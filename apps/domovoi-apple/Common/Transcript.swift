@@ -18,22 +18,17 @@ struct Transcript: View {
     /// Scrolling to the end by edge measures the real content, where a
     /// scroll to a marker in a lazy stack can land in estimated blank space.
     @State private var position = ScrollPosition(edge: .bottom)
-    /// Until when a move of the view is ours (following, jumping to the
-    /// end), not the reader's.
-    @State private var scrollingSelfUntil = Date.distantPast
-    /// Opening: the end is pinned on every change of height, either way,
-    /// until the page has loaded and its lazy rows have stopped resizing
-    /// (or the reader scrolls). A thread opens on a spinner and its history
-    /// lands later: a few tries in the first second left it at the top, or
-    /// in blank space past the measured rows.
-    @State private var pinning = true
-    /// Geometry reports in a row at the end with the height unchanged.
-    @State private var settled = 0
+    /// Following and pinning bookkeeping (see `ScrollBook`).
+    @State private var book = ScrollBook()
     /// A row's text shown to select from (see `selectText`).
     @State private var selectingText: SelectedText?
-    /// A follow is already asked for this pass: one per frame, however many
-    /// changes of height arrive.
-    @State private var followQueued = false
+    /// How many of the last lines are drawn. A long thread (thousands of
+    /// rows) in one lazy stack opened on blank space and pinned its end for
+    /// ever: the stack guesses unmeasured rows from the few it measured (6.9
+    /// million points for a 50,000-point thread) and each move corrects the
+    /// guess by a little. The rest comes back with "Show Earlier".
+    @State private var shownLines = Transcript.window
+    static let window = 80
 
     /// What the scroll geometry tells: where the view is, how tall the
     /// content, whether the end is in view.
@@ -50,6 +45,10 @@ struct Transcript: View {
         /// sit over the transcript's end and take this, not the container.
         var insetBottom: CGFloat
         var atBottom: Bool
+        /// Scrolled beyond the content's end by more than half a screen:
+        /// blank space where rows were estimated taller than they measured.
+        /// A stale offset, never the reader (outside a drag's rubber band).
+        var pastEnd: Bool
     }
 
     var body: some View {
@@ -59,7 +58,10 @@ struct Transcript: View {
         let actions = TranscriptActions(send: { [weak core] in core?.update($0) })
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: Space.l) {
+                // Not lazy: the lines drawn are bounded (`shownLines`), and a
+                // lazy stack guesses the height of rows it hasn't measured,
+                // which left the end in blank space it still counted.
+                VStack(alignment: .leading, spacing: Space.l) {
                     if let parent = thread.parent {
                         ParentBanner(parent: parent, canMergeBack: thread.canMergeBack, actions: actions).id("parent")
                     }
@@ -70,8 +72,17 @@ struct Transcript: View {
                     }
                     let retryBlocked = core.view.retryBlocked
                     // Built with the page, off the main thread.
-                    let lines = core.view.lines
+                    let all = core.view.lines
+                    let lines = all.suffix(shownLines)
                     let lastId = lines.last?.id
+                    if lines.count < all.count {
+                        let earlier = min(Transcript.window, all.count - lines.count)
+                        Button("Show \(earlier) Earlier") { showEarlier(proxy, keeping: lines.first?.id) }
+                            .buttonStyle(.borderless)
+                            .font(TypeRole.meta)
+                            .frame(maxWidth: .infinity)
+                            .id("earlier")
+                    }
                     ForEach(lines) { line in
                         switch line {
                         case .item(let item):
@@ -100,11 +111,13 @@ struct Transcript: View {
                     } else if thread.status == "interrupted", thread.pendingSends.isEmpty, !thread.items.isEmpty {
                         StoppedRow(retryBlocked: retryBlocked, actions: actions).id("stopped")
                     }
-                    Color.clear.frame(height: 1).id("bottom")
+                    // The bottom padding is the marker itself: a scroll to the
+                    // marker and one to the edge land on the same spot.
+                    Color.clear.frame(height: Space.l).id("bottom")
                 }
                 .scrollTargetLayout()
                 .padding(.horizontal, Space.gutter)
-                .padding(.vertical, Space.l)
+                .padding(.top, Space.l)
                 .frame(maxWidth: Space.column)
                 .frame(maxWidth: .infinity)
             }
@@ -112,7 +125,7 @@ struct Transcript: View {
             // to the thread (back from a subagent, another thread picked and
             // this one again) shows it there, not at the end.
             .onScrollTargetVisibilityChange(idType: String.self, threshold: 0.1) { ids in
-                guard !following, !pinning, let top = ids.first else { return }
+                guard !following, !book.pinning, let top = ids.first else { return }
                 ScrollMemory.shared.anchors[thread.id] = top
             }
             // Opens at the end; scrolled up, what's on screen stays put while
@@ -124,12 +137,13 @@ struct Transcript: View {
                 // Back to a thread read scrolled up: to the row it was at,
                 // once the page is here.
                 if let anchor = ScrollMemory.shared.anchors[thread.id] {
+                    reveal(anchor)
                     following = false
-                    pinning = false
+                    book.pinning = false
                     guard !thread.loading else { return }
                     for delay in [0.0, 0.25] {
                         try? await Task.sleep(for: .seconds(delay))
-                        scrollingSelfUntil = Date().addingTimeInterval(0.3)
+                        book.selfUntil = Date().addingTimeInterval(0.3)
                         proxy.scrollTo(anchor, anchor: .top)
                     }
                     return
@@ -137,8 +151,7 @@ struct Transcript: View {
                 // Opened, or the page finished loading: back to pinning the
                 // end, unless the reader has scrolled away from it.
                 guard following else { return }
-                pinning = true
-                settled = 0
+                book.startPinning(loaded: !thread.loading)
                 for delay in [0.0, 0.25, 0.8] {
                     try? await Task.sleep(for: .seconds(delay))
                     if following { toEnd(proxy) }
@@ -147,20 +160,24 @@ struct Transcript: View {
             .onScrollPhaseChange { _, phase in
                 userScrolling = phase == .tracking || phase == .interacting || phase == .decelerating
                 // The reader took over: pinning stops.
-                if userScrolling { pinning = false }
+                if userScrolling { book.pinning = false }
             }
             .onScrollGeometryChange(for: Geometry.self) { g in
                 // `containerSize` is already what is visible, inside the insets
-                // (the composer, keyboard and approval card on iOS).
-                Geometry(
+                // (the composer, keyboard and approval card on iOS); the offset
+                // counts from under the top inset (the navigation bar), so the
+                // end is at `height - container - insetTop` (measured on iOS).
+                let seenTo = g.contentOffset.y + g.contentInsets.top + g.containerSize.height
+                return Geometry(
                     offset: g.contentOffset.y,
                     height: g.contentSize.height,
                     container: g.containerSize.height,
                     insetTop: g.contentInsets.top,
                     insetBottom: g.contentInsets.bottom,
                     // Short content that fits is at its end too.
-                    atBottom: g.contentSize.height <= g.containerSize.height
-                        || g.contentOffset.y + g.containerSize.height >= g.contentSize.height - 60
+                    atBottom: g.contentSize.height <= g.containerSize.height || seenTo >= g.contentSize.height - 60,
+                    pastEnd: g.contentSize.height > g.containerSize.height
+                        && seenTo > g.contentSize.height + g.containerSize.height / 2
                 )
             } action: { old, new in
                 let sameHeight = abs(new.height - old.height) < 0.5
@@ -169,15 +186,22 @@ struct Transcript: View {
                 // mouse wheel, which reports no scroll phase. (On iOS lazy rows
                 // being measured move the view like this too; a touch always
                 // has a phase.)
-                if pinning, sameHeight, new.offset < old.offset - 1, !thread.loading { pinning = false }
+                if book.pinning, sameHeight, new.offset < old.offset - 1, !thread.loading { book.pinning = false }
                 #endif
-                if pinning {
-                    // Opening: every change of height, either way, goes back
-                    // to the end; the heuristics below would read lazy rows
-                    // resizing as the reader scrolling.
-                    if !sameHeight || !new.atBottom { toEnd(proxy) }
-                    settled = sameHeight && new.atBottom ? settled + 1 : 0
-                    if settled >= 2, !thread.loading, !core.view.lines.isEmpty { pinning = false }
+                // Blank space past the end: back to the real end, whatever
+                // else is going on (unless the reader is dragging).
+                if new.pastEnd, !userScrolling, Date() > book.holdUntil { pinToEnd(proxy) }
+                if book.pinning {
+                    // Opening: back to the end whenever the view isn't there;
+                    // the heuristics below would read lazy rows resizing as
+                    // the reader scrolling. Bounded: in a very long thread each
+                    // move realizes rows that move the view again, and pinning
+                    // without end kept the main thread busy (a hang on open).
+                    if !new.atBottom { pinToEnd(proxy) }
+                    book.settled = sameHeight && new.atBottom && !new.pastEnd ? book.settled + 1 : 0
+                    book.pins += 1
+                    let done = book.settled >= 2 || book.pins > 60 || Date() > book.pinUntil
+                    if done, !thread.loading, !core.view.lines.isEmpty { book.pinning = false }
                     return
                 }
                 // Any growth (a reply, a command's output, a step group, a
@@ -201,8 +225,8 @@ struct Transcript: View {
                     && abs(new.insetBottom - old.insetBottom) < 0.5
                 // With the height unchanged: content shrinking (lazy rows
                 // measured) also moves the view up, and is not the reader.
-                let wentUp = sameFrame && new.offset < old.offset - 1 && sameHeight
-                let wentDown = sameFrame && new.offset > old.offset + 1 && sameHeight && Date() > scrollingSelfUntil
+                let wentUp = sameFrame && new.offset < old.offset - 1 && sameHeight && Date() > book.selfUntil
+                let wentDown = sameFrame && new.offset > old.offset + 1 && sameHeight && Date() > book.selfUntil
                 guard userScrolling || wentUp || wentDown else { return }
                 following = new.atBottom
                 if new.atBottom {
@@ -217,7 +241,8 @@ struct Transcript: View {
             }
             .onChange(of: thread.find?.activeItemId) { _, id in
                 guard let id else { return }
-                pinning = false
+                book.pinning = false
+                reveal(id)
                 // A match folded inside a step group: bring the group on
                 // screen (it opens for the match), then the row once it's
                 // laid out.
@@ -272,7 +297,32 @@ struct Transcript: View {
     }
 
     /// What the agent is on now: the summary of the open group at the end.
-    private func liveSummary(_ lines: [TranscriptLine]) -> String? {
+    /// Draws earlier lines too, keeping the line that was first on screen.
+    private func showEarlier(_ proxy: ScrollViewProxy, keeping first: String?) {
+        book.pinning = false
+        book.hold()
+        shownLines += Transcript.window
+        guard let first else { return }
+        DispatchQueue.main.async { proxy.scrollTo(first, anchor: .top) }
+    }
+
+    /// Widens the drawn lines to hold the row or line `id` (a find match, a
+    /// remembered place), so a scroll to it has something to land on.
+    private func reveal(_ id: String) {
+        let all = core.view.lines
+        let index = all.lastIndex { line in
+            switch line {
+            case .item(let item): return item.id == id
+            case .group(let group, _, let items): return "group-\(group)" == id || items.contains { $0.id == id }
+            }
+        }
+        guard let index else { return }
+        book.hold()
+        let needed = all.count - index + 10
+        if needed > shownLines { shownLines = needed }
+    }
+
+    private func liveSummary(_ lines: ArraySlice<TranscriptLine>) -> String? {
         guard case .group(_, let summary, _) = lines.last, !summary.isEmpty else { return nil }
         return summary
     }
@@ -280,10 +330,10 @@ struct Transcript: View {
     /// New output: follow it (once this pass), or note it for the jump button.
     private func grew(_ proxy: ScrollViewProxy) {
         if following {
-            guard !followQueued else { return }
-            followQueued = true
+            guard !book.queued else { return }
+            book.queued = true
             DispatchQueue.main.async {
-                followQueued = false
+                book.queued = false
                 if following { toEnd(proxy) }
             }
         } else if thread.working {
@@ -291,21 +341,73 @@ struct Transcript: View {
         }
     }
 
-    /// To the end, now. By edge (the real content); then to the end marker
-    /// once laid out, in case the edge was already the position asked for
-    /// (an equal position is no move).
+    /// To the end, now: by edge, then to the end marker once laid out. The
+    /// edge alone can land in blank space the lazy stack still counts (rows
+    /// estimated taller than they are), and asking for the edge it is
+    /// already at is no move; the marker is the real end. The scroll
+    /// heuristics ignore the moves this makes (`selfUntil`).
     private func toEnd(_ proxy: ScrollViewProxy) {
-        scrollingSelfUntil = Date().addingTimeInterval(0.3)
+        book.selfUntil = Date().addingTimeInterval(0.5)
         position.scrollTo(edge: .bottom)
         DispatchQueue.main.async { proxy.scrollTo("bottom", anchor: .bottom) }
+    }
+
+    /// While opening, or out of blank space: to the end by edge (the content
+    /// as measured, where the end marker of a lazy stack can sit in
+    /// estimated space), at most once a pass.
+    private func pinToEnd(_ proxy: ScrollViewProxy) {
+        guard !book.queued else { return }
+        book.queued = true
+        DispatchQueue.main.async {
+            book.queued = false
+            toEnd(proxy)
+        }
     }
 
     private func jumpToEnd(_ proxy: ScrollViewProxy) {
         unseen = false
         following = true
         ScrollMemory.shared.anchors[thread.id] = nil
-        scrollingSelfUntil = Date().addingTimeInterval(0.8)
+        book.selfUntil = Date().addingTimeInterval(0.8)
         withAnimation { position.scrollTo(edge: .bottom) }
+        DispatchQueue.main.async { withAnimation { proxy.scrollTo("bottom", anchor: .bottom) } }
+    }
+}
+
+/// The transcript's scroll bookkeeping that nothing on screen shows. A class
+/// held in `@State`: changing it doesn't redraw the transcript (several of
+/// these change on every scroll report).
+@MainActor
+final class ScrollBook {
+    /// Opening: the end is pinned whenever the view leaves it, until the page
+    /// has loaded and its lazy rows have stopped resizing (or the reader
+    /// scrolls, or the limits below). A thread opens on a spinner and its
+    /// history lands later: a few tries in the first second left it at the
+    /// top, or in blank space past the measured rows.
+    var pinning = true
+    /// Scroll reports in a row at the end with the height unchanged.
+    var settled = 0
+    /// Scroll reports while pinning.
+    var pins = 0
+    /// Pinning ends by then, settled or not (set once the page is loaded).
+    var pinUntil = Date.distantFuture
+    /// A move to the end is already asked for this pass.
+    var queued = false
+    /// Until when a move of the view is ours (following, jumping to the
+    /// end), not the reader's.
+    var selfUntil = Date.distantPast
+    /// Until when blank space past the end is left alone: rows were just
+    /// added above or a scroll to a row is landing, and the content's
+    /// measure passes through such states on the way.
+    var holdUntil = Date.distantPast
+
+    func hold() { holdUntil = Date().addingTimeInterval(1.5) }
+
+    func startPinning(loaded: Bool) {
+        pinning = true
+        settled = 0
+        pins = 0
+        pinUntil = loaded ? Date().addingTimeInterval(2.5) : .distantFuture
     }
 }
 
