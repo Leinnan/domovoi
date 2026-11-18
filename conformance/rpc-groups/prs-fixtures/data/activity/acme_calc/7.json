@@ -1,0 +1,867 @@
+{
+ "data": {
+  "repository": {
+   "pullRequest": {
+    "author": {
+     "login": "mona",
+     "avatarUrl": "https://avatars.githubusercontent.com/mona?v=4",
+     "__typename": "User",
+     "name": "Mona Lisa"
+    },
+    "reactionGroups": [
+     {
+      "content": "THUMBS_UP",
+      "viewerHasReacted": true,
+      "reactors": {
+       "totalCount": 3,
+       "nodes": [
+        {
+         "login": "hubot"
+        },
+        {
+         "login": "defunkt"
+        }
+       ]
+      }
+     },
+     {
+      "content": "THUMBS_DOWN",
+      "viewerHasReacted": false,
+      "reactors": {
+       "totalCount": 0,
+       "nodes": []
+      }
+     },
+     {
+      "content": "LAUGH",
+      "viewerHasReacted": false,
+      "reactors": {
+       "totalCount": 0,
+       "nodes": []
+      }
+     },
+     {
+      "content": "HOORAY",
+      "viewerHasReacted": false,
+      "reactors": {
+       "totalCount": 0,
+       "nodes": []
+      }
+     },
+     {
+      "content": "CONFUSED",
+      "viewerHasReacted": false,
+      "reactors": {
+       "totalCount": 0,
+       "nodes": []
+      }
+     },
+     {
+      "content": "HEART",
+      "viewerHasReacted": false,
+      "reactors": {
+       "totalCount": 0,
+       "nodes": []
+      }
+     },
+     {
+      "content": "ROCKET",
+      "viewerHasReacted": false,
+      "reactors": {
+       "totalCount": 1,
+       "nodes": [
+        {
+         "login": "hubot"
+        }
+       ]
+      }
+     },
+     {
+      "content": "EYES",
+      "viewerHasReacted": false,
+      "reactors": {
+       "totalCount": 0,
+       "nodes": []
+      }
+     },
+     {
+      "content": "UNKNOWN_FUTURE",
+      "viewerHasReacted": false,
+      "reactors": {
+       "totalCount": 4,
+       "nodes": []
+      }
+     },
+     {
+      "viewerHasReacted": false
+     }
+    ],
+    "latestReviews": {
+     "nodes": [
+      {
+       "author": {
+        "login": "hubot",
+        "avatarUrl": "https://avatars.githubusercontent.com/hubot?v=4",
+        "__typename": "Bot"
+       }
+      },
+      {
+       "author": {
+        "login": "defunkt",
+        "avatarUrl": "https://avatars.githubusercontent.com/defunkt?v=4",
+        "__typename": "User",
+        "name": "Chris Wanstrath"
+       }
+      },
+      {
+       "author": {
+        "login": "hubot",
+        "avatarUrl": "https://avatars.githubusercontent.com/hubot?v=4",
+        "__typename": "Bot"
+       }
+      },
+      {
+       "author": null
+      }
+     ]
+    },
+    "comments": {
+     "totalCount": 4,
+     "pageInfo": {
+      "hasNextPage": true
+     },
+     "nodes": [
+      {
+       "id": "IC_kwDOA1",
+       "body": "Thanks for this!",
+       "createdAt": "2025-03-02T09:30:00Z",
+       "lastEditedAt": "2025-03-02T09:45:00Z",
+       "url": "https://github.com/acme/calc/pull/7#issuecomment-1",
+       "isMinimized": false,
+       "viewerCanUpdate": true,
+       "author": {
+        "login": "octocat",
+        "avatarUrl": "https://avatars.githubusercontent.com/octocat?v=4",
+        "__typename": "User",
+        "name": "The Octocat"
+       },
+       "reactionGroups": [
+        {
+         "content": "THUMBS_UP",
+         "viewerHasReacted": false,
+         "reactors": {
+          "totalCount": 0,
+          "nodes": []
+         }
+        },
+        {
+         "content": "THUMBS_DOWN",
+         "viewerHasReacted": false,
+         "reactors": {
+          "totalCount": 0,
+          "nodes": []
+         }
+        },
+        {
+         "content": "LAUGH",
+         "viewerHasReacted": false,
+         "reactors": {
+          "totalCount": 0,
+          "nodes": []
+         }
+        },
+        {
+         "content": "HOORAY",
+         "viewerHasReacted": false,
+         "reactors": {
+          "totalCount": 0,
+          "nodes": []
+         }
+        },
+        {
+         "content": "CONFUSED",
+         "viewerHasReacted": false,
+         "reactors": {
+          "totalCount": 0,
+          "nodes": []
+         }
+        },
+        {
+         "content": "HEART",
+         "viewerHasReacted": true,
+         "reactors": {
+          "totalCount": 2,
+          "nodes": [
+           {
+            "login": "mona"
+           }
+          ]
+         }
+        },
+        {
+         "content": "ROCKET",
+         "viewerHasReacted": false,
+         "reactors": {
+          "totalCount": 0,
+          "nodes": []
+         }
+        },
+        {
+         "content": "EYES",
+         "viewerHasReacted": false,
+         "reactors": {
+          "totalCount": 1,
+          "nodes": [
+           {},
+           {
+            "login": "defunkt"
+           }
+          ]
+         }
+        }
+       ]
+      },
+      {
+       "id": "IC_kwDOA2",
+       "body": "Deployed to preview.",
+       "createdAt": "2025-03-02T08:00:00Z",
+       "lastEditedAt": null,
+       "url": "",
+       "isMinimized": false,
+       "viewerCanUpdate": false,
+       "author": {
+        "login": "vercel",
+        "avatarUrl": "https://avatars.githubusercontent.com/vercel?v=4",
+        "__typename": "Bot"
+       },
+       "reactionGroups": []
+      },
+      {
+       "id": "IC_kwDOA3",
+       "body": "spam",
+       "createdAt": "2025-03-02T08:30:00Z",
+       "isMinimized": true,
+       "author": {
+        "login": "spammer",
+        "avatarUrl": "https://avatars.githubusercontent.com/spammer?v=4",
+        "__typename": "User",
+        "name": "Spam"
+       }
+      },
+      {
+       "id": "IC_kwDOA4",
+       "body": "From a deleted account",
+       "createdAt": "2025-03-03T08:30:00Z",
+       "lastEditedAt": null,
+       "url": "https://github.com/acme/calc/pull/7#issuecomment-4",
+       "isMinimized": false,
+       "viewerCanUpdate": false,
+       "author": null,
+       "reactionGroups": null
+      }
+     ]
+    },
+    "reviews": {
+     "totalCount": 7,
+     "pageInfo": {
+      "hasNextPage": false
+     },
+     "nodes": [
+      {
+       "id": "PRR_kwDOA1",
+       "body": "",
+       "state": "APPROVED",
+       "submittedAt": "2025-03-02T11:00:00Z",
+       "lastEditedAt": null,
+       "url": "https://github.com/acme/calc/pull/7#pullrequestreview-1",
+       "isMinimized": false,
+       "viewerCanUpdate": false,
+       "author": {
+        "login": "hubot",
+        "avatarUrl": "https://avatars.githubusercontent.com/hubot?v=4",
+        "__typename": "Bot"
+       },
+       "reactionGroups": [
+        {
+         "content": "THUMBS_UP",
+         "viewerHasReacted": false,
+         "reactors": {
+          "totalCount": 0,
+          "nodes": []
+         }
+        },
+        {
+         "content": "THUMBS_DOWN",
+         "viewerHasReacted": false,
+         "reactors": {
+          "totalCount": 0,
+          "nodes": []
+         }
+        },
+        {
+         "content": "LAUGH",
+         "viewerHasReacted": false,
+         "reactors": {
+          "totalCount": 0,
+          "nodes": []
+         }
+        },
+        {
+         "content": "HOORAY",
+         "viewerHasReacted": false,
+         "reactors": {
+          "totalCount": 0,
+          "nodes": []
+         }
+        },
+        {
+         "content": "CONFUSED",
+         "viewerHasReacted": false,
+         "reactors": {
+          "totalCount": 0,
+          "nodes": []
+         }
+        },
+        {
+         "content": "HEART",
+         "viewerHasReacted": false,
+         "reactors": {
+          "totalCount": 0,
+          "nodes": []
+         }
+        },
+        {
+         "content": "ROCKET",
+         "viewerHasReacted": false,
+         "reactors": {
+          "totalCount": 0,
+          "nodes": []
+         }
+        },
+        {
+         "content": "EYES",
+         "viewerHasReacted": false,
+         "reactors": {
+          "totalCount": 0,
+          "nodes": []
+         }
+        }
+       ]
+      },
+      {
+       "id": "PRR_kwDOA2",
+       "body": "A few notes inline.",
+       "state": "COMMENTED",
+       "submittedAt": "2025-03-02T12:00:00Z",
+       "lastEditedAt": "2025-03-02T12:10:00Z",
+       "url": "https://github.com/acme/calc/pull/7#pullrequestreview-2",
+       "isMinimized": false,
+       "viewerCanUpdate": true,
+       "author": {
+        "login": "defunkt",
+        "avatarUrl": "https://avatars.githubusercontent.com/defunkt?v=4",
+        "__typename": "User",
+        "name": "Chris Wanstrath"
+       },
+       "reactionGroups": [
+        {
+         "content": "THUMBS_UP",
+         "viewerHasReacted": false,
+         "reactors": {
+          "totalCount": 0,
+          "nodes": []
+         }
+        },
+        {
+         "content": "THUMBS_DOWN",
+         "viewerHasReacted": false,
+         "reactors": {
+          "totalCount": 0,
+          "nodes": []
+         }
+        },
+        {
+         "content": "LAUGH",
+         "viewerHasReacted": false,
+         "reactors": {
+          "totalCount": 1,
+          "nodes": [
+           {
+            "login": "mona"
+           }
+          ]
+         }
+        },
+        {
+         "content": "HOORAY",
+         "viewerHasReacted": false,
+         "reactors": {
+          "totalCount": 0,
+          "nodes": []
+         }
+        },
+        {
+         "content": "CONFUSED",
+         "viewerHasReacted": false,
+         "reactors": {
+          "totalCount": 0,
+          "nodes": []
+         }
+        },
+        {
+         "content": "HEART",
+         "viewerHasReacted": false,
+         "reactors": {
+          "totalCount": 0,
+          "nodes": []
+         }
+        },
+        {
+         "content": "ROCKET",
+         "viewerHasReacted": false,
+         "reactors": {
+          "totalCount": 0,
+          "nodes": []
+         }
+        },
+        {
+         "content": "EYES",
+         "viewerHasReacted": false,
+         "reactors": {
+          "totalCount": 0,
+          "nodes": []
+         }
+        }
+       ]
+      },
+      {
+       "id": "PRR_kwDOA3",
+       "body": "  ",
+       "state": "COMMENTED",
+       "submittedAt": "2025-03-02T12:30:00Z",
+       "author": {
+        "login": "defunkt",
+        "avatarUrl": "https://avatars.githubusercontent.com/defunkt?v=4",
+        "__typename": "User",
+        "name": "Chris Wanstrath"
+       }
+      },
+      {
+       "id": "PRR_kwDOA4",
+       "body": "Not yet.",
+       "state": "CHANGES_REQUESTED",
+       "submittedAt": "2025-03-01T12:00:00Z",
+       "author": {
+        "login": "mona",
+        "avatarUrl": "https://avatars.githubusercontent.com/mona?v=4",
+        "__typename": "User",
+        "name": "Mona Lisa"
+       },
+       "reactionGroups": []
+      },
+      {
+       "id": "PRR_kwDOA5",
+       "body": "",
+       "state": "DISMISSED",
+       "submittedAt": "2025-03-01T13:00:00Z",
+       "author": {
+        "login": "mona",
+        "avatarUrl": "https://avatars.githubusercontent.com/mona?v=4",
+        "__typename": "User",
+        "name": "Mona Lisa"
+       }
+      },
+      {
+       "id": "PRR_kwDOA6",
+       "body": "A draft review",
+       "state": "PENDING",
+       "submittedAt": null,
+       "author": {
+        "login": "octocat",
+        "avatarUrl": "https://avatars.githubusercontent.com/octocat?v=4",
+        "__typename": "User",
+        "name": "The Octocat"
+       }
+      },
+      {
+       "id": "PRR_kwDOA7",
+       "body": "hidden",
+       "state": "COMMENTED",
+       "submittedAt": "2025-03-01T14:00:00Z",
+       "isMinimized": true,
+       "author": {
+        "login": "spammer",
+        "avatarUrl": "https://avatars.githubusercontent.com/spammer?v=4",
+        "__typename": "User",
+        "name": "Spam"
+       }
+      }
+     ]
+    },
+    "reviewThreads": {
+     "pageInfo": {
+      "hasNextPage": true
+     },
+     "nodes": [
+      {
+       "id": "PRRT_kwDOA1",
+       "path": "src/calc.py",
+       "line": 12,
+       "originalLine": 10,
+       "diffSide": "RIGHT",
+       "isResolved": false,
+       "isOutdated": false,
+       "viewerCanResolve": true,
+       "comments": {
+        "totalCount": 3,
+        "pageInfo": {
+         "hasNextPage": true,
+         "endCursor": "Y3Vyc29yOnYyOjE="
+        },
+        "nodes": [
+         {
+          "id": "PRRC_kwDOA1",
+          "body": "Why not `operator.sub`?",
+          "createdAt": "2025-03-02T12:00:00Z",
+          "lastEditedAt": null,
+          "url": "https://github.com/acme/calc/pull/7#discussion_r1",
+          "viewerCanUpdate": true,
+          "pullRequestReview": {
+           "url": "https://github.com/acme/calc/pull/7#pullrequestreview-2"
+          },
+          "author": {
+           "login": "defunkt",
+           "avatarUrl": "https://avatars.githubusercontent.com/defunkt?v=4",
+           "__typename": "User",
+           "name": "Chris Wanstrath"
+          },
+          "reactionGroups": [
+           {
+            "content": "THUMBS_UP",
+            "viewerHasReacted": false,
+            "reactors": {
+             "totalCount": 0,
+             "nodes": []
+            }
+           },
+           {
+            "content": "THUMBS_DOWN",
+            "viewerHasReacted": true,
+            "reactors": {
+             "totalCount": 1,
+             "nodes": []
+            }
+           },
+           {
+            "content": "LAUGH",
+            "viewerHasReacted": false,
+            "reactors": {
+             "totalCount": 0,
+             "nodes": []
+            }
+           },
+           {
+            "content": "HOORAY",
+            "viewerHasReacted": true,
+            "reactors": {
+             "totalCount": 2,
+             "nodes": [
+              {
+               "login": "hubot"
+              }
+             ]
+            }
+           },
+           {
+            "content": "CONFUSED",
+            "viewerHasReacted": false,
+            "reactors": {
+             "totalCount": 1,
+             "nodes": [
+              {
+               "login": "mona"
+              }
+             ]
+            }
+           },
+           {
+            "content": "HEART",
+            "viewerHasReacted": false,
+            "reactors": {
+             "totalCount": 0,
+             "nodes": []
+            }
+           },
+           {
+            "content": "ROCKET",
+            "viewerHasReacted": false,
+            "reactors": {
+             "totalCount": 0,
+             "nodes": []
+            }
+           },
+           {
+            "content": "EYES",
+            "viewerHasReacted": false,
+            "reactors": {
+             "totalCount": 0,
+             "nodes": []
+            }
+           }
+          ]
+         },
+         {
+          "id": "PRRC_kwDOA2",
+          "body": "Kept explicit for readability.",
+          "createdAt": "2025-03-02T13:00:00Z",
+          "lastEditedAt": "2025-03-02T13:05:00Z",
+          "url": "https://github.com/acme/calc/pull/7#discussion_r2",
+          "viewerCanUpdate": false,
+          "pullRequestReview": null,
+          "author": {
+           "login": "mona",
+           "avatarUrl": "https://avatars.githubusercontent.com/mona?v=4",
+           "__typename": "User",
+           "name": "Mona Lisa"
+          },
+          "reactionGroups": [
+           {
+            "content": "THUMBS_UP",
+            "viewerHasReacted": false,
+            "reactors": {
+             "totalCount": 0,
+             "nodes": []
+            }
+           },
+           {
+            "content": "THUMBS_DOWN",
+            "viewerHasReacted": false,
+            "reactors": {
+             "totalCount": 0,
+             "nodes": []
+            }
+           },
+           {
+            "content": "LAUGH",
+            "viewerHasReacted": false,
+            "reactors": {
+             "totalCount": 0,
+             "nodes": []
+            }
+           },
+           {
+            "content": "HOORAY",
+            "viewerHasReacted": false,
+            "reactors": {
+             "totalCount": 0,
+             "nodes": []
+            }
+           },
+           {
+            "content": "CONFUSED",
+            "viewerHasReacted": false,
+            "reactors": {
+             "totalCount": 0,
+             "nodes": []
+            }
+           },
+           {
+            "content": "HEART",
+            "viewerHasReacted": false,
+            "reactors": {
+             "totalCount": 0,
+             "nodes": []
+            }
+           },
+           {
+            "content": "ROCKET",
+            "viewerHasReacted": false,
+            "reactors": {
+             "totalCount": 0,
+             "nodes": []
+            }
+           },
+           {
+            "content": "EYES",
+            "viewerHasReacted": false,
+            "reactors": {
+             "totalCount": 0,
+             "nodes": []
+            }
+           }
+          ]
+         }
+        ]
+       }
+      },
+      {
+       "id": "PRRT_kwDOA2",
+       "path": "tests/test_calc.py",
+       "line": null,
+       "originalLine": 4,
+       "diffSide": "LEFT",
+       "isResolved": true,
+       "isOutdated": true,
+       "viewerCanResolve": false,
+       "comments": {
+        "totalCount": 1,
+        "pageInfo": {
+         "hasNextPage": false,
+         "endCursor": "Y3Vyc29yOnYyOjI="
+        },
+        "nodes": [
+         {
+          "id": "PRRC_kwDOA3",
+          "body": "Removed on purpose?",
+          "createdAt": "2025-03-02T14:00:00Z",
+          "lastEditedAt": null,
+          "url": null,
+          "viewerCanUpdate": false,
+          "pullRequestReview": {
+           "url": ""
+          },
+          "author": null,
+          "reactionGroups": [
+           {
+            "content": "THUMBS_UP",
+            "viewerHasReacted": false,
+            "reactors": {
+             "totalCount": 0,
+             "nodes": []
+            }
+           },
+           {
+            "content": "THUMBS_DOWN",
+            "viewerHasReacted": false,
+            "reactors": {
+             "totalCount": 0,
+             "nodes": []
+            }
+           },
+           {
+            "content": "LAUGH",
+            "viewerHasReacted": false,
+            "reactors": {
+             "totalCount": 0,
+             "nodes": []
+            }
+           },
+           {
+            "content": "HOORAY",
+            "viewerHasReacted": false,
+            "reactors": {
+             "totalCount": 0,
+             "nodes": []
+            }
+           },
+           {
+            "content": "CONFUSED",
+            "viewerHasReacted": false,
+            "reactors": {
+             "totalCount": 0,
+             "nodes": []
+            }
+           },
+           {
+            "content": "HEART",
+            "viewerHasReacted": false,
+            "reactors": {
+             "totalCount": 0,
+             "nodes": []
+            }
+           },
+           {
+            "content": "ROCKET",
+            "viewerHasReacted": false,
+            "reactors": {
+             "totalCount": 0,
+             "nodes": []
+            }
+           },
+           {
+            "content": "EYES",
+            "viewerHasReacted": false,
+            "reactors": {
+             "totalCount": 0,
+             "nodes": []
+            }
+           }
+          ]
+         }
+        ]
+       }
+      },
+      {
+       "id": "PRRT_kwDOA3",
+       "path": "README.md",
+       "line": null,
+       "originalLine": null,
+       "diffSide": "RIGHT",
+       "isResolved": false,
+       "isOutdated": false,
+       "comments": {
+        "pageInfo": {
+         "hasNextPage": true,
+         "endCursor": ""
+        },
+        "nodes": []
+       }
+      }
+     ]
+    },
+    "commits": {
+     "nodes": [
+      {
+       "commit": {
+        "oid": "4444444444444444444444444444444444444444",
+        "messageHeadline": "Add subtraction",
+        "committedDate": "2025-03-01T08:00:00Z",
+        "additions": 30,
+        "deletions": 5,
+        "authors": {
+         "nodes": [
+          {
+           "name": "Mona Lisa",
+           "avatarUrl": "https://avatars.githubusercontent.com/u/2?v=4",
+           "user": {
+            "login": "mona"
+           }
+          },
+          {
+           "name": "Pair Partner",
+           "avatarUrl": "",
+           "user": null
+          },
+          {
+           "name": "",
+           "user": null
+          }
+         ]
+        }
+       }
+      },
+      {
+       "commit": {
+        "oid": "2222222222222222222222222222222222222222",
+        "messageHeadline": "Address review",
+        "committedDate": "2025-03-02T15:00:00Z",
+        "additions": null,
+        "deletions": null,
+        "authors": {
+         "nodes": []
+        }
+       }
+      },
+      {
+       "commit": {
+        "oid": "3333333333333333333333333333333333333333",
+        "messageHeadline": "",
+        "committedDate": "2025-03-02T16:00:00Z"
+       }
+      }
+     ]
+    }
+   }
+  }
+ }
+}

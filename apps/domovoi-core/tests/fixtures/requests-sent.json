@@ -1,0 +1,2563 @@
+[
+  {
+    "step": "pair with a code and connect",
+    "sent": [
+      "Close",
+      "socket opened",
+      {
+        "body": "",
+        "http": "POST",
+        "path": "/api/auth/websocket-ticket/rpc"
+      },
+      {
+        "body": "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Atoken-exchange&subject_token=CODE&subject_token_type=urn%3At3%3Aparams%3Aoauth%3Atoken-type%3Aenvironment-bootstrap&requested_token_type=urn%3Aietf%3Aparams%3Aoauth%3Atoken-type%3Aaccess_token&client_device_type=mobile&client_label=A+phone&client_os=iOS+19",
+        "http": "POST",
+        "path": "/oauth/token"
+      }
+    ]
+  },
+  {
+    "step": "the socket opens",
+    "sent": [
+      {
+        "payload": {
+          "environmentThemes": false,
+          "usageLimitSources": false
+        },
+        "rpc": "subscribeServerConfig"
+      },
+      {
+        "payload": {
+          "requestCompletionMarker": true
+        },
+        "rpc": "orchestration.subscribeShell"
+      },
+      {
+        "payload": {},
+        "rpc": "orchestration.getArchivedShellSnapshot"
+      },
+      {
+        "payload": {},
+        "rpc": "subscribeServerLifecycle"
+      },
+      {
+        "payload": {},
+        "rpc": "subscribeTerminalMetadata"
+      }
+    ]
+  },
+  {
+    "step": "open a thread the list does not have yet",
+    "sent": [
+      {
+        "payload": {
+          "commandId": "made-0",
+          "opened": true,
+          "threadId": "t0",
+          "type": "thread.visit",
+          "visitedAt": "2026-11-18T11:06:40.000Z"
+        },
+        "rpc": "orchestration.dispatchCommand"
+      },
+      {
+        "payload": {
+          "requestCompletionMarker": true,
+          "threadId": "t0"
+        },
+        "rpc": "orchestration.subscribeThread"
+      }
+    ]
+  },
+  {
+    "step": "send a message before the providers are known",
+    "sent": [
+      {
+        "payload": {
+          "attachments": [],
+          "commandId": "made-1",
+          "createdBy": "user",
+          "creationSource": "web",
+          "dispatchMode": {
+            "type": "queue_after_active"
+          },
+          "messageId": "made-2",
+          "text": "early",
+          "threadId": "t0",
+          "type": "message.dispatch"
+        },
+        "rpc": "orchestration.dispatchCommand"
+      }
+    ]
+  },
+  {
+    "step": "open a thread",
+    "sent": [
+      {
+        "payload": {
+          "commandId": "made-3",
+          "opened": true,
+          "threadId": "t1",
+          "type": "thread.visit",
+          "visitedAt": "2026-11-18T11:06:40.000Z"
+        },
+        "rpc": "orchestration.dispatchCommand"
+      },
+      {
+        "payload": {
+          "cwd": "/w",
+          "includeRemote": true
+        },
+        "rpc": "subscribeVcsStatus"
+      },
+      {
+        "payload": {
+          "cwd": "/w",
+          "limit": 100,
+          "refKind": "local"
+        },
+        "rpc": "vcs.listRefs"
+      },
+      {
+        "payload": {
+          "requestCompletionMarker": true,
+          "threadId": "t1"
+        },
+        "rpc": "orchestration.subscribeThread"
+      },
+      {
+        "rpc": "Interrupt"
+      }
+    ]
+  },
+  {
+    "step": "the thread arrives, with an image",
+    "sent": [
+      {
+        "payload": {
+          "resource": {
+            "_tag": "attachment",
+            "attachmentId": "t1-abc",
+            "disposition": "inline",
+            "fileName": "shot.png",
+            "mimeType": "image/png"
+          }
+        },
+        "rpc": "assets.createUrl"
+      }
+    ]
+  },
+  {
+    "step": "answer an approval",
+    "sent": [
+      {
+        "payload": {
+          "commandId": "made-4",
+          "decision": "acceptForSession",
+          "requestId": "rq1",
+          "threadId": "t1",
+          "type": "runtime-request.respond"
+        },
+        "rpc": "orchestration.dispatchCommand"
+      }
+    ]
+  },
+  {
+    "step": "answer a question",
+    "sent": [
+      {
+        "payload": {
+          "answers": {
+            "Anything else?": [
+              "Auth",
+              "Search"
+            ],
+            "Which database?": [
+              "SQLite"
+            ]
+          },
+          "commandId": "made-5",
+          "decision": "accept",
+          "requestId": "rq2",
+          "threadId": "t1",
+          "type": "runtime-request.respond"
+        },
+        "rpc": "orchestration.dispatchCommand"
+      }
+    ]
+  },
+  {
+    "step": "skip a question",
+    "sent": [
+      {
+        "payload": {
+          "commandId": "made-6",
+          "requestId": "rq2",
+          "threadId": "t1",
+          "type": "thread.user-input.dismiss"
+        },
+        "rpc": "orchestration.dispatchCommand"
+      }
+    ]
+  },
+  {
+    "step": "stop the turn",
+    "sent": [
+      {
+        "payload": {
+          "commandId": "made-7",
+          "threadId": "t1",
+          "type": "thread.stop"
+        },
+        "rpc": "orchestration.dispatchCommand"
+      }
+    ]
+  },
+  {
+    "step": "remove a queued message",
+    "sent": [
+      {
+        "payload": {
+          "commandId": "made-8",
+          "runId": "r4",
+          "threadId": "t1",
+          "type": "queued-run.cancel"
+        },
+        "rpc": "orchestration.dispatchCommand"
+      }
+    ]
+  },
+  {
+    "step": "edit a queued message",
+    "sent": [
+      {
+        "payload": {
+          "commandId": "made-9",
+          "runId": "r3",
+          "text": "tests first",
+          "threadId": "t1",
+          "type": "queued-run.edit"
+        },
+        "rpc": "orchestration.dispatchCommand"
+      }
+    ]
+  },
+  {
+    "step": "empty a queued message",
+    "sent": [
+      {
+        "payload": {
+          "commandId": "made-10",
+          "runId": "r3",
+          "threadId": "t1",
+          "type": "queued-run.cancel"
+        },
+        "rpc": "orchestration.dispatchCommand"
+      }
+    ]
+  },
+  {
+    "step": "send a queued message now",
+    "sent": [
+      {
+        "payload": {
+          "commandId": "made-11",
+          "queuedRunId": "r3",
+          "targetRunId": "r2",
+          "threadId": "t1",
+          "type": "queued-message.promote-to-steer"
+        },
+        "rpc": "orchestration.dispatchCommand"
+      }
+    ]
+  },
+  {
+    "step": "move a queued message up",
+    "sent": [
+      {
+        "payload": {
+          "beforeRunId": "r3",
+          "commandId": "made-12",
+          "runId": "r4",
+          "threadId": "t1",
+          "type": "queued-run.reorder"
+        },
+        "rpc": "orchestration.dispatchCommand"
+      }
+    ]
+  },
+  {
+    "step": "move a queued message to the end",
+    "sent": [
+      {
+        "payload": {
+          "beforeRunId": null,
+          "commandId": "made-13",
+          "runId": "r3",
+          "threadId": "t1",
+          "type": "queued-run.reorder"
+        },
+        "rpc": "orchestration.dispatchCommand"
+      }
+    ]
+  },
+  {
+    "step": "resume the queue",
+    "sent": [
+      {
+        "payload": {
+          "commandId": "made-14",
+          "threadId": "t1",
+          "type": "queue.resume"
+        },
+        "rpc": "orchestration.dispatchCommand"
+      }
+    ]
+  },
+  {
+    "step": "fork a thread",
+    "sent": [
+      {
+        "payload": {
+          "commandId": "made-15",
+          "createdAt": "2026-11-18T11:06:40.000Z",
+          "createdBy": "user",
+          "creationSource": "web",
+          "sourcePoint": {
+            "type": "latest_stable"
+          },
+          "sourceThreadId": "t1",
+          "targetThreadId": "made-16",
+          "title": "Search (fork)",
+          "type": "thread.fork"
+        },
+        "rpc": "orchestration.dispatchCommand"
+      }
+    ]
+  },
+  {
+    "step": "fork a thread the list does not have",
+    "sent": [
+      {
+        "payload": {
+          "commandId": "made-17",
+          "createdAt": "2026-11-18T11:06:40.000Z",
+          "createdBy": "user",
+          "creationSource": "web",
+          "sourcePoint": {
+            "type": "latest_stable"
+          },
+          "sourceThreadId": "gone",
+          "targetThreadId": "made-18",
+          "type": "thread.fork"
+        },
+        "rpc": "orchestration.dispatchCommand"
+      }
+    ]
+  },
+  {
+    "step": "stop a subagent",
+    "sent": [
+      {
+        "payload": {
+          "commandId": "made-19",
+          "runId": "r2",
+          "subagentId": "node-sub",
+          "threadId": "t1",
+          "type": "subagent.stop"
+        },
+        "rpc": "orchestration.dispatchCommand"
+      }
+    ]
+  },
+  {
+    "step": "stop a subagent whose row names no run",
+    "sent": [
+      {
+        "payload": {
+          "commandId": "made-20",
+          "subagentId": "node-other",
+          "threadId": "t1",
+          "type": "subagent.stop"
+        },
+        "rpc": "orchestration.dispatchCommand"
+      }
+    ]
+  },
+  {
+    "step": "stop a subagent whose row is gone",
+    "sent": [
+      {
+        "payload": {
+          "commandId": "made-21",
+          "subagentId": "node-gone",
+          "threadId": "t1",
+          "type": "subagent.stop"
+        },
+        "rpc": "orchestration.dispatchCommand"
+      }
+    ]
+  },
+  {
+    "step": "implement a plan",
+    "sent": [
+      {
+        "payload": {
+          "attachments": [],
+          "commandId": "made-22",
+          "createdBy": "user",
+          "creationSource": "web",
+          "dispatchMode": {
+            "type": "queue_after_active"
+          },
+          "messageId": "made-23",
+          "modelSelection": {
+            "instanceId": "claudeAgent",
+            "model": "claude-haiku-5-5",
+            "options": [
+              {
+                "id": "effort",
+                "value": "medium"
+              }
+            ]
+          },
+          "sourcePlanRef": {
+            "planId": "plan1",
+            "threadId": "t1"
+          },
+          "text": "Implement the plan.",
+          "threadId": "t1",
+          "type": "message.dispatch"
+        },
+        "rpc": "orchestration.dispatchCommand"
+      }
+    ]
+  },
+  {
+    "step": "regenerate the title",
+    "sent": [
+      {
+        "payload": {
+          "commandId": "made-24",
+          "regenerateTitle": true,
+          "threadId": "t1",
+          "type": "thread.metadata.update"
+        },
+        "rpc": "orchestration.dispatchCommand"
+      }
+    ]
+  },
+  {
+    "step": "revert to a checkpoint",
+    "sent": [
+      {
+        "payload": {
+          "checkpointId": "cp1",
+          "commandId": "made-25",
+          "restoreFiles": true,
+          "scopeId": "scope1",
+          "threadId": "t1",
+          "type": "checkpoint.rollback"
+        },
+        "rpc": "orchestration.dispatchCommand"
+      }
+    ]
+  },
+  {
+    "step": "revert to a checkpoint the thread does not have",
+    "sent": [
+      {
+        "payload": {
+          "checkpointId": "cp-gone",
+          "commandId": "made-26",
+          "restoreFiles": true,
+          "scopeId": "",
+          "threadId": "t1",
+          "type": "checkpoint.rollback"
+        },
+        "rpc": "orchestration.dispatchCommand"
+      }
+    ]
+  },
+  {
+    "step": "change permissions",
+    "sent": [
+      {
+        "payload": {
+          "commandId": "made-27",
+          "runtimeMode": "approval-required",
+          "threadId": "t1",
+          "type": "thread.runtime-mode.set"
+        },
+        "rpc": "orchestration.dispatchCommand"
+      }
+    ]
+  },
+  {
+    "step": "change to plan mode",
+    "sent": [
+      {
+        "payload": {
+          "commandId": "made-28",
+          "interactionMode": "plan",
+          "threadId": "t1",
+          "type": "thread.interaction-mode.set"
+        },
+        "rpc": "orchestration.dispatchCommand"
+      }
+    ]
+  },
+  {
+    "step": "find in the thread",
+    "sent": [
+      {
+        "payload": {
+          "query": "look",
+          "threadId": "t1"
+        },
+        "rpc": "orchestration.searchThread"
+      }
+    ]
+  },
+  {
+    "step": "the next match",
+    "sent": [
+      {
+        "payload": {
+          "offset": 1,
+          "query": "look",
+          "start": {
+            "entryId": "m1",
+            "occurrence": 0
+          },
+          "threadId": "t1"
+        },
+        "rpc": "orchestration.searchThread"
+      }
+    ]
+  },
+  {
+    "step": "the match before, from none",
+    "sent": [
+      {
+        "payload": {
+          "offset": -1,
+          "query": "look",
+          "threadId": "t1"
+        },
+        "rpc": "orchestration.searchThread"
+      }
+    ]
+  },
+  {
+    "step": "change the model",
+    "sent": [
+      {
+        "payload": {
+          "commandId": "made-29",
+          "modelSelection": {
+            "instanceId": "claudeAgent",
+            "model": "claude-sonnet-5"
+          },
+          "threadId": "t1",
+          "type": "thread.model-selection.set"
+        },
+        "rpc": "orchestration.dispatchCommand"
+      }
+    ]
+  },
+  {
+    "step": "change the model to one with an effort",
+    "sent": [
+      {
+        "payload": {
+          "commandId": "made-30",
+          "modelSelection": {
+            "instanceId": "claudeAgent",
+            "model": "claude-haiku-5-5",
+            "options": [
+              {
+                "id": "effort",
+                "value": "medium"
+              }
+            ]
+          },
+          "threadId": "t1",
+          "type": "thread.model-selection.set"
+        },
+        "rpc": "orchestration.dispatchCommand"
+      }
+    ]
+  },
+  {
+    "step": "change the effort",
+    "sent": [
+      {
+        "payload": {
+          "commandId": "made-31",
+          "modelSelection": {
+            "instanceId": "claudeAgent",
+            "model": "claude-haiku-5-5",
+            "options": [
+              {
+                "id": "effort",
+                "value": "low"
+              }
+            ]
+          },
+          "threadId": "t1",
+          "type": "thread.model-selection.set"
+        },
+        "rpc": "orchestration.dispatchCommand"
+      }
+    ]
+  },
+  {
+    "step": "send a message",
+    "sent": [
+      {
+        "payload": {
+          "attachments": [],
+          "commandId": "made-32",
+          "createdBy": "user",
+          "creationSource": "web",
+          "dispatchMode": {
+            "type": "queue_after_active"
+          },
+          "messageId": "made-33",
+          "modelSelection": {
+            "instanceId": "claudeAgent",
+            "model": "claude-haiku-5-5",
+            "options": [
+              {
+                "id": "effort",
+                "value": "low"
+              }
+            ]
+          },
+          "text": "later",
+          "threadId": "t1",
+          "type": "message.dispatch"
+        },
+        "rpc": "orchestration.dispatchCommand"
+      }
+    ]
+  },
+  {
+    "step": "send a message into the turn",
+    "sent": [
+      {
+        "payload": {
+          "attachments": [],
+          "commandId": "made-34",
+          "createdBy": "user",
+          "creationSource": "web",
+          "dispatchMode": {
+            "targetRunId": "r2",
+            "type": "steer_active"
+          },
+          "messageId": "made-35",
+          "modelSelection": {
+            "instanceId": "claudeAgent",
+            "model": "claude-haiku-5-5",
+            "options": [
+              {
+                "id": "effort",
+                "value": "low"
+              }
+            ]
+          },
+          "text": "now",
+          "threadId": "t1",
+          "type": "message.dispatch"
+        },
+        "rpc": "orchestration.dispatchCommand"
+      }
+    ]
+  },
+  {
+    "step": "send a message with an image: the image first",
+    "sent": [
+      {
+        "payload": {
+          "attachments": [
+            {
+              "dataUrl": "data:image/png;base64,AAAA",
+              "mimeType": "image/png",
+              "name": "shot.png",
+              "sizeBytes": 3,
+              "type": "image"
+            }
+          ],
+          "messageId": "made-36",
+          "threadId": "t1"
+        },
+        "rpc": "assets.persistChatAttachments"
+      }
+    ]
+  },
+  {
+    "step": "assets.persistChatAttachments answered",
+    "sent": [
+      {
+        "payload": {
+          "attachments": [
+            {
+              "id": "t1-new",
+              "mimeType": "image/png",
+              "name": "shot.png",
+              "sizeBytes": 3,
+              "type": "image"
+            }
+          ],
+          "commandId": "made-37",
+          "createdBy": "user",
+          "creationSource": "web",
+          "dispatchMode": {
+            "type": "queue_after_active"
+          },
+          "messageId": "made-36",
+          "modelSelection": {
+            "instanceId": "claudeAgent",
+            "model": "claude-haiku-5-5",
+            "options": [
+              {
+                "id": "effort",
+                "value": "low"
+              }
+            ]
+          },
+          "text": "see this",
+          "threadId": "t1",
+          "type": "message.dispatch"
+        },
+        "rpc": "orchestration.dispatchCommand"
+      }
+    ]
+  },
+  {
+    "step": "implement a plan from plan mode",
+    "sent": [
+      {
+        "payload": {
+          "attachments": [],
+          "commandId": "made-38",
+          "createdBy": "user",
+          "creationSource": "web",
+          "dispatchMode": {
+            "type": "queue_after_active"
+          },
+          "messageId": "made-39",
+          "modelSelection": {
+            "instanceId": "claudeAgent",
+            "model": "claude-haiku-5-5",
+            "options": [
+              {
+                "id": "effort",
+                "value": "low"
+              }
+            ]
+          },
+          "sourcePlanRef": {
+            "planId": "plan1",
+            "threadId": "t1"
+          },
+          "text": "Implement the plan.",
+          "threadId": "t1",
+          "type": "message.dispatch"
+        },
+        "rpc": "orchestration.dispatchCommand"
+      },
+      {
+        "payload": {
+          "commandId": "made-40",
+          "interactionMode": "default",
+          "threadId": "t1",
+          "type": "thread.interaction-mode.set"
+        },
+        "rpc": "orchestration.dispatchCommand"
+      }
+    ]
+  },
+  {
+    "step": "rename a thread",
+    "sent": [
+      {
+        "payload": {
+          "commandId": "made-41",
+          "threadId": "t1",
+          "title": "New name",
+          "type": "thread.metadata.update"
+        },
+        "rpc": "orchestration.dispatchCommand"
+      }
+    ]
+  },
+  {
+    "step": "pin a thread",
+    "sent": [
+      {
+        "payload": {
+          "commandId": "made-42",
+          "threadId": "t1",
+          "type": "thread.pin"
+        },
+        "rpc": "orchestration.dispatchCommand"
+      }
+    ]
+  },
+  {
+    "step": "unpin a thread",
+    "sent": [
+      {
+        "payload": {
+          "commandId": "made-43",
+          "threadId": "t1",
+          "type": "thread.unpin"
+        },
+        "rpc": "orchestration.dispatchCommand"
+      }
+    ]
+  },
+  {
+    "step": "settle a thread",
+    "sent": [
+      {
+        "payload": {
+          "commandId": "made-44",
+          "settledAt": "2026-11-18T11:06:40.000Z",
+          "threadId": "t1",
+          "type": "thread.settle"
+        },
+        "rpc": "orchestration.dispatchCommand"
+      }
+    ]
+  },
+  {
+    "step": "unsettle a thread",
+    "sent": [
+      {
+        "payload": {
+          "commandId": "made-45",
+          "reason": "user",
+          "threadId": "t1",
+          "type": "thread.unsettle"
+        },
+        "rpc": "orchestration.dispatchCommand"
+      }
+    ]
+  },
+  {
+    "step": "snooze a thread",
+    "sent": [
+      {
+        "payload": {
+          "commandId": "made-46",
+          "snoozedUntil": "2026-11-18T12:06:40.000Z",
+          "threadId": "t1",
+          "type": "thread.snooze"
+        },
+        "rpc": "orchestration.dispatchCommand"
+      }
+    ]
+  },
+  {
+    "step": "undo the snooze",
+    "sent": [
+      {
+        "payload": {
+          "commandId": "made-47",
+          "reason": "user",
+          "threadId": "t1",
+          "type": "thread.unsnooze"
+        },
+        "rpc": "orchestration.dispatchCommand"
+      }
+    ]
+  },
+  {
+    "step": "wake a thread",
+    "sent": [
+      {
+        "payload": {
+          "commandId": "made-48",
+          "reason": "user",
+          "threadId": "t1",
+          "type": "thread.unsnooze"
+        },
+        "rpc": "orchestration.dispatchCommand"
+      }
+    ]
+  },
+  {
+    "step": "mark a thread unread",
+    "sent": [
+      {
+        "payload": {
+          "commandId": "made-49",
+          "threadId": "t1",
+          "type": "thread.mark-unread"
+        },
+        "rpc": "orchestration.dispatchCommand"
+      }
+    ]
+  },
+  {
+    "step": "answer an approval from its notification",
+    "sent": [
+      {
+        "payload": {
+          "commandId": "made-50",
+          "decision": "accept",
+          "requestId": "rq3",
+          "threadId": "t3",
+          "type": "runtime-request.respond"
+        },
+        "rpc": "orchestration.dispatchCommand"
+      }
+    ]
+  },
+  {
+    "step": "answer an approval from a live activity",
+    "sent": [
+      {
+        "payload": {
+          "commandId": "made-51",
+          "decision": "decline",
+          "requestId": "rq3",
+          "threadId": "t3",
+          "type": "runtime-request.respond"
+        },
+        "rpc": "orchestration.dispatchCommand"
+      }
+    ]
+  },
+  {
+    "step": "answer a question from its notification",
+    "sent": [
+      {
+        "payload": {
+          "answers": {
+            "Which database?": [
+              "SQLite"
+            ]
+          },
+          "commandId": "made-52",
+          "decision": "accept",
+          "requestId": "rq3",
+          "threadId": "t3",
+          "type": "runtime-request.respond"
+        },
+        "rpc": "orchestration.dispatchCommand"
+      }
+    ]
+  },
+  {
+    "step": "the thread's diff",
+    "sent": [
+      {
+        "payload": {
+          "threadId": "t1",
+          "toTurnCount": 1
+        },
+        "rpc": "orchestration.getFullThreadDiff"
+      }
+    ]
+  },
+  {
+    "step": "a turn's diff",
+    "sent": [
+      {
+        "payload": {
+          "fromTurnCount": 0,
+          "threadId": "t1",
+          "toTurnCount": 1
+        },
+        "rpc": "orchestration.getTurnDiff"
+      }
+    ]
+  },
+  {
+    "step": "the branch's diff",
+    "sent": [
+      {
+        "payload": {
+          "cwd": "/w",
+          "sourceKind": "branch-range"
+        },
+        "rpc": "review.getDiffPreview"
+      }
+    ]
+  },
+  {
+    "step": "the working tree's diff",
+    "sent": [
+      {
+        "payload": {
+          "cwd": "/w",
+          "sourceKind": "working-tree"
+        },
+        "rpc": "review.getDiffPreview"
+      }
+    ]
+  },
+  {
+    "step": "the files",
+    "sent": [
+      {
+        "payload": {
+          "cwd": "/w",
+          "directoryPath": ""
+        },
+        "rpc": "projects.listEntries"
+      }
+    ]
+  },
+  {
+    "step": "a folder",
+    "sent": [
+      {
+        "payload": {
+          "cwd": "/w",
+          "directoryPath": "src"
+        },
+        "rpc": "projects.listEntries"
+      }
+    ]
+  },
+  {
+    "step": "a file",
+    "sent": [
+      {
+        "payload": {
+          "cwd": "/w",
+          "relativePath": "src/main.rs"
+        },
+        "rpc": "projects.readFile"
+      }
+    ]
+  },
+  {
+    "step": "search the files",
+    "sent": [
+      {
+        "payload": {
+          "cwd": "/w",
+          "limit": 50,
+          "query": "ma"
+        },
+        "rpc": "projects.searchEntries"
+      }
+    ]
+  },
+  {
+    "step": "a terminal",
+    "sent": [
+      {
+        "payload": {
+          "cols": 100,
+          "cwd": "/w",
+          "rows": 24,
+          "terminalId": "term-1",
+          "threadId": "t1"
+        },
+        "rpc": "terminal.attach"
+      }
+    ]
+  },
+  {
+    "step": "type in the terminal",
+    "sent": [
+      {
+        "payload": {
+          "data": "a",
+          "terminalId": "term-1",
+          "threadId": "t1"
+        },
+        "rpc": "terminal.write"
+      }
+    ]
+  },
+  {
+    "step": "paste in the terminal",
+    "sent": [
+      {
+        "payload": {
+          "data": "ls -la",
+          "terminalId": "term-1",
+          "threadId": "t1"
+        },
+        "rpc": "terminal.write"
+      }
+    ]
+  },
+  {
+    "step": "clear the terminal",
+    "sent": [
+      {
+        "payload": {
+          "data": "\f",
+          "terminalId": "term-1",
+          "threadId": "t1"
+        },
+        "rpc": "terminal.write"
+      },
+      {
+        "payload": {
+          "terminalId": "term-1",
+          "threadId": "t1"
+        },
+        "rpc": "terminal.clear"
+      }
+    ]
+  },
+  {
+    "step": "resize the terminal",
+    "sent": [
+      {
+        "payload": {
+          "cols": 100,
+          "rows": 30,
+          "terminalId": "term-1",
+          "threadId": "t1"
+        },
+        "rpc": "terminal.resize"
+      }
+    ]
+  },
+  {
+    "step": "a second terminal",
+    "sent": [
+      {
+        "payload": {
+          "cols": 100,
+          "cwd": "/w",
+          "rows": 24,
+          "terminalId": "term-2",
+          "threadId": "t1"
+        },
+        "rpc": "terminal.attach"
+      }
+    ]
+  },
+  {
+    "step": "close a terminal",
+    "sent": [
+      {
+        "payload": {
+          "terminalId": "term-2",
+          "threadId": "t1"
+        },
+        "rpc": "terminal.close"
+      },
+      {
+        "rpc": "Interrupt"
+      }
+    ]
+  },
+  {
+    "step": "refresh git",
+    "sent": [
+      {
+        "payload": {
+          "cwd": "/w",
+          "limit": 100,
+          "refKind": "local"
+        },
+        "rpc": "vcs.listRefs"
+      },
+      {
+        "payload": {
+          "cwd": "/w"
+        },
+        "rpc": "vcs.refreshStatus"
+      }
+    ]
+  },
+  {
+    "step": "commit and push",
+    "sent": [
+      {
+        "payload": {
+          "action": "commit_push",
+          "actionId": "made-53",
+          "commitMessage": "Fix it",
+          "cwd": "/w",
+          "threadId": "t1"
+        },
+        "rpc": "git.runStackedAction"
+      }
+    ]
+  },
+  {
+    "step": "push without a message",
+    "sent": [
+      {
+        "payload": {
+          "action": "push",
+          "actionId": "made-54",
+          "cwd": "/w",
+          "threadId": "t1"
+        },
+        "rpc": "git.runStackedAction"
+      }
+    ]
+  },
+  {
+    "step": "pull",
+    "sent": [
+      {
+        "payload": {
+          "cwd": "/w"
+        },
+        "rpc": "vcs.pull"
+      }
+    ]
+  },
+  {
+    "step": "switch branch",
+    "sent": [
+      {
+        "payload": {
+          "cwd": "/w",
+          "refName": "main"
+        },
+        "rpc": "vcs.switchRef"
+      }
+    ]
+  },
+  {
+    "step": "create a branch",
+    "sent": [
+      {
+        "payload": {
+          "cwd": "/w",
+          "refName": "feature",
+          "switchRef": true
+        },
+        "rpc": "vcs.createRef"
+      }
+    ]
+  },
+  {
+    "step": "open a fork",
+    "sent": [
+      {
+        "payload": {
+          "cols": 100,
+          "cwd": "/w",
+          "rows": 24,
+          "terminalId": "term-3",
+          "threadId": "t2"
+        },
+        "rpc": "terminal.attach"
+      },
+      {
+        "payload": {
+          "commandId": "made-55",
+          "opened": true,
+          "threadId": "t2",
+          "type": "thread.visit",
+          "visitedAt": "2026-11-18T11:06:40.000Z"
+        },
+        "rpc": "orchestration.dispatchCommand"
+      },
+      {
+        "payload": {
+          "requestCompletionMarker": true,
+          "threadId": "t2"
+        },
+        "rpc": "orchestration.subscribeThread"
+      },
+      {
+        "rpc": "Interrupt"
+      },
+      {
+        "rpc": "Interrupt"
+      }
+    ]
+  },
+  {
+    "step": "merge a fork back",
+    "sent": [
+      {
+        "payload": {
+          "commandId": "made-56",
+          "createdAt": "2026-11-18T11:06:40.000Z",
+          "createdBy": "user",
+          "creationSource": "web",
+          "sourcePoint": {
+            "type": "latest_stable"
+          },
+          "sourceThreadId": "t2",
+          "targetThreadId": "t1",
+          "type": "thread.merge_back"
+        },
+        "rpc": "orchestration.dispatchCommand"
+      }
+    ]
+  },
+  {
+    "step": "archive the open thread",
+    "sent": [
+      {
+        "payload": {
+          "commandId": "made-57",
+          "threadId": "t2",
+          "type": "thread.archive"
+        },
+        "rpc": "orchestration.dispatchCommand"
+      },
+      {
+        "payload": {},
+        "rpc": "orchestration.getArchivedShellSnapshot"
+      },
+      {
+        "rpc": "Interrupt"
+      },
+      {
+        "rpc": "Interrupt"
+      }
+    ]
+  },
+  {
+    "step": "undo the archive",
+    "sent": [
+      {
+        "payload": {
+          "commandId": "made-58",
+          "threadId": "t2",
+          "type": "thread.unarchive"
+        },
+        "rpc": "orchestration.dispatchCommand"
+      },
+      {
+        "payload": {},
+        "rpc": "orchestration.getArchivedShellSnapshot"
+      }
+    ]
+  },
+  {
+    "step": "unarchive a thread",
+    "sent": [
+      {
+        "payload": {
+          "commandId": "made-59",
+          "threadId": "t3",
+          "type": "thread.unarchive"
+        },
+        "rpc": "orchestration.dispatchCommand"
+      },
+      {
+        "payload": {},
+        "rpc": "orchestration.getArchivedShellSnapshot"
+      }
+    ]
+  },
+  {
+    "step": "delete a thread",
+    "sent": [
+      {
+        "payload": {
+          "commandId": "made-60",
+          "threadId": "t3",
+          "type": "thread.delete"
+        },
+        "rpc": "orchestration.dispatchCommand"
+      }
+    ]
+  },
+  {
+    "step": "search the threads",
+    "sent": [
+      {
+        "payload": {
+          "limit": 20,
+          "query": "the"
+        },
+        "rpc": "orchestration.searchThreads"
+      }
+    ]
+  },
+  {
+    "step": "mention a file",
+    "sent": [
+      {
+        "payload": {
+          "cwd": "/w",
+          "limit": 8,
+          "query": "sr"
+        },
+        "rpc": "projects.searchEntries"
+      }
+    ]
+  },
+  {
+    "step": "start a thread in the project's folder",
+    "sent": [
+      {
+        "payload": {
+          "commandId": "made-61",
+          "creationSource": "web",
+          "generateTitle": true,
+          "initialMessage": {
+            "attachments": [],
+            "messageId": "made-62",
+            "text": "First line\nand more"
+          },
+          "interactionMode": "default",
+          "modelSelection": {
+            "instanceId": "claudeAgent",
+            "model": "claude-haiku-5-5",
+            "options": [
+              {
+                "id": "effort",
+                "value": "medium"
+              }
+            ]
+          },
+          "projectId": "p1",
+          "runtimeMode": "approval-required",
+          "threadId": "made-63",
+          "title": "First line",
+          "workspaceStrategy": {
+            "type": "root"
+          }
+        },
+        "rpc": "orchestration.launchThread"
+      }
+    ]
+  },
+  {
+    "step": "orchestration.launchThread answered",
+    "sent": [
+      {
+        "payload": {
+          "commandId": "made-64",
+          "opened": true,
+          "threadId": "made-63",
+          "type": "thread.visit",
+          "visitedAt": "2026-11-18T11:06:40.000Z"
+        },
+        "rpc": "orchestration.dispatchCommand"
+      },
+      {
+        "payload": {
+          "requestCompletionMarker": true,
+          "threadId": "made-63"
+        },
+        "rpc": "orchestration.subscribeThread"
+      }
+    ]
+  },
+  {
+    "step": "a new thread",
+    "sent": [
+      {
+        "rpc": "Interrupt"
+      }
+    ]
+  },
+  {
+    "step": "commit with no thread open",
+    "sent": [
+      {
+        "payload": {
+          "action": "commit",
+          "actionId": "made-65",
+          "commitMessage": "Fix it",
+          "cwd": "/w"
+        },
+        "rpc": "git.runStackedAction"
+      }
+    ]
+  },
+  {
+    "step": "start a thread in a worktree",
+    "sent": [
+      {
+        "payload": {
+          "commandId": "made-66",
+          "creationSource": "web",
+          "generateTitle": true,
+          "initialMessage": {
+            "attachments": [],
+            "messageId": "made-67",
+            "text": "In a worktree"
+          },
+          "interactionMode": "default",
+          "modelSelection": {
+            "instanceId": "claudeAgent",
+            "model": "claude-haiku-5-5",
+            "options": [
+              {
+                "id": "effort",
+                "value": "medium"
+              }
+            ]
+          },
+          "projectId": "p1",
+          "runtimeMode": "approval-required",
+          "threadId": "made-68",
+          "title": "In a worktree",
+          "workspaceStrategy": {
+            "baseRef": "HEAD",
+            "type": "worktree"
+          }
+        },
+        "rpc": "orchestration.launchThread"
+      }
+    ]
+  },
+  {
+    "step": "orchestration.launchThread answered",
+    "sent": [
+      {
+        "payload": {
+          "commandId": "made-69",
+          "opened": true,
+          "threadId": "made-68",
+          "type": "thread.visit",
+          "visitedAt": "2026-11-18T11:06:40.000Z"
+        },
+        "rpc": "orchestration.dispatchCommand"
+      },
+      {
+        "payload": {
+          "requestCompletionMarker": true,
+          "threadId": "made-68"
+        },
+        "rpc": "orchestration.subscribeThread"
+      }
+    ]
+  },
+  {
+    "step": "a new thread",
+    "sent": [
+      {
+        "rpc": "Interrupt"
+      }
+    ]
+  },
+  {
+    "step": "start a thread with an image: the image first",
+    "sent": [
+      {
+        "payload": {
+          "attachments": [
+            {
+              "dataUrl": "data:image/png;base64,BBBB",
+              "mimeType": "image/png",
+              "name": "plan.png",
+              "sizeBytes": 4,
+              "type": "image"
+            }
+          ],
+          "messageId": "made-70",
+          "threadId": "made-71"
+        },
+        "rpc": "assets.persistChatAttachments"
+      }
+    ]
+  },
+  {
+    "step": "assets.persistChatAttachments answered",
+    "sent": [
+      {
+        "payload": {
+          "commandId": "made-72",
+          "creationSource": "web",
+          "generateTitle": true,
+          "initialMessage": {
+            "attachments": [
+              {
+                "id": "new-img",
+                "mimeType": "image/png",
+                "name": "plan.png",
+                "sizeBytes": 4,
+                "type": "image"
+              }
+            ],
+            "messageId": "made-70",
+            "text": "In a worktree of main"
+          },
+          "interactionMode": "plan",
+          "modelSelection": {
+            "instanceId": "codex",
+            "model": "gpt-6"
+          },
+          "projectId": "p1",
+          "runtimeMode": "full-access",
+          "threadId": "made-71",
+          "title": "In a worktree of main",
+          "workspaceStrategy": {
+            "baseRef": "main",
+            "type": "worktree"
+          }
+        },
+        "rpc": "orchestration.launchThread"
+      }
+    ]
+  },
+  {
+    "step": "orchestration.launchThread answered",
+    "sent": [
+      {
+        "payload": {
+          "commandId": "made-73",
+          "opened": true,
+          "threadId": "made-71",
+          "type": "thread.visit",
+          "visitedAt": "2026-11-18T11:06:40.000Z"
+        },
+        "rpc": "orchestration.dispatchCommand"
+      },
+      {
+        "payload": {
+          "requestCompletionMarker": true,
+          "threadId": "made-71"
+        },
+        "rpc": "orchestration.subscribeThread"
+      }
+    ]
+  },
+  {
+    "step": "a scheduled task",
+    "sent": [
+      {
+        "payload": {
+          "creationSource": "web",
+          "enabled": true,
+          "interactionMode": "default",
+          "modelSelection": {
+            "instanceId": "codex",
+            "model": "gpt-6"
+          },
+          "projectId": "p1",
+          "prompt": "Run the tests",
+          "runtimeMode": "full-access",
+          "schedule": {
+            "everyMs": 5400000,
+            "type": "interval"
+          },
+          "threadMode": "new_thread",
+          "title": "Nightly",
+          "workspaceStrategy": {
+            "type": "root"
+          }
+        },
+        "rpc": "scheduledTasks.upsert"
+      }
+    ]
+  },
+  {
+    "step": "the pull requests",
+    "sent": [
+      {
+        "payload": {
+          "limit": 50,
+          "state": "open"
+        },
+        "rpc": "pullRequests.list"
+      }
+    ]
+  },
+  {
+    "step": "a pull request",
+    "sent": [
+      {
+        "payload": {
+          "number": 12,
+          "projectId": "p1",
+          "repository": "o/calc"
+        },
+        "rpc": "pullRequests.checks"
+      },
+      {
+        "payload": {
+          "number": 12,
+          "projectId": "p1",
+          "repository": "o/calc"
+        },
+        "rpc": "pullRequests.summary"
+      }
+    ]
+  },
+  {
+    "step": "merge a pull request",
+    "sent": [
+      {
+        "payload": {
+          "action": "merge",
+          "mergeMethod": "squash",
+          "number": 12,
+          "projectId": "p1",
+          "repository": "o/calc"
+        },
+        "rpc": "pullRequests.runAction"
+      }
+    ]
+  },
+  {
+    "step": "merge a pull request the default way",
+    "sent": [
+      {
+        "payload": {
+          "action": "merge",
+          "mergeMethod": "merge",
+          "number": 12,
+          "projectId": "p1",
+          "repository": "o/calc"
+        },
+        "rpc": "pullRequests.runAction"
+      }
+    ]
+  },
+  {
+    "step": "close a pull request",
+    "sent": [
+      {
+        "payload": {
+          "action": "close",
+          "number": 12,
+          "projectId": "p1",
+          "repository": "o/calc"
+        },
+        "rpc": "pullRequests.runAction"
+      }
+    ]
+  },
+  {
+    "step": "review a pull request",
+    "sent": [
+      {
+        "payload": {
+          "body": "fine",
+          "comments": [],
+          "number": 12,
+          "projectId": "p1",
+          "repository": "o/calc",
+          "verdict": "approve"
+        },
+        "rpc": "pullRequests.submitReview"
+      }
+    ]
+  },
+  {
+    "step": "comment on a pull request",
+    "sent": [
+      {
+        "payload": {
+          "body": "note",
+          "number": 12,
+          "projectId": "p1",
+          "repository": "o/calc"
+        },
+        "rpc": "pullRequests.comment"
+      }
+    ]
+  },
+  {
+    "step": "a thread for a pull request",
+    "sent": [
+      {
+        "payload": {
+          "cwd": "/w",
+          "mode": "worktree",
+          "reference": "12"
+        },
+        "rpc": "git.preparePullRequestThread"
+      }
+    ]
+  },
+  {
+    "step": "git.preparePullRequestThread answered",
+    "sent": [
+      {
+        "rpc": "Interrupt"
+      }
+    ]
+  },
+  {
+    "step": "start a thread in the pull request's worktree",
+    "sent": [
+      {
+        "payload": {
+          "commandId": "made-74",
+          "creationSource": "web",
+          "generateTitle": true,
+          "initialMessage": {
+            "attachments": [],
+            "messageId": "made-75",
+            "text": "Review this"
+          },
+          "interactionMode": "plan",
+          "modelSelection": {
+            "instanceId": "codex",
+            "model": "gpt-6"
+          },
+          "projectId": "p1",
+          "runtimeMode": "full-access",
+          "threadId": "made-76",
+          "title": "Review this",
+          "workspaceStrategy": {
+            "branch": "fix-parser",
+            "type": "existing_worktree",
+            "worktreePath": "/wt/pr-12"
+          }
+        },
+        "rpc": "orchestration.launchThread"
+      }
+    ]
+  },
+  {
+    "step": "orchestration.launchThread answered",
+    "sent": [
+      {
+        "payload": {
+          "commandId": "made-77",
+          "opened": true,
+          "threadId": "made-76",
+          "type": "thread.visit",
+          "visitedAt": "2026-11-18T11:06:40.000Z"
+        },
+        "rpc": "orchestration.dispatchCommand"
+      },
+      {
+        "payload": {
+          "requestCompletionMarker": true,
+          "threadId": "made-76"
+        },
+        "rpc": "orchestration.subscribeThread"
+      }
+    ]
+  },
+  {
+    "step": "add a project by its path",
+    "sent": [
+      {
+        "payload": {
+          "commandId": "made-78",
+          "createWorkspaceRootIfMissing": false,
+          "defaultModelSelection": null,
+          "projectId": "made-79",
+          "title": "new",
+          "type": "project.create",
+          "workspaceRoot": "/work/new"
+        },
+        "rpc": "projects.mutate"
+      }
+    ]
+  },
+  {
+    "step": "create a project",
+    "sent": [
+      {
+        "payload": {
+          "name": "new"
+        },
+        "rpc": "projects.createNew"
+      }
+    ]
+  },
+  {
+    "step": "rename a project",
+    "sent": [
+      {
+        "payload": {
+          "commandId": "made-80",
+          "projectId": "p1",
+          "title": "Renamed",
+          "type": "project.update"
+        },
+        "rpc": "projects.mutate"
+      }
+    ]
+  },
+  {
+    "step": "remove a project",
+    "sent": [
+      {
+        "payload": {
+          "commandId": "made-81",
+          "projectId": "p-site",
+          "type": "project.delete"
+        },
+        "rpc": "projects.mutate"
+      }
+    ]
+  },
+  {
+    "step": "the scratch project",
+    "sent": [
+      {
+        "payload": {},
+        "rpc": "projects.ensureScratch"
+      }
+    ]
+  },
+  {
+    "step": "a project from a scratch thread",
+    "sent": [
+      {
+        "payload": {
+          "threadId": "t1"
+        },
+        "rpc": "projects.createFromThread"
+      }
+    ]
+  },
+  {
+    "step": "look for sessions to import",
+    "sent": [
+      {
+        "payload": {},
+        "rpc": "agentSessions.scan"
+      }
+    ]
+  },
+  {
+    "step": "import a folder's sessions: its project first",
+    "sent": [
+      {
+        "payload": {
+          "commandId": "made-82",
+          "createWorkspaceRootIfMissing": false,
+          "defaultModelSelection": null,
+          "projectId": "made-83",
+          "title": "calc",
+          "type": "project.create",
+          "workspaceRoot": "/w/calc"
+        },
+        "rpc": "projects.mutate"
+      }
+    ]
+  },
+  {
+    "step": "projects.mutate answered",
+    "sent": [
+      {
+        "payload": {
+          "expectedWorkspaceRoot": "/w/calc",
+          "projectId": "made-83"
+        },
+        "rpc": "agentSessions.import"
+      }
+    ]
+  },
+  {
+    "step": "agentSessions.import answered",
+    "sent": [
+      {
+        "payload": {
+          "expectedWorkspaceRoot": "/w/site",
+          "projectId": "p-site"
+        },
+        "rpc": "agentSessions.import"
+      }
+    ]
+  },
+  {
+    "step": "agentSessions.import answered",
+    "sent": [
+      {
+        "payload": {},
+        "rpc": "agentSessions.scan"
+      }
+    ]
+  },
+  {
+    "step": "browse the server's folders",
+    "sent": [
+      {
+        "payload": {
+          "partialPath": "/w/"
+        },
+        "rpc": "filesystem.browse"
+      }
+    ]
+  },
+  {
+    "step": "the providers settings",
+    "sent": [
+      {
+        "payload": {},
+        "rpc": "server.refreshProviders"
+      }
+    ]
+  },
+  {
+    "step": "the scheduled settings",
+    "sent": [
+      {
+        "payload": {},
+        "rpc": "scheduledTasks.subscribe"
+      }
+    ]
+  },
+  {
+    "step": "the archived settings",
+    "sent": [
+      {
+        "payload": {},
+        "rpc": "orchestration.getArchivedShellSnapshot"
+      }
+    ]
+  },
+  {
+    "step": "the storage settings",
+    "sent": [
+      {
+        "payload": {},
+        "rpc": "server.getDatabaseStorage"
+      },
+      {
+        "payload": {},
+        "rpc": "server.getStorageCleanupReport"
+      }
+    ]
+  },
+  {
+    "step": "the diagnostics settings",
+    "sent": [
+      {
+        "payload": {},
+        "rpc": "server.getHostResources"
+      },
+      {
+        "payload": {},
+        "rpc": "server.getProcessDiagnostics"
+      }
+    ]
+  },
+  {
+    "step": "the access settings",
+    "sent": [
+      {
+        "body": "",
+        "http": "GET",
+        "path": "/api/domovoi/remote"
+      },
+      {
+        "payload": {},
+        "rpc": "subscribeAuthAccess"
+      }
+    ]
+  },
+  {
+    "step": "switch a setting",
+    "sent": [
+      {
+        "payload": {
+          "patch": {
+            "defaultAutoPull": true
+          }
+        },
+        "rpc": "server.updateSettings"
+      }
+    ]
+  },
+  {
+    "step": "type a setting",
+    "sent": [
+      {
+        "payload": {
+          "patch": {
+            "worktreesDirectory": "somewhere"
+          }
+        },
+        "rpc": "server.updateSettings"
+      }
+    ]
+  },
+  {
+    "step": "choose a setting",
+    "sent": [
+      {
+        "payload": {
+          "patch": {
+            "defaultRuntimeMode": "full-access"
+          }
+        },
+        "rpc": "server.updateSettings"
+      }
+    ]
+  },
+  {
+    "step": "type a number setting",
+    "sent": [
+      {
+        "payload": {
+          "patch": {
+            "sidebarAutoSettleAfterDays": 12
+          }
+        },
+        "rpc": "server.updateSettings"
+      }
+    ]
+  },
+  {
+    "step": "type words into a number setting",
+    "sent": [
+      {
+        "payload": {
+          "patch": {
+            "sidebarAutoSettleAfterDays": "soon"
+          }
+        },
+        "rpc": "server.updateSettings"
+      }
+    ]
+  },
+  {
+    "step": "switch a setting this build does not know",
+    "sent": [
+      {
+        "payload": {
+          "patch": {
+            "aNewerSetting": false
+          }
+        },
+        "rpc": "server.updateSettings"
+      }
+    ]
+  },
+  {
+    "step": "favorite a model",
+    "sent": [
+      {
+        "payload": {
+          "patch": {
+            "setModelFavorites": [
+              {
+                "favorite": true,
+                "model": "claude-haiku-5-5",
+                "provider": "claudeAgent"
+              }
+            ]
+          }
+        },
+        "rpc": "server.updateSettings"
+      }
+    ]
+  },
+  {
+    "step": "favorite a hidden model",
+    "sent": [
+      {
+        "payload": {
+          "patch": {
+            "setModelFavorites": [
+              {
+                "favorite": true,
+                "model": "claude-sonnet-5",
+                "provider": "claudeAgent"
+              }
+            ],
+            "setModelsHidden": [
+              {
+                "hidden": false,
+                "model": "claude-sonnet-5",
+                "provider": "claudeAgent"
+              }
+            ]
+          }
+        },
+        "rpc": "server.updateSettings"
+      }
+    ]
+  },
+  {
+    "step": "unfavorite a model",
+    "sent": [
+      {
+        "payload": {
+          "patch": {
+            "setModelFavorites": [
+              {
+                "favorite": false,
+                "model": "claude-sonnet-5",
+                "provider": "claudeAgent"
+              }
+            ]
+          }
+        },
+        "rpc": "server.updateSettings"
+      }
+    ]
+  },
+  {
+    "step": "hide a favorite model",
+    "sent": [
+      {
+        "payload": {
+          "patch": {
+            "setModelFavorites": [
+              {
+                "favorite": false,
+                "model": "gpt-6",
+                "provider": "codex"
+              }
+            ],
+            "setModelsHidden": [
+              {
+                "hidden": true,
+                "model": "gpt-6",
+                "provider": "codex"
+              }
+            ]
+          }
+        },
+        "rpc": "server.updateSettings"
+      }
+    ]
+  },
+  {
+    "step": "show a hidden model",
+    "sent": [
+      {
+        "payload": {
+          "patch": {
+            "setModelsHidden": [
+              {
+                "hidden": false,
+                "model": "gpt-6",
+                "provider": "codex"
+              }
+            ]
+          }
+        },
+        "rpc": "server.updateSettings"
+      }
+    ]
+  },
+  {
+    "step": "refresh the providers",
+    "sent": [
+      {
+        "payload": {
+          "fresh": true
+        },
+        "rpc": "server.refreshProviders"
+      }
+    ]
+  },
+  {
+    "step": "clean up storage",
+    "sent": [
+      {
+        "payload": {},
+        "rpc": "server.runStorageCleanup"
+      }
+    ]
+  },
+  {
+    "step": "reclaim database space",
+    "sent": [
+      {
+        "payload": {},
+        "rpc": "server.reclaimDatabaseSpace"
+      }
+    ]
+  },
+  {
+    "step": "turn a scheduled task off",
+    "sent": [
+      {
+        "payload": {
+          "enabled": false,
+          "id": "task-1"
+        },
+        "rpc": "scheduledTasks.setEnabled"
+      }
+    ]
+  },
+  {
+    "step": "run a scheduled task now",
+    "sent": [
+      {
+        "payload": {
+          "id": "task-1"
+        },
+        "rpc": "scheduledTasks.runNow"
+      }
+    ]
+  },
+  {
+    "step": "delete a scheduled task",
+    "sent": [
+      {
+        "payload": {
+          "id": "task-1"
+        },
+        "rpc": "scheduledTasks.delete"
+      }
+    ]
+  },
+  {
+    "step": "remove a keybinding",
+    "sent": [
+      {
+        "payload": {
+          "command": "thread.new",
+          "key": "mod+n"
+        },
+        "rpc": "server.removeKeybinding"
+      }
+    ]
+  },
+  {
+    "step": "remove a keybinding with a condition",
+    "sent": [
+      {
+        "payload": {
+          "command": "thread.new",
+          "key": "mod+n",
+          "when": "!terminalFocus"
+        },
+        "rpc": "server.removeKeybinding"
+      }
+    ]
+  },
+  {
+    "step": "the usage",
+    "sent": [
+      {
+        "payload": {
+          "sinceDay": "2026-11-12",
+          "timeZone": "UTC",
+          "untilDay": "2026-11-18"
+        },
+        "rpc": "server.getUsageSummary"
+      }
+    ]
+  },
+  {
+    "step": "a push token",
+    "sent": [
+      {
+        "body": {
+          "environment": "production",
+          "token": "apns-1"
+        },
+        "http": "POST",
+        "path": "/api/domovoi/push/devices"
+      }
+    ]
+  },
+  {
+    "step": "a live activity's token",
+    "sent": [
+      {
+        "body": {
+          "environment": "sandbox",
+          "threadId": "t1",
+          "token": "activity-1"
+        },
+        "http": "POST",
+        "path": "/api/domovoi/push/activities"
+      }
+    ]
+  },
+  {
+    "step": "remote access",
+    "sent": [
+      {
+        "body": "",
+        "http": "GET",
+        "path": "/api/domovoi/remote"
+      }
+    ]
+  },
+  {
+    "step": "turn remote access on",
+    "sent": [
+      {
+        "body": {
+          "enabled": true
+        },
+        "http": "POST",
+        "path": "/api/domovoi/remote/configure"
+      }
+    ]
+  },
+  {
+    "step": "a pairing link",
+    "sent": [
+      {
+        "body": {
+          "ttlMinutes": 10
+        },
+        "http": "POST",
+        "path": "/api/domovoi/remote/pairing"
+      }
+    ]
+  },
+  {
+    "step": "sign a device out",
+    "sent": [
+      {
+        "body": {
+          "sessionId": "session-1"
+        },
+        "http": "POST",
+        "path": "/api/auth/clients/revoke"
+      }
+    ]
+  },
+  {
+    "step": "open the thread again",
+    "sent": [
+      {
+        "payload": {
+          "cols": 100,
+          "cwd": "/w",
+          "rows": 24,
+          "terminalId": "term-4",
+          "threadId": "t1"
+        },
+        "rpc": "terminal.attach"
+      },
+      {
+        "payload": {
+          "commandId": "made-84",
+          "opened": true,
+          "threadId": "t1",
+          "type": "thread.visit",
+          "visitedAt": "2026-11-18T11:06:40.000Z"
+        },
+        "rpc": "orchestration.dispatchCommand"
+      },
+      {
+        "payload": {
+          "requestCompletionMarker": true,
+          "threadId": "t1"
+        },
+        "rpc": "orchestration.subscribeThread"
+      },
+      {
+        "rpc": "Interrupt"
+      }
+    ]
+  },
+  {
+    "step": "pull to refresh",
+    "sent": [
+      {
+        "payload": {
+          "afterSequence": 6,
+          "requestCompletionMarker": true
+        },
+        "rpc": "orchestration.subscribeShell"
+      },
+      {
+        "payload": {
+          "afterSequence": 9,
+          "requestCompletionMarker": true,
+          "threadId": "t1"
+        },
+        "rpc": "orchestration.subscribeThread"
+      },
+      {
+        "rpc": "Interrupt"
+      },
+      {
+        "rpc": "Interrupt"
+      }
+    ]
+  },
+  {
+    "step": "reconnect",
+    "sent": [
+      "socket opened",
+      {
+        "body": "",
+        "http": "POST",
+        "path": "/api/auth/websocket-ticket/rpc"
+      }
+    ]
+  },
+  {
+    "step": "the socket opens again: what waited is sent",
+    "sent": [
+      {
+        "payload": {
+          "afterSequence": 6,
+          "requestCompletionMarker": true
+        },
+        "rpc": "orchestration.subscribeShell"
+      },
+      {
+        "payload": {
+          "afterSequence": 9,
+          "requestCompletionMarker": true,
+          "threadId": "t1"
+        },
+        "rpc": "orchestration.subscribeThread"
+      },
+      {
+        "payload": {
+          "cols": 100,
+          "cwd": "/w",
+          "rows": 24,
+          "terminalId": "term-5",
+          "threadId": "t1"
+        },
+        "rpc": "terminal.attach"
+      },
+      {
+        "payload": {
+          "commandId": "made-85",
+          "settledAt": "2026-11-18T11:06:40.000Z",
+          "threadId": "t1",
+          "type": "thread.settle"
+        },
+        "rpc": "orchestration.dispatchCommand"
+      },
+      {
+        "payload": {
+          "cwd": "/w",
+          "includeRemote": true
+        },
+        "rpc": "subscribeVcsStatus"
+      },
+      {
+        "payload": {
+          "cwd": "/w",
+          "limit": 100,
+          "refKind": "local"
+        },
+        "rpc": "vcs.listRefs"
+      },
+      {
+        "payload": {
+          "environmentThemes": false,
+          "usageLimitSources": false
+        },
+        "rpc": "subscribeServerConfig"
+      },
+      {
+        "payload": {},
+        "rpc": "orchestration.getArchivedShellSnapshot"
+      },
+      {
+        "payload": {},
+        "rpc": "subscribeServerLifecycle"
+      },
+      {
+        "payload": {},
+        "rpc": "subscribeTerminalMetadata"
+      }
+    ]
+  },
+  {
+    "step": "forget the server",
+    "sent": [
+      "Close",
+      {
+        "body": "",
+        "http": "POST",
+        "path": "/api/domovoi/session/end"
+      }
+    ]
+  }
+]

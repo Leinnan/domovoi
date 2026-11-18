@@ -1,0 +1,32 @@
+[package]
+name = "domovoi-remote"
+description = "Reach a Domovoi server over iroh: HTTP/1.1 carried on iroh bi-streams, and a loopback bridge for clients"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+default = ["server", "bridge"]
+# Serve an axum router to iroh peers.
+server = ["dep:axum", "dep:hyper", "dep:hyper-util"]
+# Forward loopback TCP connections to a remote server (native clients, `domovoi-server connect`).
+bridge = []
+
+[dependencies]
+axum = { workspace = true, optional = true }
+hyper = { version = "1.12.0", features = ["server", "http1"], optional = true }
+hyper-util = { version = "0.1.21", features = ["tokio", "service"], optional = true }
+iroh = "1.4.1"
+iroh-tickets = "1.0.0"
+serde.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+# iOS: libc 0.2.190 limits `in6_ifreq` to macOS, but netdev (used by iroh's
+# netwatch) needs it on every Apple target. Stay below until netdev adapts.
+libc = "=0.2.189"
+
+[dev-dependencies]
+futures.workspace = true
+tokio-tungstenite = "0.29.0"

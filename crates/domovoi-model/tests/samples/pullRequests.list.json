@@ -1,0 +1,128 @@
+{
+  "viewers": { "github.com": "mona" },
+  "providers": [
+    {
+      "host": "github.com",
+      "kind": "github",
+      "searchesOnHost": true,
+      "actions": [
+        "merge",
+        "ready",
+        "draft",
+        "close",
+        "reopen",
+        "delete-branch",
+        "update-branch",
+        "enable-auto-merge",
+        "disable-auto-merge",
+        "revert",
+        "approve-workflows"
+      ],
+      "projectCount": 2,
+      "configured": true,
+      "detail": null
+    },
+    {
+      "host": "gitlab.com",
+      "kind": "gitlab",
+      "searchesOnHost": false,
+      "actions": [],
+      "projectCount": 1,
+      "configured": false,
+      "detail": "This host cannot be browsed here yet."
+    }
+  ],
+  "entries": [
+    {
+      "number": 128,
+      "title": "Type the records the git panel reads",
+      "url": "https://github.com/acme/t5code/pull/128",
+      "author": { "login": "mona", "name": "Mona Lisa", "avatarUrl": "https://avatars.githubusercontent.com/u/583231?v=4" },
+      "headBranch": "feature/typed-records",
+      "baseBranch": "main",
+      "state": "open",
+      "isDraft": false,
+      "mergeability": "mergeable",
+      "additions": 412,
+      "deletions": 37,
+      "createdAt": "2026-11-14T09:12:40Z",
+      "updatedAt": "2026-11-16T18:04:11Z",
+      "labels": [
+        { "name": "client", "color": "1d76db", "description": "The client core and the apps" },
+        { "name": "refactor", "color": "fbca04", "description": null }
+      ],
+      "checksState": "passing",
+      "reviewDecision": "approved",
+      "viewerReviewRequested": false,
+      "provider": "github",
+      "host": "github.com",
+      "projectId": "project-t5code",
+      "projectTitle": "t5code",
+      "repository": "acme/t5code",
+      "observedAt": 1794938400123
+    },
+    {
+      "number": 131,
+      "title": "Fix the login redirect loop",
+      "url": "https://github.com/acme/t5code/pull/131",
+      "author": {
+        "login": "dependabot",
+        "name": null,
+        "avatarUrl": "https://github.com/dependabot.png?size=80",
+        "isBot": true
+      },
+      "headBranch": "fix/login-redirect",
+      "baseBranch": "main",
+      "state": "open",
+      "isDraft": true,
+      "mergeability": "unknown",
+      "additions": 0,
+      "deletions": 0,
+      "createdAt": "2026-11-15T21:40:02Z",
+      "updatedAt": "2026-11-16T07:55:30Z",
+      "labels": [],
+      "checksState": "pending",
+      "reviewDecision": "review-required",
+      "viewerReviewRequested": true,
+      "provider": "github",
+      "host": "github.com",
+      "projectId": "project-t5code",
+      "projectTitle": "t5code",
+      "repository": "acme/t5code",
+      "observedAt": 1794938400123
+    },
+    {
+      "number": 17,
+      "title": "Drop the legacy sync path",
+      "url": "https://github.com/acme/playground/pull/17",
+      "author": null,
+      "headBranch": "cleanup/legacy-sync",
+      "baseBranch": "develop",
+      "state": "merged",
+      "isDraft": false,
+      "mergeability": "conflicting",
+      "additions": 12,
+      "deletions": 940,
+      "createdAt": "2026-10-30T11:00:00Z",
+      "updatedAt": "2026-11-02T16:21:09Z",
+      "labels": [{ "name": "cleanup", "color": null, "description": null }],
+      "checksState": "failing",
+      "viewerReviewRequested": false,
+      "provider": "github",
+      "host": "github.com",
+      "projectId": "project-playground",
+      "projectTitle": "playground",
+      "repository": "acme/playground",
+      "observedAt": 1794938400123
+    }
+  ],
+  "errors": [
+    {
+      "projectId": "project-archive",
+      "projectTitle": "archive",
+      "message": "GraphQL: Could not resolve to a Repository with the name 'acme/archive'."
+    }
+  ],
+  "truncated": false,
+  "nextCursors": {}
+}

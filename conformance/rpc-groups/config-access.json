@@ -1,0 +1,164 @@
+{
+ "cases": [
+  {
+   "http": "GET /.well-known/t3/environment",
+   "status": 200,
+   "anonymous": true
+  },
+  {
+   "http": "GET /api/auth/session",
+   "status": 200
+  },
+  {
+   "http": "GET /api/auth/session",
+   "status": 200,
+   "anonymous": true
+  },
+  {
+   "http": "POST /api/auth/browser-session",
+   "payload": {
+    "credential": "not-a-code"
+   },
+   "status": 401,
+   "anonymous": true
+  },
+  {
+   "http": "POST /api/auth/websocket-ticket",
+   "status": 401,
+   "anonymous": true
+  },
+  {
+   "tag": "subscribeAuthAccess",
+   "payload": {},
+   "expect": "chunk",
+   "save": {
+    "SESSION": "/payload/clientSessions/0/sessionId"
+   },
+   "note": "this session, no links"
+  },
+  {
+   "http": "GET /api/domovoi/remote",
+   "status": 200
+  },
+  {
+   "http": "GET /api/domovoi/remote",
+   "status": 401,
+   "anonymous": true
+  },
+  {
+   "http": "POST /api/domovoi/remote/pairing",
+   "payload": {
+    "permissions": []
+   },
+   "status": 400
+  },
+  {
+   "http": "POST /api/domovoi/remote/pairing",
+   "payload": {
+    "permissions": [
+     "not:a-permission"
+    ]
+   },
+   "status": 400
+  },
+  {
+   "http": "POST /api/domovoi/remote/pairing",
+   "payload": {},
+   "status": 401,
+   "anonymous": true
+  },
+  {
+   "http": "POST /api/auth/clients/revoke",
+   "payload": {
+    "sessionId": "nope"
+   },
+   "status": 200
+  },
+  {
+   "http": "POST /api/auth/clients/revoke",
+   "payload": {
+    "sessionId": "$SESSION"
+   },
+   "status": 403
+  },
+  {
+   "http": "POST /api/auth/clients/revoke",
+   "payload": {
+    "sessionId": "x"
+   },
+   "status": 401,
+   "anonymous": true
+  },
+  {
+   "http": "POST /api/auth/clients/revoke-others",
+   "status": 200
+  },
+  {
+   "http": "POST /api/auth/clients/revoke-others",
+   "status": 401,
+   "anonymous": true
+  },
+  {
+   "http": "POST /api/domovoi/remote/configure",
+   "payload": {
+    "enabled": true,
+    "relays": [
+     "not a url"
+    ]
+   },
+   "status": 400
+  },
+  {
+   "http": "POST /api/domovoi/remote/configure",
+   "payload": {
+    "enabled": false
+   },
+   "status": 200
+  },
+  {
+   "http": "POST /api/domovoi/remote/configure",
+   "payload": {
+    "enabled": false,
+    "relays": []
+   },
+   "status": 200
+  },
+  {
+   "http": "POST /api/domovoi/remote/configure",
+   "payload": {
+    "enabled": true
+   },
+   "status": 401,
+   "anonymous": true
+  },
+  {
+   "http": "POST /api/domovoi/server/stop",
+   "payload": {},
+   "status": 401,
+   "anonymous": true
+  },
+  {
+   "http": "POST /api/domovoi/session/end",
+   "status": 401,
+   "anonymous": true
+  },
+  {
+   "http": "GET /api/domovoi/remote",
+   "status": 200
+  },
+  {
+   "http": "POST /api/domovoi/session/end",
+   "status": 200,
+   "note": "the last call of this session"
+  },
+  {
+   "http": "GET /api/auth/session",
+   "status": 200,
+   "note": "signed out"
+  },
+  {
+   "http": "GET /api/domovoi/remote",
+   "status": 401
+  }
+ ]
+}

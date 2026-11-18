@@ -1,0 +1,23 @@
+{
+  "isRepo": true,
+  "hasPrimaryRemote": true,
+  "isDefaultRef": true,
+  "refName": "main",
+  "hasWorkingTreeChanges": true,
+  "workingTree": {
+    "rootPath": "/Users/dev/code/t5code",
+    "files": [
+      { "path": "README.md", "insertions": 6, "deletions": 2 },
+      { "path": "justfile", "insertions": 1, "deletions": 1 }
+    ],
+    "insertions": 7,
+    "deletions": 3
+  },
+  "branchChanges": { "baseRef": "origin/main", "insertions": 7, "deletions": 3 },
+  "sourceControlProvider": { "kind": "github", "name": "GitHub", "baseUrl": "https://github.com" },
+  "hasUpstream": true,
+  "aheadCount": 1,
+  "behindCount": 4,
+  "aheadOfDefaultCount": 0,
+  "pr": null
+}

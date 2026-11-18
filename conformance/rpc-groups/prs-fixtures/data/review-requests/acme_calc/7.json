@@ -1,0 +1,28 @@
+{
+ "data": {
+  "repository": {
+   "pullRequest": {
+    "author": {
+     "login": "Mona"
+    },
+    "reviewRequests": {
+     "nodes": [
+      {
+       "requestedReviewer": {
+        "login": "HUBOT"
+       }
+      },
+      {
+       "requestedReviewer": {
+        "combinedSlug": "acme/core"
+       }
+      },
+      {
+       "requestedReviewer": null
+      }
+     ]
+    }
+   }
+  }
+ }
+}

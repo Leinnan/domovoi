@@ -1,0 +1,13 @@
+{
+  "pullRequest": {
+    "number": 128,
+    "title": "Type the records the git panel reads",
+    "url": "https://github.com/acme/t5code/pull/128",
+    "baseBranch": "main",
+    "headBranch": "feature/typed-records",
+    "state": "open"
+  },
+  "branch": "feature/typed-records",
+  "worktreePath": "/Users/dev/.domovoi/worktrees/t5code/feature-typed-records-3c5e7a9b1d2f4a60",
+  "isOnPullRequestHead": true
+}

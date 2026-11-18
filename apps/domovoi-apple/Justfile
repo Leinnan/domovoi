@@ -1,0 +1,16 @@
+# Shortcuts for working inside apps/domovoi-apple; the recipes live in the
+# repository's root justfile (`just --list` there for everything).
+
+root := "../.."
+
+# Generate Swift types, the core's Swift package and the Xcode project
+generate:
+    just --justfile {{root}}/justfile mac-generate
+
+# Debug build of the app and "Domovoi Server.app"
+build:
+    just --justfile {{root}}/justfile mac-build
+
+# Release build of both apps packaged as .app, .zip and .dmg in dist/
+package:
+    just --justfile {{root}}/justfile mac-package

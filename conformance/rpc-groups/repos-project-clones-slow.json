@@ -1,0 +1,12 @@
+{
+  "cases": [
+    { "tag": "projectClone.start", "payload": { "projectId": "ps-slow", "title": "Never answers", "createdAt": "2026-01-01T00:00:00.000Z", "remoteUrl": "git@slow.test:acme/x.git", "destinationPath": "$DIR/clones/s-slow" } },
+    { "sh": "await-ssh slow.test && touch slow-called", "tag": "projectClone.start", "payload": { "projectId": "ps-done", "title": "Done soon", "createdAt": "2026-01-01T00:00:00.000Z", "remoteUrl": "git@github.test:acme/local.git", "destinationPath": "$DIR/clones/s-done" } },
+    { "sh": "await-done ps-done", "tag": "subscribeProjectClones", "payload": {}, "expect": "chunk", "note": "one running, one done" },
+    { "sh": "sleep-until slow-called 22", "tag": "subscribeProjectClones", "payload": {}, "expect": "chunk", "note": "git has said nothing for 20 seconds: the running clone is stalled" },
+    { "sh": "sleep-until done-at-ps-done 32", "tag": "subscribeProjectClones", "payload": {}, "expect": "chunk", "note": "a clone done 30 seconds ago is no longer listed" },
+    { "tag": "projectClone.start", "payload": { "projectId": "ps-done", "title": "Once more", "createdAt": "2026-01-01T00:00:00.000Z", "remoteUrl": "git@github.test:acme/local.git", "destinationPath": "$DIR/clones/s-again" }, "note": "the project's clone is forgotten: it may start another" },
+    { "sh": "await-done ps-done 2", "tag": "projectClone.cancel", "payload": { "projectId": "ps-slow" } },
+    { "tag": "subscribeProjectClones", "payload": {}, "expect": "chunk", "note": "cancelled, and no longer stalled; the second clone of the other project is done" }
+  ]
+}

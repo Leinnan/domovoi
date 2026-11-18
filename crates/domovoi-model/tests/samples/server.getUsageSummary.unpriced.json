@@ -1,0 +1,146 @@
+{
+  "contractVersion": 1,
+  "readAt": "2026-11-17T11:26:02.480Z",
+  "timeZone": "Europe/Warsaw",
+  "sinceDay": "2026-11-16",
+  "untilDay": "2026-11-17",
+  "buckets": [
+    {
+      "day": "2026-11-16",
+      "hourStart": null,
+      "provider": "claude",
+      "model": "claude-opus-4-5",
+      "totals": {
+        "uncachedInputTokens": 18240,
+        "cachedInputTokens": 2416800,
+        "cacheCreationTokens": 96400,
+        "outputTokens": 41250,
+        "reasoningTokens": 0
+      },
+      "costUsd": 0.0,
+      "cacheSavingsUsd": 0.0,
+      "costSource": "unpriced",
+      "records": 212,
+      "unpricedRecords": 212,
+      "unpricedTokens": 2572690,
+      "sessions": 3
+    },
+    {
+      "day": "2026-11-16",
+      "hourStart": null,
+      "provider": "claude",
+      "model": "claude-sonnet-4-5",
+      "totals": {
+        "uncachedInputTokens": 9020,
+        "cachedInputTokens": 884300,
+        "cacheCreationTokens": 51200,
+        "outputTokens": 18730,
+        "reasoningTokens": 0
+      },
+      "costUsd": 0.0,
+      "cacheSavingsUsd": 0.0,
+      "costSource": "unpriced",
+      "records": 97,
+      "unpricedRecords": 97,
+      "unpricedTokens": 963250,
+      "sessions": 2
+    },
+    {
+      "day": "2026-11-16",
+      "hourStart": null,
+      "provider": "codex",
+      "model": "gpt-5.5",
+      "totals": {
+        "uncachedInputTokens": 402100,
+        "cachedInputTokens": 3120500,
+        "cacheCreationTokens": 0,
+        "outputTokens": 58340,
+        "reasoningTokens": 21900
+      },
+      "costUsd": 0.0,
+      "cacheSavingsUsd": 0.0,
+      "costSource": "unpriced",
+      "records": 164,
+      "unpricedRecords": 164,
+      "unpricedTokens": 3602840,
+      "sessions": 4
+    },
+    {
+      "day": "2026-11-17",
+      "hourStart": null,
+      "provider": "claude",
+      "model": "claude-opus-4-5",
+      "totals": {
+        "uncachedInputTokens": 7310,
+        "cachedInputTokens": 1204600,
+        "cacheCreationTokens": 40100,
+        "outputTokens": 22480,
+        "reasoningTokens": 0
+      },
+      "costUsd": 0.0,
+      "cacheSavingsUsd": 0.0,
+      "costSource": "unpriced",
+      "records": 118,
+      "unpricedRecords": 118,
+      "unpricedTokens": 1274490,
+      "sessions": 2
+    },
+    {
+      "day": "2026-11-17",
+      "hourStart": null,
+      "provider": "codex",
+      "model": "gpt-5.5",
+      "totals": {
+        "uncachedInputTokens": 155800,
+        "cachedInputTokens": 990200,
+        "cacheCreationTokens": 0,
+        "outputTokens": 19760,
+        "reasoningTokens": 8450
+      },
+      "costUsd": 0.0,
+      "cacheSavingsUsd": 0.0,
+      "costSource": "unpriced",
+      "records": 61,
+      "unpricedRecords": 61,
+      "unpricedTokens": 1174210,
+      "sessions": 1
+    }
+  ],
+  "sources": [
+    {
+      "status": "ok",
+      "scannedFiles": 9,
+      "skippedFiles": 31,
+      "malformedRecords": 1,
+      "distinctSessions": 5,
+      "message": null,
+      "fingerprint": {
+        "hostId": "local",
+        "provider": "claude",
+        "resolvedHomePath": "/Users/dev/.claude",
+        "volumeId": "local"
+      }
+    },
+    {
+      "status": "ok",
+      "scannedFiles": 6,
+      "skippedFiles": 12,
+      "malformedRecords": 0,
+      "distinctSessions": 5,
+      "message": null,
+      "fingerprint": {
+        "hostId": "local",
+        "provider": "codex",
+        "resolvedHomePath": "/Users/dev/.codex",
+        "volumeId": "local"
+      }
+    }
+  ],
+  "pricing": {
+    "status": "unavailable",
+    "source": "none",
+    "fetchedAt": null,
+    "knownModels": 0
+  },
+  "scanDurationMs": 38
+}

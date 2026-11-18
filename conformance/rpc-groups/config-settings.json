@@ -1,0 +1,1029 @@
+{
+ "cases": [
+  {
+   "tag": "server.getConfig",
+   "payload": {},
+   "note": "defaults"
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {}
+   },
+   "note": "an empty patch"
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {
+     "defaultAutoPull": true,
+     "branchNamePrefix": "feat",
+     "sidebarAutoSettleAfterDays": null,
+     "keepAwakeWhileAgentsWork": false
+    }
+   },
+   "note": "plain merge"
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {
+     "storageCleanup": {
+      "worktreeOnMerge": true,
+      "logsAfterDays": 14
+     },
+     "observability": {
+      "otlpTracesUrl": "http://otel.test/v1/traces"
+     }
+    }
+   },
+   "note": "nested merge"
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {
+     "setModelFavorites": [
+      {
+       "provider": "codex",
+       "model": "gpt-6-luna",
+       "favorite": true
+      },
+      {
+       "provider": "claudeAgent",
+       "model": "claude-haiku-5-5",
+       "favorite": true
+      }
+     ]
+    }
+   }
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {
+     "setModelFavorites": [
+      {
+       "provider": "codex",
+       "model": "gpt-6-luna",
+       "favorite": false
+      },
+      {
+       "provider": "claudeAgent",
+       "model": "claude-haiku-5-5",
+       "favorite": true
+      },
+      {
+       "provider": "codex",
+       "model": "never-there",
+       "favorite": false
+      }
+     ]
+    }
+   },
+   "note": "remove, add again, remove an absent one"
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {
+     "favorites": [
+      {
+       "provider": "codex",
+       "model": "x"
+      }
+     ],
+     "setModelFavorites": [
+      {
+       "provider": "codex",
+       "model": "y",
+       "favorite": true
+      }
+     ]
+    }
+   },
+   "note": "an explicit list, then a toggle"
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {
+     "setModelFavorites": []
+    }
+   },
+   "note": "no toggles"
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {
+     "favorites": null
+    }
+   },
+   "note": "favorites reset (a null t3code's patch schema refuses)",
+   "skip_schema": true
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {
+     "setModelsHidden": [
+      {
+       "provider": "codex",
+       "model": "m1",
+       "hidden": true
+      },
+      {
+       "provider": "claudeAgent",
+       "model": "m2",
+       "hidden": true
+      }
+     ]
+    }
+   }
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {
+     "setModelsHidden": [
+      {
+       "provider": "codex",
+       "model": "m1",
+       "hidden": false
+      },
+      {
+       "provider": "codex",
+       "model": "m3",
+       "hidden": true
+      }
+     ]
+    }
+   }
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {
+     "setModelsHidden": []
+    }
+   },
+   "note": "an empty list changes nothing"
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {
+     "setProviderModelOrder": {
+      "provider": "codex",
+      "modelOrder": [
+       "m3",
+       "m1"
+      ]
+     }
+    }
+   }
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {
+     "setProviderModelOrder": {
+      "provider": "opencode",
+      "modelOrder": [
+       "a/b"
+      ]
+     }
+    }
+   },
+   "note": "a provider without preferences yet"
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {
+     "providerModelPreferences": {
+      "codex": {
+       "hiddenModels": [
+        "z"
+       ],
+       "modelOrder": []
+      }
+     },
+     "setModelsHidden": [
+      {
+       "provider": "codex",
+       "model": "y",
+       "hidden": true
+      }
+     ]
+    }
+   },
+   "note": "explicit preferences, then a toggle"
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {
+     "providerModelPreferences": null
+    }
+   },
+   "note": "preferences reset (a null t3code's patch schema refuses)",
+   "skip_schema": true
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {
+     "migrateModelPreferences": {
+      "favorites": [
+       {
+        "provider": "codex",
+        "model": "old"
+       }
+      ],
+      "providerModelPreferences": {
+       "codex": {
+        "hiddenModels": [
+         "old"
+        ],
+        "modelOrder": []
+       }
+      }
+     }
+    }
+   },
+   "note": "a migration of preferences already set (to null)"
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {
+     "usageLimitSources": {
+      "hub": {
+       "kind": "cliproxy",
+       "url": "http://hub.test",
+       "managementKey": "k",
+       "enabled": true
+      }
+     }
+    }
+   }
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {
+     "usageLimitSources": {
+      "hub": {
+       "kind": "cliproxy",
+       "url": "http://hub2.test",
+       "label": "Hub"
+      },
+      "off": {
+       "kind": "cliproxy",
+       "url": "http://off.test",
+       "enabled": false
+      }
+     }
+    }
+   },
+   "note": "an entry merges"
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {
+     "usageLimitSources": {
+      "hub": {
+       "enabled": false
+      }
+     }
+    }
+   },
+   "note": "a part of an entry merges (t3code's patch schema wants the whole entry)",
+   "skip_schema": true
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {
+     "usageLimitSources": {
+      "off": null
+     }
+    }
+   }
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {
+     "textGenerators": {
+      "local": {
+       "kind": "openaiCompatible",
+       "baseUrl": "http://llm.test/v1",
+       "apiKey": ""
+      }
+     }
+    }
+   }
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {
+     "textGenerators": {
+      "local": {
+       "kind": "openaiCompatible",
+       "baseUrl": "http://llm.test/v2",
+       "label": "Local"
+      },
+      "claude-api": {
+       "kind": "anthropic",
+       "baseUrl": "http://claude.test"
+      }
+     }
+    }
+   }
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {
+     "textGenerators": {
+      "local": {
+       "enabled": false
+      }
+     }
+    }
+   },
+   "note": "a part of an entry",
+   "skip_schema": true
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {
+     "textGenerators": {
+      "claude-api": null
+     }
+    }
+   },
+   "note": "a null entry removes"
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {
+     "secretProviders": {
+      "env": {
+       "kind": "env",
+       "label": "Environment"
+      },
+      "op": {
+       "kind": "1password",
+       "label": "1Password",
+       "config": {
+        "account": "me"
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {
+     "secretProviders": {
+      "env": null,
+      "op": {
+       "kind": "1password",
+       "label": "1Password",
+       "config": {
+        "vault": "dev"
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {
+     "secretProviders": {
+      "op": {
+       "config": {
+        "account": "you"
+       }
+      }
+     }
+    }
+   },
+   "note": "a part of an entry",
+   "skip_schema": true
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {
+     "sourceControlHosts": {
+      "github": {
+       "host": "github.test",
+       "nested": {
+        "a": 1
+       }
+      }
+     }
+    }
+   }
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {
+     "sourceControlHosts": {
+      "github": {
+       "nested": {
+        "b": 2.5
+       }
+      },
+      "gitlab": {
+       "host": "gitlab.test"
+      }
+     }
+    }
+   }
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {
+     "sourceControlHosts": {
+      "gitlab": null
+     }
+    }
+   },
+   "note": "a null entry removes (t3code's patch schema has no null here)",
+   "skip_schema": true
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {
+     "usagePriceOverrides": {
+      "gpt-6-luna": {
+       "inputCostPerMillionTokens": 1.5,
+       "outputCostPerMillionTokens": 6
+      }
+     }
+    }
+   }
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {
+     "usagePriceOverrides": {
+      "gpt-6-luna": {
+       "inputCostPerMillionTokens": 2,
+       "outputCostPerMillionTokens": 6,
+       "cacheWriteCostPerMillionTokens": 3.75
+      },
+      "other": {
+       "inputCostPerMillionTokens": 1,
+       "outputCostPerMillionTokens": 2
+      }
+     }
+    }
+   }
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {
+     "usagePriceOverrides": {
+      "gpt-6-luna": {
+       "cacheReadCostPerMillionTokens": 0.1
+      }
+     }
+    }
+   },
+   "note": "a part of an entry",
+   "skip_schema": true
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {
+     "usagePriceOverrides": {
+      "other": null
+     }
+    }
+   }
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {
+     "usageModelAliases": {
+      "gpt-6-luna-2026": "gpt-6-luna",
+      "x": "y"
+     }
+    }
+   }
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {
+     "usageModelAliases": {
+      "x": null,
+      "gpt-6-luna-2026": "gpt-6"
+     }
+    }
+   }
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {
+     "projectSettingsOverrides": {
+      "p1": {
+       "defaultAutoPull": true,
+       "branchNamePrefix": "p1",
+       "futureOverride": {
+        "n": 1
+       }
+      },
+      "p2": {}
+     }
+    }
+   },
+   "note": "an empty entry is dropped; a key this build does not know is kept"
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {
+     "projectSettingsOverrides": {
+      "p1": {
+       "defaultAutoPull": false,
+       "defaultProjectScripts": [
+        {
+         "id": "setup",
+         "name": "Setup",
+         "command": "make deps",
+         "icon": "configure",
+         "runOnWorktreeCreate": true
+        }
+       ]
+      },
+      "p3": {
+       "defaultRuntimeMode": "auto"
+      }
+     }
+    }
+   }
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {
+     "projectSettingsOverrides": {
+      "p3": null
+     }
+    }
+   }
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {
+     "defaultModelSelection": {
+      "instanceId": "codex",
+      "model": "gpt-6-luna"
+     },
+     "fallbackModelSelection": {
+      "instanceId": "claudeAgent",
+      "model": "claude-haiku-5-5",
+      "options": [
+       {
+        "id": "effort",
+        "value": "low"
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {
+     "defaultModelSelection": {
+      "instanceId": "claudeAgent",
+      "model": "claude-haiku-5-5"
+     },
+     "fallbackModelSelection": null
+    }
+   },
+   "note": "a selection replaces whole, null clears"
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {
+     "speechPostProcessingModelSelection": {
+      "instanceId": "codex",
+      "model": "gpt-6-luna"
+     },
+     "textGenerationModelSelection": {
+      "instanceId": "claudeAgent",
+      "model": "claude-haiku-5-5"
+     }
+    }
+   },
+   "note": "the replaced text generation selection loses its options"
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {
+     "defaultProjectScripts": [
+      {
+       "id": "setup",
+       "name": "Setup",
+       "command": "make deps",
+       "icon": "configure",
+       "runOnWorktreeCreate": true
+      },
+      {
+       "id": "settle",
+       "name": "Settle",
+       "command": "make lint",
+       "icon": "lint",
+       "runOnWorktreeCreate": false,
+       "runOnSettle": true,
+       "stopOnSettle": true
+      }
+     ]
+    }
+   }
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {
+     "defaultProjectScripts": []
+    }
+   }
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {
+     "providerInstances": {
+      "codex-2": {
+       "driver": "codex",
+       "displayName": "Codex 2",
+       "config": {
+        "setupMode": "managed"
+       }
+      },
+      "claude-2": {
+       "driver": "claudeAgent",
+       "enabled": false
+      }
+     }
+    }
+   }
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {
+     "providerInstances": {
+      "codex-3": {
+       "driver": "codex"
+      }
+     }
+    }
+   },
+   "note": "the instances replace whole"
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {
+     "worktreeCleanup": {
+      "mode": "custom",
+      "rules": {
+       "worktreeAfterDays": 3,
+       "worktreeOnMerge": true,
+       "worktreeOnDelete": false,
+       "worktreeUnchanged": false
+      }
+     }
+    }
+   }
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {
+     "worktreeCleanup": {
+      "mode": "custom",
+      "rules": {
+       "worktreeOnDelete": true,
+       "worktreeKeepWhen": "tracked-changes"
+      }
+     }
+    }
+   },
+   "note": "custom rules merge"
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {
+     "worktreeCleanup": {
+      "mode": "off"
+     }
+    }
+   }
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {
+     "worktreeCleanup": {
+      "mode": "custom",
+      "rules": {
+       "worktreeAfterDays": null,
+       "worktreeOnMerge": false,
+       "worktreeOnDelete": false,
+       "worktreeUnchanged": true
+      }
+     }
+    }
+   },
+   "note": "custom after off starts from no rules"
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {
+     "worktreeCleanup": null
+    }
+   }
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {
+     "worktreesDirectory": "/a"
+    }
+   },
+   "note": "from the default: nothing to remember"
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {
+     "worktreesDirectory": "/b"
+    }
+   }
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {
+     "worktreesDirectory": "/a"
+    }
+   },
+   "note": "back: /a leaves the history, /b joins it"
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {
+     "worktreesDirectory": "/a"
+    }
+   },
+   "note": "unchanged"
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {
+     "worktreesDirectory": ""
+    }
+   }
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {
+     "projectAutoPullOverrides": {
+      "p1": true
+     },
+     "projectScriptOverrides": {
+      "p1": null
+     },
+     "projectAgentBrowserAccessOverrides": {
+      "p1": false
+     }
+    }
+   },
+   "note": "per-project keys of older clients are not merged"
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {
+     "futureSetting": {
+      "level": 3,
+      "list": [
+       1,
+       2.0,
+       null
+      ]
+     },
+     "enableAssistantStreaming": true
+    }
+   },
+   "note": "unknown keys at the top level"
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {
+     "futureSetting": {
+      "more": "x"
+     },
+     "storageCleanup": {
+      "futureRule": 1
+     },
+     "observability": {
+      "futureUrl": "http://x.test"
+     }
+    }
+   },
+   "note": "unknown keys, nested"
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {
+     "futureSetting": {
+      "level": null
+     }
+    }
+   }
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {},
+    "providerInstanceMutation": {
+     "operation": "create",
+     "instanceId": "codex-4",
+     "instance": {
+      "driver": "codex",
+      "config": {
+       "setupMode": "managed"
+      }
+     }
+    }
+   }
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {},
+    "providerInstanceMutation": {
+     "operation": "create",
+     "instanceId": "codex-4",
+     "instance": {
+      "driver": "claudeAgent"
+     }
+    }
+   },
+   "note": "create keeps an existing instance"
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {},
+    "providerInstanceMutation": {
+     "operation": "upsert",
+     "instanceId": "codex-4",
+     "instance": {
+      "driver": "codex",
+      "displayName": "Four",
+      "enabled": false
+     }
+    }
+   }
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {
+     "defaultAutoPull": false
+    },
+    "providerInstanceMutation": {
+     "operation": "upsert",
+     "instanceId": "codex-5",
+     "instance": {
+      "driver": "codex"
+     }
+    }
+   },
+   "note": "a patch and a mutation"
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {},
+    "providerInstanceMutation": {
+     "operation": "remove",
+     "instanceId": "codex-4"
+    }
+   }
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {},
+    "providerInstanceMutation": {
+     "operation": "remove",
+     "instanceId": "nope"
+    }
+   }
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {},
+    "providerInstanceMutation": null
+   },
+   "note": "no mutation (a null t3code's schema refuses)",
+   "skip_schema": true
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {
+     "providerInstances": null
+    },
+    "providerInstanceMutation": {
+     "operation": "upsert",
+     "instanceId": "codex-6",
+     "instance": {
+      "driver": "codex"
+     }
+    }
+   },
+   "note": "a mutation of instances a patch just cleared",
+   "skip_schema": true
+  },
+  {
+   "sh": "mkdir home/userdata/settings.json.tmp",
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {
+     "defaultAutoPull": true
+    }
+   },
+   "expect": "failure",
+   "error": "ServerSettingsError",
+   "note": "the temporary file cannot be written"
+  },
+  {
+   "sh": "rmdir home/userdata/settings.json.tmp; mv home/userdata/settings.json home/userdata/kept.json; mkdir home/userdata/settings.json; touch home/userdata/settings.json/x",
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {
+     "defaultAutoPull": true
+    }
+   },
+   "expect": "failure",
+   "error": "ServerSettingsError",
+   "note": "the file cannot be replaced"
+  },
+  {
+   "sh": "rm -r home/userdata/settings.json home/userdata/settings.json.tmp; mv home/userdata/kept.json home/userdata/settings.json",
+   "tag": "server.getConfig",
+   "payload": {},
+   "note": "a failed write changes nothing"
+  },
+  {
+   "tag": "subscribeServerConfig",
+   "payload": {},
+   "expect": "chunk"
+  }
+ ]
+}

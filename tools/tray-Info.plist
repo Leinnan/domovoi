@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>Domovoi Server</string>
+    <key>CFBundleDisplayName</key>
+    <string>Domovoi Server</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.crayen.domovoi.server</string>
+    <!-- The server itself, not a launcher script: as an app's executable it
+         starts with its status bar icon (a script that execs it would change
+         the pid version, and the menu bar then hides the icon). -->
+    <key>CFBundleExecutable</key>
+    <string>domovoi-server</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
+    <key>CFBundleIconName</key>
+    <string>AppIcon</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>@VERSION@</string>
+    <key>CFBundleVersion</key>
+    <string>@VERSION@</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>13.0</string>
+    <!-- A status bar icon only: no Dock icon, no app menu. -->
+    <key>LSUIElement</key>
+    <true/>
+    <key>NSDocumentsFolderUsageDescription</key>
+    <string>Domovoi Server runs your coding agents in your projects, and your projects are in Documents.</string>
+    <key>NSDesktopFolderUsageDescription</key>
+    <string>Domovoi Server runs your coding agents in your projects, and some projects are on the Desktop.</string>
+    <key>NSDownloadsFolderUsageDescription</key>
+    <string>Domovoi Server runs your coding agents in your projects, and some projects are in Downloads.</string>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>Domovoi Server reaches your paired devices directly when they are on the same network.</string>
+</dict>
+</plist>

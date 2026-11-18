@@ -1,0 +1,6 @@
+{
+  "_tag": "EnvironmentAuthInvalidError",
+  "code": "auth_invalid",
+  "reason": "invalid_credential",
+  "traceId": "3c9f1a7e5b2d4068a1c3e5f7092b4d6e"
+}

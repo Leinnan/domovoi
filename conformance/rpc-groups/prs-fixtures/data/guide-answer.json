@@ -1,0 +1,131 @@
+{
+ "stops": [
+  {
+   "title": " The operation is added ",
+   "summary": "Before, only addition existed. Now `mul` sits beside it.",
+   "attention": {
+    "kind": "contract",
+    "note": " The function is public. "
+   },
+   "excerpts": [
+    {
+     "path": "calc.py",
+     "side": "new",
+     "start": 5,
+     "end": 6,
+     "caption": "The new function"
+    },
+    {
+     "path": "calc.py",
+     "side": "old",
+     "start": 1,
+     "end": 2,
+     "caption": ""
+    },
+    {
+     "path": "calc.py",
+     "side": "sideways",
+     "start": 3,
+     "end": 3
+    },
+    {
+     "path": "calc.py",
+     "side": "new",
+     "start": 0,
+     "end": 4,
+     "caption": "dropped: line 0"
+    },
+    {
+     "path": "calc.py",
+     "side": "new",
+     "start": 9,
+     "end": 4,
+     "caption": "dropped: ends before it starts"
+    },
+    {
+     "path": " ",
+     "side": "new",
+     "start": 1,
+     "end": 2,
+     "caption": "dropped: no path"
+    }
+   ],
+   "files": [
+    {
+     "path": "README.md",
+     "note": "Mentions the new operation"
+    },
+    {
+     "path": "notes.txt"
+    },
+    {
+     "path": "",
+     "note": "dropped"
+    }
+   ],
+   "notes": [
+    {
+     "path": "calc.py",
+     "line": 5,
+     "title": "Why a function",
+     "body": "It mirrors `add`."
+    },
+    {
+     "path": "calc.py",
+     "line": 6,
+     "title": "No body"
+    },
+    {
+     "path": "calc.py",
+     "line": 0,
+     "title": "dropped",
+     "body": ""
+    },
+    {
+     "path": "calc.py",
+     "line": 5,
+     "title": " ",
+     "body": "dropped"
+    }
+   ],
+   "questions": [
+    "Should it accept floats?",
+    "  ",
+    7
+   ]
+  },
+  {
+   "title": "",
+   "summary": "dropped: no title"
+  },
+  {
+   "title": "The rest",
+   "summary": 5,
+   "attention": {
+    "kind": "nit",
+    "note": "not a kind"
+   }
+  },
+  {
+   "title": "Attention without a note",
+   "summary": "",
+   "attention": {
+    "kind": "risk",
+    "note": "  "
+   },
+   "excerpts": [],
+   "files": [],
+   "notes": [],
+   "questions": []
+  },
+  {
+   "title": "No attention",
+   "summary": "Nothing to judge.",
+   "attention": null,
+   "excerpts": [],
+   "files": [],
+   "notes": [],
+   "questions": []
+  }
+ ]
+}

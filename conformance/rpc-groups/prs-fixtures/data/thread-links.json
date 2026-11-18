@@ -1,0 +1,22 @@
+[
+ {
+  "host": "GitHub.com",
+  "repository": "Acme/Calc",
+  "number": 7,
+  "url": "https://github.com/acme/calc/pull/7",
+  "source": "manual",
+  "linkedAt": "2025-03-01T09:00:00.000Z",
+  "snapshot": null,
+  "stack": null
+ },
+ {
+  "host": "github.com",
+  "repository": "acme/calc",
+  "number": 8,
+  "url": "https://github.com/acme/calc/pull/8",
+  "source": "stack-dismissed",
+  "linkedAt": "2025-03-01T09:00:00.000Z",
+  "snapshot": null,
+  "stack": null
+ }
+]

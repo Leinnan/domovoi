@@ -1,0 +1,41 @@
+{ "fixture": true,
+  "cases": [
+    { "tag": "cloud.getRelayClientStatus", "payload": {}, "note": "no cloudflared anywhere: missing" },
+    { "tag": "cloud.installRelayClient", "payload": {}, "all": true, "expect": "failure", "error": "RelayClientInstallFailedError", "note": "nothing is downloaded: managed_by_policy after the first progress event" },
+    { "tag": "cloud.installRelayClient", "payload": {}, "expect": "chunk" },
+    { "sh": "./make-cloudflared bin/cloudflared 2024.1.1", "tag": "cloud.getRelayClientStatus", "payload": {}, "note": "one on PATH, older than the minimum: still missing" },
+    { "sh": "./make-cloudflared bin/cloudflared 2025.11.1", "tag": "cloud.getRelayClientStatus", "payload": {}, "note": "one on PATH, new enough" },
+    { "tag": "cloud.installRelayClient", "payload": {}, "all": true, "note": "nothing to install: progress, then complete with the status" },
+    { "sh": "./make-cloudflared \"$(cat managed-dir)/cloudflared\" 2026.10.4", "tag": "cloud.getRelayClientStatus", "payload": {}, "note": "a managed copy wins over PATH" },
+    { "sh": "printf '#!/bin/bash\\necho nonsense\\n' > \"$(cat managed-dir)/cloudflared\"", "tag": "cloud.getRelayClientStatus", "payload": {}, "note": "a managed copy that reports no version is passed over" },
+    { "sh": "rm bin/cloudflared", "tag": "cloud.getRelayClientStatus", "payload": {} },
+
+    { "tag": "peerLinks.list", "payload": {} },
+    { "tag": "peerLinks.link", "payload": { "url": "http://192.0.2.10:3773", "pairingCode": "ABCDEFGHJKLM", "access": "read-only" }, "expect": "failure", "error": "PeerLinkError", "note": "the setting is off" },
+    { "tag": "peerLinks.unlink", "payload": { "environmentId": "env-elsewhere" } },
+    { "tag": "guestShare.create", "payload": { "threadId": "$THREAD" }, "expect": "failure", "error": "GuestShareCreateError", "note": "disabled" },
+    { "tag": "server.updateSettings", "payload": { "patch": { "linkedEnvironmentsEnabled": true, "guestSharingEnabled": true } } },
+    { "tag": "peerLinks.link", "payload": { "url": "http://192.0.2.10:3773", "pairingCode": "ABCDEFGHJKLM", "access": "read-only" }, "expect": "failure", "error": "PeerLinkError", "note": "the setting is on: Domovoi still links nothing" },
+    { "tag": "guestShare.create", "payload": { "threadId": "$THREAD" }, "expect": "failure", "error": "GuestShareCreateError", "note": "connect_unavailable" },
+
+    { "tag": "peerLinks.answerRequest", "payload": { "threadId": "$THREAD", "turnItemId": "$ITEM", "answer": { "type": "decline" } }, "expect": "failure", "error": "PeerLinkRequestError", "note": "not_found: the item is no link request" },
+    { "tag": "peerLinks.answerRequest", "payload": { "threadId": "$THREAD", "turnItemId": "nope", "answer": { "type": "link", "urls": ["http://192.0.2.10:3773"], "access": "read-only", "pairingCode": "ABCDEFGHJKLM" } }, "expect": "failure", "error": "PeerLinkRequestError" },
+    { "tag": "peerLinks.answerRequest", "payload": { "threadId": "nope", "turnItemId": "x", "answer": { "type": "decline" } }, "expect": "failure", "error": "PeerLinkRequestError", "note": "load_failed, with its cause: no such thread" },
+    { "tag": "secrets.answerRequest", "payload": { "threadId": "$THREAD", "turnItemId": "$ITEM", "answer": { "type": "decline" } }, "expect": "failure", "error": "SecretRequestError", "note": "not_found: the item is no secret request" },
+    { "tag": "secrets.answerRequest", "payload": { "threadId": "$THREAD", "turnItemId": "nope", "answer": { "type": "save", "secret": "s" } }, "expect": "failure", "error": "SecretRequestError" },
+    { "tag": "secrets.answerRequest", "payload": { "threadId": "nope", "turnItemId": "x", "answer": { "type": "save", "secret": "s" } }, "expect": "failure", "error": "SecretRequestError", "note": "load_failed, with its cause" },
+
+    { "tag": "secrets.answerRequest", "payload": { "threadId": "$THREAD", "turnItemId": "$ITEM", "answer": ["decline"] }, "expect": "failure", "error": "SecretRequestError", "skip_schema": true, "note": "an answer of any shape is taken: what it says matters only for a card that is waiting" },
+    { "tag": "peerLinks.answerRequest", "payload": { "threadId": "$THREAD", "turnItemId": "$ITEM", "answer": 5 }, "expect": "failure", "error": "PeerLinkRequestError", "skip_schema": true, "note": "an answer of any shape is taken here too: what it says is never read" },
+
+    { "tag": "mcpApps.callTool", "payload": { "threadId": "$THREAD", "itemId": "$ITEM", "name": "show", "arguments": {} }, "expect": "failure", "error": "McpAppRequestError" },
+    { "tag": "mcpApps.callTool", "payload": { "threadId": "nope", "itemId": "x", "name": "show", "arguments": { "a": 1 } }, "expect": "failure", "error": "McpAppRequestError" },
+    { "tag": "mcpApps.toolInfo", "payload": { "threadId": "$THREAD", "itemId": "$ITEM", "name": "show" }, "expect": "failure", "error": "McpAppRequestError" },
+    { "tag": "mcpApps.readResource", "payload": { "threadId": "$THREAD", "itemId": "$ITEM", "uri": "ui://charts/show" }, "expect": "failure", "error": "McpAppRequestError" },
+    { "tag": "mcpApps.updateModelContext", "payload": { "threadId": "$THREAD", "itemId": "$ITEM", "conversationThreadId": "$THREAD", "content": [{ "type": "text", "text": "hi" }] }, "expect": "failure", "error": "McpAppRequestError" },
+
+    { "tag": "orchestration.dispatchCommand", "payload": { "type": "thread.delete", "commandId": "connect-delete", "threadId": "$THREAD" } },
+    { "tag": "peerLinks.answerRequest", "payload": { "threadId": "$THREAD", "turnItemId": "$ITEM", "answer": { "type": "decline" } }, "expect": "failure", "error": "PeerLinkRequestError", "note": "not_found: the thread is deleted, its cards with it" },
+    { "tag": "secrets.answerRequest", "payload": { "threadId": "$THREAD", "turnItemId": "$ITEM", "answer": { "type": "decline" } }, "expect": "failure", "error": "SecretRequestError", "note": "not_found: the thread is deleted" },
+    { "tag": "mcpApps.toolInfo", "payload": { "threadId": "$THREAD", "itemId": "$ITEM", "name": "show" }, "expect": "failure", "error": "McpAppRequestError" }
+  ] }

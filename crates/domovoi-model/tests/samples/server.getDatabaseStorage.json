@@ -1,0 +1,16 @@
+[
+  {
+    "databaseBytes": 268435456,
+    "reclaimableBytes": 52428800,
+    "incrementalVacuumEnabled": false,
+    "compactCommand": "sqlite3 '/Users/dev/.domovoi/userdata/state.sqlite' 'VACUUM;'",
+    "canReclaim": true
+  },
+  {
+    "databaseBytes": 216006656,
+    "reclaimableBytes": 0,
+    "incrementalVacuumEnabled": false,
+    "compactCommand": "sqlite3 '/Users/dev/.domovoi/userdata/state.sqlite' 'VACUUM;'",
+    "canReclaim": true
+  }
+]

@@ -1,0 +1,14 @@
+{
+ "cases": [
+  {
+   "http": "GET /api/domovoi/remote",
+   "status": 200
+  },
+  {
+   "http": "POST /api/domovoi/server/stop",
+   "payload": {},
+   "status": 200,
+   "note": "the server stops"
+  }
+ ]
+}

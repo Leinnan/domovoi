@@ -1,0 +1,340 @@
+{
+ "fixture": true,
+ "env": {
+  "TZ": "Europe/Berlin"
+ },
+ "normalize": [
+  [
+   "/api/hooks/([^/]+)/[A-Za-z0-9_-]{43}",
+   "/api/hooks/${1}/<token>"
+  ],
+  [
+   "^(claude|codex) initialize failed: .*$",
+   "${1} initialize failed: <how>"
+  ]
+ ],
+ "cases": [
+  {
+   "tag": "scheduledTasks.upsert",
+   "payload": {
+    "title": "Hourly check",
+    "prompt": "Where is the add function defined?",
+    "enabled": true,
+    "schedule": {
+     "type": "interval",
+     "everyMs": 3600000
+    },
+    "projectId": "$PROJECT",
+    "workspaceStrategy": {
+     "type": "root"
+    },
+    "modelSelection": {
+     "instanceId": "claudeAgent",
+     "model": "claude-haiku-5-5"
+    },
+    "runtimeMode": "approval-required",
+    "interactionMode": "default",
+    "id": "task-a"
+   },
+   "note": "setup: a task"
+  },
+  {
+   "tag": "scheduledTasks.upsert",
+   "payload": {
+    "title": "Hook",
+    "prompt": "Where is the add function defined?",
+    "enabled": true,
+    "schedule": {
+     "type": "webhook"
+    },
+    "projectId": "$PROJECT",
+    "workspaceStrategy": {
+     "type": "root"
+    },
+    "modelSelection": {
+     "instanceId": "claudeAgent",
+     "model": "claude-haiku-5-5"
+    },
+    "runtimeMode": "approval-required",
+    "interactionMode": "default",
+    "id": "hook-a"
+   },
+   "note": "setup: a webhook task"
+  },
+  {
+   "tag": "scheduledTasks.setEnabled",
+   "payload": {
+    "id": "task-a",
+    "enabled": false
+   },
+   "note": "the row cannot be updated",
+   "expect": "failure",
+   "error": "ScheduledTaskError",
+   "sh": "sqlite3 home/userdata/domovoi.sqlite \"DROP TRIGGER IF EXISTS refuse; CREATE TRIGGER refuse BEFORE UPDATE ON scheduled_tasks  BEGIN SELECT RAISE(ABORT, 'refused by the test'); END\""
+  },
+  {
+   "tag": "scheduledTasks.rotateWebhookToken",
+   "payload": {
+    "id": "hook-a"
+   },
+   "note": "nor its token replaced",
+   "expect": "failure",
+   "error": "ScheduledTaskError"
+  },
+  {
+   "tag": "scheduledTasks.runNow",
+   "payload": {
+    "id": "task-a"
+   },
+   "note": "nor marked as running",
+   "expect": "failure",
+   "error": "ScheduledTaskError"
+  },
+  {
+   "tag": "scheduledTasks.upsert",
+   "payload": {
+    "title": "Edited",
+    "prompt": "Where is the add function defined?",
+    "enabled": true,
+    "schedule": {
+     "type": "interval",
+     "everyMs": 3600000
+    },
+    "projectId": "$PROJECT",
+    "workspaceStrategy": {
+     "type": "root"
+    },
+    "modelSelection": {
+     "instanceId": "claudeAgent",
+     "model": "claude-haiku-5-5"
+    },
+    "runtimeMode": "approval-required",
+    "interactionMode": "default",
+    "id": "task-a"
+   },
+   "note": "nor saved",
+   "expect": "failure",
+   "error": "ScheduledTaskError"
+  },
+  {
+   "tag": "scheduledTasks.subscribe",
+   "payload": {},
+   "note": "nothing changed",
+   "expect": "chunk"
+  },
+  {
+   "tag": "scheduledTasks.runNow",
+   "payload": {
+    "id": "task-a"
+   },
+   "note": "the run starts but its outcome cannot be written",
+   "expect": "failure",
+   "error": "ScheduledTaskError",
+   "sh": "sqlite3 home/userdata/domovoi.sqlite \"DROP TRIGGER IF EXISTS refuse; CREATE TRIGGER refuse BEFORE UPDATE ON scheduled_tasks WHEN NEW.run_count > OLD.run_count BEGIN SELECT RAISE(ABORT, 'refused by the test'); END\""
+  },
+  {
+   "tag": "scheduledTasks.subscribe",
+   "payload": {},
+   "note": "the row stays running",
+   "expect": "chunk",
+   "sleep_ms": 2500
+  },
+  {
+   "tag": "scheduledTasks.delete",
+   "payload": {
+    "id": "task-a"
+   },
+   "note": "the row cannot be deleted",
+   "expect": "failure",
+   "error": "ScheduledTaskError",
+   "sh": "sqlite3 home/userdata/domovoi.sqlite \"DROP TRIGGER IF EXISTS refuse; CREATE TRIGGER refuse BEFORE DELETE ON scheduled_tasks  BEGIN SELECT RAISE(ABORT, 'refused by the test'); END\""
+  },
+  {
+   "tag": "scheduledTasks.setEnabled",
+   "payload": {
+    "id": "hook-a",
+    "enabled": false
+   },
+   "note": "a write that changes no row (as when the row went meanwhile): the task is gone",
+   "expect": "failure",
+   "error": "ScheduledTaskError",
+   "sh": "sqlite3 home/userdata/domovoi.sqlite \"DROP TRIGGER IF EXISTS refuse; CREATE TRIGGER refuse BEFORE UPDATE ON scheduled_tasks BEGIN SELECT RAISE(IGNORE); END\""
+  },
+  {
+   "tag": "scheduledTasks.rotateWebhookToken",
+   "payload": {
+    "id": "hook-a"
+   },
+   "note": "or replaced",
+   "expect": "failure",
+   "error": "ScheduledTaskError"
+  },
+  {
+   "tag": "scheduledTasks.runNow",
+   "payload": {
+    "id": "task-a"
+   },
+   "note": "nothing to mark as running",
+   "expect": "failure",
+   "error": "ScheduledTaskError"
+  },
+  {
+   "tag": "scheduledTasks.upsert",
+   "payload": {
+    "title": "Hook",
+    "prompt": "Where is the add function defined?",
+    "enabled": true,
+    "schedule": {
+     "type": "webhook"
+    },
+    "projectId": "$PROJECT",
+    "workspaceStrategy": {
+     "type": "root"
+    },
+    "modelSelection": {
+     "instanceId": "claudeAgent",
+     "model": "claude-haiku-5-5"
+    },
+    "runtimeMode": "approval-required",
+    "interactionMode": "default",
+    "id": "hook-a"
+   },
+   "note": "nothing saved",
+   "expect": "failure",
+   "error": "ScheduledTaskError"
+  },
+  {
+   "tag": "scheduledTasks.upsert",
+   "payload": {
+    "title": "Bound",
+    "prompt": "Where is the add function defined?",
+    "enabled": true,
+    "schedule": {
+     "type": "interval",
+     "everyMs": 3600000
+    },
+    "projectId": "$PROJECT",
+    "workspaceStrategy": {
+     "type": "root"
+    },
+    "modelSelection": {
+     "instanceId": "claudeAgent",
+     "model": "claude-haiku-5-5"
+    },
+    "runtimeMode": "approval-required",
+    "interactionMode": "default",
+    "id": "task-c",
+    "threadId": "$THREAD"
+   },
+   "note": "the destination thread cannot be read",
+   "expect": "failure",
+   "error": "ScheduledTaskError",
+   "sh": "sqlite3 home/userdata/domovoi.sqlite 'DROP TRIGGER IF EXISTS refuse; ALTER TABLE threads RENAME TO threads_away'"
+  },
+  {
+   "tag": "scheduledTasks.subscribe",
+   "payload": {},
+   "note": "the threads are back; none of it changed a task",
+   "expect": "chunk",
+   "sh": "sqlite3 home/userdata/domovoi.sqlite 'ALTER TABLE threads_away RENAME TO threads'"
+  },
+  {
+   "tag": "scheduledTasks.subscribe",
+   "payload": {},
+   "note": "the table cannot be read: the list fails, with no task named",
+   "expect": "failure",
+   "error": "ScheduledTaskError",
+   "sh": "sqlite3 home/userdata/domovoi.sqlite 'DROP TRIGGER IF EXISTS refuse; ALTER TABLE scheduled_tasks RENAME TO scheduled_tasks_away'"
+  },
+  {
+   "tag": "scheduledTasks.setEnabled",
+   "payload": {
+    "id": "task-a",
+    "enabled": true
+   },
+   "note": "nor a task loaded",
+   "expect": "failure",
+   "error": "ScheduledTaskError"
+  },
+  {
+   "tag": "scheduledTasks.upsert",
+   "payload": {
+    "title": "Hourly check",
+    "prompt": "Where is the add function defined?",
+    "enabled": true,
+    "schedule": {
+     "type": "interval",
+     "everyMs": 3600000
+    },
+    "projectId": "$PROJECT",
+    "workspaceStrategy": {
+     "type": "root"
+    },
+    "modelSelection": {
+     "instanceId": "claudeAgent",
+     "model": "claude-haiku-5-5"
+    },
+    "runtimeMode": "approval-required",
+    "interactionMode": "default",
+    "id": "task-b"
+   },
+   "note": "nor looked up for a save",
+   "expect": "failure",
+   "error": "ScheduledTaskError"
+  },
+  {
+   "tag": "scheduledTasks.runNow",
+   "payload": {
+    "id": "task-a"
+   },
+   "note": "nor for a run",
+   "expect": "failure",
+   "error": "ScheduledTaskError"
+  },
+  {
+   "tag": "scheduledTasks.rotateWebhookToken",
+   "payload": {
+    "id": "hook-a"
+   },
+   "note": "nor for a new token",
+   "expect": "failure",
+   "error": "ScheduledTaskError"
+  },
+  {
+   "tag": "scheduledTasks.delete",
+   "payload": {
+    "id": "task-a"
+   },
+   "note": "nor deleted",
+   "expect": "failure",
+   "error": "ScheduledTaskError"
+  },
+  {
+   "tag": "scheduledTasks.listWebhookDeliveries",
+   "payload": {
+    "id": "hook-a"
+   },
+   "note": "the delivery log does not read the table"
+  },
+  {
+   "tag": "scheduledTasks.subscribe",
+   "payload": {},
+   "note": "readable again",
+   "expect": "chunk",
+   "sh": "sqlite3 home/userdata/domovoi.sqlite 'ALTER TABLE scheduled_tasks_away RENAME TO scheduled_tasks'"
+  },
+  {
+   "tag": "scheduledTasks.delete",
+   "payload": {
+    "id": "task-a"
+   },
+   "note": "and writable"
+  },
+  {
+   "tag": "scheduledTasks.subscribe",
+   "payload": {},
+   "note": "the rest",
+   "expect": "chunk"
+  }
+ ]
+}

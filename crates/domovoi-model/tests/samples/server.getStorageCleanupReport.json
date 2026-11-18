@@ -1,0 +1,85 @@
+[
+  {
+    "trigger": "automatic",
+    "startedAt": "2026-11-17T03:00:00.041Z",
+    "entries": [
+      {
+        "kind": "logs",
+        "outcome": "removed",
+        "reason": "Older than 14 days.",
+        "path": "/Users/dev/.domovoi/logs/server.2026-11-02.log",
+        "threadId": null,
+        "threadTitle": null,
+        "bytes": 1843200,
+        "files": 1
+      },
+      {
+        "kind": "logs",
+        "outcome": "failed",
+        "reason": "Permission denied (os error 13)",
+        "path": "/Users/dev/.domovoi/logs/server.2026-11-01.log",
+        "threadId": null,
+        "threadTitle": null,
+        "bytes": 921600,
+        "files": 1
+      },
+      {
+        "kind": "worktree",
+        "outcome": "removed",
+        "reason": "Its thread is done and it has nothing unsaved.",
+        "path": "/Users/dev/.domovoi/worktrees/acme-app/fix-login-redirect",
+        "threadId": "6e2b9c1d-4a7f-4d3e-9b5c-8f1a2e3d4c5b",
+        "threadTitle": "Fix the login redirect",
+        "bytes": 412876800
+      },
+      {
+        "kind": "worktree",
+        "outcome": "kept",
+        "reason": "It has local changes.",
+        "path": "/Users/dev/.domovoi/worktrees/acme-app/billing-export",
+        "threadId": "b7d4e1f0-2c3a-4b5d-8e6f-9a0b1c2d3e4f",
+        "threadTitle": "Export invoices as CSV",
+        "bytes": 398458880
+      },
+      {
+        "kind": "worktree",
+        "outcome": "kept",
+        "reason": "No thread on this server uses it.",
+        "path": "/Users/dev/.domovoi/worktrees/acme-app/scratch",
+        "threadId": null,
+        "threadTitle": null
+      }
+    ],
+    "omittedCount": 0,
+    "bytesFreed": 414720000,
+    "counts": {
+      "removed": 2,
+      "kept": 2,
+      "failed": 1
+    },
+    "finishedAt": "2026-11-17T03:00:02.615Z"
+  },
+  {
+    "trigger": "manual",
+    "startedAt": "2026-11-17T10:30:11.200Z",
+    "entries": [
+      {
+        "kind": "worktree",
+        "outcome": "kept",
+        "reason": "Settled for 2 of 7 days.",
+        "path": "/Users/dev/.domovoi/worktrees/acme-app/billing-export",
+        "threadId": "b7d4e1f0-2c3a-4b5d-8e6f-9a0b1c2d3e4f",
+        "threadTitle": "Export invoices as CSV",
+        "bytes": 398458880
+      }
+    ],
+    "omittedCount": 0,
+    "bytesFreed": 0,
+    "counts": {
+      "removed": 0,
+      "kept": 1,
+      "failed": 0
+    },
+    "finishedAt": "2026-11-17T10:30:11.954Z"
+  }
+]

@@ -1,0 +1,61 @@
+{
+  "candidates": [
+    {
+      "path": "/Users/dev/code/acme-app",
+      "title": "acme-app",
+      "sources": [
+        "claudeAgent",
+        "codex"
+      ],
+      "threadCount": 14,
+      "lastActiveAt": "2026-11-17T10:58:13.000Z",
+      "alreadyImported": true,
+      "git": {
+        "remoteKey": "github.com/acme/acme-app",
+        "repository": "acme/acme-app"
+      },
+      "projectId": "4be5a0c2-6f0d-4c57-9a53-1f1f0b0f6f11"
+    },
+    {
+      "path": "/Users/dev/code/billing-service",
+      "title": "billing-service",
+      "sources": [
+        "codex"
+      ],
+      "threadCount": 5,
+      "lastActiveAt": "2026-11-15T16:41:02.512Z",
+      "alreadyImported": false,
+      "git": {
+        "remoteKey": "gitlab.example.com/platform/billing/service",
+        "repository": "platform/billing/service"
+      }
+    },
+    {
+      "path": "/Users/dev/code/notes",
+      "title": "notes",
+      "sources": [
+        "claudeAgent"
+      ],
+      "threadCount": 2,
+      "lastActiveAt": "2026-11-02T09:12:44.000Z",
+      "alreadyImported": false,
+      "git": {
+        "remoteKey": null,
+        "repository": null
+      }
+    },
+    {
+      "path": "/Users/dev/scratch/prototype",
+      "title": "prototype",
+      "sources": [
+        "claudeAgent"
+      ],
+      "threadCount": 0,
+      "lastActiveAt": "2026-08-30T20:05:19.000Z",
+      "alreadyImported": false,
+      "git": null
+    }
+  ],
+  "scannedAt": "2026-11-17T11:27:40.031Z",
+  "truncated": true
+}

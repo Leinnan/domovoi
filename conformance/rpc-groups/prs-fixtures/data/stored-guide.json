@@ -1,0 +1,62 @@
+{
+ "headSha": "2222222222222222222222222222222222222222",
+ "generatedAt": "2025-03-03T10:00:00.000Z",
+ "modelSelection": {
+  "instanceId": "claudeAgent",
+  "model": "claude-sonnet-4-5",
+  "options": [
+   {
+    "id": "effort",
+    "value": "high"
+   }
+  ]
+ },
+ "stops": [
+  {
+   "title": "Subtraction is added",
+   "summary": "A second operation.",
+   "attention": {
+    "kind": "tradeoff",
+    "note": "Explicit over generic."
+   },
+   "excerpts": [
+    {
+     "path": "src/calc.py",
+     "side": "new",
+     "start": 5,
+     "end": 6,
+     "caption": ""
+    }
+   ],
+   "files": [
+    {
+     "path": "README.md"
+    },
+    {
+     "path": "tests/test_calc.py",
+     "note": "Covers it"
+    }
+   ],
+   "notes": [
+    {
+     "path": "src/calc.py",
+     "line": 5,
+     "title": "Why",
+     "body": ""
+    }
+   ],
+   "questions": [
+    "Floats?"
+   ]
+  },
+  {
+   "title": "The rest",
+   "summary": "",
+   "attention": null,
+   "excerpts": [],
+   "files": [],
+   "notes": [],
+   "questions": []
+  }
+ ]
+}

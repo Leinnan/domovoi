@@ -1,0 +1,11 @@
+{
+ "data": {
+  "repository": {
+   "viewerPermission": "ADMIN",
+   "autoMergeAllowed": true,
+   "mergeCommitAllowed": true,
+   "squashMergeAllowed": true,
+   "rebaseMergeAllowed": false
+  }
+ }
+}

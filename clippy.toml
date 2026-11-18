@@ -1,0 +1,17 @@
+# Enforced by `just check` (`-D clippy::disallowed_methods`), outside tests.
+disallowed-methods = [
+    { path = "tokio::process::Command::new", reason = "start children with `crate::process::command`: killed with the task that waits for them" },
+    { path = "std::process::Command::new", reason = "start children with `crate::process::blocking_command`, and run them with `output_blocking`" },
+    { path = "tokio::sync::mpsc::unbounded_channel", reason = "a queue with no limit grows without one: use `mpsc::channel`, or say with `#[expect]` what bounds this one" },
+]
+
+# Enforced by `just check` (`-D clippy::disallowed_types -D clippy::disallowed_macros`), outside tests.
+# JSON as JSON is for the edges: a module that reads someone else's format, or a field our own schema
+# leaves open, says so with `#![expect(clippy::disallowed_types, …, reason = "…")]`.
+disallowed-types = [
+    { path = "serde_json::Value", reason = "hold a record from `domovoi_model::typed`; JSON values are for the edge modules that read a foreign format" },
+    { path = "serde_json::Map", reason = "hold a record from `domovoi_model::typed`; JSON values are for the edge modules that read a foreign format" },
+]
+disallowed-macros = [
+    { path = "serde_json::json", reason = "build a record from `domovoi_model::typed` and serialize it; `json!` is for the edge modules that write a foreign format" },
+]

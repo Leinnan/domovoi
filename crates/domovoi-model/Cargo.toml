@@ -1,0 +1,18 @@
+[package]
+name = "domovoi-model"
+description = "Typed records of the t3code wire schemas and the thread read model on them, shared by domovoi-server and the Crux client core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+rustc-hash = "2.1.3"
+
+[dev-dependencies]
+divan.workspace = true
+
+[[bench]]
+name = "thread"
+harness = false

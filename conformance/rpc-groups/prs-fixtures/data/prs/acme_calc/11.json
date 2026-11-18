@@ -1,0 +1,75 @@
+{
+ "id": "PR_kwDOA11",
+ "number": 11,
+ "title": "Add modulo",
+ "body": "Body of #11.\n\n- one\n- two\n",
+ "url": "https://github.com/acme/calc/pull/11",
+ "state": "OPEN",
+ "isDraft": false,
+ "author": {
+  "login": ""
+ },
+ "headRefName": "feature/11",
+ "headRefOid": "2222222222222222222222222222222222222222",
+ "baseRefName": "main",
+ "baseRefOid": "1111111111111111111111111111111111111111",
+ "headRepository": null,
+ "headRepositoryOwner": null,
+ "isCrossRepository": false,
+ "createdAt": "2025-03-01T09:00:00Z",
+ "updatedAt": "2025-03-11T12:00:00Z",
+ "closedAt": null,
+ "mergedAt": null,
+ "additions": 0,
+ "deletions": 0,
+ "changedFiles": 0,
+ "mergeable": "MERGEABLE",
+ "mergeStateStatus": "HAS_HOOKS",
+ "reviewDecision": "",
+ "labels": [],
+ "reviewRequests": [],
+ "latestReviews": [
+  {
+   "id": "PRR_6",
+   "author": {
+    "login": "review-bot"
+   },
+   "state": "APPROVED"
+  },
+  {
+   "id": "PRR_7",
+   "author": {
+    "login": "spam"
+   },
+   "state": "CHANGES_REQUESTED",
+   "isMinimized": true
+  }
+ ],
+ "statusCheckRollup": [
+  {
+   "__typename": "CheckRun",
+   "completedAt": "0001-01-01T00:00:00Z",
+   "conclusion": "",
+   "detailsUrl": "https://github.com/acme/calc/actions/runs/100/job/5",
+   "name": "build",
+   "startedAt": "2025-03-02T10:00:00Z",
+   "status": "IN_PROGRESS",
+   "workflowName": "CI"
+  },
+  {
+   "__typename": "CheckRun",
+   "completedAt": "2025-03-02T10:05:00Z",
+   "conclusion": "SUCCESS",
+   "detailsUrl": "https://github.com/acme/calc/actions/runs/100/job/4",
+   "name": "lint",
+   "startedAt": "2025-03-02T10:00:00Z",
+   "status": "COMPLETED",
+   "workflowName": "CI"
+  }
+ ],
+ "maintainerCanModify": true,
+ "autoMergeRequest": {
+  "mergeMethod": "REBASE"
+ },
+ "files": []
+}

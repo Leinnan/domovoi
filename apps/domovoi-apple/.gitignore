@@ -1,0 +1,10 @@
+generated/
+build/
+Domovoi.xcodeproj/
+macOS/Info.plist
+iOS/Info.plist
+iOS/DomovoiIOS.entitlements
+Widgets/Info.plist
+Widgets/DomovoiWidgets.entitlements
+ShareExtension/Info.plist
+ShareExtension/DomovoiShare.entitlements

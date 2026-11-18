@@ -1,0 +1,10 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp" android:height="24dp" android:viewportWidth="24" android:viewportHeight="24">
+    <!-- The launcher icon's face in white: hood, eyes and mouth. -->
+    <path android:strokeColor="#FFFFFFFF" android:strokeWidth="2.64" android:strokeLineCap="round"
+        android:pathData="M3.35,12.98A8.68,8.68 0,0 1,20.65 12.98" />
+    <path android:fillColor="#FFFFFFFF"
+        android:pathData="M6.66,14.08a2.08,2.08 0,1 0,4.16 0a2.08,2.08 0,1 0,-4.16 0zM13.18,14.08a2.08,2.08 0,1 0,4.16 0a2.08,2.08 0,1 0,-4.16 0z" />
+    <path android:strokeColor="#FFFFFFFF" android:strokeWidth="1.94" android:strokeLineCap="round"
+        android:pathData="M10.75,19.29H13.25" />
+</vector>

@@ -1,0 +1,10 @@
+{
+  "pullRequest": {
+    "number": 131,
+    "title": "Fix the login redirect loop",
+    "url": "https://github.com/acme/t5code/pull/131",
+    "baseBranch": "main",
+    "headBranch": "fix/login-redirect",
+    "state": "merged"
+  }
+}

@@ -1,0 +1,104 @@
+[package]
+name = "domovoi-server"
+description = "Rust execution server, wire-compatible with t3code's apps/server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "domovoi-server"
+path = "src/main.rs"
+
+[features]
+default = ["tray"]
+# The status bar icon (`--tray`). On Linux it needs GTK 3 and an
+# appindicator library to build; a headless build can leave it out with
+# `--no-default-features`.
+tray = ["dep:tray-icon", "dep:tiny-skia", "dep:arboard", "dep:open", "dep:winit", "dep:gtk", "dep:dark-light"]
+
+[dependencies]
+async-stream = "0.3.6"
+axum.workspace = true
+base64 = "0.23.1"
+clap = { version = "4.6.7", features = ["derive"] }
+dirs = "7.0.0"
+effect-rpc.workspace = true
+futures.workspace = true
+getrandom = "0.4.3"
+hex = "0.4.3"
+jiff = "0.2.42"
+regex = "1.13.1"
+parking_lot = "0.12.5"
+portable-pty = "0.9.0"
+rusqlite = { version = "0.42.0", features = ["bundled"] }
+serde.workspace = true
+serde_json.workspace = true
+# Says where in a settings file a value did not fit (already built for axum).
+serde_path_to_error = "0.1.20"
+sha2 = "0.11.1"
+domovoi-contracts = { path = "../../crates/domovoi-contracts" }
+domovoi-model = { path = "../../crates/domovoi-model" }
+thiserror.workspace = true
+tokio.workspace = true
+tokio-stream = { version = "0.1.19", features = ["sync"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+time = { version = "0.3.55", features = ["formatting", "parsing", "macros"] }
+uuid = { version = "1.29.2", features = ["v4", "v5"] }
+ignore = "0.4.34"
+grep-regex = "0.1.14"
+grep-searcher = "0.1.17"
+grep-matcher = "0.1.9"
+nucleo-matcher = "0.3.1"
+hmac = "0.13"
+unicode-normalization = "0.1.26"
+url = "2.5.8"
+qrcode = { version = "0.14.1", default-features = false }
+# APNs: HTTP/2 to Apple, ES256 provider tokens. iroh already brings rustls
+# (without a provider) and ring; main installs ring as the provider.
+reqwest = { version = "0.13.5", default-features = false, features = ["json", "http2", "rustls-no-provider"] }
+rustls = { version = "0.23.46", default-features = false, features = ["ring"] }
+ring = "0.17.14"
+domovoi-remote = { path = "../../crates/domovoi-remote" }
+tokio-util.workspace = true
+tracing-appender = "0.2.4"
+libc = "0.2.189"
+sysinfo = { version = "0.40.1", default-features = false, features = ["system"] }
+memchr = "2.8.3"
+tray-icon = { version = "0.26.1", optional = true }
+tiny-skia = { version = "0.11.4", optional = true }
+arboard = { version = "3.6.1", optional = true, default-features = false }
+open = { version = "5.3.2", optional = true }
+
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+winit = { version = "0.30.13", optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# Launch at login for "Domovoi Server.app": a login item (SMAppService, macOS 13+).
+objc2-service-management = { version = "0.3.2", default-features = false, features = ["std", "SMAppService", "objc2", "objc2-foundation"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSError", "NSString"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk = { version = "0.18", optional = true }
+
+[target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
+# The bar's light or dark appearance, for the status bar icon (on macOS only
+# while it shows a coloured mark; otherwise it is a template image).
+dark-light = { version = "2", optional = true }
+
+[target.'cfg(windows)'.dependencies]
+# The status bar icon's Windows workarounds, and the launch-at-login registry value.
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation", "Win32_Graphics_Gdi", "Win32_System_Console", "Win32_System_LibraryLoader", "Win32_System_Registry",
+    "Win32_System_Threading", "Win32_UI_Accessibility", "Win32_UI_WindowsAndMessaging",
+] }
+
+[build-dependencies]
+# The Windows executable's icon (build.rs).
+winresource = { version = "0.1.34", default-features = false }
+
+[dev-dependencies]
+# Measurements only: counting commits and listing the statements a workload runs.
+rusqlite = { version = "0.42.0", features = ["bundled", "hooks", "trace"] }
+tokio-tungstenite = "0.30.0"
+

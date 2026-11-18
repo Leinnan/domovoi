@@ -1,0 +1,89 @@
+{
+ "id": "PR_kwDOA13",
+ "number": 13,
+ "title": "Add multiplication",
+ "body": "Body of #13.\n\n- one\n- two\n",
+ "url": "https://github.com/acme/calc/pull/13",
+ "state": "OPEN",
+ "isDraft": false,
+ "author": {
+  "id": "U_octocat",
+  "is_bot": false,
+  "login": "octocat",
+  "name": "The Octocat"
+ },
+ "headRefName": "feature/13",
+ "headRefOid": "@HEAD@",
+ "baseRefName": "main",
+ "baseRefOid": "1111111111111111111111111111111111111111",
+ "headRepository": {
+  "id": "R_kgDOA1",
+  "name": "calc"
+ },
+ "headRepositoryOwner": {
+  "id": "O_kgDOA1",
+  "login": "acme"
+ },
+ "isCrossRepository": false,
+ "createdAt": "2025-03-01T09:00:00Z",
+ "updatedAt": "2025-03-13T12:00:00Z",
+ "closedAt": null,
+ "mergedAt": null,
+ "additions": 42,
+ "deletions": 7,
+ "changedFiles": 5,
+ "mergeable": "MERGEABLE",
+ "mergeStateStatus": "UNSTABLE",
+ "reviewDecision": "",
+ "labels": [],
+ "reviewRequests": [],
+ "latestReviews": [],
+ "statusCheckRollup": [
+  {
+   "__typename": "CheckRun",
+   "completedAt": "2025-03-02T10:05:00Z",
+   "conclusion": "SUCCESS",
+   "detailsUrl": "https://github.com/acme/calc/actions/runs/100/job/5",
+   "name": "build",
+   "startedAt": "2025-03-02T10:00:00Z",
+   "status": "COMPLETED",
+   "workflowName": "CI"
+  },
+  {
+   "__typename": "StatusContext",
+   "context": "ci/circleci: build",
+   "startedAt": "2025-03-02T10:00:00Z",
+   "state": "SUCCESS",
+   "targetUrl": "https://ci.example.com/build/1"
+  }
+ ],
+ "maintainerCanModify": true,
+ "autoMergeRequest": null,
+ "files": [
+  {
+   "path": "src/calc.py",
+   "additions": 20,
+   "deletions": 5
+  },
+  {
+   "path": "tests/test_calc.py",
+   "additions": 12,
+   "deletions": 0
+  },
+  {
+   "path": "src/__mocks__/clock.py",
+   "additions": 4,
+   "deletions": 1
+  },
+  {
+   "path": "poetry.lock",
+   "additions": 3,
+   "deletions": 1
+  },
+  {
+   "path": "README.md",
+   "additions": 3,
+   "deletions": 0
+  }
+ ]
+}

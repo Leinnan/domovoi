@@ -1,0 +1,17 @@
+{
+  "entries": [
+    {
+      "path": "calc.py",
+      "kind": "file"
+    },
+    {
+      "path": "tests/test_calc.py",
+      "kind": "file"
+    },
+    {
+      "path": "tests",
+      "kind": "directory"
+    }
+  ],
+  "truncated": true
+}

@@ -1,0 +1,27 @@
+{
+ "data": {
+  "repository": {
+   "assignableUsers": {
+    "pageInfo": {
+     "hasNextPage": true
+    },
+    "nodes": [
+     {
+      "login": "monalisa-two",
+      "name": "Mona Two",
+      "avatarUrl": "https://avatars.githubusercontent.com/u/4?v=4"
+     },
+     {
+      "login": "octocat",
+      "name": "The Octocat",
+      "avatarUrl": "https://avatars.githubusercontent.com/u/583231?v=4"
+     },
+     {
+      "login": "zed",
+      "name": "Has mona in the name"
+     }
+    ]
+   }
+  }
+ }
+}

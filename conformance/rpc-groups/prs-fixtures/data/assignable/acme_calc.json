@@ -1,0 +1,42 @@
+{
+ "data": {
+  "repository": {
+   "assignableUsers": {
+    "pageInfo": {
+     "hasNextPage": false
+    },
+    "nodes": [
+     {
+      "login": "octocat",
+      "name": "The Octocat",
+      "avatarUrl": "https://avatars.githubusercontent.com/u/583231?v=4"
+     },
+     {
+      "login": "mona",
+      "name": "Mona Lisa",
+      "avatarUrl": "https://avatars.githubusercontent.com/u/2?v=4"
+     },
+     {
+      "login": "hubot",
+      "name": null,
+      "avatarUrl": ""
+     },
+     {
+      "login": "defunkt",
+      "name": "Chris Wanstrath",
+      "avatarUrl": "https://avatars.githubusercontent.com/u/3?v=4"
+     },
+     {
+      "login": "Hubot",
+      "name": "A second spelling",
+      "avatarUrl": null
+     },
+     {
+      "login": "",
+      "name": "No login"
+     }
+    ]
+   }
+  }
+ }
+}

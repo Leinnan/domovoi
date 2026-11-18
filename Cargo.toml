@@ -1,0 +1,27 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "apps/server", "apps/ws-tap", "apps/domovoi-core"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[workspace.dependencies]
+axum = { version = "0.8.9", features = ["ws"] }
+futures = "0.3.34"
+serde = { version = "1.0.229", features = ["derive", "rc"] }
+serde_json = { version = "1.0.154", features = ["preserve_order"] }
+thiserror = "2.0.21"
+tokio = { version = "1.54.1", features = ["full"] }
+tokio-util = { version = "0.7.20", features = ["rt"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+effect-rpc = { path = "crates/effect-rpc" }
+# Benchmarks (`cargo bench`), driven by the recorded sessions in fixtures/golden.
+divan = "0.1.21"
+
+# Dependencies (serde_json, the PTY, git and grep crates) run optimized in dev
+# builds; Domovoi's own code stays fast to compile and debuggable.
+[profile.dev.package."*"]
+opt-level = 2

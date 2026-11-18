@@ -1,0 +1,109 @@
+[
+  {
+    "actionId": "git-action-7f3c",
+    "cwd": "/Users/dev/code/t5code",
+    "action": "commit_push_pr",
+    "kind": "action_started",
+    "phases": ["branch", "commit", "push", "pr"]
+  },
+  {
+    "actionId": "git-action-7f3c",
+    "cwd": "/Users/dev/code/t5code",
+    "action": "commit_push_pr",
+    "kind": "phase_started",
+    "phase": "branch",
+    "label": "Preparing feature branch..."
+  },
+  {
+    "actionId": "git-action-7f3c",
+    "cwd": "/Users/dev/code/t5code",
+    "action": "commit_push_pr",
+    "kind": "phase_started",
+    "phase": "commit",
+    "label": "Committing..."
+  },
+  {
+    "actionId": "git-action-7f3c",
+    "cwd": "/Users/dev/code/t5code",
+    "action": "commit_push_pr",
+    "kind": "hook_started",
+    "hookName": "pre-commit"
+  },
+  {
+    "actionId": "git-action-7f3c",
+    "cwd": "/Users/dev/code/t5code",
+    "action": "commit_push_pr",
+    "kind": "hook_output",
+    "hookName": "pre-commit",
+    "stream": "stdout",
+    "text": "cargo fmt --check ... ok"
+  },
+  {
+    "actionId": "git-action-7f3c",
+    "cwd": "/Users/dev/code/t5code",
+    "action": "commit_push_pr",
+    "kind": "hook_output",
+    "hookName": null,
+    "stream": "stderr",
+    "text": "warning: 2 files reformatted"
+  },
+  {
+    "actionId": "git-action-7f3c",
+    "cwd": "/Users/dev/code/t5code",
+    "action": "commit_push_pr",
+    "kind": "hook_finished",
+    "hookName": "pre-commit",
+    "exitCode": 0,
+    "durationMs": 1840
+  },
+  {
+    "actionId": "git-action-7f3c",
+    "cwd": "/Users/dev/code/t5code",
+    "action": "commit_push_pr",
+    "kind": "phase_started",
+    "phase": "push",
+    "label": "Pushing..."
+  },
+  {
+    "actionId": "git-action-7f3c",
+    "cwd": "/Users/dev/code/t5code",
+    "action": "commit_push_pr",
+    "kind": "phase_started",
+    "phase": "pr",
+    "label": "Preparing PR..."
+  },
+  {
+    "actionId": "git-action-7f3c",
+    "cwd": "/Users/dev/code/t5code",
+    "action": "commit_push_pr",
+    "kind": "action_finished",
+    "result": {
+      "action": "commit_push_pr",
+      "branch": { "status": "created", "name": "feature/typed-vcs-records" },
+      "commit": {
+        "status": "created",
+        "commitSha": "9b1d4e7a2c6f8035b1d4e7a2c6f8035b1d4e7a2c",
+        "subject": "Type the records the git panel reads"
+      },
+      "push": {
+        "status": "pushed",
+        "branch": "feature/typed-vcs-records",
+        "upstreamBranch": "origin/feature/typed-vcs-records",
+        "setUpstream": true
+      },
+      "pr": {
+        "status": "created",
+        "url": "https://github.com/acme/t5code/pull/129",
+        "number": 129,
+        "baseBranch": "main",
+        "headBranch": "feature/typed-vcs-records",
+        "title": "Type the records the git panel reads"
+      },
+      "toast": {
+        "title": "Created PR #129",
+        "description": "Type the records the git panel reads",
+        "cta": { "kind": "open_pr", "label": "View PR", "url": "https://github.com/acme/t5code/pull/129" }
+      }
+    }
+  }
+]

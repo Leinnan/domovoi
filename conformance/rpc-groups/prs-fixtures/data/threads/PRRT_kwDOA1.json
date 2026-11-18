@@ -1,0 +1,181 @@
+{
+ "data": {
+  "node": {
+   "comments": {
+    "pageInfo": {
+     "hasNextPage": true,
+     "endCursor": "Y3Vyc29yOnYyOjM="
+    },
+    "nodes": [
+     {
+      "id": "PRRC_kwDOA4",
+      "body": "Fair enough.",
+      "createdAt": "2025-03-02T13:30:00Z",
+      "lastEditedAt": null,
+      "url": "https://github.com/acme/calc/pull/7#discussion_r4",
+      "viewerCanUpdate": true,
+      "pullRequestReview": {
+       "url": "https://github.com/acme/calc/pull/7#pullrequestreview-2"
+      },
+      "author": {
+       "login": "defunkt",
+       "avatarUrl": "https://avatars.githubusercontent.com/defunkt?v=4",
+       "__typename": "User",
+       "name": "Chris Wanstrath"
+      },
+      "reactionGroups": [
+       {
+        "content": "THUMBS_UP",
+        "viewerHasReacted": false,
+        "reactors": {
+         "totalCount": 1,
+         "nodes": [
+          {
+           "login": "mona"
+          }
+         ]
+        }
+       },
+       {
+        "content": "THUMBS_DOWN",
+        "viewerHasReacted": false,
+        "reactors": {
+         "totalCount": 0,
+         "nodes": []
+        }
+       },
+       {
+        "content": "LAUGH",
+        "viewerHasReacted": false,
+        "reactors": {
+         "totalCount": 0,
+         "nodes": []
+        }
+       },
+       {
+        "content": "HOORAY",
+        "viewerHasReacted": false,
+        "reactors": {
+         "totalCount": 0,
+         "nodes": []
+        }
+       },
+       {
+        "content": "CONFUSED",
+        "viewerHasReacted": false,
+        "reactors": {
+         "totalCount": 0,
+         "nodes": []
+        }
+       },
+       {
+        "content": "HEART",
+        "viewerHasReacted": false,
+        "reactors": {
+         "totalCount": 0,
+         "nodes": []
+        }
+       },
+       {
+        "content": "ROCKET",
+        "viewerHasReacted": false,
+        "reactors": {
+         "totalCount": 0,
+         "nodes": []
+        }
+       },
+       {
+        "content": "EYES",
+        "viewerHasReacted": false,
+        "reactors": {
+         "totalCount": 0,
+         "nodes": []
+        }
+       }
+      ]
+     },
+     {
+      "id": "PRRC_kwDOA5",
+      "body": "Resolving.",
+      "createdAt": "2025-03-02T13:40:00Z",
+      "lastEditedAt": null,
+      "url": "https://github.com/acme/calc/pull/7#discussion_r5",
+      "viewerCanUpdate": false,
+      "pullRequestReview": null,
+      "author": {
+       "login": "github-actions",
+       "avatarUrl": "https://avatars.githubusercontent.com/github-actions?v=4",
+       "__typename": "Bot"
+      },
+      "reactionGroups": [
+       {
+        "content": "THUMBS_UP",
+        "viewerHasReacted": false,
+        "reactors": {
+         "totalCount": 0,
+         "nodes": []
+        }
+       },
+       {
+        "content": "THUMBS_DOWN",
+        "viewerHasReacted": false,
+        "reactors": {
+         "totalCount": 0,
+         "nodes": []
+        }
+       },
+       {
+        "content": "LAUGH",
+        "viewerHasReacted": false,
+        "reactors": {
+         "totalCount": 0,
+         "nodes": []
+        }
+       },
+       {
+        "content": "HOORAY",
+        "viewerHasReacted": false,
+        "reactors": {
+         "totalCount": 0,
+         "nodes": []
+        }
+       },
+       {
+        "content": "CONFUSED",
+        "viewerHasReacted": false,
+        "reactors": {
+         "totalCount": 0,
+         "nodes": []
+        }
+       },
+       {
+        "content": "HEART",
+        "viewerHasReacted": false,
+        "reactors": {
+         "totalCount": 0,
+         "nodes": []
+        }
+       },
+       {
+        "content": "ROCKET",
+        "viewerHasReacted": false,
+        "reactors": {
+         "totalCount": 0,
+         "nodes": []
+        }
+       },
+       {
+        "content": "EYES",
+        "viewerHasReacted": false,
+        "reactors": {
+         "totalCount": 0,
+         "nodes": []
+        }
+       }
+      ]
+     }
+    ]
+   }
+  }
+ }
+}

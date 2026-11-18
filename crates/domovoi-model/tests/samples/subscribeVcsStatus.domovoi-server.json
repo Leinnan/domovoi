@@ -1,0 +1,76 @@
+[
+  {
+    "_tag": "snapshot",
+    "local": {
+      "isRepo": true,
+      "hasPrimaryRemote": true,
+      "isDefaultRef": false,
+      "refName": "feature/typed-records",
+      "hasWorkingTreeChanges": true,
+      "workingTree": {
+        "rootPath": "/Users/dev/code/t5code",
+        "files": [
+          { "path": "crates/t5-model/src/typed/vcs.rs", "insertions": 42, "deletions": 3 }
+        ],
+        "insertions": 42,
+        "deletions": 3
+      },
+      "branchChanges": { "baseRef": "origin/main", "insertions": 42, "deletions": 3 },
+      "sourceControlProvider": { "kind": "github", "name": "GitHub", "baseUrl": "https://github.com" }
+    },
+    "remote": {
+      "hasUpstream": true,
+      "aheadCount": 2,
+      "behindCount": 1,
+      "aheadOfDefaultCount": 5,
+      "pr": {
+        "number": 128,
+        "title": "Type the records the git panel reads",
+        "url": "https://github.com/acme/t5code/pull/128",
+        "baseRef": "main",
+        "headRef": "feature/typed-records",
+        "state": "open",
+        "isDraft": false,
+        "updatedAt": "2026-11-16T18:04:11Z"
+      }
+    }
+  },
+  {
+    "_tag": "localUpdated",
+    "local": {
+      "isRepo": true,
+      "hasPrimaryRemote": true,
+      "isDefaultRef": false,
+      "refName": "feature/typed-records",
+      "hasWorkingTreeChanges": true,
+      "workingTree": {
+        "rootPath": "/Users/dev/code/t5code",
+        "files": [
+          { "path": "crates/domovoi-model/src/typed/source_control.rs", "insertions": 120, "deletions": 0 },
+          { "path": "crates/t5-model/src/typed/vcs.rs", "insertions": 57, "deletions": 9 },
+          { "path": "docs/notes.md", "insertions": 0, "deletions": 14 }
+        ],
+        "insertions": 177,
+        "deletions": 23
+      },
+      "branchChanges": { "baseRef": "origin/main", "insertions": 177, "deletions": 23 },
+      "sourceControlProvider": { "kind": "github", "name": "GitHub", "baseUrl": "https://github.com" }
+    }
+  },
+  {
+    "_tag": "remoteUpdated",
+    "remote": { "hasUpstream": true, "aheadCount": 3, "behindCount": 0, "aheadOfDefaultCount": 0, "pr": null }
+  },
+  {
+    "_tag": "snapshot",
+    "local": {
+      "isRepo": false,
+      "hasPrimaryRemote": false,
+      "isDefaultRef": false,
+      "refName": null,
+      "hasWorkingTreeChanges": false,
+      "workingTree": { "files": [], "insertions": 0, "deletions": 0 }
+    },
+    "remote": null
+  }
+]

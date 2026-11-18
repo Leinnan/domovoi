@@ -1,0 +1,31 @@
+{
+  "complete": true,
+  "snapshotSequence": 292,
+  "totalMatches": 6,
+  "activeIndex": 3,
+  "navigation": [
+    {
+      "entryId": "aeb6e418-7085-4e8b-9e3b-6f12f805dfcf",
+      "runId": "run:thread:6421f1e6-14f6-4d7a-89b3-6e82dac38210:ordinal:1",
+      "startIndex": 0,
+      "count": 2
+    },
+    {
+      "entryId": "message:assistant:6421f1e6:1",
+      "runId": "run:thread:6421f1e6-14f6-4d7a-89b3-6e82dac38210:ordinal:1",
+      "startIndex": 2,
+      "count": 3
+    },
+    {
+      "entryId": "turn-item:thread-created:6421f1e6",
+      "runId": null,
+      "startIndex": 5,
+      "count": 1
+    }
+  ],
+  "match": {
+    "entryId": "message:assistant:6421f1e6:1",
+    "runId": "run:thread:6421f1e6-14f6-4d7a-89b3-6e82dac38210:ordinal:1",
+    "occurrence": 1
+  }
+}

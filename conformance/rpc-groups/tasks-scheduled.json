@@ -1,0 +1,1652 @@
+{
+ "fixture": true,
+ "env": {
+  "TZ": "Europe/Berlin"
+ },
+ "normalize": [
+  [
+   "/api/hooks/([^/]+)/[A-Za-z0-9_-]{43}",
+   "/api/hooks/${1}/<token>"
+  ],
+  [
+   "^(claude|codex) initialize failed: .*$",
+   "${1} initialize failed: <how>"
+  ]
+ ],
+ "cases": [
+  {
+   "tag": "scheduledTasks.subscribe",
+   "payload": {},
+   "expect": "chunk",
+   "note": "no tasks yet; the server's zone"
+  },
+  {
+   "tag": "projects.mutate",
+   "payload": {
+    "type": "project.create",
+    "commandId": "p2",
+    "projectId": "project-2",
+    "title": "other",
+    "workspaceRoot": "$DIR/other",
+    "createWorkspaceRootIfMissing": true,
+    "defaultModelSelection": null
+   },
+   "note": "setup: a second project"
+  },
+  {
+   "tag": "orchestration.launchThread",
+   "payload": {
+    "commandId": "l-thread-archived",
+    "creationSource": "web",
+    "threadId": "thread-archived",
+    "projectId": "$PROJECT",
+    "title": "Archived",
+    "modelSelection": {
+     "instanceId": "claudeAgent",
+     "model": "claude-haiku-5-5"
+    },
+    "runtimeMode": "approval-required",
+    "interactionMode": "default",
+    "workspaceStrategy": {
+     "type": "root"
+    }
+   },
+   "note": "setup: a thread without a turn"
+  },
+  {
+   "tag": "orchestration.launchThread",
+   "payload": {
+    "commandId": "l-thread-deleted",
+    "creationSource": "web",
+    "threadId": "thread-deleted",
+    "projectId": "$PROJECT",
+    "title": "Deleted",
+    "modelSelection": {
+     "instanceId": "claudeAgent",
+     "model": "claude-haiku-5-5"
+    },
+    "runtimeMode": "approval-required",
+    "interactionMode": "default",
+    "workspaceStrategy": {
+     "type": "root"
+    }
+   },
+   "note": "setup: a thread without a turn"
+  },
+  {
+   "tag": "orchestration.launchThread",
+   "payload": {
+    "commandId": "l-thread-fresh",
+    "creationSource": "web",
+    "threadId": "thread-fresh",
+    "projectId": "$PROJECT",
+    "title": "Fresh sessions",
+    "modelSelection": {
+     "instanceId": "claudeAgent",
+     "model": "claude-haiku-5-5"
+    },
+    "runtimeMode": "approval-required",
+    "interactionMode": "default",
+    "workspaceStrategy": {
+     "type": "root"
+    }
+   },
+   "note": "setup: a thread without a turn"
+  },
+  {
+   "tag": "orchestration.dispatchCommand",
+   "payload": {
+    "type": "thread.archive",
+    "commandId": "arch",
+    "threadId": "thread-archived"
+   },
+   "note": "setup"
+  },
+  {
+   "tag": "orchestration.dispatchCommand",
+   "payload": {
+    "type": "thread.delete",
+    "commandId": "del",
+    "threadId": "thread-deleted"
+   },
+   "note": "setup"
+  },
+  {
+   "tag": "scheduledTasks.upsert",
+   "payload": {
+    "title": "Hourly check",
+    "prompt": "Where is the add function defined?",
+    "enabled": true,
+    "schedule": {
+     "type": "interval",
+     "everyMs": 3600000
+    },
+    "projectId": "$PROJECT",
+    "workspaceStrategy": {
+     "type": "root"
+    },
+    "modelSelection": {
+     "instanceId": "claudeAgent",
+     "model": "claude-haiku-5-5"
+    },
+    "runtimeMode": "approval-required",
+    "interactionMode": "default",
+    "id": "task-interval"
+   },
+   "note": "interval, with an id"
+  },
+  {
+   "tag": "scheduledTasks.upsert",
+   "payload": {
+    "title": "Weekday standup",
+    "prompt": "Summarize yesterday",
+    "enabled": true,
+    "schedule": {
+     "type": "fixed_time",
+     "timeOfDay": "09:30",
+     "weekdays": [
+      1,
+      2,
+      3,
+      4,
+      5
+     ]
+    },
+    "projectId": "$PROJECT",
+    "workspaceStrategy": {
+     "type": "worktree",
+     "baseRef": "main",
+     "branch": "nightly",
+     "startFromOrigin": true
+    },
+    "modelSelection": {
+     "instanceId": "codex",
+     "model": "gpt-5",
+     "options": [
+      {
+       "id": "reasoningEffort",
+       "value": "high"
+      }
+     ]
+    },
+    "runtimeMode": "full-access",
+    "interactionMode": "plan",
+    "commandId": "cmd-fixed",
+    "threadMode": "continue",
+    "createdBy": "agent",
+    "creationSource": "mcp"
+   },
+   "note": "fixed time on weekdays, id from the command id, continued thread without one yet, created by an agent"
+  },
+  {
+   "tag": "scheduledTasks.upsert",
+   "payload": {
+    "title": "Daily",
+    "prompt": "Where is the add function defined?",
+    "enabled": true,
+    "schedule": {
+     "type": "fixed_time",
+     "timeOfDay": "7:05"
+    },
+    "projectId": "$PROJECT",
+    "workspaceStrategy": {
+     "type": "existing_worktree",
+     "worktreePath": "$WORKSPACE",
+     "branch": "main"
+    },
+    "modelSelection": {
+     "instanceId": "claudeAgent",
+     "model": "claude-haiku-5-5"
+    },
+    "runtimeMode": "approval-required",
+    "interactionMode": "default"
+   },
+   "note": "fixed time every day, generated id",
+   "save": {
+    "GENERATED": "/task/id"
+   }
+  },
+  {
+   "tag": "scheduledTasks.upsert",
+   "payload": {
+    "title": "Hourly check",
+    "prompt": "Where is the add function defined?",
+    "enabled": true,
+    "schedule": {
+     "type": "fixed_time",
+     "timeOfDay": "23:59",
+     "weekdays": []
+    },
+    "projectId": "$PROJECT",
+    "workspaceStrategy": {
+     "type": "root"
+    },
+    "modelSelection": {
+     "instanceId": "claudeAgent",
+     "model": "claude-haiku-5-5"
+    },
+    "runtimeMode": "approval-required",
+    "interactionMode": "default",
+    "id": "task-fixed-empty"
+   },
+   "note": "fixed time with an empty weekday list"
+  },
+  {
+   "tag": "scheduledTasks.upsert",
+   "payload": {
+    "title": "New year",
+    "prompt": "Where is the add function defined?",
+    "enabled": true,
+    "schedule": {
+     "type": "once",
+     "runAt": "2999-01-01T09:00:00+01:00"
+    },
+    "projectId": "$PROJECT",
+    "workspaceStrategy": {
+     "type": "root"
+    },
+    "modelSelection": {
+     "instanceId": "claudeAgent",
+     "model": "claude-haiku-5-5"
+    },
+    "runtimeMode": "approval-required",
+    "interactionMode": "default",
+    "id": "task-once"
+   },
+   "note": "once, far away, with an offset: stored in UTC"
+  },
+  {
+   "tag": "scheduledTasks.upsert",
+   "payload": {
+    "title": "Follow up",
+    "prompt": "Any news?",
+    "enabled": false,
+    "schedule": {
+     "type": "once",
+     "runAt": "2999-06-01T12:00:00.250Z"
+    },
+    "projectId": "$PROJECT",
+    "workspaceStrategy": {
+     "type": "root"
+    },
+    "modelSelection": {
+     "instanceId": "claudeAgent",
+     "model": "claude-haiku-5-5"
+    },
+    "runtimeMode": "approval-required",
+    "interactionMode": "default",
+    "id": "task-bound",
+    "threadId": "$THREAD"
+   },
+   "note": "once, disabled, bound to a thread: continues it"
+  },
+  {
+   "tag": "scheduledTasks.upsert",
+   "payload": {
+    "title": "Too late",
+    "prompt": "Where is the add function defined?",
+    "enabled": false,
+    "schedule": {
+     "type": "once",
+     "runAt": "2000-01-01T00:00:00Z"
+    },
+    "projectId": "$PROJECT",
+    "workspaceStrategy": {
+     "type": "root"
+    },
+    "modelSelection": {
+     "instanceId": "claudeAgent",
+     "model": "claude-haiku-5-5"
+    },
+    "runtimeMode": "approval-required",
+    "interactionMode": "default",
+    "id": "task-past"
+   },
+   "note": "once in the past, disabled: saved, never due"
+  },
+  {
+   "tag": "scheduledTasks.upsert",
+   "payload": {
+    "title": "Fresh",
+    "prompt": "Where is the add function defined?",
+    "enabled": true,
+    "schedule": {
+     "type": "interval",
+     "everyMs": 60000
+    },
+    "projectId": "$PROJECT",
+    "workspaceStrategy": {
+     "type": "root"
+    },
+    "modelSelection": {
+     "instanceId": "claudeAgent",
+     "model": "claude-haiku-5-5"
+    },
+    "runtimeMode": "approval-required",
+    "interactionMode": "default",
+    "id": "task-fresh",
+    "threadId": "thread-fresh",
+    "threadMode": "fresh_session"
+   },
+   "note": "a fresh session in one thread each run"
+  },
+  {
+   "tag": "scheduledTasks.upsert",
+   "payload": {
+    "title": "New each time",
+    "prompt": "Where is the add function defined?",
+    "enabled": true,
+    "schedule": {
+     "type": "interval",
+     "everyMs": 3600000
+    },
+    "projectId": "$PROJECT",
+    "workspaceStrategy": {
+     "type": "root"
+    },
+    "modelSelection": {
+     "instanceId": "claudeAgent",
+     "model": "claude-haiku-5-5"
+    },
+    "runtimeMode": "approval-required",
+    "interactionMode": "default",
+    "id": "task-newthread",
+    "threadId": "$THREAD",
+    "threadMode": "new_thread"
+   },
+   "note": "a thread given with new_thread: not kept"
+  },
+  {
+   "tag": "scheduledTasks.upsert",
+   "payload": {
+    "title": "Nowhere",
+    "prompt": "Where is the add function defined?",
+    "enabled": true,
+    "schedule": {
+     "type": "interval",
+     "everyMs": 3600000
+    },
+    "projectId": "project-gone",
+    "workspaceStrategy": {
+     "type": "root"
+    },
+    "modelSelection": {
+     "instanceId": "claudeAgent",
+     "model": "claude-haiku-5-5"
+    },
+    "runtimeMode": "approval-required",
+    "interactionMode": "default",
+    "id": "task-noproject"
+   },
+   "note": "a task of a project that does not exist: saved as given"
+  },
+  {
+   "tag": "scheduledTasks.upsert",
+   "payload": {
+    "title": "Fast",
+    "prompt": "Where is the add function defined?",
+    "enabled": false,
+    "schedule": {
+     "type": "interval",
+     "everyMs": 5000
+    },
+    "projectId": "$PROJECT",
+    "workspaceStrategy": {
+     "type": "root"
+    },
+    "modelSelection": {
+     "instanceId": "claudeAgent",
+     "model": "claude-haiku-5-5"
+    },
+    "runtimeMode": "approval-required",
+    "interactionMode": "default",
+    "id": "task-fast"
+   },
+   "note": "an interval under a minute, as older clients saved (the request is outside t3code's upsert schema, which wants a minute or more)",
+   "skip_schema": true
+  },
+  {
+   "tag": "scheduledTasks.upsert",
+   "payload": {
+    "title": "Cron",
+    "prompt": "Where is the add function defined?",
+    "enabled": true,
+    "schedule": {
+     "type": "cron",
+     "expression": "0 9 * * *"
+    },
+    "projectId": "$PROJECT",
+    "workspaceStrategy": {
+     "type": "root"
+    },
+    "modelSelection": {
+     "instanceId": "claudeAgent",
+     "model": "claude-haiku-5-5"
+    },
+    "runtimeMode": "approval-required",
+    "interactionMode": "default",
+    "id": "task-cron"
+   },
+   "note": "a kind of schedule the server does not know: kept as sent, never due (neither the request nor the answer is in t3code's schema)",
+   "skip_schema": true
+  },
+  {
+   "tag": "scheduledTasks.upsert",
+   "payload": {
+    "title": "Loose",
+    "prompt": "Where is the add function defined?",
+    "enabled": "yes",
+    "schedule": {
+     "type": "interval",
+     "everyMs": 3600000
+    },
+    "projectId": "$PROJECT",
+    "workspaceStrategy": {
+     "type": "root"
+    },
+    "modelSelection": {
+     "instanceId": "claudeAgent",
+     "model": "claude-haiku-5-5"
+    },
+    "runtimeMode": "approval-required",
+    "interactionMode": "default",
+    "id": 7,
+    "commandId": "cmd-loose",
+    "requireExisting": "no",
+    "threadId": null,
+    "threadMode": false,
+    "createdBy": 7,
+    "creationSource": [
+     "mcp"
+    ]
+   },
+   "note": "fields of another type than theirs count as not sent: the id is made from the command id, the task is off, the user's, from the web (the request is outside t3code's schema)",
+   "skip_schema": true
+  },
+  {
+   "tag": "scheduledTasks.upsert",
+   "payload": {
+    "title": "On push",
+    "prompt": "Review {{body.ref}}",
+    "enabled": true,
+    "schedule": {
+     "type": "webhook"
+    },
+    "projectId": "$PROJECT",
+    "workspaceStrategy": {
+     "type": "root"
+    },
+    "modelSelection": {
+     "instanceId": "claudeAgent",
+     "model": "claude-haiku-5-5"
+    },
+    "runtimeMode": "approval-required",
+    "interactionMode": "default",
+    "id": "hook-plain"
+   },
+   "note": "webhook, the URL token only"
+  },
+  {
+   "tag": "scheduledTasks.upsert",
+   "payload": {
+    "title": "Signed",
+    "prompt": "Review the push",
+    "enabled": true,
+    "schedule": {
+     "type": "webhook",
+     "signature": {
+      "header": "X-Hub-Signature-256",
+      "encoding": "hex",
+      "prefix": "sha256=",
+      "secret": "s3cret"
+     },
+     "maxDeliveryAgeMinutes": 60,
+     "dedupe": {
+      "replayKey": "{{headers.x-delivery}}",
+      "coalesceKey": "{{body.ref}}",
+      "coalesceWindowSeconds": 30
+     },
+     "filters": [
+      {
+       "path": "body.ref",
+       "op": "equals",
+       "value": "refs/heads/main"
+      },
+      {
+       "path": "body.action",
+       "op": "notEquals",
+       "value": "closed"
+      },
+      {
+       "path": "headers.x-event",
+       "op": "startsWith",
+       "value": "push"
+      },
+      {
+       "path": "body.kind",
+       "op": "in",
+       "value": [
+        "a",
+        "b c"
+       ]
+      },
+      {
+       "path": "query.token",
+       "op": "exists"
+      }
+     ]
+    },
+    "projectId": "$PROJECT",
+    "workspaceStrategy": {
+     "type": "root"
+    },
+    "modelSelection": {
+     "instanceId": "claudeAgent",
+     "model": "claude-haiku-5-5"
+    },
+    "runtimeMode": "approval-required",
+    "interactionMode": "default",
+    "id": "hook-signed"
+   },
+   "note": "webhook with a signature, its secret, an age limit, dedupe and every filter kind"
+  },
+  {
+   "tag": "scheduledTasks.upsert",
+   "payload": {
+    "title": "Open",
+    "prompt": "Where is the add function defined?",
+    "enabled": true,
+    "schedule": {
+     "type": "webhook",
+     "signature": null,
+     "maxDeliveryAgeMinutes": null,
+     "dedupe": {
+      "replayKey": "{{request}}"
+     }
+    },
+    "projectId": "$PROJECT",
+    "workspaceStrategy": {
+     "type": "root"
+    },
+    "modelSelection": {
+     "instanceId": "claudeAgent",
+     "model": "claude-haiku-5-5"
+    },
+    "runtimeMode": "approval-required",
+    "interactionMode": "default",
+    "id": "hook-null"
+   },
+   "note": "webhook with a null signature and a null age limit"
+  },
+  {
+   "tag": "scheduledTasks.subscribe",
+   "payload": {},
+   "expect": "chunk",
+   "note": "every kind listed"
+  },
+  {
+   "tag": "scheduledTasks.upsert",
+   "payload": {
+    "title": "Renamed",
+    "prompt": "Where is the add function defined?",
+    "enabled": true,
+    "schedule": {
+     "type": "interval",
+     "everyMs": 3600000
+    },
+    "projectId": "$PROJECT",
+    "workspaceStrategy": {
+     "type": "root"
+    },
+    "modelSelection": {
+     "instanceId": "claudeAgent",
+     "model": "claude-haiku-5-5"
+    },
+    "runtimeMode": "approval-required",
+    "interactionMode": "default",
+    "id": "task-interval",
+    "requireExisting": true
+   },
+   "note": "a new title: the pending run stays"
+  },
+  {
+   "tag": "scheduledTasks.upsert",
+   "payload": {
+    "title": "Renamed",
+    "prompt": "Where is the add function defined?",
+    "enabled": true,
+    "schedule": {
+     "type": "interval",
+     "everyMs": 7200000
+    },
+    "projectId": "$PROJECT",
+    "workspaceStrategy": {
+     "type": "root"
+    },
+    "modelSelection": {
+     "instanceId": "claudeAgent",
+     "model": "claude-haiku-5-5"
+    },
+    "runtimeMode": "approval-required",
+    "interactionMode": "default",
+    "id": "task-interval"
+   },
+   "note": "another interval: the run moves"
+  },
+  {
+   "tag": "scheduledTasks.upsert",
+   "payload": {
+    "title": "Hourly check",
+    "prompt": "Where is the add function defined?",
+    "enabled": true,
+    "schedule": {
+     "type": "once",
+     "runAt": "2999-02-03T04:05:06Z"
+    },
+    "projectId": "$PROJECT",
+    "workspaceStrategy": {
+     "type": "root"
+    },
+    "modelSelection": {
+     "instanceId": "claudeAgent",
+     "model": "claude-haiku-5-5"
+    },
+    "runtimeMode": "approval-required",
+    "interactionMode": "default",
+    "id": "task-fixed-empty"
+   },
+   "note": "another kind of schedule"
+  },
+  {
+   "tag": "scheduledTasks.upsert",
+   "payload": {
+    "title": "New year",
+    "prompt": "Where is the add function defined?",
+    "enabled": false,
+    "schedule": {
+     "type": "once",
+     "runAt": "2999-01-01T08:00:00.000Z"
+    },
+    "projectId": "$PROJECT",
+    "workspaceStrategy": {
+     "type": "root"
+    },
+    "modelSelection": {
+     "instanceId": "claudeAgent",
+     "model": "claude-haiku-5-5"
+    },
+    "runtimeMode": "approval-required",
+    "interactionMode": "default",
+    "id": "task-once"
+   },
+   "note": "disabled by an edit"
+  },
+  {
+   "tag": "scheduledTasks.upsert",
+   "payload": {
+    "title": "Follow up",
+    "prompt": "Any news?",
+    "enabled": false,
+    "schedule": {
+     "type": "once",
+     "runAt": "2999-06-01T12:00:00.250Z"
+    },
+    "projectId": "$PROJECT",
+    "workspaceStrategy": {
+     "type": "root"
+    },
+    "modelSelection": {
+     "instanceId": "claudeAgent",
+     "model": "claude-haiku-5-5"
+    },
+    "runtimeMode": "approval-required",
+    "interactionMode": "default",
+    "id": "task-bound",
+    "createdBy": "agent",
+    "creationSource": "mcp"
+   },
+   "note": "a bound task keeps its thread when none is sent"
+  },
+  {
+   "tag": "scheduledTasks.upsert",
+   "payload": {
+    "title": "Follow up",
+    "prompt": "Any news?",
+    "enabled": false,
+    "schedule": {
+     "type": "once",
+     "runAt": "2999-06-01T12:00:00.250Z"
+    },
+    "projectId": "project-2",
+    "workspaceStrategy": {
+     "type": "root"
+    },
+    "modelSelection": {
+     "instanceId": "claudeAgent",
+     "model": "claude-haiku-5-5"
+    },
+    "runtimeMode": "approval-required",
+    "interactionMode": "default",
+    "id": "task-bound"
+   },
+   "note": "a bound task moved to another project loses its thread"
+  },
+  {
+   "tag": "scheduledTasks.upsert",
+   "payload": {
+    "title": "Fresh",
+    "prompt": "Where is the add function defined?",
+    "enabled": true,
+    "schedule": {
+     "type": "interval",
+     "everyMs": 60000
+    },
+    "projectId": "$PROJECT",
+    "workspaceStrategy": {
+     "type": "root"
+    },
+    "modelSelection": {
+     "instanceId": "claudeAgent",
+     "model": "claude-haiku-5-5"
+    },
+    "runtimeMode": "approval-required",
+    "interactionMode": "default",
+    "id": "task-fresh",
+    "threadMode": "new_thread"
+   },
+   "note": "a bound task set to new threads loses its thread"
+  },
+  {
+   "tag": "scheduledTasks.upsert",
+   "payload": {
+    "title": "Signed",
+    "prompt": "Review the push",
+    "enabled": true,
+    "schedule": {
+     "type": "webhook",
+     "signature": {
+      "header": "X-Hub-Signature-256",
+      "encoding": "hex",
+      "prefix": "sha256="
+     }
+    },
+    "projectId": "$PROJECT",
+    "workspaceStrategy": {
+     "type": "root"
+    },
+    "modelSelection": {
+     "instanceId": "claudeAgent",
+     "model": "claude-haiku-5-5"
+    },
+    "runtimeMode": "approval-required",
+    "interactionMode": "default",
+    "id": "hook-signed"
+   },
+   "note": "webhook saved again without secret, dedupe or filters: all kept"
+  },
+  {
+   "tag": "scheduledTasks.upsert",
+   "payload": {
+    "title": "Signed",
+    "prompt": "Review the push",
+    "enabled": true,
+    "schedule": {
+     "type": "webhook",
+     "signature": {
+      "header": "x-sig",
+      "encoding": "base64",
+      "prefix": "",
+      "secret": "other"
+     },
+     "dedupe": {
+      "coalesceKey": "{{query.id}}"
+     },
+     "filters": []
+    },
+    "projectId": "$PROJECT",
+    "workspaceStrategy": {
+     "type": "root"
+    },
+    "modelSelection": {
+     "instanceId": "claudeAgent",
+     "model": "claude-haiku-5-5"
+    },
+    "runtimeMode": "approval-required",
+    "interactionMode": "default",
+    "id": "hook-signed"
+   },
+   "note": "webhook: an empty filter list clears, a new dedupe replaces, another secret and encoding"
+  },
+  {
+   "tag": "scheduledTasks.upsert",
+   "payload": {
+    "title": "Signed",
+    "prompt": "Review the push",
+    "enabled": true,
+    "schedule": {
+     "type": "webhook",
+     "signature": null
+    },
+    "projectId": "$PROJECT",
+    "workspaceStrategy": {
+     "type": "root"
+    },
+    "modelSelection": {
+     "instanceId": "claudeAgent",
+     "model": "claude-haiku-5-5"
+    },
+    "runtimeMode": "approval-required",
+    "interactionMode": "default",
+    "id": "hook-signed"
+   },
+   "note": "webhook: no signature any more drops the secret"
+  },
+  {
+   "tag": "scheduledTasks.upsert",
+   "payload": {
+    "title": "Open",
+    "prompt": "Where is the add function defined?",
+    "enabled": true,
+    "schedule": {
+     "type": "interval",
+     "everyMs": 60000
+    },
+    "projectId": "$PROJECT",
+    "workspaceStrategy": {
+     "type": "root"
+    },
+    "modelSelection": {
+     "instanceId": "claudeAgent",
+     "model": "claude-haiku-5-5"
+    },
+    "runtimeMode": "approval-required",
+    "interactionMode": "default",
+    "id": "hook-null"
+   },
+   "note": "webhook turned into an interval: no endpoint"
+  },
+  {
+   "tag": "scheduledTasks.upsert",
+   "payload": {
+    "title": "New each time",
+    "prompt": "Where is the add function defined?",
+    "enabled": true,
+    "schedule": {
+     "type": "webhook",
+     "signature": {
+      "header": "X-Hub-Signature-256",
+      "encoding": "hex",
+      "prefix": "sha256=",
+      "secret": "x"
+     }
+    },
+    "projectId": "$PROJECT",
+    "workspaceStrategy": {
+     "type": "root"
+    },
+    "modelSelection": {
+     "instanceId": "claudeAgent",
+     "model": "claude-haiku-5-5"
+    },
+    "runtimeMode": "approval-required",
+    "interactionMode": "default",
+    "id": "task-newthread"
+   },
+   "note": "an interval turned into a webhook: a token is made"
+  },
+  {
+   "tag": "scheduledTasks.subscribe",
+   "payload": {},
+   "expect": "chunk",
+   "note": "after the edits"
+  },
+  {
+   "tag": "scheduledTasks.upsert",
+   "payload": {
+    "title": "Hourly check",
+    "prompt": "Where is the add function defined?",
+    "enabled": true,
+    "schedule": {
+     "type": "once",
+     "runAt": "2000-01-01T00:00:00Z"
+    },
+    "projectId": "$PROJECT",
+    "workspaceStrategy": {
+     "type": "root"
+    },
+    "modelSelection": {
+     "instanceId": "claudeAgent",
+     "model": "claude-haiku-5-5"
+    },
+    "runtimeMode": "approval-required",
+    "interactionMode": "default",
+    "id": "task-late"
+   },
+   "expect": "failure",
+   "error": "ScheduledTaskError",
+   "note": "once in the past"
+  },
+  {
+   "tag": "scheduledTasks.upsert",
+   "payload": {
+    "title": "Too late",
+    "prompt": "Where is the add function defined?",
+    "enabled": true,
+    "schedule": {
+     "type": "once",
+     "runAt": "2000-01-01T00:00:00Z"
+    },
+    "projectId": "$PROJECT",
+    "workspaceStrategy": {
+     "type": "root"
+    },
+    "modelSelection": {
+     "instanceId": "claudeAgent",
+     "model": "claude-haiku-5-5"
+    },
+    "runtimeMode": "approval-required",
+    "interactionMode": "default",
+    "id": "task-past"
+   },
+   "expect": "failure",
+   "error": "ScheduledTaskError",
+   "note": "once in the past, enabling a disabled one by an edit"
+  },
+  {
+   "tag": "scheduledTasks.upsert",
+   "payload": {
+    "title": "Hourly check",
+    "prompt": "Where is the add function defined?",
+    "enabled": true,
+    "schedule": {
+     "type": "interval",
+     "everyMs": 3600000
+    },
+    "projectId": "$PROJECT",
+    "workspaceStrategy": {
+     "type": "root"
+    },
+    "modelSelection": {
+     "instanceId": "claudeAgent",
+     "model": "claude-haiku-5-5"
+    },
+    "runtimeMode": "approval-required",
+    "interactionMode": "default",
+    "id": "task-missing",
+    "requireExisting": true
+   },
+   "expect": "failure",
+   "error": "ScheduledTaskError",
+   "note": "an edit of a task that is gone"
+  },
+  {
+   "tag": "scheduledTasks.upsert",
+   "payload": {
+    "title": "Hourly check",
+    "prompt": "Where is the add function defined?",
+    "enabled": true,
+    "schedule": {
+     "type": "interval",
+     "everyMs": 3600000
+    },
+    "projectId": "$PROJECT",
+    "workspaceStrategy": {
+     "type": "root"
+    },
+    "modelSelection": {
+     "instanceId": "claudeAgent",
+     "model": "claude-haiku-5-5"
+    },
+    "runtimeMode": "approval-required",
+    "interactionMode": "default",
+    "id": "task-badthread",
+    "threadId": "no-such-thread"
+   },
+   "expect": "failure",
+   "error": "ScheduledTaskError",
+   "note": "a thread that does not exist"
+  },
+  {
+   "tag": "scheduledTasks.upsert",
+   "payload": {
+    "title": "Hourly check",
+    "prompt": "Where is the add function defined?",
+    "enabled": true,
+    "schedule": {
+     "type": "interval",
+     "everyMs": 3600000
+    },
+    "projectId": "$PROJECT",
+    "workspaceStrategy": {
+     "type": "root"
+    },
+    "modelSelection": {
+     "instanceId": "claudeAgent",
+     "model": "claude-haiku-5-5"
+    },
+    "runtimeMode": "approval-required",
+    "interactionMode": "default",
+    "id": "task-badthread",
+    "threadId": "thread-deleted"
+   },
+   "expect": "failure",
+   "error": "ScheduledTaskError",
+   "note": "a deleted thread"
+  },
+  {
+   "tag": "scheduledTasks.upsert",
+   "payload": {
+    "title": "Hourly check",
+    "prompt": "Where is the add function defined?",
+    "enabled": true,
+    "schedule": {
+     "type": "interval",
+     "everyMs": 3600000
+    },
+    "projectId": "$PROJECT",
+    "workspaceStrategy": {
+     "type": "root"
+    },
+    "modelSelection": {
+     "instanceId": "claudeAgent",
+     "model": "claude-haiku-5-5"
+    },
+    "runtimeMode": "approval-required",
+    "interactionMode": "default",
+    "id": "task-badthread",
+    "threadId": "thread-archived"
+   },
+   "expect": "failure",
+   "error": "ScheduledTaskError",
+   "note": "an archived thread"
+  },
+  {
+   "tag": "scheduledTasks.upsert",
+   "payload": {
+    "title": "Hourly check",
+    "prompt": "Where is the add function defined?",
+    "enabled": true,
+    "schedule": {
+     "type": "interval",
+     "everyMs": 3600000
+    },
+    "projectId": "project-2",
+    "workspaceStrategy": {
+     "type": "root"
+    },
+    "modelSelection": {
+     "instanceId": "claudeAgent",
+     "model": "claude-haiku-5-5"
+    },
+    "runtimeMode": "approval-required",
+    "interactionMode": "default",
+    "id": "task-badthread",
+    "threadId": "$THREAD"
+   },
+   "expect": "failure",
+   "error": "ScheduledTaskError",
+   "note": "a thread of another project"
+  },
+  {
+   "tag": "scheduledTasks.upsert",
+   "payload": {
+    "title": "Hourly check",
+    "prompt": "Where is the add function defined?",
+    "enabled": true,
+    "schedule": {
+     "type": "interval",
+     "everyMs": 3600000
+    },
+    "projectId": "$PROJECT",
+    "workspaceStrategy": {
+     "type": "root"
+    },
+    "modelSelection": {
+     "instanceId": "claudeAgent",
+     "model": "claude-haiku-5-5"
+    },
+    "runtimeMode": "approval-required",
+    "interactionMode": "default",
+    "id": "task-interval",
+    "threadId": "no-such-thread"
+   },
+   "expect": "failure",
+   "error": "ScheduledTaskError",
+   "note": "rebinding an existing task to a thread that does not exist"
+  },
+  {
+   "tag": "scheduledTasks.upsert",
+   "payload": {
+    "title": "Hourly check",
+    "prompt": "Where is the add function defined?",
+    "enabled": true,
+    "schedule": {
+     "type": "webhook",
+     "signature": {
+      "header": "X-Hub-Signature-256",
+      "encoding": "hex",
+      "prefix": "sha256="
+     }
+    },
+    "projectId": "$PROJECT",
+    "workspaceStrategy": {
+     "type": "root"
+    },
+    "modelSelection": {
+     "instanceId": "claudeAgent",
+     "model": "claude-haiku-5-5"
+    },
+    "runtimeMode": "approval-required",
+    "interactionMode": "default",
+    "id": "hook-nosecret"
+   },
+   "expect": "failure",
+   "error": "ScheduledTaskError",
+   "note": "a signature without a secret"
+  },
+  {
+   "tag": "scheduledTasks.upsert",
+   "payload": {
+    "title": "Hourly check",
+    "prompt": "Where is the add function defined?",
+    "enabled": true,
+    "schedule": {
+     "type": "webhook",
+     "signature": {
+      "header": "X-Hub-Signature-256",
+      "encoding": "hex",
+      "prefix": "sha256=",
+      "secretRef": "secret-1"
+     }
+    },
+    "projectId": "$PROJECT",
+    "workspaceStrategy": {
+     "type": "root"
+    },
+    "modelSelection": {
+     "instanceId": "claudeAgent",
+     "model": "claude-haiku-5-5"
+    },
+    "runtimeMode": "approval-required",
+    "interactionMode": "default",
+    "id": "hook-ref"
+   },
+   "expect": "failure",
+   "error": "ScheduledTaskError",
+   "note": "a signature with a secret request (Domovoi has none)"
+  },
+  {
+   "tag": "scheduledTasks.upsert",
+   "payload": {
+    "title": "Hourly check",
+    "prompt": "Where is the add function defined?",
+    "enabled": true,
+    "schedule": {
+     "type": "webhook",
+     "signature": {
+      "header": "X-Hub-Signature-256",
+      "encoding": "hex",
+      "prefix": "sha256="
+     }
+    },
+    "projectId": "$PROJECT",
+    "workspaceStrategy": {
+     "type": "root"
+    },
+    "modelSelection": {
+     "instanceId": "claudeAgent",
+     "model": "claude-haiku-5-5"
+    },
+    "runtimeMode": "approval-required",
+    "interactionMode": "default",
+    "id": "hook-signed"
+   },
+   "expect": "failure",
+   "error": "ScheduledTaskError",
+   "note": "a signature for a stored task whose secret was dropped"
+  },
+  {
+   "tag": "scheduledTasks.upsert",
+   "payload": {
+    "prompt": "Where is the add function defined?",
+    "enabled": true,
+    "schedule": {
+     "type": "interval",
+     "everyMs": 3600000
+    },
+    "projectId": "$PROJECT",
+    "workspaceStrategy": {
+     "type": "root"
+    },
+    "modelSelection": {
+     "instanceId": "claudeAgent",
+     "model": "claude-haiku-5-5"
+    },
+    "runtimeMode": "approval-required",
+    "interactionMode": "default",
+    "id": "task-untitled"
+   },
+   "expect": "failure",
+   "error": "ScheduledTaskError",
+   "note": "no title: the table refuses the row, the failure with a cause (the request is outside t3code's schema)",
+   "skip_schema": true
+  },
+  {
+   "tag": "scheduledTasks.upsert",
+   "payload": {
+    "title": "Hourly check",
+    "prompt": "Where is the add function defined?",
+    "enabled": true,
+    "schedule": {
+     "type": "interval",
+     "everyMs": 3600000
+    },
+    "projectId": "$PROJECT",
+    "workspaceStrategy": {
+     "type": "root"
+    },
+    "modelSelection": {
+     "instanceId": "claudeAgent",
+     "model": "claude-haiku-5-5"
+    },
+    "interactionMode": "default",
+    "id": "task-nomode"
+   },
+   "expect": "failure",
+   "error": "ScheduledTaskError",
+   "note": "no runtime mode: the table refuses the row (the request is outside t3code's schema)",
+   "skip_schema": true
+  },
+  {
+   "tag": "scheduledTasks.subscribe",
+   "payload": {},
+   "expect": "chunk",
+   "note": "nothing saved by the failures"
+  },
+  {
+   "tag": "scheduledTasks.setEnabled",
+   "payload": {
+    "id": "task-interval",
+    "enabled": false
+   },
+   "note": "off: no next run"
+  },
+  {
+   "tag": "scheduledTasks.setEnabled",
+   "payload": {
+    "id": "task-interval",
+    "enabled": false
+   },
+   "note": "off again: unchanged"
+  },
+  {
+   "tag": "scheduledTasks.setEnabled",
+   "payload": {
+    "id": "task-interval",
+    "enabled": true
+   },
+   "note": "on: the clock restarts"
+  },
+  {
+   "tag": "scheduledTasks.setEnabled",
+   "payload": {
+    "id": "hook-plain",
+    "enabled": false
+   },
+   "note": "a webhook off"
+  },
+  {
+   "tag": "scheduledTasks.setEnabled",
+   "payload": {
+    "id": "hook-plain",
+    "enabled": true
+   },
+   "note": "a webhook on: still no next run"
+  },
+  {
+   "tag": "scheduledTasks.setEnabled",
+   "payload": {
+    "id": "task-once",
+    "enabled": true
+   },
+   "note": "a far one-time task on"
+  },
+  {
+   "tag": "scheduledTasks.setEnabled",
+   "payload": {
+    "id": "task-past",
+    "enabled": true
+   },
+   "expect": "failure",
+   "error": "ScheduledTaskError",
+   "note": "a past one-time task cannot be turned on"
+  },
+  {
+   "tag": "scheduledTasks.setEnabled",
+   "payload": {
+    "id": "nope",
+    "enabled": true
+   },
+   "expect": "failure",
+   "error": "ScheduledTaskError",
+   "note": "no such task"
+  },
+  {
+   "tag": "scheduledTasks.rotateWebhookToken",
+   "payload": {
+    "id": "hook-plain"
+   },
+   "note": "a new token"
+  },
+  {
+   "tag": "scheduledTasks.rotateWebhookToken",
+   "payload": {
+    "id": "task-interval"
+   },
+   "expect": "failure",
+   "error": "ScheduledTaskError",
+   "note": "not a webhook task"
+  },
+  {
+   "tag": "scheduledTasks.rotateWebhookToken",
+   "payload": {
+    "id": "nope"
+   },
+   "expect": "failure",
+   "error": "ScheduledTaskError",
+   "note": "no such task"
+  },
+  {
+   "tag": "scheduledTasks.listWebhookDeliveries",
+   "payload": {
+    "id": "hook-plain",
+    "acceptAnyOutcome": true
+   },
+   "note": "domovoi logs none"
+  },
+  {
+   "tag": "scheduledTasks.listWebhookDeliveries",
+   "payload": {
+    "id": "nope"
+   },
+   "note": "nor for a task that is not there"
+  },
+  {
+   "tag": "scheduledTasks.getWebhookDelivery",
+   "payload": {
+    "id": "hook-plain",
+    "deliveryId": "d1"
+   },
+   "expect": "failure",
+   "error": "ScheduledTaskError",
+   "note": "so none is found"
+  },
+  {
+   "tag": "scheduledTasks.runNow",
+   "payload": {
+    "id": "task-interval"
+   },
+   "note": "a new thread; the provider fails at once"
+  },
+  {
+   "tag": "scheduledTasks.upsert",
+   "payload": {
+    "title": "Here",
+    "prompt": "Any news?",
+    "enabled": true,
+    "schedule": {
+     "type": "interval",
+     "everyMs": 600000
+    },
+    "projectId": "$PROJECT",
+    "workspaceStrategy": {
+     "type": "root"
+    },
+    "modelSelection": {
+     "instanceId": "claudeAgent",
+     "model": "claude-haiku-5-5"
+    },
+    "runtimeMode": "approval-required",
+    "interactionMode": "default",
+    "id": "task-here",
+    "threadId": "$THREAD"
+   },
+   "note": "setup: a task bound to the fixture's thread"
+  },
+  {
+   "tag": "scheduledTasks.runNow",
+   "payload": {
+    "id": "task-here"
+   },
+   "note": "a message to the bound thread"
+  },
+  {
+   "tag": "scheduledTasks.upsert",
+   "payload": {
+    "title": "Fresh",
+    "prompt": "Where is the add function defined?",
+    "enabled": true,
+    "schedule": {
+     "type": "interval",
+     "everyMs": 60000
+    },
+    "projectId": "$PROJECT",
+    "workspaceStrategy": {
+     "type": "root"
+    },
+    "modelSelection": {
+     "instanceId": "claudeAgent",
+     "model": "claude-haiku-5-5"
+    },
+    "runtimeMode": "approval-required",
+    "interactionMode": "default",
+    "id": "task-fresh",
+    "threadId": "thread-fresh",
+    "threadMode": "fresh_session"
+   },
+   "note": "setup: a fresh-session task bound to a thread"
+  },
+  {
+   "tag": "scheduledTasks.runNow",
+   "payload": {
+    "id": "task-fresh"
+   },
+   "note": "a fresh session in the bound thread"
+  },
+  {
+   "tag": "scheduledTasks.runNow",
+   "payload": {
+    "id": "scheduled-task:cmd-fixed"
+   },
+   "note": "a continued thread is made by the first run and kept"
+  },
+  {
+   "tag": "scheduledTasks.runNow",
+   "payload": {
+    "id": "task-bound"
+   },
+   "note": "a disabled task runs when asked"
+  },
+  {
+   "tag": "scheduledTasks.runNow",
+   "payload": {
+    "id": "task-once"
+   },
+   "note": "a one-time task"
+  },
+  {
+   "tag": "scheduledTasks.runNow",
+   "payload": {
+    "id": "task-noproject"
+   },
+   "note": "a project that does not exist: the launch fails"
+  },
+  {
+   "tag": "scheduledTasks.runNow",
+   "payload": {
+    "id": "hook-plain"
+   },
+   "expect": "failure",
+   "error": "ScheduledTaskError",
+   "note": "a webhook task"
+  },
+  {
+   "tag": "scheduledTasks.runNow",
+   "payload": {
+    "id": "nope"
+   },
+   "expect": "failure",
+   "error": "ScheduledTaskError",
+   "note": "no such task"
+  },
+  {
+   "tag": "scheduledTasks.subscribe",
+   "payload": {},
+   "expect": "chunk",
+   "note": "the runs as recorded, once the providers have failed",
+   "sleep_ms": 4000
+  },
+  {
+   "tag": "scheduledTasks.runNow",
+   "payload": {
+    "id": "task-interval"
+   },
+   "note": "again: the count goes up",
+   "sleep_ms": 200
+  },
+  {
+   "tag": "scheduledTasks.subscribe",
+   "payload": {},
+   "expect": "chunk",
+   "note": "after the second run",
+   "sleep_ms": 4000
+  },
+  {
+   "tag": "scheduledTasks.upsert",
+   "payload": {
+    "title": "Missed",
+    "prompt": "Where is the add function defined?",
+    "enabled": true,
+    "schedule": {
+     "type": "fixed_time",
+     "timeOfDay": "03:00"
+    },
+    "projectId": "$PROJECT",
+    "workspaceStrategy": {
+     "type": "root"
+    },
+    "modelSelection": {
+     "instanceId": "claudeAgent",
+     "model": "claude-haiku-5-5"
+    },
+    "runtimeMode": "approval-required",
+    "interactionMode": "default",
+    "id": "task-missed"
+   },
+   "note": "setup: a fixed-time task"
+  },
+  {
+   "tag": "scheduledTasks.upsert",
+   "payload": {
+    "title": "Due",
+    "prompt": "Where is the add function defined?",
+    "enabled": true,
+    "schedule": {
+     "type": "interval",
+     "everyMs": 86400000
+    },
+    "projectId": "$PROJECT",
+    "workspaceStrategy": {
+     "type": "root"
+    },
+    "modelSelection": {
+     "instanceId": "claudeAgent",
+     "model": "claude-haiku-5-5"
+    },
+    "runtimeMode": "approval-required",
+    "interactionMode": "default",
+    "id": "task-due"
+   },
+   "note": "setup: an interval task for the timer"
+  },
+  {
+   "tag": "scheduledTasks.upsert",
+   "payload": {
+    "title": "Wake",
+    "prompt": "Where is the add function defined?",
+    "enabled": true,
+    "schedule": {
+     "type": "interval",
+     "everyMs": 3600000
+    },
+    "projectId": "$PROJECT",
+    "workspaceStrategy": {
+     "type": "root"
+    },
+    "modelSelection": {
+     "instanceId": "claudeAgent",
+     "model": "claude-haiku-5-5"
+    },
+    "runtimeMode": "approval-required",
+    "interactionMode": "default",
+    "id": "task-wake"
+   },
+   "note": "the timer wakes on a change: a fixed time long past is skipped, a due interval runs",
+   "sh": "sqlite3 home/userdata/domovoi.sqlite \"UPDATE scheduled_tasks SET next_run_at = '2020-01-01T03:00:00.000Z' WHERE task_id IN ('task-missed', 'task-due')\""
+  },
+  {
+   "tag": "scheduledTasks.subscribe",
+   "payload": {},
+   "expect": "chunk",
+   "note": "what the timer did",
+   "sleep_ms": 4000
+  },
+  {
+   "tag": "scheduledTasks.delete",
+   "payload": {
+    "id": "task-interval"
+   },
+   "note": "gone"
+  },
+  {
+   "tag": "scheduledTasks.delete",
+   "payload": {
+    "id": "hook-plain"
+   },
+   "note": "a webhook task"
+  },
+  {
+   "tag": "scheduledTasks.delete",
+   "payload": {
+    "id": "nope"
+   },
+   "note": "one that is not there: the same answer"
+  },
+  {
+   "tag": "scheduledTasks.runNow",
+   "payload": {
+    "id": "task-interval"
+   },
+   "expect": "failure",
+   "error": "ScheduledTaskError",
+   "note": "a deleted task"
+  },
+  {
+   "tag": "scheduledTasks.setEnabled",
+   "payload": {
+    "id": "task-interval",
+    "enabled": true
+   },
+   "expect": "failure",
+   "error": "ScheduledTaskError",
+   "note": "a deleted task"
+  },
+  {
+   "tag": "scheduledTasks.subscribe",
+   "payload": {},
+   "expect": "chunk",
+   "note": "the rest",
+   "sleep_ms": 300
+  }
+ ]
+}

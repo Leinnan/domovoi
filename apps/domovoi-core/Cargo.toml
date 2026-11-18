@@ -1,0 +1,47 @@
+[package]
+name = "domovoi_core"
+description = "Crux client core for t3code-compatible servers: connection, Effect RPC, projects, threads, approvals"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib", "lib", "staticlib"]
+
+[[bin]]
+name = "codegen"
+required-features = ["codegen"]
+
+[features]
+default = ["remote"]
+# The iroh bridge for remote servers, exported to the shells (`TunnelFfi`).
+remote = ["dep:domovoi-remote", "dep:tokio"]
+facet_typegen = ["crux_core/facet_typegen"]
+codegen = ["dep:anyhow", "dep:clap", "facet_typegen"]
+
+[dependencies]
+boltffi = "=0.32.1"
+crux_core = "=0.20.0"
+crux_http = "=0.20.0"
+effect-rpc = { path = "../../crates/effect-rpc", default-features = false }
+facet = "=0.46.5"
+serde.workspace = true
+serde_json.workspace = true
+domovoi-model = { path = "../../crates/domovoi-model" }
+domovoi-remote = { path = "../../crates/domovoi-remote", default-features = false, features = ["bridge"], optional = true }
+tokio = { workspace = true, optional = true }
+uuid = { version = "1.29.2", features = ["v4"] }
+
+anyhow = { version = "1", optional = true }
+clap = { version = "4.6.7", optional = true, features = ["derive"] }
+pulldown-cmark = { version = "0.13.6", default-features = false }
+rustc-hash = "2.1.3"
+vt100 = "0.18.1"
+
+[dev-dependencies]
+crux_core = { version = "=0.20.0", features = ["testing"] }
+divan.workspace = true
+
+[[bench]]
+name = "view"
+harness = false

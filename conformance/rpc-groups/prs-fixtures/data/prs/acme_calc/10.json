@@ -1,0 +1,71 @@
+{
+ "id": "PR_kwDOA10",
+ "number": 10,
+ "title": "Rewrite in Rust",
+ "body": "Body of #10.\n\n- one\n- two\n",
+ "url": "https://github.com/acme/calc/pull/10",
+ "state": "CLOSED",
+ "isDraft": false,
+ "author": {
+  "id": "U_hubot",
+  "is_bot": false,
+  "login": "hubot",
+  "name": "Hubot"
+ },
+ "headRefName": "feature/10",
+ "headRefOid": "2222222222222222222222222222222222222222",
+ "baseRefName": "main",
+ "baseRefOid": "1111111111111111111111111111111111111111",
+ "headRepository": {
+  "id": "R_kgDOB1",
+  "name": "calc"
+ },
+ "headRepositoryOwner": {
+  "id": "U_hubot",
+  "login": "hubot"
+ },
+ "isCrossRepository": true,
+ "createdAt": "2025-03-01T09:00:00Z",
+ "updatedAt": "2025-03-10T12:00:00Z",
+ "closedAt": "2025-03-06T08:00:00Z",
+ "mergedAt": null,
+ "additions": 42,
+ "deletions": 7,
+ "changedFiles": 400,
+ "mergeable": "UNKNOWN",
+ "mergeStateStatus": "UNKNOWN",
+ "reviewDecision": "",
+ "labels": [],
+ "reviewRequests": [],
+ "latestReviews": [],
+ "statusCheckRollup": [],
+ "maintainerCanModify": false,
+ "autoMergeRequest": null,
+ "files": [
+  {
+   "path": "src/calc.py",
+   "additions": 20,
+   "deletions": 5
+  },
+  {
+   "path": "tests/test_calc.py",
+   "additions": 12,
+   "deletions": 0
+  },
+  {
+   "path": "src/__mocks__/clock.py",
+   "additions": 4,
+   "deletions": 1
+  },
+  {
+   "path": "poetry.lock",
+   "additions": 3,
+   "deletions": 1
+  },
+  {
+   "path": "README.md",
+   "additions": 3,
+   "deletions": 0
+  }
+ ]
+}

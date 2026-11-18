@@ -1,0 +1,7 @@
+{
+  "cases": [
+    { "tag": "projects.ensureScratch", "payload": {}, "expect": "failure", "error": "OrchestrationDispatchCommandError", "note": "the home is inside a repository" },
+    { "tag": "projects.createFromThread", "payload": { "threadId": "t" }, "expect": "failure", "error": "OrchestrationDispatchCommandError" },
+    { "tag": "projects.createNew", "payload": { "name": "Inside a checkout" }, "note": "named projects still work" }
+  ]
+}

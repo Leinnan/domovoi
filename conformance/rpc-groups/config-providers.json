@@ -1,0 +1,1150 @@
+{
+ "fixture": true,
+ "env": {
+  "DOMOVOI_CLAUDE_BINARY": "$DIR/bin/claude",
+  "DOMOVOI_CODEX_BINARY": "$DIR/bin/codex"
+ },
+ "cases": [
+  {
+   "tag": "subscribeServerConfig",
+   "payload": {
+    "environmentThemes": true,
+    "usageLimitSources": true
+   },
+   "expect": "chunk"
+  },
+  {
+   "tag": "subscribeServerConfig",
+   "payload": {},
+   "expect": "chunk"
+  },
+  {
+   "tag": "subscribeServerConfig",
+   "payload": {
+    "environmentThemes": true
+   },
+   "expect": "chunk"
+  },
+  {
+   "tag": "subscribeServerConfig",
+   "payload": {
+    "usageLimitSources": true,
+    "environmentThemes": false
+   },
+   "expect": "chunk"
+  },
+  {
+   "tag": "subscribeServerLifecycle",
+   "payload": {},
+   "expect": "chunk"
+  },
+  {
+   "tag": "server.getConfig",
+   "payload": {}
+  },
+  {
+   "tag": "server.probe",
+   "payload": {}
+  },
+  {
+   "tag": "server.reportClientActivity",
+   "payload": {
+    "clientId": "c1",
+    "clientKind": "web",
+    "visible": true,
+    "focused": true,
+    "recentlyInteracted": true,
+    "scopes": [
+     {
+      "type": "server-config"
+     }
+    ],
+    "observedAt": "2026-11-13T12:00:00.000Z"
+   }
+  },
+  {
+   "tag": "server.updateProvider",
+   "payload": {
+    "provider": "codex"
+   },
+   "expect": "failure",
+   "error": "ServerProviderUpdateError"
+  },
+  {
+   "tag": "server.updateProvider",
+   "payload": {
+    "provider": "claudeAgent",
+    "instanceId": "claudeAgent"
+   },
+   "expect": "failure",
+   "error": "ServerProviderUpdateError"
+  },
+  {
+   "tag": "server.refreshProviders",
+   "payload": {}
+  },
+  {
+   "tag": "server.refreshProviders",
+   "payload": {
+    "instanceId": "codex"
+   }
+  },
+  {
+   "tag": "server.refreshProviders",
+   "payload": {
+    "instanceId": "claudeAgent"
+   }
+  },
+  {
+   "tag": "server.refreshProviders",
+   "payload": {
+    "instanceId": "opencode"
+   }
+  },
+  {
+   "tag": "server.refreshProviders",
+   "payload": {
+    "instanceId": "nope"
+   },
+   "note": "no such instance: nothing is probed"
+  },
+  {
+   "tag": "server.refreshProviders",
+   "payload": {
+    "instanceId": "codex"
+   },
+   "sh": "echo 'Logged in using an API key - sk-***' > state/codex-auth"
+  },
+  {
+   "tag": "server.refreshProviders",
+   "payload": {
+    "instanceId": "codex"
+   },
+   "sh": "echo 'Not logged in' > state/codex-auth"
+  },
+  {
+   "tag": "server.refreshProviders",
+   "payload": {
+    "instanceId": "codex"
+   },
+   "sh": "rm state/codex-auth",
+   "note": "the sign-in check fails"
+  },
+  {
+   "tag": "server.refreshProviders",
+   "payload": {
+    "instanceId": "codex"
+   },
+   "sh": "echo 'codex-cli' > state/codex-version",
+   "note": "no version: not installed"
+  },
+  {
+   "tag": "server.refreshProviders",
+   "payload": {
+    "instanceId": "codex"
+   },
+   "sh": "rm state/codex-version",
+   "note": "nothing runs"
+  },
+  {
+   "tag": "server.refreshProviders",
+   "payload": {
+    "instanceId": "codex"
+   },
+   "sh": "echo 'codex-cli 0.166.0' > state/codex-version; echo 'Logged in using ChatGPT' > state/codex-auth"
+  },
+  {
+   "tag": "server.refreshProviders",
+   "payload": {
+    "instanceId": "claudeAgent"
+   },
+   "sh": "echo '{\"loggedIn\": true, \"subscriptionType\": \"pro\"}' > state/claude-auth",
+   "note": "no authMethod"
+  },
+  {
+   "tag": "server.refreshProviders",
+   "payload": {
+    "instanceId": "claudeAgent"
+   },
+   "sh": "echo '{\"loggedIn\": true, \"authMethod\": \"console\", \"subscriptionType\": \"team\"}' > state/claude-auth"
+  },
+  {
+   "tag": "server.refreshProviders",
+   "payload": {
+    "instanceId": "claudeAgent"
+   },
+   "sh": "echo '{\"loggedIn\": true, \"authMethod\": \"apiKey\"}' > state/claude-auth"
+  },
+  {
+   "tag": "server.refreshProviders",
+   "payload": {
+    "instanceId": "claudeAgent"
+   },
+   "sh": "echo '{\"loggedIn\": false}' > state/claude-auth"
+  },
+  {
+   "tag": "server.refreshProviders",
+   "payload": {
+    "instanceId": "claudeAgent"
+   },
+   "sh": "echo 'not json' > state/claude-auth"
+  },
+  {
+   "tag": "server.refreshProviders",
+   "payload": {
+    "instanceId": "claudeAgent"
+   },
+   "sh": "rm state/claude-auth"
+  },
+  {
+   "tag": "server.refreshProviders",
+   "payload": {
+    "instanceId": "claudeAgent"
+   },
+   "sh": "rm state/claude-version",
+   "note": "nothing runs"
+  },
+  {
+   "tag": "server.refreshProviders",
+   "payload": {
+    "instanceId": "claudeAgent"
+   },
+   "sh": "echo '2.1.319 (Claude Code)' > state/claude-version; echo '{\"loggedIn\": true, \"authMethod\": \"claude.ai\", \"subscriptionType\": \"max\"}' > state/claude-auth"
+  },
+  {
+   "tag": "server.refreshProviders",
+   "payload": {
+    "instanceId": "opencode"
+   },
+   "sh": "echo 'opencode' > state/opencode-version",
+   "note": "no version"
+  },
+  {
+   "tag": "server.refreshProviders",
+   "payload": {
+    "instanceId": "opencode"
+   },
+   "sh": "echo 'v2.0.18' > state/opencode-version",
+   "note": "new enough; its server does not start"
+  },
+  {
+   "tag": "server.refreshProviders",
+   "payload": {
+    "instanceId": "opencode"
+   },
+   "sh": "touch state/opencode-serve",
+   "note": "its server has no models to list"
+  },
+  {
+   "tag": "server.refreshProviders",
+   "payload": {
+    "instanceId": "opencode"
+   },
+   "sh": "echo '{\"data\": []}' > state/opencode-models",
+   "note": "no models"
+  },
+  {
+   "tag": "server.refreshProviders",
+   "payload": {
+    "instanceId": "opencode"
+   },
+   "sh": "cat > state/opencode-models <<'E'\n{\"data\": [{\"providerID\": \"anthropic\", \"id\": \"claude-sonnet-5\", \"name\": \"Claude Sonnet 5\", \"enabled\": true}, {\"providerID\": \"openai\", \"id\": \"gpt-6\", \"enabled\": true}, {\"providerID\": \"openai\", \"id\": \"gpt-old\", \"name\": \"Old\", \"enabled\": false}, {\"id\": \"no-provider\", \"name\": \"Nameless\"}]}\nE",
+   "note": "models, none the default"
+  },
+  {
+   "tag": "server.refreshProviders",
+   "payload": {
+    "instanceId": "opencode"
+   },
+   "sh": "echo '{\"data\": {\"providerID\": \"openai\", \"id\": \"gpt-6\"}}' > state/opencode-default",
+   "note": "models, one the default"
+  },
+  {
+   "tag": "server.refreshProviders",
+   "payload": {
+    "instanceId": "pi"
+   },
+   "note": "pi 0.84.3: too old"
+  },
+  {
+   "tag": "server.refreshProviders",
+   "payload": {
+    "instanceId": "pi"
+   },
+   "sh": "echo 'pi' > state/pi-version",
+   "note": "no version"
+  },
+  {
+   "tag": "server.refreshProviders",
+   "payload": {
+    "instanceId": "pi"
+   },
+   "sh": "echo '1.3.0' > state/pi-version",
+   "note": "new enough; its RPC mode does not start"
+  },
+  {
+   "tag": "server.refreshProviders",
+   "payload": {
+    "instanceId": "pi"
+   },
+   "sh": "touch state/pi-rpc",
+   "note": "no models: not signed in to any provider"
+  },
+  {
+   "tag": "server.refreshProviders",
+   "payload": {
+    "instanceId": "pi"
+   },
+   "sh": "echo '{\"models\": [{\"id\": \"x\"}]}' > state/pi-models",
+   "note": "a model with no provider: an answer Domovoi can't read"
+  },
+  {
+   "tag": "server.refreshProviders",
+   "payload": {
+    "instanceId": "pi"
+   },
+   "sh": "cat > state/pi-models <<'E'\n{\"models\": [{\"provider\": \"anthropic\", \"id\": \"claude-sonnet-5\", \"name\": \"Claude Sonnet 5\", \"reasoning\": true, \"thinkingLevelMap\": {\"minimal\": null, \"xhigh\": \"xhigh\"}, \"contextWindow\": 200000}, {\"provider\": \"openrouter\", \"id\": \"qwen/qwen3.5\", \"reasoning\": false, \"serviceTiers\": [{\"id\": \"priority\", \"name\": \"Fast\"}]}, {\"provider\": \"extension-only\", \"id\": \"m1\", \"name\": \"M1\"}]}\nE\ncat > state/pi-models-bare <<'E'\n{\"models\": [{\"provider\": \"anthropic\", \"id\": \"claude-sonnet-5\", \"name\": \"Claude Sonnet 5\", \"reasoning\": true, \"thinkingLevelMap\": {\"minimal\": null, \"xhigh\": \"xhigh\"}, \"contextWindow\": 200000}, {\"provider\": \"openrouter\", \"id\": \"qwen/qwen3.5\", \"reasoning\": false, \"serviceTiers\": [{\"id\": \"priority\", \"name\": \"Fast\"}]}]}\nE\ncat > state/pi-state <<'E'\n{\"model\": {\"provider\": \"anthropic\", \"id\": \"claude-sonnet-5\"}, \"thinkingLevel\": \"medium\", \"isStreaming\": false, \"isCompacting\": false, \"pendingMessageCount\": 0}\nE\ncat > state/pi-commands <<'E'\n{\"commands\": [{\"name\": \"websearch\", \"description\": \"Search the web\", \"source\": \"extension\"}, {\"name\": \"skill:review\", \"description\": \"Review a change\", \"source\": \"skill\", \"sourceInfo\": {\"path\": \"/skills/review/SKILL.md\", \"scope\": \"global\"}}]}\nE",
+   "note": "models (one only an extension registers), thinking levels, a service tier, commands and a skill"
+  },
+  {
+   "tag": "server.refreshProviders",
+   "payload": {
+    "instanceId": "pi"
+   },
+   "sh": "cat > state/pi-state <<'E'\n{\"model\": {\"provider\": \"zai\", \"id\": \"glm-5.3\"}, \"thinkingLevel\": \"high\"}\nE\necho '{\"reason\": \"credentials_not_configured\"}' > state/pi-auth-check",
+   "note": "pi's own default uses a provider with no credentials"
+  },
+  {
+   "tag": "server.refreshProviders",
+   "payload": {}
+  },
+  {
+   "tag": "server.getConfig",
+   "payload": {}
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {
+     "providerInstances": {
+      "codex-managed": {
+       "driver": "codex",
+       "config": {
+        "setupMode": "managed"
+       }
+      },
+      "codex-named": {
+       "driver": "codex",
+       "config": {
+        "setupMode": "managed",
+        "binaryPath": " codex "
+       }
+      },
+      "codex-custom": {
+       "driver": "codex",
+       "config": {
+        "setupMode": "managed",
+        "binaryPath": "/opt/codex"
+       }
+      },
+      "codex-off": {
+       "driver": "codex",
+       "enabled": false
+      },
+      "claude-off": {
+       "driver": "claudeAgent",
+       "config": {
+        "enabled": false
+       }
+      },
+      "claudeAgent": {
+       "driver": "claudeAgent",
+       "enabled": true,
+       "config": {
+        "enabled": false
+       }
+      },
+      "cursor-1": {
+       "driver": "cursor"
+      }
+     },
+     "usageLimitSources": {
+      "hub": {
+       "kind": "cliproxy",
+       "url": "http://hub.test",
+       "enabled": true
+      },
+      "off": {
+       "kind": "cliproxy",
+       "url": "http://off.test",
+       "enabled": false
+      }
+     }
+    }
+   }
+  },
+  {
+   "tag": "provider.auth.start",
+   "payload": {
+    "instanceId": "codex",
+    "methodId": "chatgpt",
+    "callbackMode": "server"
+   },
+   "expect": "failure",
+   "error": "ProviderSetupError"
+  },
+  {
+   "tag": "provider.auth.start",
+   "payload": {
+    "instanceId": "codex-managed",
+    "methodId": "chatgpt",
+    "callbackMode": "server"
+   },
+   "expect": "failure",
+   "error": "ProviderSetupError"
+  },
+  {
+   "tag": "provider.auth.start",
+   "payload": {
+    "instanceId": "nope",
+    "methodId": "chatgpt",
+    "callbackMode": "server"
+   },
+   "expect": "failure",
+   "error": "ProviderSetupError"
+  },
+  {
+   "tag": "provider.auth.start",
+   "payload": {
+    "instanceId": "cursor-1",
+    "methodId": "chatgpt",
+    "callbackMode": "server"
+   },
+   "expect": "failure",
+   "error": "ProviderSetupError"
+  },
+  {
+   "tag": "provider.auth.complete",
+   "payload": {
+    "instanceId": "codex",
+    "flowId": "f1",
+    "callbackUrl": "http://localhost/cb?code=x"
+   },
+   "expect": "failure",
+   "error": "ProviderSetupError"
+  },
+  {
+   "tag": "provider.auth.complete",
+   "payload": {
+    "instanceId": "codex-managed",
+    "flowId": "f1",
+    "callbackUrl": "http://localhost/cb?code=x"
+   },
+   "expect": "failure",
+   "error": "ProviderSetupError"
+  },
+  {
+   "tag": "provider.auth.complete",
+   "payload": {
+    "instanceId": "nope",
+    "flowId": "f1",
+    "callbackUrl": "http://localhost/cb?code=x"
+   },
+   "expect": "failure",
+   "error": "ProviderSetupError"
+  },
+  {
+   "tag": "provider.auth.complete",
+   "payload": {
+    "instanceId": "cursor-1",
+    "flowId": "f1",
+    "callbackUrl": "http://localhost/cb?code=x"
+   },
+   "expect": "failure",
+   "error": "ProviderSetupError"
+  },
+  {
+   "tag": "provider.auth.respond",
+   "payload": {
+    "instanceId": "codex",
+    "flowId": "f1",
+    "interactionId": "i1",
+    "response": {
+     "type": "browser",
+     "action": "accept"
+    }
+   },
+   "expect": "failure",
+   "error": "ProviderSetupError"
+  },
+  {
+   "tag": "provider.auth.respond",
+   "payload": {
+    "instanceId": "codex-managed",
+    "flowId": "f1",
+    "interactionId": "i1",
+    "response": {
+     "type": "browser",
+     "action": "accept"
+    }
+   },
+   "expect": "failure",
+   "error": "ProviderSetupError"
+  },
+  {
+   "tag": "provider.auth.respond",
+   "payload": {
+    "instanceId": "nope",
+    "flowId": "f1",
+    "interactionId": "i1",
+    "response": {
+     "type": "browser",
+     "action": "accept"
+    }
+   },
+   "expect": "failure",
+   "error": "ProviderSetupError"
+  },
+  {
+   "tag": "provider.auth.respond",
+   "payload": {
+    "instanceId": "cursor-1",
+    "flowId": "f1",
+    "interactionId": "i1",
+    "response": {
+     "type": "browser",
+     "action": "accept"
+    }
+   },
+   "expect": "failure",
+   "error": "ProviderSetupError"
+  },
+  {
+   "tag": "provider.auth.cancel",
+   "payload": {
+    "instanceId": "codex",
+    "flowId": "f1"
+   },
+   "expect": "failure",
+   "error": "ProviderSetupError"
+  },
+  {
+   "tag": "provider.auth.cancel",
+   "payload": {
+    "instanceId": "codex-managed",
+    "flowId": "f1"
+   },
+   "expect": "failure",
+   "error": "ProviderSetupError"
+  },
+  {
+   "tag": "provider.auth.cancel",
+   "payload": {
+    "instanceId": "nope",
+    "flowId": "f1"
+   },
+   "expect": "failure",
+   "error": "ProviderSetupError"
+  },
+  {
+   "tag": "provider.auth.cancel",
+   "payload": {
+    "instanceId": "cursor-1",
+    "flowId": "f1"
+   },
+   "expect": "failure",
+   "error": "ProviderSetupError"
+  },
+  {
+   "tag": "provider.auth.removeMethod",
+   "payload": {
+    "instanceId": "codex",
+    "methodId": "m1"
+   },
+   "expect": "failure",
+   "error": "ProviderSetupError"
+  },
+  {
+   "tag": "provider.auth.removeMethod",
+   "payload": {
+    "instanceId": "codex-managed",
+    "methodId": "m1"
+   },
+   "expect": "failure",
+   "error": "ProviderSetupError"
+  },
+  {
+   "tag": "provider.auth.removeMethod",
+   "payload": {
+    "instanceId": "nope",
+    "methodId": "m1"
+   },
+   "expect": "failure",
+   "error": "ProviderSetupError"
+  },
+  {
+   "tag": "provider.auth.removeMethod",
+   "payload": {
+    "instanceId": "cursor-1",
+    "methodId": "m1"
+   },
+   "expect": "failure",
+   "error": "ProviderSetupError"
+  },
+  {
+   "tag": "provider.auth.logout",
+   "payload": {
+    "instanceId": "codex"
+   },
+   "expect": "failure",
+   "error": "ProviderSetupError"
+  },
+  {
+   "tag": "provider.auth.logout",
+   "payload": {
+    "instanceId": "codex-managed"
+   },
+   "expect": "failure",
+   "error": "ProviderSetupError"
+  },
+  {
+   "tag": "provider.auth.logout",
+   "payload": {
+    "instanceId": "nope"
+   },
+   "expect": "failure",
+   "error": "ProviderSetupError"
+  },
+  {
+   "tag": "provider.auth.logout",
+   "payload": {
+    "instanceId": "cursor-1"
+   },
+   "expect": "failure",
+   "error": "ProviderSetupError"
+  },
+  {
+   "tag": "provider.chatgpt.reconnect-profile",
+   "payload": {
+    "instanceId": "codex",
+    "methodId": "m1"
+   },
+   "expect": "failure",
+   "error": "ProviderSetupError"
+  },
+  {
+   "tag": "provider.chatgpt.reconnect-profile",
+   "payload": {
+    "instanceId": "codex-managed",
+    "methodId": "m1"
+   },
+   "expect": "failure",
+   "error": "ProviderSetupError"
+  },
+  {
+   "tag": "provider.chatgpt.reconnect-profile",
+   "payload": {
+    "instanceId": "nope",
+    "methodId": "m1"
+   },
+   "expect": "failure",
+   "error": "ProviderSetupError"
+  },
+  {
+   "tag": "provider.chatgpt.reconnect-profile",
+   "payload": {
+    "instanceId": "cursor-1",
+    "methodId": "m1"
+   },
+   "expect": "failure",
+   "error": "ProviderSetupError"
+  },
+  {
+   "tag": "provider.chatgpt.import-profile",
+   "payload": {
+    "instanceId": "codex",
+    "profile": {
+     "registration": {
+      "clientId": "oaiapp_client"
+     },
+     "credentials": {
+      "clientId": "oaiapp_client",
+      "accessToken": "a",
+      "refreshToken": null,
+      "idToken": "i",
+      "issuer": "https://auth.example",
+      "expiresAt": 1,
+      "earliestRefreshAt": null,
+      "scopes": [],
+      "subject": "s",
+      "email": null
+     }
+    }
+   },
+   "expect": "failure",
+   "error": "ProviderSetupError"
+  },
+  {
+   "tag": "provider.chatgpt.import-profile",
+   "payload": {
+    "instanceId": "codex-managed",
+    "profile": {
+     "registration": {
+      "clientId": "oaiapp_client"
+     },
+     "credentials": {
+      "clientId": "oaiapp_client",
+      "accessToken": "a",
+      "refreshToken": null,
+      "idToken": "i",
+      "issuer": "https://auth.example",
+      "expiresAt": 1,
+      "earliestRefreshAt": null,
+      "scopes": [],
+      "subject": "s",
+      "email": null
+     }
+    }
+   },
+   "expect": "failure",
+   "error": "ProviderSetupError"
+  },
+  {
+   "tag": "provider.chatgpt.import-profile",
+   "payload": {
+    "instanceId": "nope",
+    "profile": {
+     "registration": {
+      "clientId": "oaiapp_client"
+     },
+     "credentials": {
+      "clientId": "oaiapp_client",
+      "accessToken": "a",
+      "refreshToken": null,
+      "idToken": "i",
+      "issuer": "https://auth.example",
+      "expiresAt": 1,
+      "earliestRefreshAt": null,
+      "scopes": [],
+      "subject": "s",
+      "email": null
+     }
+    }
+   },
+   "expect": "failure",
+   "error": "ProviderSetupError"
+  },
+  {
+   "tag": "provider.chatgpt.import-profile",
+   "payload": {
+    "instanceId": "cursor-1",
+    "profile": {
+     "registration": {
+      "clientId": "oaiapp_client"
+     },
+     "credentials": {
+      "clientId": "oaiapp_client",
+      "accessToken": "a",
+      "refreshToken": null,
+      "idToken": "i",
+      "issuer": "https://auth.example",
+      "expiresAt": 1,
+      "earliestRefreshAt": null,
+      "scopes": [],
+      "subject": "s",
+      "email": null
+     }
+    }
+   },
+   "expect": "failure",
+   "error": "ProviderSetupError"
+  },
+  {
+   "tag": "provider.auth.subscribe",
+   "payload": {
+    "instanceId": "claudeAgent"
+   },
+   "expect": "failure",
+   "error": "ProviderSetupError"
+  },
+  {
+   "tag": "provider.auth.subscribe",
+   "payload": {
+    "instanceId": "nope"
+   },
+   "expect": "failure",
+   "error": "ProviderSetupError"
+  },
+  {
+   "tag": "provider.auth.subscribe",
+   "payload": {
+    "instanceId": "nope"
+   },
+   "all": true,
+   "expect": "failure",
+   "error": "ProviderSetupError",
+   "note": "the stream to its end"
+  },
+  {
+   "tag": "provider.chatgpt.handoff.subscribe",
+   "payload": {
+    "instanceId": "codex",
+    "environmentId": "env",
+    "attemptId": "a1",
+    "returnUrl": "http://localhost/return",
+    "profile": null
+   },
+   "expect": "failure",
+   "error": "ProviderSetupError"
+  },
+  {
+   "tag": "provider.chatgpt.handoff.subscribe",
+   "payload": {
+    "instanceId": "nope",
+    "environmentId": "env",
+    "attemptId": "a1",
+    "returnUrl": "http://localhost/return",
+    "profile": null
+   },
+   "all": true,
+   "expect": "failure",
+   "error": "ProviderSetupError"
+  },
+  {
+   "tag": "provider.install.start",
+   "payload": {
+    "instanceId": "nope"
+   },
+   "expect": "failure",
+   "error": "ProviderSetupError"
+  },
+  {
+   "tag": "provider.install.start",
+   "payload": {
+    "instanceId": "claudeAgent"
+   },
+   "expect": "failure",
+   "error": "ProviderSetupError"
+  },
+  {
+   "tag": "provider.install.start",
+   "payload": {
+    "instanceId": "cursor-1"
+   },
+   "expect": "failure",
+   "error": "ProviderSetupError"
+  },
+  {
+   "tag": "provider.install.start",
+   "payload": {
+    "instanceId": "codex"
+   },
+   "expect": "failure",
+   "error": "ProviderSetupError"
+  },
+  {
+   "tag": "provider.install.start",
+   "payload": {
+    "instanceId": "codex-custom"
+   },
+   "expect": "failure",
+   "error": "ProviderSetupError"
+  },
+  {
+   "tag": "provider.install.start",
+   "payload": {
+    "instanceId": "codex-managed"
+   },
+   "expect": "failure",
+   "error": "ProviderSetupError"
+  },
+  {
+   "tag": "provider.install.start",
+   "payload": {
+    "instanceId": "codex-named"
+   },
+   "expect": "failure",
+   "error": "ProviderSetupError"
+  },
+  {
+   "tag": "provider.install.remove",
+   "payload": {
+    "instanceId": "nope"
+   },
+   "expect": "failure",
+   "error": "ProviderSetupError"
+  },
+  {
+   "tag": "provider.install.remove",
+   "payload": {
+    "instanceId": "claudeAgent"
+   },
+   "expect": "failure",
+   "error": "ProviderSetupError"
+  },
+  {
+   "tag": "provider.install.remove",
+   "payload": {
+    "instanceId": "cursor-1"
+   },
+   "expect": "failure",
+   "error": "ProviderSetupError"
+  },
+  {
+   "tag": "provider.install.remove",
+   "payload": {
+    "instanceId": "codex"
+   },
+   "expect": "failure",
+   "error": "ProviderSetupError"
+  },
+  {
+   "tag": "provider.install.remove",
+   "payload": {
+    "instanceId": "codex-custom"
+   },
+   "expect": "failure",
+   "error": "ProviderSetupError"
+  },
+  {
+   "tag": "provider.install.remove",
+   "payload": {
+    "instanceId": "codex-managed"
+   },
+   "expect": "failure",
+   "error": "ProviderSetupError"
+  },
+  {
+   "tag": "provider.install.remove",
+   "payload": {
+    "instanceId": "codex-named"
+   },
+   "expect": "failure",
+   "error": "ProviderSetupError"
+  },
+  {
+   "tag": "provider.install.cancel",
+   "payload": {
+    "instanceId": "nope",
+    "operationId": "op1"
+   },
+   "expect": "failure",
+   "error": "ProviderSetupError"
+  },
+  {
+   "tag": "provider.install.cancel",
+   "payload": {
+    "instanceId": "claudeAgent",
+    "operationId": "op1"
+   },
+   "expect": "failure",
+   "error": "ProviderSetupError"
+  },
+  {
+   "tag": "provider.install.cancel",
+   "payload": {
+    "instanceId": "codex",
+    "operationId": "op1"
+   },
+   "expect": "failure",
+   "error": "ProviderSetupError"
+  },
+  {
+   "tag": "provider.install.cancel",
+   "payload": {
+    "instanceId": "codex-custom",
+    "operationId": "op1"
+   }
+  },
+  {
+   "tag": "provider.install.cancel",
+   "payload": {
+    "instanceId": "codex-managed",
+    "operationId": "op1"
+   }
+  },
+  {
+   "tag": "provider.install.cancel",
+   "payload": {
+    "instanceId": "codex-named",
+    "operationId": "op1"
+   }
+  },
+  {
+   "tag": "provider.install.subscribe",
+   "payload": {
+    "instanceId": "nope"
+   },
+   "expect": "failure",
+   "error": "ProviderSetupError"
+  },
+  {
+   "tag": "provider.install.subscribe",
+   "payload": {
+    "instanceId": "claudeAgent"
+   },
+   "expect": "failure",
+   "error": "ProviderSetupError"
+  },
+  {
+   "tag": "provider.install.subscribe",
+   "payload": {
+    "instanceId": "codex"
+   },
+   "expect": "failure",
+   "error": "ProviderSetupError"
+  },
+  {
+   "tag": "provider.install.subscribe",
+   "payload": {
+    "instanceId": "nope"
+   },
+   "all": true,
+   "expect": "failure",
+   "error": "ProviderSetupError"
+  },
+  {
+   "tag": "provider.install.subscribe",
+   "payload": {
+    "instanceId": "codex-managed"
+   },
+   "expect": "chunk"
+  },
+  {
+   "tag": "provider.install.subscribe",
+   "payload": {
+    "instanceId": "codex-custom"
+   },
+   "expect": "chunk"
+  },
+  {
+   "tag": "server.refreshProviders",
+   "payload": {
+    "instanceId": "codex"
+   },
+   "sh": "rm state/codex-version",
+   "note": "codex gone: the installation state names no version"
+  },
+  {
+   "tag": "provider.install.subscribe",
+   "payload": {
+    "instanceId": "codex-managed"
+   },
+   "expect": "chunk"
+  },
+  {
+   "tag": "provider.install.cancel",
+   "payload": {
+    "instanceId": "codex-managed",
+    "operationId": "op1"
+   }
+  },
+  {
+   "tag": "provider.consumeResetCredit",
+   "payload": {
+    "instanceId": "codex"
+   }
+  },
+  {
+   "tag": "provider.consumeResetCredit",
+   "payload": {
+    "instanceId": "codex-managed",
+    "creditId": "c1"
+   }
+  },
+  {
+   "tag": "provider.consumeResetCredit",
+   "payload": {
+    "instanceId": "nope"
+   },
+   "expect": "failure",
+   "error": "ProviderSetupError"
+  },
+  {
+   "tag": "provider.consumeResetCredit",
+   "payload": {
+    "instanceId": "cursor-1"
+   },
+   "expect": "failure",
+   "error": "ProviderSetupError"
+  },
+  {
+   "tag": "provider.consumeResetCredit",
+   "payload": {
+    "instanceId": "codex-off"
+   },
+   "expect": "failure",
+   "error": "ProviderSetupError"
+  },
+  {
+   "tag": "provider.consumeResetCredit",
+   "payload": {
+    "instanceId": "claude-off"
+   },
+   "expect": "failure",
+   "error": "ProviderSetupError"
+  },
+  {
+   "tag": "provider.consumeResetCredit",
+   "payload": {
+    "instanceId": "claudeAgent"
+   },
+   "note": "enabled on the instance wins over its config"
+  },
+  {
+   "tag": "provider.consumeResetCredit",
+   "payload": {},
+   "expect": "failure",
+   "error": "ProviderSetupError",
+   "skip_schema": true,
+   "note": "no instance named: the request is not one t3code's schema accepts, and the failure names the empty instance id, which ProviderSetupError's schema refuses"
+  },
+  {
+   "tag": "provider.consumeResetCredit",
+   "payload": {
+    "sourceId": "hub",
+    "accountId": "a1",
+    "creditId": "c1"
+   },
+   "expect": "failure",
+   "error": "UsageLimitSourceError"
+  },
+  {
+   "tag": "provider.consumeResetCredit",
+   "payload": {
+    "sourceId": "off",
+    "accountId": "a1",
+    "creditId": "c1"
+   },
+   "expect": "failure",
+   "error": "UsageLimitSourceError"
+  },
+  {
+   "tag": "provider.consumeResetCredit",
+   "payload": {
+    "sourceId": "nope",
+    "accountId": "a1",
+    "creditId": "c1"
+   },
+   "expect": "failure",
+   "error": "UsageLimitSourceError"
+  },
+  {
+   "tag": "provider.uploadFeedback",
+   "payload": {
+    "threadId": "$THREAD",
+    "reason": "wrong answer"
+   },
+   "expect": "failure",
+   "error": "ProviderUploadFeedbackError"
+  },
+  {
+   "tag": "provider.uploadFeedback",
+   "payload": {
+    "threadId": "nope"
+   },
+   "expect": "failure",
+   "error": "ProviderUploadFeedbackError"
+  }
+ ]
+}

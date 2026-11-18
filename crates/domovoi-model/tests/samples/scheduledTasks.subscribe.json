@@ -1,0 +1,416 @@
+[
+  {
+    "tasks": [
+      {
+        "id": "scheduled-task:c0a1d4b8-0c5e-4f0b-b3a7-2f9d1c5e7a44",
+        "title": "Triage new issues",
+        "prompt": "A new issue arrived: {{body.issue.title}}. Label it and reply with a first assessment.",
+        "enabled": true,
+        "schedule": {
+          "type": "webhook",
+          "signature": {
+            "header": "x-hub-signature-256",
+            "encoding": "hex",
+            "prefix": "sha256="
+          },
+          "maxDeliveryAgeMinutes": 90,
+          "dedupe": {
+            "replayKey": "{{headers.x-github-delivery}}",
+            "coalesceKey": "{{body.issue.number}}",
+            "coalesceWindowSeconds": 300
+          },
+          "filters": [
+            {
+              "path": "headers.x-github-event",
+              "op": "equals",
+              "value": "issues"
+            },
+            {
+              "path": "body.action",
+              "op": "in",
+              "value": [
+                "opened",
+                "reopened"
+              ]
+            },
+            {
+              "path": "body.issue.user.login",
+              "op": "notEquals",
+              "value": "dependabot[bot]"
+            },
+            {
+              "path": "body.repository.full_name",
+              "op": "startsWith",
+              "value": "acme/"
+            },
+            {
+              "path": "body.issue.labels[]",
+              "op": "exists"
+            }
+          ]
+        },
+        "projectId": "0e7d6f7b-58a1-4f1e-8d55-9d0a4a7c2b90",
+        "threadId": null,
+        "threadMode": "new_thread",
+        "workspaceStrategy": {
+          "type": "worktree",
+          "baseRef": "main",
+          "branch": "triage",
+          "startFromOrigin": true
+        },
+        "modelSelection": {
+          "instanceId": "claudeAgent",
+          "model": "claude-sonnet-4-5",
+          "options": [
+            {
+              "id": "effort",
+              "value": "high"
+            },
+            {
+              "id": "thinking",
+              "value": true
+            }
+          ]
+        },
+        "runtimeMode": "auto-accept-edits",
+        "interactionMode": "plan",
+        "createdBy": "agent",
+        "creationSource": "mcp",
+        "createdAt": "2026-11-16T17:40:11.004Z",
+        "updatedAt": "2026-11-17T06:02:45.310Z",
+        "nextRunAt": null,
+        "lastRunAt": "2026-11-17T06:02:41.877Z",
+        "lastRunStatus": "failed",
+        "lastRunError": "The provider is over its usage limit.",
+        "runCount": 3,
+        "webhook": {
+          "path": "/api/hooks/scheduled-task%3Ac0a1d4b8-0c5e-4f0b-b3a7-2f9d1c5e7a44/Zk3vQ0m1uYb7r2T9cX5wLh8nPa4sDe6fGj0iKoMqRtU",
+          "url": null,
+          "hasSecret": true
+        }
+      },
+      {
+        "id": "scheduled-task:9b7e2d10-3a6c-4c1d-8e2f-6a5b4c3d2e1f",
+        "title": "Release notes for 2.4",
+        "prompt": "Write the release notes for 2.4 from the merged pull requests since the last tag.",
+        "enabled": true,
+        "schedule": {
+          "type": "once",
+          "runAt": "2026-11-20T08:00:00.000Z"
+        },
+        "projectId": "4be5a0c2-6f0d-4c57-9a53-1f1f0b0f6f11",
+        "threadId": null,
+        "threadMode": "new_thread",
+        "workspaceStrategy": {
+          "type": "existing_worktree",
+          "worktreePath": "/Users/dev/.domovoi/worktrees/acme-app/release-2-4",
+          "branch": "release/2.4"
+        },
+        "modelSelection": {
+          "instanceId": "codex",
+          "model": "gpt-5.5"
+        },
+        "runtimeMode": "full-access",
+        "interactionMode": "default",
+        "createdBy": "user",
+        "creationSource": "web",
+        "createdAt": "2026-11-15T12:00:00.000Z",
+        "updatedAt": "2026-11-15T12:00:00.000Z",
+        "nextRunAt": "2026-11-20T08:00:00.000Z",
+        "lastRunAt": null,
+        "lastRunStatus": "never",
+        "lastRunError": null,
+        "runCount": 0
+      },
+      {
+        "id": "scheduled-task:2f4e6a8c-1b3d-4f5a-9c7e-0a1b2c3d4e5f",
+        "title": "Morning summary",
+        "prompt": "Summarize what changed on main since yesterday morning.",
+        "enabled": true,
+        "schedule": {
+          "type": "fixed_time",
+          "timeOfDay": "09:30",
+          "weekdays": [
+            1,
+            2,
+            3,
+            4,
+            5
+          ]
+        },
+        "projectId": "4be5a0c2-6f0d-4c57-9a53-1f1f0b0f6f11",
+        "threadId": "8a1c1a59-7d32-4b02-8e0f-5f6f4f5a9c01",
+        "threadMode": "fresh_session",
+        "workspaceStrategy": {
+          "type": "root"
+        },
+        "modelSelection": {
+          "instanceId": "codex",
+          "model": "gpt-5.5"
+        },
+        "runtimeMode": "full-access",
+        "interactionMode": "default",
+        "createdBy": "user",
+        "creationSource": "web",
+        "createdAt": "2026-11-12T19:22:30.455Z",
+        "updatedAt": "2026-11-17T08:30:04.902Z",
+        "nextRunAt": "2026-11-18T08:30:00.000Z",
+        "lastRunAt": "2026-11-17T08:30:00.412Z",
+        "lastRunStatus": "succeeded",
+        "lastRunError": null,
+        "runCount": 3
+      },
+      {
+        "id": "scheduled-task:5d2c7f7e-7a44-45f0-9d9c-0d2a3f1b6a10",
+        "title": "Dependency check",
+        "prompt": "Check for outdated dependencies and open a pull request for the safe updates.",
+        "enabled": true,
+        "schedule": {
+          "type": "interval",
+          "everyMs": 7200000
+        },
+        "projectId": "4be5a0c2-6f0d-4c57-9a53-1f1f0b0f6f11",
+        "threadId": "d3b0c5f2-91a7-4e68-b0f4-7c1e2a9d5b33",
+        "threadMode": "continue",
+        "workspaceStrategy": {
+          "type": "root"
+        },
+        "modelSelection": {
+          "instanceId": "codex",
+          "model": "gpt-5.5"
+        },
+        "runtimeMode": "full-access",
+        "interactionMode": "default",
+        "createdBy": "user",
+        "creationSource": "web",
+        "createdAt": "2026-11-10T08:15:02.120Z",
+        "updatedAt": "2026-11-17T08:15:09.731Z",
+        "nextRunAt": "2026-11-17T10:15:02.120Z",
+        "lastRunAt": "2026-11-17T08:15:02.398Z",
+        "lastRunStatus": "succeeded",
+        "lastRunError": null,
+        "runCount": 84
+      },
+      {
+        "id": "scheduled-task:7c9e1a3b-5d7f-4b2c-8a6e-4d2f0b8c6a1e",
+        "title": "Nightly test run",
+        "prompt": "Run the full test suite and report what fails.",
+        "enabled": false,
+        "schedule": {
+          "type": "fixed_time",
+          "timeOfDay": "2:05"
+        },
+        "projectId": "4be5a0c2-6f0d-4c57-9a53-1f1f0b0f6f11",
+        "threadId": null,
+        "threadMode": "new_thread",
+        "workspaceStrategy": {
+          "type": "root"
+        },
+        "modelSelection": {
+          "instanceId": "codex",
+          "model": "gpt-5.5"
+        },
+        "runtimeMode": "full-access",
+        "interactionMode": "default",
+        "createdBy": "user",
+        "creationSource": "web",
+        "createdAt": "2026-11-09T21:05:47.019Z",
+        "updatedAt": "2026-11-11T07:44:12.600Z",
+        "nextRunAt": null,
+        "lastRunAt": "2026-11-11T01:05:00.288Z",
+        "lastRunStatus": "succeeded",
+        "lastRunError": null,
+        "runCount": 2
+      }
+    ],
+    "timeZone": "Europe/Warsaw"
+  },
+  {
+    "tasks": [
+      {
+        "id": "scheduled-task:c0a1d4b8-0c5e-4f0b-b3a7-2f9d1c5e7a44",
+        "title": "Triage new issues",
+        "prompt": "A new issue arrived: {{body.issue.title}}. Label it and reply with a first assessment.",
+        "enabled": true,
+        "schedule": {
+          "type": "webhook",
+          "signature": null,
+          "maxDeliveryAgeMinutes": null
+        },
+        "projectId": "0e7d6f7b-58a1-4f1e-8d55-9d0a4a7c2b90",
+        "threadId": null,
+        "threadMode": "new_thread",
+        "workspaceStrategy": {
+          "type": "worktree",
+          "baseRef": "main",
+          "branch": "triage",
+          "startFromOrigin": true
+        },
+        "modelSelection": {
+          "instanceId": "claudeAgent",
+          "model": "claude-sonnet-4-5",
+          "options": [
+            {
+              "id": "effort",
+              "value": "high"
+            },
+            {
+              "id": "thinking",
+              "value": true
+            }
+          ]
+        },
+        "runtimeMode": "auto-accept-edits",
+        "interactionMode": "plan",
+        "createdBy": "agent",
+        "creationSource": "mcp",
+        "createdAt": "2026-11-16T17:40:11.004Z",
+        "updatedAt": "2026-11-17T10:14:20.118Z",
+        "nextRunAt": null,
+        "lastRunAt": "2026-11-17T06:02:41.877Z",
+        "lastRunStatus": "failed",
+        "lastRunError": "The provider is over its usage limit.",
+        "runCount": 3,
+        "webhook": {
+          "path": "/api/hooks/scheduled-task%3Ac0a1d4b8-0c5e-4f0b-b3a7-2f9d1c5e7a44/Zk3vQ0m1uYb7r2T9cX5wLh8nPa4sDe6fGj0iKoMqRtU",
+          "url": null,
+          "hasSecret": false
+        }
+      },
+      {
+        "id": "scheduled-task:9b7e2d10-3a6c-4c1d-8e2f-6a5b4c3d2e1f",
+        "title": "Release notes for 2.4",
+        "prompt": "Write the release notes for 2.4 from the merged pull requests since the last tag.",
+        "enabled": true,
+        "schedule": {
+          "type": "once",
+          "runAt": "2026-11-20T08:00:00.000Z"
+        },
+        "projectId": "4be5a0c2-6f0d-4c57-9a53-1f1f0b0f6f11",
+        "threadId": null,
+        "threadMode": "new_thread",
+        "workspaceStrategy": {
+          "type": "existing_worktree",
+          "worktreePath": "/Users/dev/.domovoi/worktrees/acme-app/release-2-4",
+          "branch": "release/2.4"
+        },
+        "modelSelection": {
+          "instanceId": "codex",
+          "model": "gpt-5.5"
+        },
+        "runtimeMode": "full-access",
+        "interactionMode": "default",
+        "createdBy": "user",
+        "creationSource": "web",
+        "createdAt": "2026-11-15T12:00:00.000Z",
+        "updatedAt": "2026-11-15T12:00:00.000Z",
+        "nextRunAt": "2026-11-20T08:00:00.000Z",
+        "lastRunAt": null,
+        "lastRunStatus": "never",
+        "lastRunError": null,
+        "runCount": 0
+      },
+      {
+        "id": "scheduled-task:2f4e6a8c-1b3d-4f5a-9c7e-0a1b2c3d4e5f",
+        "title": "Morning summary",
+        "prompt": "Summarize what changed on main since yesterday morning.",
+        "enabled": true,
+        "schedule": {
+          "type": "fixed_time",
+          "timeOfDay": "09:30",
+          "weekdays": [
+            1,
+            2,
+            3,
+            4,
+            5
+          ]
+        },
+        "projectId": "4be5a0c2-6f0d-4c57-9a53-1f1f0b0f6f11",
+        "threadId": "8a1c1a59-7d32-4b02-8e0f-5f6f4f5a9c01",
+        "threadMode": "fresh_session",
+        "workspaceStrategy": {
+          "type": "root"
+        },
+        "modelSelection": {
+          "instanceId": "codex",
+          "model": "gpt-5.5"
+        },
+        "runtimeMode": "full-access",
+        "interactionMode": "default",
+        "createdBy": "user",
+        "creationSource": "web",
+        "createdAt": "2026-11-12T19:22:30.455Z",
+        "updatedAt": "2026-11-17T08:30:04.902Z",
+        "nextRunAt": "2026-11-18T08:30:00.000Z",
+        "lastRunAt": "2026-11-17T08:30:00.412Z",
+        "lastRunStatus": "succeeded",
+        "lastRunError": null,
+        "runCount": 3
+      },
+      {
+        "id": "scheduled-task:5d2c7f7e-7a44-45f0-9d9c-0d2a3f1b6a10",
+        "title": "Dependency check",
+        "prompt": "Check for outdated dependencies and open a pull request for the safe updates.",
+        "enabled": true,
+        "schedule": {
+          "type": "interval",
+          "everyMs": 7200000
+        },
+        "projectId": "4be5a0c2-6f0d-4c57-9a53-1f1f0b0f6f11",
+        "threadId": "d3b0c5f2-91a7-4e68-b0f4-7c1e2a9d5b33",
+        "threadMode": "continue",
+        "workspaceStrategy": {
+          "type": "root"
+        },
+        "modelSelection": {
+          "instanceId": "codex",
+          "model": "gpt-5.5"
+        },
+        "runtimeMode": "full-access",
+        "interactionMode": "default",
+        "createdBy": "user",
+        "creationSource": "web",
+        "createdAt": "2026-11-10T08:15:02.120Z",
+        "updatedAt": "2026-11-17T10:15:02.377Z",
+        "nextRunAt": "2026-11-17T12:15:02.120Z",
+        "lastRunAt": "2026-11-17T10:15:02.377Z",
+        "lastRunStatus": "running",
+        "lastRunError": null,
+        "runCount": 85
+      },
+      {
+        "id": "scheduled-task:7c9e1a3b-5d7f-4b2c-8a6e-4d2f0b8c6a1e",
+        "title": "Nightly test run",
+        "prompt": "Run the full test suite and report what fails.",
+        "enabled": false,
+        "schedule": {
+          "type": "fixed_time",
+          "timeOfDay": "2:05"
+        },
+        "projectId": "4be5a0c2-6f0d-4c57-9a53-1f1f0b0f6f11",
+        "threadId": null,
+        "threadMode": "new_thread",
+        "workspaceStrategy": {
+          "type": "root"
+        },
+        "modelSelection": {
+          "instanceId": "codex",
+          "model": "gpt-5.5"
+        },
+        "runtimeMode": "full-access",
+        "interactionMode": "default",
+        "createdBy": "user",
+        "creationSource": "web",
+        "createdAt": "2026-11-09T21:05:47.019Z",
+        "updatedAt": "2026-11-11T07:44:12.600Z",
+        "nextRunAt": null,
+        "lastRunAt": "2026-11-11T01:05:00.288Z",
+        "lastRunStatus": "succeeded",
+        "lastRunError": null,
+        "runCount": 2
+      }
+    ],
+    "timeZone": "Europe/Warsaw"
+  }
+]

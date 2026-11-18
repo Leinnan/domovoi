@@ -1,0 +1,11 @@
+{
+ "data": {
+  "repository": {
+   "viewerPermission": "TRIAGE",
+   "autoMergeAllowed": false,
+   "mergeCommitAllowed": false,
+   "squashMergeAllowed": true,
+   "rebaseMergeAllowed": true
+  }
+ }
+}

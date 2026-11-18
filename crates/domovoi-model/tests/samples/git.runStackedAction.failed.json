@@ -1,0 +1,41 @@
+[
+  {
+    "actionId": "git-action-a41e",
+    "cwd": "/Users/dev/code/playground",
+    "action": "commit_push",
+    "kind": "action_started",
+    "phases": ["commit", "push"]
+  },
+  {
+    "actionId": "git-action-a41e",
+    "cwd": "/Users/dev/code/playground",
+    "action": "commit_push",
+    "kind": "phase_started",
+    "phase": "commit",
+    "label": "Generating commit message..."
+  },
+  {
+    "actionId": "git-action-a41e",
+    "cwd": "/Users/dev/code/playground",
+    "action": "commit_push",
+    "kind": "phase_started",
+    "phase": "commit",
+    "label": "Committing..."
+  },
+  {
+    "actionId": "git-action-a41e",
+    "cwd": "/Users/dev/code/playground",
+    "action": "commit_push",
+    "kind": "phase_started",
+    "phase": "push",
+    "label": "Pushing..."
+  },
+  {
+    "actionId": "git-action-a41e",
+    "cwd": "/Users/dev/code/playground",
+    "action": "commit_push",
+    "kind": "action_failed",
+    "phase": "push",
+    "message": "Cannot push because no git remote is configured for this repository."
+  }
+]

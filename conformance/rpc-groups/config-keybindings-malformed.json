@@ -1,0 +1,23 @@
+{
+ "cases": [
+  {
+   "tag": "subscribeServerConfig",
+   "payload": {},
+   "expect": "chunk",
+   "note": "the issue is in the snapshot"
+  },
+  {
+   "tag": "server.getConfig",
+   "payload": {}
+  },
+  {
+   "tag": "server.upsertKeybinding",
+   "payload": {
+    "key": "mod+y",
+    "command": "diff.toggle"
+   },
+   "expect": "failure",
+   "error": "KeybindingsConfigParseError"
+  }
+ ]
+}

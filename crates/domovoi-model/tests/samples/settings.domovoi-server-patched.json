@@ -1,0 +1,193 @@
+{
+ "favorites": [
+  {
+   "provider": "codex",
+   "model": "gpt-6-luna"
+  },
+  {
+   "provider": "claudeAgent",
+   "model": "claude-fable-5"
+  }
+ ],
+ "providerModelPreferences": {
+  "codex": {
+   "hiddenModels": [
+    "gpt-5-mini"
+   ],
+   "modelOrder": []
+  },
+  "claudeAgent": {
+   "hiddenModels": [],
+   "modelOrder": [
+    "claude-fable-5",
+    "claude-opus-5"
+   ]
+  }
+ },
+ "worktreeCleanup": {
+  "mode": "custom",
+  "rules": {
+   "worktreeOnMerge": true
+  }
+ },
+ "storageCleanup": {
+  "worktreeKeepWhen": "uncommitted-changes",
+  "worktreeAfterDays": null,
+  "worktreeSettledAfterDays": null,
+  "worktreeOnMerge": false,
+  "worktreeOnDelete": false,
+  "worktreeUnchanged": false,
+  "browserArtifactsAfterDays": null,
+  "logsAfterDays": null
+ },
+ "worktreesDirectory": "/Users/sam/worktrees",
+ "fastWorktreeCheckout": false,
+ "previousWorktreesDirectories": [
+  "/Users/sam/.domovoi/worktrees"
+ ],
+ "responseStreamingMode": "paragraph",
+ "enableProviderUpdateChecks": true,
+ "continueThreadsAfterServerUpdate": true,
+ "keepAwakeWhileAgentsWork": true,
+ "enableAgentBrowserAccess": true,
+ "cloudSpeechCredentials": {
+  "openai": "",
+  "xai": "",
+  "openrouter": ""
+ },
+ "speechModelId": "handy-computer/parakeet-unified-en-0.6b-gguf",
+ "speechAcceleration": "auto",
+ "speechModelUnloadTimeout": "min_15",
+ "speechProjectCustomWords": [],
+ "speechPostProcessingModelSelection": null,
+ "projectAgentBrowserAccessOverrides": {},
+ "defaultAutoPull": false,
+ "defaultProjectScripts": [],
+ "projectScriptOverrides": {},
+ "projectAutoPullOverrides": {},
+ "defaultModelSelection": {
+  "instanceId": "claudeAgent",
+  "model": "claude-fable-5",
+  "options": [
+   {
+    "id": "effort",
+    "value": "high"
+   }
+  ]
+ },
+ "fallbackModelSelection": null,
+ "defaultRuntimeMode": "approval-required",
+ "projectSettingsOverrides": {
+  "286fbd85-ebfc-40dc-9285-77462d776fe2": {
+   "defaultRuntimeMode": "auto",
+   "branchNamePrefix": "exp"
+  }
+ },
+ "projectSettingsFolded": false,
+ "enableAgentDeviceAccess": false,
+ "enableDeviceSupport": true,
+ "deviceOnboardingCompleted": false,
+ "deviceHosts": [],
+ "easDeviceHosts": [],
+ "simlockDeviceHosts": [],
+ "simlockDeviceHostsEnabled": false,
+ "sidebarAutoSettleAfterDays": null,
+ "compactIdleThreads": false,
+ "snoozeLimitedThreads": false,
+ "autoResumeLimitedThreads": false,
+ "snoozePresets": [
+  {
+   "kind": "after",
+   "minutes": 60
+  },
+  {
+   "kind": "after",
+   "minutes": 180
+  },
+  {
+   "kind": "at",
+   "day": "today",
+   "time": "18:00"
+  },
+  {
+   "kind": "at",
+   "day": "tomorrow",
+   "time": "09:00"
+  },
+  {
+   "kind": "at",
+   "day": "monday",
+   "time": "09:00"
+  }
+ ],
+ "hiddenThreadTags": [],
+ "hideTaggedThreads": false,
+ "guestSharingEnabled": false,
+ "linkedEnvironmentsEnabled": false,
+ "promptSuggestionsEnabled": false,
+ "sidebarAutoSettleKeepPullRequests": false,
+ "sidebarAutoSettleOnMerge": true,
+ "backgroundActivity": {
+  "schemaVersion": 1,
+  "profile": "balanced",
+  "overrides": {}
+ },
+ "automaticGitFetchInterval": 30000,
+ "providerHealthRefreshInterval": 300000,
+ "backgroundActivityProfile": "balanced",
+ "defaultTheme": "",
+ "defaultThemeSetAt": "",
+ "environmentIcon": null,
+ "newWorktreesStartFromOrigin": true,
+ "worktreeSubmodules": null,
+ "addProjectBaseDirectory": "",
+ "ghqCloneLayout": false,
+ "textGenerationModelSelection": {
+  "model": "gpt-6"
+ },
+ "threadTitleInstructions": "",
+ "branchNamingMode": "semantic",
+ "branchNamePrefix": "t5",
+ "branchNameInstructions": "",
+ "removeAgentCreditsOnMerge": false,
+ "sourceControlWritingStyle": {
+  "mode": "repo_conventions",
+  "customInstructions": "",
+  "followChangeRequestTemplates": true
+ },
+ "sourceControlWriterModelSelection": null,
+ "reviewGuidesEnabled": false,
+ "reviewGuideModelSelection": null,
+ "reviewGuideInstructions": "",
+ "pullRequestMergeMethod": null,
+ "providerInstances": {
+  "claudeAgent": {
+   "driver": "claudeAgent",
+   "config": {
+    "binaryPath": "/usr/local/bin/claude"
+   }
+  },
+  "codex-2": {
+   "driver": "codex",
+   "displayName": "Codex (personal)"
+  }
+ },
+ "observability": {
+  "otlpTracesUrl": "",
+  "otlpMetricsUrl": "",
+  "otlpLogsUrl": ""
+ },
+ "sourceControlHosts": {},
+ "offeredSourceControlProviders": {},
+ "usageLimitSources": {},
+ "textGenerators": {},
+ "secretProviders": {
+  "1password": {
+   "kind": "one_password",
+   "label": "1Password"
+  }
+ },
+ "usagePriceOverrides": {},
+ "usageModelAliases": {},
+ "defaultThreadEnvMode": null
+}

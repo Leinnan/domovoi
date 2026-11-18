@@ -1,0 +1,65 @@
+{
+ "id": "PR_kwDOA19",
+ "number": 19,
+ "title": "Merged from a deleted fork",
+ "body": "Body of #19.\n\n- one\n- two\n",
+ "url": "https://github.com/acme/calc/pull/19",
+ "state": "MERGED",
+ "isDraft": false,
+ "author": {
+  "id": "U_mona",
+  "is_bot": false,
+  "login": "mona",
+  "name": "Mona Lisa"
+ },
+ "headRefName": "feature/19",
+ "headRefOid": "2222222222222222222222222222222222222222",
+ "baseRefName": "main",
+ "baseRefOid": "1111111111111111111111111111111111111111",
+ "headRepository": null,
+ "headRepositoryOwner": null,
+ "isCrossRepository": false,
+ "createdAt": "2025-03-01T09:00:00Z",
+ "updatedAt": "2025-03-19T12:00:00Z",
+ "closedAt": "2025-03-07T08:00:00Z",
+ "mergedAt": "2025-03-07T08:00:00Z",
+ "additions": 42,
+ "deletions": 7,
+ "changedFiles": 5,
+ "mergeable": "UNKNOWN",
+ "mergeStateStatus": "UNKNOWN",
+ "reviewDecision": "",
+ "labels": [],
+ "reviewRequests": [],
+ "latestReviews": [],
+ "statusCheckRollup": [],
+ "maintainerCanModify": true,
+ "autoMergeRequest": null,
+ "files": [
+  {
+   "path": "src/calc.py",
+   "additions": 20,
+   "deletions": 5
+  },
+  {
+   "path": "tests/test_calc.py",
+   "additions": 12,
+   "deletions": 0
+  },
+  {
+   "path": "src/__mocks__/clock.py",
+   "additions": 4,
+   "deletions": 1
+  },
+  {
+   "path": "poetry.lock",
+   "additions": 3,
+   "deletions": 1
+  },
+  {
+   "path": "README.md",
+   "additions": 3,
+   "deletions": 0
+  }
+ ]
+}

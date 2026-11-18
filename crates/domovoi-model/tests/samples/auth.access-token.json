@@ -1,0 +1,7 @@
+{
+  "access_token": "tV9mK2xQ7bR4nH8cJ1wZ5yL3pF6sD0gA_uE-iOoTtYy",
+  "issued_token_type": "urn:ietf:params:oauth:token-type:access_token",
+  "token_type": "Bearer",
+  "expires_in": 2592000,
+  "scope": "orchestration:read orchestration:operate terminal:operate relay:read access:read access:write relay:write"
+}

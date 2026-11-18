@@ -1,0 +1,25 @@
+#!/bin/bash
+# Stand-in for the Codex CLI in the `prs-guides` RPC group: answers the one
+# command text generation runs (`codex exec … --output-last-message <file> -`,
+# the prompt on stdin) for a review guide, and fails for everything else, as
+# `/usr/bin/false` does in the other groups.
+D="$(cd "$(dirname "$0")/.." && pwd)/gh-data"
+[ "$1" = "exec" ] || exit 1
+prompt="$(cat)"
+out=""
+while [ $# -gt 0 ]; do
+  [ "$1" = "--output-last-message" ] && out="$2"
+  shift
+done
+case "$prompt" in
+  *"guided tour of change request #14 "*)
+    printf 'ERROR: stream disconnected before completion: the model is overloaded\n' >&2
+    exit 1 ;;
+  *"guided tour of change request #16 "*)
+    printf '{"stops":[{"title":"  ","summary":"dropped: no title"}]}\n' > "$out" ;;
+  *"guided tour of change request #"*)
+    # Long enough for a second call to find the run under way.
+    sleep 2
+    cat "$D/guide-answer.json" > "$out" ;;
+  *) exit 1 ;;
+esac

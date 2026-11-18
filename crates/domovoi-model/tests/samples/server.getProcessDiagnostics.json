@@ -1,0 +1,81 @@
+{
+  "serverPid": 4120,
+  "readAt": "2026-11-17T11:25:41.300Z",
+  "processCount": 4,
+  "totalRssBytes": 874512384,
+  "totalCpuPercent": 112.65,
+  "processes": [
+    {
+      "pid": 4120,
+      "startTimeMs": 1794902400000,
+      "ppid": 1,
+      "pgid": {
+        "_tag": "Some",
+        "value": 4120
+      },
+      "status": "Runnable",
+      "cpuPercent": 3.4,
+      "rssBytes": 96468992,
+      "elapsed": "03:25:41",
+      "command": "/Applications/domovoi.app/Contents/MacOS/domovoi-server --port 13773",
+      "depth": 0,
+      "childPids": [
+        4388,
+        4610
+      ]
+    },
+    {
+      "pid": 4388,
+      "startTimeMs": 1794906012000,
+      "ppid": 4120,
+      "pgid": {
+        "_tag": "Some",
+        "value": 4388
+      },
+      "status": "Sleeping",
+      "cpuPercent": 12.75,
+      "rssBytes": 512753664,
+      "elapsed": "02:25:29",
+      "command": "codex app-server",
+      "depth": 1,
+      "childPids": [
+        5012
+      ]
+    },
+    {
+      "pid": 5012,
+      "startTimeMs": 1794914650000,
+      "ppid": 4388,
+      "pgid": {
+        "_tag": "Some",
+        "value": 4388
+      },
+      "status": "Runnable",
+      "cpuPercent": 96.5,
+      "rssBytes": 221249536,
+      "elapsed": "00:01:31",
+      "command": "cargo test -p domovoi-model",
+      "depth": 2,
+      "childPids": []
+    },
+    {
+      "pid": 4610,
+      "startTimeMs": 1794907200000,
+      "ppid": 4120,
+      "pgid": {
+        "_tag": "Some",
+        "value": 4610
+      },
+      "status": "Sleeping",
+      "cpuPercent": 0.0,
+      "rssBytes": 44040192,
+      "elapsed": "02:05:41",
+      "command": "/bin/zsh -il",
+      "depth": 1,
+      "childPids": []
+    }
+  ],
+  "error": {
+    "_tag": "None"
+  }
+}

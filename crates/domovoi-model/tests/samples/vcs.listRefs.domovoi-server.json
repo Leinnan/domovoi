@@ -1,0 +1,36 @@
+{
+  "isAtRepositoryRoot": true,
+  "refs": [
+    { "name": "feature/typed-records", "isRemote": false, "current": true, "isDefault": false, "worktreePath": "/Users/dev/code/t5code" },
+    { "name": "main", "isRemote": false, "current": false, "isDefault": true, "worktreePath": null },
+    {
+      "name": "fix/login-redirect",
+      "isRemote": false,
+      "current": false,
+      "isDefault": false,
+      "worktreePath": "/Users/dev/.domovoi/worktrees/t5code/fix-login-redirect-0f3a9c2d4b5e6f70"
+    },
+    {
+      "name": "origin/main",
+      "isRemote": true,
+      "current": false,
+      "isDefault": false,
+      "worktreePath": null,
+      "remoteName": "origin",
+      "upstreamRef": "refs/remotes/origin/main"
+    },
+    {
+      "name": "origin/feature/typed-records",
+      "isRemote": true,
+      "current": false,
+      "isDefault": false,
+      "worktreePath": null,
+      "remoteName": "origin",
+      "upstreamRef": "refs/remotes/origin/feature/typed-records"
+    }
+  ],
+  "isRepo": true,
+  "hasPrimaryRemote": true,
+  "nextCursor": 5,
+  "totalCount": 12
+}

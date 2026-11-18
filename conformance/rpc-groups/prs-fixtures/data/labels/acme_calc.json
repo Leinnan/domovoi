@@ -1,0 +1,42 @@
+[
+ {
+  "id": "LA_kwDOA1",
+  "name": "bug",
+  "description": "Something isn't working",
+  "color": "d73a4a"
+ },
+ {
+  "id": "LA_kwDOA2",
+  "name": "enhancement",
+  "description": "",
+  "color": "a2eeef"
+ },
+ {
+  "id": "LA_kwDOA4",
+  "name": "dependencies",
+  "description": "Pull requests that update a dependency file",
+  "color": "0366d6"
+ },
+ {
+  "id": "LA_kwDOA5",
+  "name": "bugfix",
+  "description": null,
+  "color": "ffffff"
+ },
+ {
+  "id": "LA_kwDOA6",
+  "name": "not-a-bug",
+  "description": "Works as intended",
+  "color": ""
+ },
+ {
+  "id": "LA_kwDOA7",
+  "name": "Bug",
+  "description": "A second spelling",
+  "color": "000000"
+ },
+ {
+  "id": "LA_kwDOA3",
+  "name": "needs triage"
+ }
+]

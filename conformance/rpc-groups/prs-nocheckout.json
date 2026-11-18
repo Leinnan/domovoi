@@ -1,0 +1,29 @@
+{
+  "fixture": true,
+  "env": {"GIT_ALLOW_PROTOCOL": "file", "GIT_TERMINAL_PROMPT": "0"},
+  "normalize": [],
+  "cases": [
+    {"tag": "pullRequests.list", "payload": {"state": "open"}, "note": "no project on any host"},
+    {"tag": "projects.mutate", "payload": {"type": "project.create", "commandId": "create-gl-one", "projectId": "gl-one", "title": "GitLab one", "workspaceRoot": "$DIR/repos/gl-one", "createWorkspaceRootIfMissing": false, "defaultModelSelection": null}},
+    {"tag": "pullRequests.list", "payload": {"state": "open"}, "note": "only a host that cannot be read"},
+    {"tag": "pullRequests.listStats", "payload": {"refs": [{"projectId": "$PROJECT", "repository": "acme/calc", "number": 7}]}},
+    {"tag": "pullRequests.filterOptions", "payload": {"kind": "authors"}},
+    {"tag": "pullRequests.summary", "payload": {"projectId": "$PROJECT", "repository": "acme/calc", "number": 7, "host": "github.com"}, "note": "github.com is read without a checkout"},
+    {"tag": "pullRequests.detail", "payload": {"projectId": "gl-one", "repository": "acme/calc", "number": 7, "host": "GitHub.com"}},
+    {"tag": "pullRequests.routing", "payload": {"projectId": "$PROJECT", "repository": "acme/calc", "number": 7, "host": "github.com"}},
+    {"tag": "pullRequests.summary", "payload": {"projectId": "$PROJECT", "repository": "acme/calc", "number": 7, "host": "github.com", "expectedAccountId": "583231"}},
+    {"tag": "pullRequests.reviewGuide", "payload": {"projectId": "$PROJECT", "repository": "acme/calc", "number": 7, "host": "github.com"}},
+    {"tag": "pullRequests.reportState", "payload": {"reference": {"projectId": "$PROJECT", "repository": "acme/calc", "number": 7, "host": "github.com"}, "state": "open"}},
+    {"tag": "pullRequests.linkedThreads", "payload": {"projectId": "$PROJECT", "repository": "acme/calc", "number": 7, "host": "github.com"}},
+    {"tag": "pullRequests.linkedThreads", "payload": {"projectId": "$PROJECT", "repository": "acme/calc", "number": 7}, "note": "a project on no host"},
+    {"tag": "pullRequests.linkedThreads", "payload": {"projectId": "gl-one", "repository": "one", "number": 7}, "note": "keyed by the GitLab project's host"},
+    {"tag": "pullRequests.linkedThreads", "payload": {"projectId": "$PROJECT", "repository": "calc", "number": 7, "host": "github.com"}, "note": "a repository without an owner: the project is asked for its host, and has none"},
+    {"tag": "pullRequests.summary", "payload": {"projectId": "$PROJECT", "repository": "acme/calc", "number": 7}, "expect": "failure", "error": "PullRequestUnavailableError", "note": "no host named"},
+    {"tag": "pullRequests.summary", "payload": {"projectId": "nope", "repository": "acme/calc", "number": 7, "host": "github.com"}, "expect": "failure", "error": "PullRequestUnavailableError", "note": "no such project"},
+    {"tag": "pullRequests.summary", "payload": {"projectId": "$PROJECT", "repository": "acme/calc", "number": 7, "host": "gitlab.com"}, "expect": "failure", "error": "PullRequestUnavailableError"},
+    {"tag": "pullRequests.summary", "payload": {"projectId": "$PROJECT", "repository": "acme/calc", "number": 7, "host": "github.example.com"}, "expect": "failure", "error": "PullRequestUnavailableError"},
+    {"tag": "pullRequests.routingIdentity", "payload": {"host": "github.com"}, "expect": "failure", "error": "PullRequestUnavailableError", "note": "no project on the host"},
+    {"tag": "pullRequests.reviewGuide", "payload": {"projectId": "$PROJECT", "repository": "acme/calc", "number": 7}, "expect": "failure", "error": "PullRequestOperationError", "note": "a project on no host"},
+    {"tag": "pullRequests.generateReviewGuide", "payload": {"projectId": "$PROJECT", "repository": "acme/calc", "number": 7, "host": "github.com"}, "expect": "failure", "error": "PullRequestOperationError", "note": "review guides are off"}
+  ]
+}

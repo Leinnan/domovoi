@@ -1,0 +1,8 @@
+{
+  "cases": [
+    { "tag": "projectClone.start", "payload": { "projectId": "pc-name", "title": "By name", "createdAt": "2026-01-01T00:00:00.000Z", "provider": "github", "repository": "acme/local", "protocol": "https", "destinationPath": "$DIR/clones/p-name" }, "note": "a repository by name: looked up with gh, cloned from its https URL" },
+    { "sh": "await-done pc-name", "tag": "projectClone.start", "payload": { "projectId": "pc-fallback", "title": "Over https after all", "createdAt": "2026-01-01T00:00:00.000Z", "provider": "github", "repository": "acme/denied", "protocol": "auto", "destinationPath": "$DIR/clones/p-fallback" }, "note": "ssh refuses the key: cloned over https instead" },
+    { "sh": "await-done pc-fallback", "tag": "projectClone.start", "payload": { "projectId": "pc-path", "title": "By path", "createdAt": "2026-01-01T00:00:00.000Z", "remoteUrl": "file://user:secret@localhost$DIR/remotes/acme/local.git", "destinationPath": "~/clones/p-path" }, "note": "credentials are not in the answer's URL; ~ is the home folder" },
+    { "sh": "await-done pc-path", "tag": "subscribeProjectClones", "payload": {}, "expect": "chunk", "note": "all three are done, the first two with the repository gh named" }
+  ]
+}

@@ -1,0 +1,69 @@
+{
+  "cwd": "/HOME/Documents/IDEAS/t5code/.reference/playground",
+  "generatedAt": "2026-11-13T16:30:00.000Z",
+  "sources": [
+    {
+      "id": "working-tree",
+      "kind": "working-tree",
+      "title": "Uncommitted",
+      "baseRef": "HEAD",
+      "headRef": null,
+      "diff": "diff --git a/calc.py b/calc.py\nindex 3b18e51..9d1f0a2 100644\n--- a/calc.py\n+++ b/calc.py\n@@ -1,2 +1,6 @@\n def add(a, b):\n     return a + b\n+\n+\n+def sub(a, b):\n+    return a - b\n",
+      "files": [
+        {
+          "path": "calc.py",
+          "previousPath": null,
+          "additions": 4,
+          "deletions": 0
+        }
+      ],
+      "diffHash": "5f1d0c2a9b3e4d17",
+      "truncated": false
+    },
+    {
+      "id": "branch-range",
+      "kind": "branch-range",
+      "title": "Changes vs main",
+      "baseRef": "main",
+      "headRef": "t5/add-sub",
+      "diff": "",
+      "files": [
+        {
+          "path": "calc.py",
+          "previousPath": null,
+          "additions": 4,
+          "deletions": 0
+        },
+        {
+          "path": "docs/usage.md",
+          "previousPath": "USAGE.md",
+          "additions": 2,
+          "deletions": 1
+        }
+      ],
+      "diffHash": "a81c33f0e2d94b06",
+      "truncated": true,
+      "patchesDeferred": true
+    },
+    {
+      "id": "9d1f0a2c4b7e8f1a2b3c4d5e6f708192a3b4c5d6",
+      "kind": "commit",
+      "title": "Commit 9d1f0a2",
+      "commitSubject": "Add sub",
+      "baseRef": "3b18e51f0a1b2c3d4e5f60718293a4b5c6d7e8f9",
+      "headRef": "9d1f0a2c4b7e8f1a2b3c4d5e6f708192a3b4c5d6",
+      "diff": "diff --git a/calc.py b/calc.py\nindex 3b18e51..9d1f0a2 100644\n--- a/calc.py\n+++ b/calc.py\n@@ -1,2 +1,6 @@\n def add(a, b):\n     return a + b\n+\n+\n+def sub(a, b):\n+    return a - b\n",
+      "files": [
+        {
+          "path": "calc.py",
+          "previousPath": null,
+          "additions": 4,
+          "deletions": 0
+        }
+      ],
+      "diffHash": "0c44e1b7a29d5f38",
+      "truncated": false
+    }
+  ],
+  "incomplete": true
+}

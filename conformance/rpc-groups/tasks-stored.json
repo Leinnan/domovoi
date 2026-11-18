@@ -1,0 +1,302 @@
+{
+ "fixture": true,
+ "env": {
+  "TZ": "CET-1CEST,M3.5.0,M10.5.0/3"
+ },
+ "normalize": [
+  [
+   "/api/hooks/([^/]+)/[A-Za-z0-9_-]{43}",
+   "/api/hooks/${1}/<token>"
+  ],
+  [
+   "^(claude|codex) initialize failed: .*$",
+   "${1} initialize failed: <how>"
+  ]
+ ],
+ "cases": [
+  {
+   "tag": "scheduledTasks.subscribe",
+   "payload": {},
+   "note": "the rows as the previous server left them; no name for the zone",
+   "expect": "chunk",
+   "sh": "sqlite3 home/userdata/domovoi.sqlite < stored-rows.sql"
+  },
+  {
+   "tag": "scheduledTasks.setEnabled",
+   "payload": {
+    "id": "old-interval-keys",
+    "enabled": false
+   },
+   "note": "a stored row turned off"
+  },
+  {
+   "tag": "scheduledTasks.setEnabled",
+   "payload": {
+    "id": "old-interval-keys",
+    "enabled": true
+   },
+   "note": "and on"
+  },
+  {
+   "tag": "scheduledTasks.setEnabled",
+   "payload": {
+    "id": "old-fast",
+    "enabled": true
+   },
+   "note": "an interval under a minute waits a minute"
+  },
+  {
+   "tag": "scheduledTasks.setEnabled",
+   "payload": {
+    "id": "old-once-past",
+    "enabled": true
+   },
+   "note": "a stored one-time task of the past",
+   "expect": "failure",
+   "error": "ScheduledTaskError"
+  },
+  {
+   "tag": "scheduledTasks.upsert",
+   "payload": {
+    "title": "Renamed",
+    "prompt": "Where is the add function defined?",
+    "enabled": true,
+    "schedule": {
+     "type": "interval",
+     "everyMs": 7200000
+    },
+    "projectId": "$PROJECT",
+    "workspaceStrategy": {
+     "type": "root"
+    },
+    "modelSelection": {
+     "instanceId": "codex",
+     "model": "gpt-5"
+    },
+    "runtimeMode": "approval-required",
+    "interactionMode": "default",
+    "id": "old-interval-keys",
+    "requireExisting": true
+   },
+   "note": "an edit that keeps the stored schedule keeps its run and who made it"
+  },
+  {
+   "tag": "scheduledTasks.upsert",
+   "payload": {
+    "title": "Weekdays",
+    "prompt": "Where is the add function defined?",
+    "enabled": true,
+    "schedule": {
+     "type": "fixed_time",
+     "timeOfDay": "9:30",
+     "weekdays": [
+      5,
+      4,
+      3,
+      2,
+      1,
+      1
+     ]
+    },
+    "projectId": "$PROJECT",
+    "workspaceStrategy": {
+     "type": "root"
+    },
+    "modelSelection": {
+     "instanceId": "claudeAgent",
+     "model": "claude-haiku-5-5"
+    },
+    "runtimeMode": "approval-required",
+    "interactionMode": "default",
+    "id": "old-fixed"
+   },
+   "note": "the same fixed time written another way: the stored run and thread stay"
+  },
+  {
+   "tag": "scheduledTasks.upsert",
+   "payload": {
+    "title": "Daily",
+    "prompt": "Where is the add function defined?",
+    "enabled": true,
+    "schedule": {
+     "type": "fixed_time",
+     "timeOfDay": "07:05",
+     "weekdays": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6
+     ]
+    },
+    "projectId": "$PROJECT",
+    "workspaceStrategy": {
+     "type": "root"
+    },
+    "modelSelection": {
+     "instanceId": "claudeAgent",
+     "model": "claude-haiku-5-5"
+    },
+    "runtimeMode": "approval-required",
+    "interactionMode": "default",
+    "id": "old-fixed-daily"
+   },
+   "note": "every weekday is every day: the stored run stays"
+  },
+  {
+   "tag": "scheduledTasks.upsert",
+   "payload": {
+    "title": "Once",
+    "prompt": "Where is the add function defined?",
+    "enabled": true,
+    "schedule": {
+     "type": "once",
+     "runAt": "2999-02-03T05:05:06+01:00"
+    },
+    "projectId": "$PROJECT",
+    "workspaceStrategy": {
+     "type": "root"
+    },
+    "modelSelection": {
+     "instanceId": "claudeAgent",
+     "model": "claude-haiku-5-5"
+    },
+    "runtimeMode": "approval-required",
+    "interactionMode": "default",
+    "id": "old-once"
+   },
+   "note": "the same moment in another zone: the stored run stays"
+  },
+  {
+   "tag": "scheduledTasks.upsert",
+   "payload": {
+    "title": "Webhook, signed",
+    "prompt": "Where is the add function defined?",
+    "enabled": true,
+    "schedule": {
+     "type": "webhook",
+     "signature": {
+      "header": "X-Hub-Signature-256",
+      "encoding": "hex",
+      "prefix": "sha256="
+     }
+    },
+    "projectId": "$PROJECT",
+    "workspaceStrategy": {
+     "type": "root"
+    },
+    "modelSelection": {
+     "instanceId": "claudeAgent",
+     "model": "claude-haiku-5-5"
+    },
+    "runtimeMode": "approval-required",
+    "interactionMode": "default",
+    "id": "old-hook-signed"
+   },
+   "note": "a stored webhook saved again: its secret, token, dedupe and filters stay"
+  },
+  {
+   "tag": "scheduledTasks.upsert",
+   "payload": {
+    "title": "Webhook, base64",
+    "prompt": "Where is the add function defined?",
+    "enabled": false,
+    "schedule": {
+     "type": "webhook",
+     "signature": null,
+     "maxDeliveryAgeMinutes": 30,
+     "filters": [
+      {
+       "path": "body",
+       "op": "exists"
+      }
+     ]
+    },
+    "projectId": "$PROJECT",
+    "workspaceStrategy": {
+     "type": "root"
+    },
+    "modelSelection": {
+     "instanceId": "claudeAgent",
+     "model": "claude-haiku-5-5"
+    },
+    "runtimeMode": "approval-required",
+    "interactionMode": "default",
+    "id": "old-hook-base64"
+   },
+   "note": "a stored webhook without its signature: the secret goes, the dedupe stays"
+  },
+  {
+   "tag": "scheduledTasks.rotateWebhookToken",
+   "payload": {
+    "id": "old-hook"
+   },
+   "note": "a stored webhook's token replaced"
+  },
+  {
+   "tag": "scheduledTasks.runNow",
+   "payload": {
+    "id": "old-running"
+   },
+   "note": "a row left running is run when asked"
+  },
+  {
+   "tag": "scheduledTasks.runNow",
+   "payload": {
+    "id": "old-fresh"
+   },
+   "note": "a stored fresh-session task"
+  },
+  {
+   "tag": "scheduledTasks.runNow",
+   "payload": {
+    "id": "old-elsewhere"
+   },
+   "note": "a stored task of a project that is gone"
+  },
+  {
+   "tag": "scheduledTasks.delete",
+   "payload": {
+    "id": "old-interval"
+   },
+   "note": "a stored row deleted"
+  },
+  {
+   "tag": "scheduledTasks.upsert",
+   "payload": {
+    "title": "New",
+    "prompt": "Where is the add function defined?",
+    "enabled": true,
+    "schedule": {
+     "type": "fixed_time",
+     "timeOfDay": "00:00",
+     "weekdays": [
+      0,
+      6
+     ]
+    },
+    "projectId": "$PROJECT",
+    "workspaceStrategy": {
+     "type": "root"
+    },
+    "modelSelection": {
+     "instanceId": "claudeAgent",
+     "model": "claude-haiku-5-5"
+    },
+    "runtimeMode": "approval-required",
+    "interactionMode": "default",
+    "id": "new-fixed"
+   },
+   "note": "a new task among them"
+  },
+  {
+   "tag": "scheduledTasks.subscribe",
+   "payload": {},
+   "note": "the rows afterwards",
+   "expect": "chunk",
+   "sleep_ms": 4000
+  }
+ ]
+}

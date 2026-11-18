@@ -1,0 +1,508 @@
+{
+  "schemaVersion": 2,
+  "snapshotSequence": 292,
+  "threads": [
+    {
+      "createdBy": "user",
+      "creationSource": "web",
+      "id": "6421f1e6-14f6-4d7a-89b3-6e82dac38210",
+      "projectId": "286fbd85-ebfc-40dc-9285-77462d776fe2",
+      "title": "Add Subtraction Function",
+      "providerInstanceId": "codex",
+      "modelSelection": {
+        "instanceId": "codex",
+        "model": "gpt-6-luna",
+        "options": [
+          {
+            "id": "reasoningEffort",
+            "value": "low"
+          },
+          {
+            "id": "serviceTier",
+            "value": "default"
+          },
+          {
+            "id": "cyberAccessProgram",
+            "value": "standard"
+          }
+        ]
+      },
+      "runtimeMode": "auto-accept-edits",
+      "interactionMode": "default",
+      "branch": "main",
+      "worktreePath": null,
+      "pullRequests": [],
+      "lineage": {
+        "parentThreadId": null,
+        "relationshipToParent": null,
+        "rootThreadId": "6421f1e6-14f6-4d7a-89b3-6e82dac38210"
+      },
+      "forkedFrom": null,
+      "activeProviderThreadId": "provider-thread:provider:codex:native-thread:pending%3Arun%3Athread%3A6421f1e6-14f6-4d7a-89b3-6e82dac38210%3Aordinal%3A1",
+      "latestRunId": "run:thread:6421f1e6-14f6-4d7a-89b3-6e82dac38210:ordinal:2",
+      "latestRunRequestedAt": "2026-11-13T15:32:46.015Z",
+      "latestRunStartedAt": "2026-11-13T15:32:46.040Z",
+      "latestRunCompletedAt": "2026-11-13T15:34:09.110Z",
+      "latestRunStopRequested": false,
+      "latestRunBackgroundWake": false,
+      "activeRunId": null,
+      "activityRunStartedAt": null,
+      "activityRunStatus": null,
+      "blockedOnThreadWait": false,
+      "status": "rolled_back",
+      "lastError": null,
+      "lastErrorClass": null,
+      "lastErrorCode": null,
+      "usageLimitResetAt": null,
+      "pendingRuntimeRequest": null,
+      "pendingGuestMessageCount": 0,
+      "latestVisibleMessage": null,
+      "latestUserMessageAt": "2026-11-13T15:32:46.015Z",
+      "latestUserAuthoredMessageAt": "2026-11-13T15:32:46.015Z",
+      "hasActionableProposedPlan": false,
+      "pendingBackgroundTasks": [],
+      "providerInstanceHistory": [
+        "codex"
+      ],
+      "goal": null,
+      "itemCount": 9,
+      "visibleItemCount": 9,
+      "createdAt": "2026-11-13T15:31:44.355Z",
+      "updatedAt": "2026-11-13T15:34:09.110Z",
+      "archivedAt": null,
+      "settledOverride": null,
+      "settledAt": null,
+      "unsettledAt": null,
+      "snoozedUntil": null,
+      "snoozedAt": null,
+      "limitRecovery": null,
+      "pinnedAt": null,
+      "autoSettleDisabledAt": null,
+      "pinOrderKey": null,
+      "lastVisitedAt": "2026-11-13T15:34:09.110Z",
+      "opens": {
+        "openedAt": 1794583904426,
+        "score": 1,
+        "picks": []
+      },
+      "titleRegeneration": null,
+      "lastTitleRegeneration": null,
+      "deletedAt": null
+    },
+    {
+      "createdBy": "user",
+      "creationSource": "web",
+      "id": "4454828a-013b-4976-8887-d9064f5ca464",
+      "projectId": "286fbd85-ebfc-40dc-9285-77462d776fe2",
+      "title": "Add Multiplication Function",
+      "providerInstanceId": "claudeAgent",
+      "modelSelection": {
+        "instanceId": "claudeAgent",
+        "model": "claude-haiku-5-5"
+      },
+      "runtimeMode": "approval-required",
+      "interactionMode": "default",
+      "branch": "main",
+      "worktreePath": null,
+      "pullRequests": [],
+      "lineage": {
+        "parentThreadId": null,
+        "relationshipToParent": null,
+        "rootThreadId": "4454828a-013b-4976-8887-d9064f5ca464"
+      },
+      "forkedFrom": null,
+      "activeProviderThreadId": "provider-thread:provider:claudeAgent:native-thread:pending%3Arun%3Athread%3A4454828a-013b-4976-8887-d9064f5ca464%3Aordinal%3A1",
+      "latestRunId": "run:thread:4454828a-013b-4976-8887-d9064f5ca464:ordinal:2",
+      "latestRunRequestedAt": "2026-11-13T15:43:54.792Z",
+      "latestRunStartedAt": "2026-11-13T15:43:54.817Z",
+      "latestRunCompletedAt": "2026-11-13T15:44:10.622Z",
+      "latestRunStopRequested": false,
+      "latestRunBackgroundWake": false,
+      "activeRunId": null,
+      "activityRunStartedAt": null,
+      "activityRunStatus": null,
+      "blockedOnThreadWait": false,
+      "status": "completed",
+      "lastError": null,
+      "lastErrorClass": null,
+      "lastErrorCode": null,
+      "usageLimitResetAt": null,
+      "pendingRuntimeRequest": null,
+      "pendingGuestMessageCount": 0,
+      "latestVisibleMessage": null,
+      "latestUserMessageAt": "2026-11-13T15:43:54.792Z",
+      "latestUserAuthoredMessageAt": "2026-11-13T15:43:54.792Z",
+      "hasActionableProposedPlan": false,
+      "pendingBackgroundTasks": [],
+      "providerInstanceHistory": [
+        "claudeAgent"
+      ],
+      "goal": null,
+      "itemCount": 12,
+      "visibleItemCount": 12,
+      "createdAt": "2026-11-13T15:42:16.916Z",
+      "updatedAt": "2026-11-13T15:44:10.622Z",
+      "archivedAt": null,
+      "settledOverride": null,
+      "settledAt": null,
+      "unsettledAt": null,
+      "snoozedUntil": null,
+      "snoozedAt": null,
+      "limitRecovery": null,
+      "pinnedAt": null,
+      "autoSettleDisabledAt": null,
+      "pinOrderKey": null,
+      "lastVisitedAt": "2026-11-13T15:44:10.622Z",
+      "opens": {
+        "openedAt": 1794584536986,
+        "score": 1,
+        "picks": []
+      },
+      "titleRegeneration": null,
+      "lastTitleRegeneration": null,
+      "deletedAt": null
+    },
+    {
+      "createdBy": "user",
+      "creationSource": "web",
+      "id": "056c0574-d9dd-46ff-a008-9ea9779662be",
+      "projectId": "286fbd85-ebfc-40dc-9285-77462d776fe2",
+      "title": "Add Negation Function to Calculator",
+      "providerInstanceId": "claudeAgent",
+      "modelSelection": {
+        "instanceId": "claudeAgent",
+        "model": "claude-haiku-5-5"
+      },
+      "runtimeMode": "approval-required",
+      "interactionMode": "default",
+      "branch": "main",
+      "worktreePath": null,
+      "pullRequests": [],
+      "lineage": {
+        "parentThreadId": null,
+        "relationshipToParent": null,
+        "rootThreadId": "056c0574-d9dd-46ff-a008-9ea9779662be"
+      },
+      "forkedFrom": null,
+      "activeProviderThreadId": "provider-thread:provider:claudeAgent:native-thread:pending%3Arun%3Athread%3A056c0574-d9dd-46ff-a008-9ea9779662be%3Aordinal%3A1",
+      "latestRunId": "run:thread:056c0574-d9dd-46ff-a008-9ea9779662be:ordinal:1",
+      "latestRunRequestedAt": "2026-11-13T15:45:17.320Z",
+      "latestRunStartedAt": "2026-11-13T15:45:17.367Z",
+      "latestRunCompletedAt": "2026-11-13T15:45:39.664Z",
+      "latestRunStopRequested": false,
+      "latestRunBackgroundWake": false,
+      "activeRunId": null,
+      "activityRunStartedAt": null,
+      "activityRunStatus": null,
+      "blockedOnThreadWait": false,
+      "status": "completed",
+      "lastError": null,
+      "lastErrorClass": null,
+      "lastErrorCode": null,
+      "usageLimitResetAt": null,
+      "pendingRuntimeRequest": null,
+      "pendingGuestMessageCount": 0,
+      "latestVisibleMessage": null,
+      "latestUserMessageAt": "2026-11-13T15:45:17.320Z",
+      "latestUserAuthoredMessageAt": "2026-11-13T15:45:17.320Z",
+      "hasActionableProposedPlan": false,
+      "pendingBackgroundTasks": [],
+      "providerInstanceHistory": [
+        "claudeAgent"
+      ],
+      "goal": null,
+      "itemCount": 7,
+      "visibleItemCount": 7,
+      "createdAt": "2026-11-13T15:45:17.309Z",
+      "updatedAt": "2026-11-13T15:45:39.664Z",
+      "archivedAt": null,
+      "settledOverride": null,
+      "settledAt": null,
+      "unsettledAt": null,
+      "snoozedUntil": null,
+      "snoozedAt": null,
+      "limitRecovery": null,
+      "pinnedAt": null,
+      "autoSettleDisabledAt": null,
+      "pinOrderKey": null,
+      "lastVisitedAt": "2026-11-13T15:45:39.664Z",
+      "opens": {
+        "openedAt": 1794584717374,
+        "score": 1,
+        "picks": []
+      },
+      "titleRegeneration": null,
+      "lastTitleRegeneration": null,
+      "deletedAt": null
+    },
+    {
+      "createdBy": "system",
+      "creationSource": "server",
+      "id": "thread:project:45b61978-e2bb-4bed-8764-4ba59ce421ab:160abc56-26a6-43ce-b191-1df01bba7bc3",
+      "projectId": "45b61978-e2bb-4bed-8764-4ba59ce421ab",
+      "title": "New thread",
+      "providerInstanceId": "codex",
+      "modelSelection": {
+        "instanceId": "codex",
+        "model": "gpt-6-astra"
+      },
+      "runtimeMode": "full-access",
+      "interactionMode": "default",
+      "branch": "main",
+      "worktreePath": null,
+      "pullRequests": [],
+      "lineage": {
+        "parentThreadId": null,
+        "relationshipToParent": null,
+        "rootThreadId": "thread:project:45b61978-e2bb-4bed-8764-4ba59ce421ab:160abc56-26a6-43ce-b191-1df01bba7bc3"
+      },
+      "forkedFrom": null,
+      "activeProviderThreadId": null,
+      "latestRunId": null,
+      "latestRunRequestedAt": null,
+      "latestRunStartedAt": null,
+      "latestRunCompletedAt": null,
+      "latestRunStopRequested": false,
+      "latestRunBackgroundWake": false,
+      "activeRunId": null,
+      "activityRunStartedAt": null,
+      "activityRunStatus": null,
+      "blockedOnThreadWait": false,
+      "status": "idle",
+      "lastError": null,
+      "lastErrorClass": null,
+      "lastErrorCode": null,
+      "usageLimitResetAt": null,
+      "pendingRuntimeRequest": null,
+      "pendingGuestMessageCount": 0,
+      "latestVisibleMessage": null,
+      "latestUserMessageAt": null,
+      "latestUserAuthoredMessageAt": null,
+      "hasActionableProposedPlan": false,
+      "pendingBackgroundTasks": [],
+      "providerInstanceHistory": [],
+      "goal": null,
+      "itemCount": 0,
+      "visibleItemCount": 0,
+      "createdAt": "2026-11-13T15:25:06.178Z",
+      "updatedAt": "2026-11-13T15:25:06.832Z",
+      "archivedAt": null,
+      "settledOverride": null,
+      "settledAt": null,
+      "unsettledAt": null,
+      "snoozedUntil": null,
+      "snoozedAt": null,
+      "limitRecovery": null,
+      "pinnedAt": null,
+      "autoSettleDisabledAt": null,
+      "pinOrderKey": null,
+      "lastVisitedAt": "2026-11-13T15:25:06.832Z",
+      "opens": {
+        "openedAt": 1794584420712,
+        "score": 1.999534848070764,
+        "picks": []
+      },
+      "titleRegeneration": null,
+      "lastTitleRegeneration": null,
+      "deletedAt": null
+    }
+  ],
+  "archivedThreads": [
+    {
+      "createdBy": "user",
+      "creationSource": "web",
+      "id": "6421f1e6-14f6-4d7a-89b3-6e82dac38210",
+      "projectId": "286fbd85-ebfc-40dc-9285-77462d776fe2",
+      "title": "Add Subtraction Function",
+      "providerInstanceId": "codex",
+      "modelSelection": {
+        "instanceId": "codex",
+        "model": "gpt-6-luna",
+        "options": [
+          {
+            "id": "reasoningEffort",
+            "value": "low"
+          },
+          {
+            "id": "serviceTier",
+            "value": "default"
+          },
+          {
+            "id": "cyberAccessProgram",
+            "value": "standard"
+          }
+        ]
+      },
+      "runtimeMode": "auto-accept-edits",
+      "interactionMode": "default",
+      "branch": "main",
+      "worktreePath": null,
+      "pullRequests": [],
+      "lineage": {
+        "parentThreadId": null,
+        "relationshipToParent": null,
+        "rootThreadId": "6421f1e6-14f6-4d7a-89b3-6e82dac38210"
+      },
+      "forkedFrom": null,
+      "activeProviderThreadId": "provider-thread:provider:codex:native-thread:pending%3Arun%3Athread%3A6421f1e6-14f6-4d7a-89b3-6e82dac38210%3Aordinal%3A1",
+      "latestRunId": "run:thread:6421f1e6-14f6-4d7a-89b3-6e82dac38210:ordinal:2",
+      "latestRunRequestedAt": "2026-11-13T15:32:46.015Z",
+      "latestRunStartedAt": "2026-11-13T15:32:46.040Z",
+      "latestRunCompletedAt": "2026-11-13T15:34:09.110Z",
+      "latestRunStopRequested": false,
+      "latestRunBackgroundWake": false,
+      "activeRunId": null,
+      "activityRunStartedAt": null,
+      "activityRunStatus": null,
+      "blockedOnThreadWait": false,
+      "status": "rolled_back",
+      "lastError": null,
+      "lastErrorClass": null,
+      "lastErrorCode": null,
+      "usageLimitResetAt": null,
+      "pendingRuntimeRequest": null,
+      "pendingGuestMessageCount": 0,
+      "latestVisibleMessage": null,
+      "latestUserMessageAt": "2026-11-13T15:32:46.015Z",
+      "latestUserAuthoredMessageAt": "2026-11-13T15:32:46.015Z",
+      "hasActionableProposedPlan": false,
+      "pendingBackgroundTasks": [],
+      "providerInstanceHistory": [
+        "codex"
+      ],
+      "goal": null,
+      "itemCount": 9,
+      "visibleItemCount": 9,
+      "createdAt": "2026-11-13T15:31:44.355Z",
+      "updatedAt": "2026-11-13T16:10:00.000Z",
+      "archivedAt": "2026-11-13T16:10:00.000Z",
+      "settledOverride": null,
+      "settledAt": null,
+      "unsettledAt": null,
+      "snoozedUntil": null,
+      "snoozedAt": null,
+      "limitRecovery": null,
+      "pinnedAt": null,
+      "autoSettleDisabledAt": null,
+      "pinOrderKey": null,
+      "lastVisitedAt": "2026-11-13T15:34:09.110Z",
+      "opens": {
+        "openedAt": 1794583904426,
+        "score": 1,
+        "picks": []
+      },
+      "titleRegeneration": null,
+      "lastTitleRegeneration": null,
+      "deletedAt": null
+    }
+  ],
+  "projects": [
+    {
+      "id": "286fbd85-ebfc-40dc-9285-77462d776fe2",
+      "title": "Playground",
+      "hasCustomTitle": true,
+      "workspaceRoot": "/HOME/Documents/IDEAS/t5code/.reference/playground",
+      "repositoryIdentity": null,
+      "defaultModelSelection": {
+        "instanceId": "codex",
+        "model": "gpt-6-luna",
+        "options": [
+          {
+            "id": "reasoningEffort",
+            "value": "low"
+          },
+          {
+            "id": "fastMode",
+            "value": true
+          }
+        ]
+      },
+      "defaultThreadEnvMode": "worktree",
+      "autoPull": true,
+      "faviconPath": "public/favicon.svg",
+      "projectIcon": {
+        "kind": "monogram",
+        "text": "PG",
+        "color": "violet"
+      },
+      "scripts": [
+        {
+          "id": "dev",
+          "name": "Dev server",
+          "command": "python3 -m http.server 8000",
+          "icon": "play",
+          "runOnWorktreeCreate": false,
+          "runOnSettle": false,
+          "stopOnSettle": true,
+          "async": true,
+          "previewUrl": "http://localhost:8000",
+          "autoOpenPreview": true
+        },
+        {
+          "id": "test",
+          "name": "Test",
+          "command": "python3 -m pytest",
+          "icon": "test",
+          "runOnWorktreeCreate": true
+        }
+      ],
+      "pinnedAt": "2026-11-13T16:02:11.000Z",
+      "archivedAt": null,
+      "createdAt": "2026-11-13T15:27:30.705Z",
+      "updatedAt": "2026-11-13T16:02:11.000Z"
+    },
+    {
+      "id": "45b61978-e2bb-4bed-8764-4ba59ce421ab",
+      "title": "server",
+      "hasCustomTitle": false,
+      "workspaceRoot": "/HOME/Documents/IDEAS/t5code/.reference/t3code/apps/server",
+      "repositoryIdentity": {
+        "canonicalKey": "github.com/pingdotgg/t3code",
+        "locator": {
+          "source": "git-remote",
+          "remoteName": "origin",
+          "remoteUrl": "https://github.com/pingdotgg/t3code.git"
+        },
+        "rootPath": "/HOME/Documents/IDEAS/t5code/.reference/t3code",
+        "displayName": "pingdotgg/t3code",
+        "owner": "pingdotgg",
+        "name": "t3code",
+        "provider": "github"
+      },
+      "defaultModelSelection": null,
+      "defaultThreadEnvMode": null,
+      "autoPull": false,
+      "faviconPath": null,
+      "projectIcon": {
+        "kind": "emoji",
+        "emoji": "🛰️"
+      },
+      "scripts": [],
+      "pinnedAt": null,
+      "archivedAt": null,
+      "createdAt": "2026-11-13T15:25:06.122Z",
+      "updatedAt": "2026-11-13T15:25:06.122Z"
+    },
+    {
+      "id": "0b6b2c0e-6c0c-4a59-9a39-3f2f8c9a7d11",
+      "title": "No project",
+      "hasCustomTitle": false,
+      "workspaceRoot": "/HOME/.domovoi/scratch",
+      "repositoryIdentity": null,
+      "defaultModelSelection": null,
+      "defaultThreadEnvMode": null,
+      "autoPull": false,
+      "faviconPath": null,
+      "projectIcon": {
+        "kind": "lucide",
+        "name": "message-square-dashed",
+        "color": "gray"
+      },
+      "scripts": [],
+      "pinnedAt": null,
+      "archivedAt": "2026-11-14T08:00:00.000Z",
+      "createdAt": "2026-11-13T15:20:00.000Z",
+      "updatedAt": "2026-11-14T08:00:00.000Z"
+    }
+  ]
+}

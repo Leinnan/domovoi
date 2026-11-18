@@ -1,0 +1,238 @@
+{
+ "fixture": true,
+ "env": {},
+ "normalize": [],
+ "cases": [
+  {
+   "tag": "agentSessions.scan",
+   "payload": {},
+   "note": "every folder with sessions; the fixture's project is known"
+  },
+  {
+   "tag": "agentSessions.import",
+   "payload": {
+    "projectId": "nope"
+   },
+   "note": "a project that is not there",
+   "expect": "failure",
+   "error": "AgentSessionImportProjectNotFoundError"
+  },
+  {
+   "tag": "agentSessions.import",
+   "payload": {
+    "projectId": "$PROJECT",
+    "expectedWorkspaceRoot": "/elsewhere"
+   },
+   "note": "a project that moved since the scan",
+   "expect": "failure",
+   "error": "AgentSessionImportProjectChangedError"
+  },
+  {
+   "tag": "agentSessions.import",
+   "payload": {
+    "projectId": "$PROJECT",
+    "expectedWorkspaceRoot": "$WORKSPACE/"
+   },
+   "note": "the fixture project's sessions of the last 30 days"
+  },
+  {
+   "tag": "orchestration.getThreadProjection",
+   "payload": {
+    "threadId": "import:claudeAgent:11111111-1111-4111-8111-111111111111"
+   },
+   "note": "an imported Claude session"
+  },
+  {
+   "tag": "orchestration.getTurnItem",
+   "payload": {
+    "threadId": "import:claudeAgent:22222222-2222-4222-8222-222222222222",
+    "itemId": "agent-session-import:v2:history-truncated:import:claudeAgent:22222222-2222-4222-8222-222222222222"
+   },
+   "note": "a long one says what it left out"
+  },
+  {
+   "tag": "orchestration.getThreadProjection",
+   "payload": {
+    "threadId": "import:codex:019a1b2c-3d4e-7f60-8a1b-000000000001"
+   },
+   "note": "an imported Codex session, with its saved name"
+  },
+  {
+   "tag": "orchestration.getThreadTitles",
+   "payload": {
+    "threadIds": [
+     "import:claudeAgent:11111111-1111-4111-8111-111111111111",
+     "import:claudeAgent:22222222-2222-4222-8222-222222222222",
+     "import:codex:019a1b2c-3d4e-7f60-8a1b-000000000001",
+     "import:codex:019a1b2c-3d4e-7f60-8a1b-000000000002",
+     "import:claudeAgent:not-a-session-id",
+     "import:claudeAgent:44444444-4444-4444-8444-444444444444",
+     "import:claudeAgent:55555555-5555-4555-8555-555555555555"
+    ]
+   },
+   "note": "which sessions became threads, and their titles"
+  },
+  {
+   "tag": "agentSessions.import",
+   "payload": {
+    "projectId": "$PROJECT"
+   },
+   "note": "again, no root expected: nothing new"
+  },
+  {
+   "tag": "agentSessions.scan",
+   "payload": {},
+   "note": "after the import"
+  },
+  {
+   "tag": "projects.mutate",
+   "payload": {
+    "type": "project.create",
+    "commandId": "pa",
+    "projectId": "project-alpha",
+    "title": "alpha",
+    "workspaceRoot": "$DIR/work/alpha",
+    "createWorkspaceRootIfMissing": false,
+    "defaultModelSelection": null
+   },
+   "note": "setup: a scanned folder becomes a project"
+  },
+  {
+   "tag": "agentSessions.import",
+   "payload": {
+    "projectId": "project-alpha",
+    "expectedWorkspaceRoot": "$DIR/work/alpha"
+   },
+   "note": "its sessions; the linked worktree's are not taken"
+  },
+  {
+   "tag": "projects.mutate",
+   "payload": {
+    "type": "project.create",
+    "commandId": "pg",
+    "projectId": "project-gamma",
+    "title": "gamma",
+    "workspaceRoot": "$DIR/work/gamma",
+    "createWorkspaceRootIfMissing": false,
+    "defaultModelSelection": null
+   },
+   "note": "setup: another"
+  },
+  {
+   "tag": "agentSessions.import",
+   "payload": {
+    "projectId": "project-gamma"
+   },
+   "note": "Codex sessions only, one of them left in the scratch folder"
+  },
+  {
+   "tag": "orchestration.getThreadTitles",
+   "payload": {
+    "threadIds": [
+     "import:claudeAgent:66666666-6666-4666-8666-666666666666",
+     "import:claudeAgent:77777777-7777-4777-8777-777777777777",
+     "import:codex:019a1b2c-3d4e-7f60-8a1b-000000000003",
+     "import:codex:019a1b2c-3d4e-7f60-8a1b-000000000004",
+     "import:codex:019a1b2c-3d4e-7f60-8a1b-000000000005"
+    ]
+   },
+   "note": "which sessions became threads"
+  },
+  {
+   "tag": "projects.mutate",
+   "payload": {
+    "type": "project.create",
+    "commandId": "pe",
+    "projectId": "project-empty",
+    "title": "empty",
+    "workspaceRoot": "$DIR/work/empty",
+    "createWorkspaceRootIfMissing": true,
+    "defaultModelSelection": null
+   },
+   "note": "setup: a project without sessions"
+  },
+  {
+   "tag": "agentSessions.import",
+   "payload": {
+    "projectId": "project-empty"
+   },
+   "note": "nothing to import"
+  },
+  {
+   "tag": "projects.mutate",
+   "payload": {
+    "type": "project.create",
+    "commandId": "pd",
+    "projectId": "project-downloads",
+    "title": "unpacked",
+    "workspaceRoot": "$DIR/agent-home/Downloads/unpacked",
+    "createWorkspaceRootIfMissing": false,
+    "defaultModelSelection": null
+   },
+   "note": "setup: a project in a folder that is never scanned"
+  },
+  {
+   "tag": "agentSessions.import",
+   "payload": {
+    "projectId": "project-downloads"
+   },
+   "note": "a folder that is never scanned"
+  },
+  {
+   "tag": "agentSessions.scan",
+   "payload": {},
+   "note": "the new projects are known"
+  },
+  {
+   "tag": "agentSessions.import",
+   "payload": {
+    "projectId": "$PROJECT"
+   },
+   "note": "more was said in the terminal: the new messages are added",
+   "sh": "/usr/bin/python3 - <<'EOF'\nimport json, os\nd = os.environ['DIR']\nfolder = ''.join(c if c.isalnum() else '-' for c in d + '/workspace')\nwith open(d + '/agent-home/.claude/projects/' + folder + '/11111111-1111-4111-8111-111111111111.jsonl', 'a') as f:\n    f.write(json.dumps({'type': 'user', 'sessionId': '11111111-1111-4111-8111-111111111111', 'timestamp': '2025-03-02T08:00:00Z', 'message': {'role': 'user', 'content': 'And div?'}}) + '\\n')\n    f.write(json.dumps({'type': 'assistant', 'timestamp': '2025-03-02T08:00:04Z', 'message': {'role': 'assistant', 'model': 'claude-haiku-5-5', 'content': [{'type': 'text', 'text': 'Not yet.'}]}}) + '\\n')\nEOF"
+  },
+  {
+   "tag": "orchestration.getThreadProjection",
+   "payload": {
+    "threadId": "import:claudeAgent:11111111-1111-4111-8111-111111111111"
+   },
+   "note": "the thread with the new messages"
+  },
+  {
+   "tag": "agentSessions.scan",
+   "payload": {},
+   "note": "a transcript too long to find a folder in: the scan says it was cut short",
+   "sh": "/usr/bin/python3 - <<'EOF'\nimport json, os\nd = os.environ['DIR']\nwith open(d + '/agent-home/.claude/projects/-nowhere/ffffffff-ffff-4fff-8fff-ffffffffffff.jsonl', 'w') as f:\n    for i in range(1200): f.write(json.dumps({'type': 'assistant', 'message': {'role': 'assistant', 'content': 'line %d' % i}}) + '\\n')\nEOF"
+  },
+  {
+   "tag": "agentSessions.import",
+   "payload": {
+    "projectId": "$PROJECT"
+   },
+   "note": "an import is not cut short by it"
+  },
+  {
+   "tag": "agentSessions.scan",
+   "payload": {},
+   "note": "the record of imports cannot be read",
+   "expect": "failure",
+   "error": "AgentSessionScanError",
+   "sh": "sqlite3 home/userdata/domovoi.sqlite 'ALTER TABLE agent_session_imports RENAME TO agent_session_imports_away'"
+  },
+  {
+   "tag": "agentSessions.import",
+   "payload": {
+    "projectId": "$PROJECT"
+   },
+   "note": "nor for an import",
+   "expect": "failure",
+   "error": "AgentSessionScanError"
+  },
+  {
+   "tag": "agentSessions.scan",
+   "payload": {},
+   "note": "readable again",
+   "sh": "sqlite3 home/userdata/domovoi.sqlite 'ALTER TABLE agent_session_imports_away RENAME TO agent_session_imports'"
+  }
+ ]
+}

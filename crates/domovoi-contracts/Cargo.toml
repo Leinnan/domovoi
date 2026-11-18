@@ -1,0 +1,12 @@
+[package]
+name = "domovoi-contracts"
+description = "Wire types for t3code's server API (subset of packages/contracts), validated against the real Effect schemas"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+domovoi-model = { path = "../domovoi-model" }
+time = { version = "0.3.55", features = ["formatting", "parsing", "macros"] }

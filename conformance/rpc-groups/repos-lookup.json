@@ -1,0 +1,46 @@
+{
+  "cases": [
+    { "tag": "sourceControl.lookupRepository", "payload": { "provider": "github", "repository": "acme/widgets" }, "note": "every field from gh" },
+    { "tag": "sourceControl.lookupRepository", "payload": { "provider": "github", "repository": "probe/cwd", "cwd": "$WORKSPACE" }, "note": "gh runs in the given folder: the stand-in answers with its name" },
+    { "tag": "sourceControl.lookupRepository", "payload": { "provider": "github", "repository": "acme/widgets", "cwd": "$DIR/nowhere" }, "note": "a cwd that is no folder is not used" },
+    { "tag": "sourceControl.lookupRepository", "payload": { "provider": "github", "repository": " acme/widgets " }, "skip_schema": true, "note": "the payload is outside the schema (not trimmed) on purpose: the server trims it" },
+    { "tag": "sourceControl.lookupRepository", "payload": { "provider": "unknown", "repository": "acme/widgets" }, "expect": "failure", "error": "SourceControlRepositoryError" },
+    { "tag": "sourceControl.lookupRepository", "payload": { "provider": "gitlab", "repository": "acme/widgets", "cwd": "$WORKSPACE" }, "expect": "failure", "error": "SourceControlRepositoryError" },
+    { "tag": "sourceControl.lookupRepository", "payload": { "provider": "github", "repository": "acme/missing" }, "expect": "failure", "error": "SourceControlRepositoryError", "note": "gh: repository not found" },
+    { "tag": "sourceControl.lookupRepository", "payload": { "provider": "github", "repository": "acme/loggedout" }, "expect": "failure", "error": "SourceControlRepositoryError", "note": "gh: not logged in" },
+    { "tag": "sourceControl.lookupRepository", "payload": { "provider": "github", "repository": "acme/silent" }, "expect": "failure", "error": "SourceControlRepositoryError", "note": "gh fails and says nothing" },
+    { "tag": "sourceControl.lookupRepository", "payload": { "provider": "github", "repository": "acme/garbled" }, "expect": "failure", "error": "SourceControlRepositoryError", "note": "gh prints something that is not JSON" },
+    { "tag": "sourceControl.lookupRepository", "payload": { "provider": "github", "repository": "acme/partial" }, "skip_schema": true, "note": "gh leaves fields out: they are sent empty, which the schema (non-blank strings) refuses" },
+    { "tag": "sourceControl.lookupRepository", "payload": { "provider": "github", "repository": "acme/odd-types" }, "skip_schema": true, "note": "gh sends fields that are not strings: they are sent empty, which the schema refuses" },
+    { "tag": "sourceControl.lookupRepository", "payload": { "provider": "github", "repository": "acme/array" }, "skip_schema": true, "note": "gh prints JSON that is no object: every field is sent empty, which the schema refuses" },
+
+    { "tag": "sourceControl.starred", "payload": { "provider": "github", "host": "github.com", "repository": "acme/widgets" }, "note": "not starred yet: gh answers 404" },
+    { "tag": "sourceControl.star", "payload": { "provider": "github", "host": "github.com", "repository": "acme/widgets" } },
+    { "tag": "sourceControl.starred", "payload": { "provider": "github", "host": "github.com", "repository": "acme/widgets" }, "note": "starred now" },
+    { "tag": "sourceControl.starred", "payload": { "provider": "github", "host": "ghe.example.test", "repository": "acme/widgets" }, "note": "the host is passed to gh: nothing is starred on this one" },
+    { "tag": "sourceControl.star", "payload": { "provider": "github", "host": "ghe.example.test", "repository": "acme/widgets" } },
+    { "tag": "sourceControl.starred", "payload": { "provider": "github", "host": "ghe.example.test", "repository": "acme/widgets" } },
+    { "tag": "sourceControl.star", "payload": { "provider": "github", "host": "github.com", "repository": "acme/forbidden" }, "note": "gh: 403" },
+    { "tag": "sourceControl.starred", "payload": { "provider": "github", "host": "github.com", "repository": "not a repository" } },
+    { "tag": "sourceControl.star", "payload": { "provider": "github", "host": "github.com", "repository": "acme/" } },
+    { "tag": "sourceControl.starred", "payload": { "provider": "gitlab", "host": "gitlab.com", "repository": "acme/widgets" } },
+    { "tag": "sourceControl.star", "payload": { "provider": "gitlab", "host": "gitlab.com", "repository": "acme/widgets" } },
+
+    { "sh": "mv bin/gh bin/gh.off", "tag": "sourceControl.lookupRepository", "payload": { "provider": "github", "repository": "acme/widgets" }, "expect": "failure", "error": "SourceControlRepositoryError", "note": "no gh on PATH" },
+    { "tag": "sourceControl.starred", "payload": { "provider": "github", "host": "github.com", "repository": "acme/widgets" }, "note": "no gh on PATH" },
+    { "tag": "sourceControl.star", "payload": { "provider": "github", "host": "github.com", "repository": "acme/widgets" }, "note": "no gh on PATH" },
+    { "sh": "mv bin/gh.off bin/gh && chmod -x bin/gh", "tag": "sourceControl.lookupRepository", "payload": { "provider": "github", "repository": "acme/widgets" }, "expect": "failure", "error": "SourceControlRepositoryError", "note": "gh cannot be started" },
+    { "sh": "chmod +x bin/gh", "tag": "sourceControl.lookupRepository", "payload": { "provider": "github", "repository": "acme/widgets" } },
+
+    { "tag": "sourceControl.signInStart", "payload": { "provider": "github", "host": "github.com" }, "expect": "failure", "error": "SourceControlSignInError" },
+    { "tag": "sourceControl.signInWait", "payload": { "provider": "github", "host": "github.com" }, "expect": "failure", "error": "SourceControlSignInError" },
+    { "tag": "sourceControl.signInCancel", "payload": { "provider": "github", "host": "github.com" }, "expect": "failure", "error": "SourceControlSignInError" },
+    { "tag": "sourceControl.signInStart", "payload": { "provider": "gitlab", "host": "gitlab.example.test" }, "expect": "failure", "error": "SourceControlSignInError" },
+    { "tag": "sourceControl.signInWait", "payload": { "provider": "unknown", "host": "git.example.test" }, "expect": "failure", "error": "SourceControlSignInError" },
+    { "tag": "sourceControl.signInCancel", "payload": { "provider": "bitbucket", "host": "bitbucket.org" }, "expect": "failure", "error": "SourceControlSignInError" },
+
+    { "tag": "sourceControl.appAccess", "payload": { "provider": "github", "host": "github.com", "repository": "acme/widgets" } },
+    { "tag": "sourceControl.appAccess", "payload": { "provider": "gitlab", "host": "gitlab.com", "repository": "acme/widgets" } },
+    { "tag": "sourceControl.appAccess", "payload": "anything", "skip_schema": true, "note": "the payload is outside the schema on purpose: the server does not read it" }
+  ]
+}

@@ -1,0 +1,6 @@
+/target
+/.reference
+/.claude/worktrees/
+/dist
+.DS_Store
+/apps/domovoi-core/target

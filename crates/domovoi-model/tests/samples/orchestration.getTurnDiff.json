@@ -1,0 +1,6 @@
+{
+  "threadId": "6421f1e6-14f6-4d7a-89b3-6e82dac38210",
+  "fromTurnCount": 1,
+  "toTurnCount": 2,
+  "diff": "diff --git a/calc.py b/calc.py\nindex 3b18e51..9d1f0a2 100644\n--- a/calc.py\n+++ b/calc.py\n@@ -1,2 +1,6 @@\n def add(a, b):\n     return a + b\n+\n+\n+def sub(a, b):\n+    return a - b\n"
+}

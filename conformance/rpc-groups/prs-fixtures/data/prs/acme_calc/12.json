@@ -1,0 +1,12 @@
+{
+ "number": 12,
+ "listed": false,
+ "title": "Sparse",
+ "url": "https://github.com/acme/calc/pull/12",
+ "state": "open",
+ "headRefName": "sparse",
+ "baseRefName": "main",
+ "createdAt": "2025-03-01T09:00:00Z",
+ "updatedAt": "2025-03-01T09:00:00Z",
+ "headRefOid": ""
+}

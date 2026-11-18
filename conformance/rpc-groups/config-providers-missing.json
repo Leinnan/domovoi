@@ -1,0 +1,39 @@
+{
+ "env": {
+  "DOMOVOI_CLAUDE_BINARY": "",
+  "DOMOVOI_CODEX_BINARY": "$DIR/nowhere/codex"
+ },
+ "cases": [
+  {
+   "tag": "subscribeServerConfig",
+   "payload": {
+    "environmentThemes": true,
+    "usageLimitSources": true
+   },
+   "expect": "chunk"
+  },
+  {
+   "tag": "server.refreshProviders",
+   "payload": {}
+  },
+  {
+   "tag": "server.refreshProviders",
+   "payload": {
+    "instanceId": "codex"
+   }
+  },
+  {
+   "tag": "server.getConfig",
+   "payload": {}
+  },
+  {
+   "tag": "provider.install.cancel",
+   "payload": {
+    "instanceId": "codex",
+    "operationId": "op1"
+   },
+   "expect": "failure",
+   "error": "ProviderSetupError"
+  }
+ ]
+}

@@ -1,0 +1,12 @@
+{
+ "data": {
+  "repository": {
+   "pullRequest": {
+    "author": null,
+    "reviewRequests": {
+     "nodes": []
+    }
+   }
+  }
+ }
+}

@@ -1,0 +1,30 @@
+{
+ "data": {
+  "repository": {
+   "pullRequest": {
+    "files": {
+     "pageInfo": {
+      "hasNextPage": true
+     },
+     "nodes": [
+      {
+       "path": "src/calc.py",
+       "viewerViewedState": "VIEWED"
+      },
+      {
+       "path": "tests/test_calc.py",
+       "viewerViewedState": "DISMISSED"
+      },
+      {
+       "path": "README.md",
+       "viewerViewedState": "UNVIEWED"
+      },
+      {
+       "path": " spaced name.txt "
+      }
+     ]
+    }
+   }
+  }
+ }
+}

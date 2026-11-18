@@ -1,0 +1,27 @@
+{
+  "observedAt": 1794938400789,
+  "state": "open",
+  "checks": [
+    {
+      "name": "test (ubuntu-latest)",
+      "status": "success",
+      "description": null,
+      "url": "https://github.com/acme/t5code/actions/runs/7781234567/job/21123456789",
+      "required": true
+    },
+    {
+      "name": "clippy",
+      "status": "failure",
+      "description": null,
+      "url": "https://github.com/acme/t5code/actions/runs/7781234567/job/21123456790",
+      "required": false
+    },
+    {
+      "name": "vercel",
+      "status": "pending",
+      "description": "Deployment is building",
+      "url": "https://vercel.com/acme/t5code/8sKq2"
+    },
+    { "name": "license/cla", "status": "neutral", "description": "Contributor License Agreement is signed.", "url": null }
+  ]
+}

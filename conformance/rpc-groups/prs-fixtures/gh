@@ -1,0 +1,185 @@
+#!/bin/bash
+# Stand-in for the GitHub CLI in the `prs-*` RPC groups: answers the commands
+# domovoi-server runs (`apps/server/src/gh.rs` and the pull request handlers) from
+# the canned files in `$DIR/gh-data`, in the shapes the real `gh` prints.
+#
+# `$DIR/gh-data/rules` makes chosen commands misbehave. Each line is
+# `<extended regex>	<kind>	<text>`; the first whose regex matches the command
+# line (its arguments joined by spaces, then what it was given on stdin) wins:
+#   err    print <text> on stderr (`\n` in it is a line break) and exit 1
+#   out    print <text> on stdout and exit 0
+#   sleep  wait <text> seconds, then answer as usual
+# `gh-rule` (beside this file) writes that file.
+#
+# With `PRS_GH_LOG` set, every command line is appended to that file.
+
+D="$(cd "$(dirname "$0")/.." && pwd)/gh-data"
+args="$*"
+stdin=""
+case " $args " in *" --body-file - "* | *" --input - "*) stdin="$(cat)" ;; esac
+if [ -n "$PRS_GH_LOG" ]; then
+  printf 'gh %s%s\n' "$args" "${stdin:+ <<< $stdin}" >> "$PRS_GH_LOG"
+fi
+
+if [ -f "$D/rules" ]; then
+  while IFS=$'\t' read -r pattern kind text; do
+    [ -z "$pattern" ] && continue
+    if printf '%s%s' "$args" "${stdin:+ <<< $stdin}" | grep -Eq -e "$pattern"; then
+      case "$kind" in
+        err) printf '%b\n' "$text" >&2; exit 1 ;;
+        out) printf '%s\n' "$text"; exit 0 ;;
+        sleep) sleep "$text" ;;
+      esac
+      break
+    fi
+  done < "$D/rules"
+fi
+
+# The value after a flag, or nothing.
+flag() {
+  local want="$1"; shift
+  while [ $# -gt 0 ]; do
+    if [ "$1" = "$want" ]; then printf '%s' "$2"; return; fi
+    shift
+  done
+}
+
+# `owner/name` as a file name.
+slug() { printf '%s' "$1" | tr '/' '_' | tr 'A-Z' 'a-z'; }
+
+# Only the fields asked for with `--json`, and the head commit of the test's own repository.
+fields() {
+  local head="0000000000000000000000000000000000000000"
+  [ -f "$D/head-sha" ] && head="$(cat "$D/head-sha")"
+  jq -c --arg f "$1" '($f | split(",")) as $k | if type == "array" then map(with_entries(select(.key as $x | $k | index($x)))) else with_entries(select(.key as $x | $k | index($x))) end' | sed "s/@HEAD@/$head/g"
+}
+
+not_found() { printf 'gh: Not Found (HTTP 404)\n' >&2; exit 1; }
+
+viewer="$(jq -r .login "$D/user.json")"
+
+case "$1 $2" in
+  "api user")
+    cat "$D/user.json" ;;
+
+  "api graphql")
+    query=""; owner=""; name=""; number=""; id=""; cursor=""; q=""
+    shift 2
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        -f | -F)
+          key="${2%%=*}"; value="${2#*=}"
+          case "$key" in
+            query) query="$value" ;; owner) owner="$value" ;; name) name="$value" ;; number) number="$value" ;;
+            id) id="$value" ;; cursor) cursor="$value" ;; q) q="$value" ;;
+          esac
+          shift ;;
+      esac
+      shift
+    done
+    repo="$(slug "$owner/$name")"
+    case "$query" in
+      mutation*)
+        field="$(printf '%s' "$query" | sed -E 's/^mutation\([^)]*\) \{ ([A-Za-z]+)\(.*/\1/')"
+        printf '{"data":{"%s":{"clientMutationId":null}}}\n' "$field" ;;
+      *viewerPermission*)
+        if [ -f "$D/access/$repo.json" ]; then cat "$D/access/$repo.json"
+        else printf "gh: Could not resolve to a Repository with the name '%s/%s'.\n" "$owner" "$name" >&2; exit 1; fi ;;
+      *"reviewThreads(first: 100)"*)
+        if [ -f "$D/activity/$repo/$number.json" ]; then cat "$D/activity/$repo/$number.json"
+        else printf '{"data":{"repository":{"pullRequest":null}}}\n'; fi ;;
+      *assignableUsers*)
+        jq -c --arg q "$q" '.data.repository.assignableUsers.nodes |= map(select(($q == "") or ((.login + " " + (.name // "")) | ascii_downcase | contains($q | ascii_downcase))))' "$D/assignable/$repo.json" ;;
+      *viewerViewedState*)
+        if [ -f "$D/files-viewed/$repo/$number.json" ]; then cat "$D/files-viewed/$repo/$number.json"
+        else printf '{"data":{"repository":{"pullRequest":null}}}\n'; fi ;;
+      *"reviewRequests(first: 50)"*)
+        if [ -f "$D/review-requests/$repo/$number.json" ]; then cat "$D/review-requests/$repo/$number.json"
+        else printf '{"data":{"repository":{"pullRequest":null}}}\n'; fi ;;
+      *"node(id: \$id)"*)
+        if [ -f "$D/threads/$id.$cursor.json" ]; then cat "$D/threads/$id.$cursor.json"
+        elif [ -f "$D/threads/$id.json" ]; then cat "$D/threads/$id.json"
+        else printf '{"data":{"node":null}}\n'; fi ;;
+      *) printf 'gh: unexpected query\n' >&2; exit 1 ;;
+    esac ;;
+
+  "api -H")
+    # api -H "Accept: application/vnd.github.raw+json" repos/<owner>/<name>/contents/<path>?ref=<ref>
+    endpoint="$4"
+    path="${endpoint#repos/*/*/contents/}"; path="${path%%\?ref=*}"
+    path="$(printf '%b' "${path//%/\\x}")"
+    ref="${endpoint##*\?ref=}"
+    repo="$(printf '%s' "$endpoint" | cut -d/ -f2-3)"
+    file="$D/contents/$(slug "$repo")/$ref/$path"
+    if [ -f "$file" ]; then cat "$file"; else not_found; fi ;;
+
+  "api -X")
+    printf '{}\n' ;;
+
+  api\ repos/*)
+    endpoint="$2"
+    case "$endpoint" in
+      repos/*/*/commits/*)
+        file="$D/commits/${endpoint##*/}.json"
+        if [ -f "$file" ]; then cat "$file"; else not_found; fi ;;
+      repos/*/*/actions/runs\?*)
+        repo="$(printf '%s' "$endpoint" | cut -d/ -f2-3)"
+        file="$D/runs/$(slug "$repo").json"
+        if [ -f "$file" ]; then cat "$file"; else printf '{"total_count":0,"workflow_runs":[]}\n'; fi ;;
+      *) not_found ;;
+    esac ;;
+
+  "pr view")
+    number="$3"
+    repo="$(flag --repo "$@")"
+    file="$D/prs/$(slug "$repo")/$number.json"
+    if [ ! -f "$file" ]; then
+      printf 'GraphQL: Could not resolve to a PullRequest with the number of %s. (repository.pullRequest)\n' "$number" >&2
+      exit 1
+    fi
+    fields "$(flag --json "$@")" < "$file" ;;
+
+  "pr list")
+    repo="$(flag --repo "$@")"
+    dir="$D/prs/$(slug "$repo")"
+    if [ ! -d "$dir" ]; then
+      printf "GraphQL: Could not resolve to a Repository with the name '%s'. (repository)\n" "$repo" >&2
+      exit 1
+    fi
+    state="$(flag --state "$@" | tr 'a-z' 'A-Z')"
+    author="$(flag --author "$@")"
+    [ "$author" = "@me" ] && author="$viewer"
+    search="$(flag --search "$@")"
+    limit="$(flag --limit "$@")"
+    jq -c -s --arg state "$state" --arg author "$author" --arg search "$search" --arg viewer "$viewer" --argjson limit "${limit:-30}" '
+      map(select(.number != null and .listed != false))
+      | map(select($state == "ALL" or .state == $state))
+      | map(select($author == "" or (.author.login // "") == $author))
+      | map(select(($search | contains("review-requested:@me") | not) or ((.reviewRequests // []) | any(.login == $viewer))))
+      | (($search | gsub("review-requested:@me"; "") | gsub("^ +| +$"; "") | ascii_downcase)) as $text
+      | map(select($text == "" or ((.title // "") | ascii_downcase | contains($text)) or ((.number | tostring) == $text)))
+      | sort_by(-.number) | .[0:$limit]' "$dir"/*.json | fields "$(flag --json "$@")" ;;
+
+  "issue list")
+    repo="$(flag --repo "$@")"
+    search="$(flag --search "$@")"
+    limit="$(flag --limit "$@")"
+    file="$D/issues/$(slug "$repo").json"
+    [ -f "$file" ] || { printf '[]\n'; exit 0; }
+    jq -c --arg search "$search" --argjson limit "${limit:-30}" 'map(select($search == "" or (.title | ascii_downcase | contains($search | ascii_downcase)) or ((.number | tostring) == $search))) | .[0:$limit]' "$file" | fields "$(flag --json "$@")" ;;
+
+  "label list")
+    repo="$(flag --repo "$@")"
+    search="$(flag --search "$@")"
+    limit="$(flag --limit "$@")"
+    file="$D/labels/$(slug "$repo").json"
+    [ -f "$file" ] || { printf '[]\n'; exit 0; }
+    jq -c --arg search "$search" --argjson limit "${limit:-30}" 'map(select($search == "" or (.name | ascii_downcase | contains($search | ascii_downcase)))) | .[0:$limit]' "$file" | fields "$(flag --json "$@")" ;;
+
+  "pr merge" | "pr ready" | "pr close" | "pr reopen" | "pr revert" | "pr update-branch" | "pr edit" | "pr comment" | "pr checkout")
+    printf 'https://github.com/%s/pull/%s\n' "$(flag --repo "$@")" "$3" ;;
+
+  *)
+    printf 'unknown command "%s" for "gh"\n' "$1 $2" >&2
+    exit 1 ;;
+esac

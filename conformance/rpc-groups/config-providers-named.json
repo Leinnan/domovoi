@@ -1,0 +1,17 @@
+{
+ "env": {
+  "DOMOVOI_CLAUDE_BINARY": "claude-nightly",
+  "DOMOVOI_CODEX_BINARY": "~/bin/codex"
+ },
+ "cases": [
+  {
+   "tag": "server.refreshProviders",
+   "payload": {},
+   "note": "binaries named that are not there"
+  },
+  {
+   "tag": "server.getConfig",
+   "payload": {}
+  }
+ ]
+}

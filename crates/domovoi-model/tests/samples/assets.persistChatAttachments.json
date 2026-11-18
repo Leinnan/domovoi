@@ -1,0 +1,32 @@
+{
+  "attachments": [
+    {
+      "type": "image",
+      "id": "6421f1e6-14f6-4d7a-89b3-6e82dac38210-0b9f6a52c3d14e7f",
+      "name": "screenshot.png",
+      "mimeType": "image/png",
+      "sizeBytes": 48211
+    },
+    {
+      "type": "image",
+      "id": "6421f1e6-14f6-4d7a-89b3-6e82dac38210-7c1e9d04a8b25f63",
+      "name": "Terminal.png",
+      "mimeType": "image/png",
+      "sizeBytes": 120394,
+      "source": {
+        "kind": "snap-shot",
+        "capturedAt": "2026-11-13T16:31:02.118Z",
+        "appName": "Terminal",
+        "windowTitle": "playground — zsh",
+        "accessibleText": "test@host playground % python3 calc.py",
+        "accessibility": {
+          "format": "flat-text",
+          "text": "test@host playground % python3 calc.py",
+          "truncated": false
+        },
+        "appIdentifier": "com.apple.Terminal",
+        "appIconDataUrl": "data:image/png;base64,iVBORw0KGgo="
+      }
+    }
+  ]
+}

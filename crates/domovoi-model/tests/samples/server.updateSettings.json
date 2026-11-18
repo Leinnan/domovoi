@@ -1,0 +1,619 @@
+{
+ "favorites": [
+  {
+   "provider": "codex",
+   "model": "gpt-6-luna"
+  },
+  {
+   "provider": "claudeAgent",
+   "model": "claude-fable-5"
+  },
+  {
+   "provider": "claude-work",
+   "model": "claude-opus-5"
+  }
+ ],
+ "providerModelPreferences": {
+  "codex": {
+   "hiddenModels": [
+    "gpt-5-mini",
+    "gpt-5-nano"
+   ],
+   "modelOrder": [
+    "gpt-6-luna",
+    "gpt-6",
+    "gpt-5-codex"
+   ]
+  },
+  "claudeAgent": {
+   "hiddenModels": [],
+   "modelOrder": [
+    "claude-fable-5",
+    "claude-opus-5"
+   ]
+  },
+  "claude-work": {
+   "hiddenModels": [
+    "claude-haiku-5"
+   ],
+   "modelOrder": []
+  }
+ },
+ "worktreeCleanup": {
+  "mode": "custom",
+  "rules": {
+   "worktreeKeepWhen": "tracked-changes",
+   "worktreeAfterDays": 30,
+   "worktreeSettledAfterDays": 0,
+   "worktreeOnMerge": true,
+   "worktreeOnDelete": true,
+   "worktreeUnchanged": false
+  }
+ },
+ "storageCleanup": {
+  "worktreeKeepWhen": "any-local-files",
+  "worktreeAfterDays": 60,
+  "worktreeSettledAfterDays": 7,
+  "worktreeOnMerge": true,
+  "worktreeOnDelete": true,
+  "worktreeUnchanged": true,
+  "browserArtifactsAfterDays": 14,
+  "logsAfterDays": 30
+ },
+ "worktreesDirectory": "/Users/sam/worktrees",
+ "fastWorktreeCheckout": true,
+ "previousWorktreesDirectories": [
+  "/Users/sam/.t3/worktrees",
+  "/Volumes/fast/worktrees"
+ ],
+ "responseStreamingMode": "turn",
+ "enableProviderUpdateChecks": false,
+ "continueThreadsAfterServerUpdate": false,
+ "keepAwakeWhileAgentsWork": false,
+ "enableAgentBrowserAccess": false,
+ "cloudSpeechCredentials": {
+  "openai": "",
+  "xai": {
+   "provider": "1password",
+   "reference": "op://Private/xAI/api key"
+  },
+  "openrouter": "sk-or-v1-example"
+ },
+ "speechModelId": "handy-computer/whisper-large-v3-turbo-gguf",
+ "speechAcceleration": "gpu:Apple M4 Max",
+ "speechModelUnloadTimeout": "hour_1",
+ "speechProjectCustomWords": [
+  {
+   "term": "t5code",
+   "aliases": [
+    "tee five code",
+    "t5 code"
+   ]
+  },
+  {
+   "term": "Crux",
+   "aliases": []
+  },
+  {
+   "term": "worktree",
+   "aliases": [
+    "work tree"
+   ]
+  }
+ ],
+ "speechPostProcessingModelSelection": {
+  "instanceId": "claudeAgent",
+  "model": "claude-haiku-5"
+ },
+ "projectAgentBrowserAccessOverrides": {
+  "286fbd85-ebfc-40dc-9285-77462d776fe2": false,
+  "45b61978-e2bb-4bed-8764-4ba59ce421ab": true
+ },
+ "defaultAutoPull": true,
+ "defaultProjectScripts": [
+  {
+   "id": "setup",
+   "name": "Install",
+   "command": "pnpm install",
+   "icon": "configure",
+   "runOnWorktreeCreate": true
+  },
+  {
+   "id": "dev",
+   "name": "Dev server",
+   "command": "pnpm dev",
+   "icon": "play",
+   "runOnWorktreeCreate": false,
+   "runOnSettle": false,
+   "stopOnSettle": true,
+   "async": true,
+   "previewUrl": "http://localhost:5173",
+   "autoOpenPreview": true
+  },
+  {
+   "id": "test",
+   "name": "Tests",
+   "command": "cargo test --workspace",
+   "icon": "test",
+   "runOnWorktreeCreate": false,
+   "runOnSettle": true
+  }
+ ],
+ "projectScriptOverrides": {
+  "286fbd85-ebfc-40dc-9285-77462d776fe2": [
+   {
+    "id": "setup",
+    "name": "Install",
+    "command": "pnpm install",
+    "icon": "configure",
+    "runOnWorktreeCreate": true
+   },
+   {
+    "id": "dev",
+    "name": "Dev server",
+    "command": "pnpm dev",
+    "icon": "play",
+    "runOnWorktreeCreate": false,
+    "runOnSettle": false,
+    "stopOnSettle": true,
+    "async": true,
+    "previewUrl": "http://localhost:5173",
+    "autoOpenPreview": true
+   }
+  ],
+  "45b61978-e2bb-4bed-8764-4ba59ce421ab": null,
+  "9c1d2f6e-3a4b-4c5d-8e7f-0a1b2c3d4e5f": []
+ },
+ "projectAutoPullOverrides": {
+  "286fbd85-ebfc-40dc-9285-77462d776fe2": true,
+  "45b61978-e2bb-4bed-8764-4ba59ce421ab": false
+ },
+ "defaultModelSelection": {
+  "instanceId": "codex",
+  "model": "gpt-6",
+  "options": [
+   {
+    "id": "reasoningEffort",
+    "value": "high"
+   },
+   {
+    "id": "fastMode",
+    "value": true
+   }
+  ]
+ },
+ "fallbackModelSelection": {
+  "instanceId": "claudeAgent",
+  "model": "claude-fable-5"
+ },
+ "defaultRuntimeMode": "auto-accept-edits",
+ "projectSettingsOverrides": {
+  "286fbd85-ebfc-40dc-9285-77462d776fe2": {
+   "worktreeCleanup": {
+    "mode": "off"
+   },
+   "defaultModelSelection": {
+    "instanceId": "claude-work",
+    "model": "claude-opus-5",
+    "options": [
+     {
+      "id": "effort",
+      "value": "max"
+     }
+    ]
+   },
+   "defaultRuntimeMode": "approval-required",
+   "defaultThreadEnvMode": "worktree",
+   "newWorktreesStartFromOrigin": false,
+   "worktreeSubmodules": "top-level",
+   "defaultAutoPull": true,
+   "defaultProjectScripts": [
+    {
+     "id": "setup",
+     "name": "Install",
+     "command": "pnpm install",
+     "icon": "configure",
+     "runOnWorktreeCreate": true
+    }
+   ],
+   "enableAgentBrowserAccess": false,
+   "enableAgentDeviceAccess": true,
+   "textGenerationModelSelection": {
+    "instanceId": "codex",
+    "model": "gpt-6-luna",
+    "options": [
+     {
+      "id": "reasoningEffort",
+      "value": "low"
+     }
+    ]
+   },
+   "threadTitleInstructions": "Start with the ticket number.",
+   "sourceControlWriterModelSelection": {
+    "instanceId": "claudeAgent",
+    "model": "claude-haiku-5"
+   },
+   "reviewGuideModelSelection": {
+    "instanceId": "codex",
+    "model": "gpt-6"
+   },
+   "reviewGuideInstructions": "Call out migrations first.",
+   "sourceControlWritingStyle": {
+    "mode": "conventional_commits",
+    "customInstructions": "",
+    "followChangeRequestTemplates": false
+   },
+   "removeAgentCreditsOnMerge": true,
+   "branchNamingMode": "custom",
+   "branchNamePrefix": "sam",
+   "branchNameInstructions": "Use the ticket number, then two words.",
+   "pullRequestMergeMethod": "squash",
+   "sidebarAutoSettleOnMerge": false,
+   "sidebarAutoSettleAfterDays": 14,
+   "sidebarAutoSettleKeepPullRequests": true,
+   "continueThreadsAfterServerUpdate": false,
+   "responseStreamingMode": "paragraph",
+   "speechProjectCustomWords": [
+    {
+     "term": "Kotlin",
+     "aliases": [
+      "cotlin"
+     ]
+    }
+   ],
+   "providerInstances": {
+    "codex": {
+     "enabled": false
+    },
+    "claude-work": {}
+   }
+  },
+  "45b61978-e2bb-4bed-8764-4ba59ce421ab": {
+   "worktreeCleanup": null,
+   "defaultModelSelection": null,
+   "sourceControlWriterModelSelection": null,
+   "reviewGuideModelSelection": null,
+   "pullRequestMergeMethod": null,
+   "sidebarAutoSettleAfterDays": null,
+   "sourceControlWritingStyle": "Short, imperative subject lines.",
+   "settingFromANewerServer": {
+    "anything": [
+     1,
+     2,
+     3
+    ]
+   }
+  },
+  "9c1d2f6e-3a4b-4c5d-8e7f-0a1b2c3d4e5f": {
+   "worktreeCleanup": {
+    "mode": "custom",
+    "rules": {
+     "worktreeKeepWhen": "uncommitted-changes",
+     "worktreeAfterDays": null,
+     "worktreeSettledAfterDays": null,
+     "worktreeOnMerge": false,
+     "worktreeOnDelete": true,
+     "worktreeUnchanged": false
+    }
+   }
+  }
+ },
+ "projectSettingsFolded": true,
+ "enableAgentDeviceAccess": true,
+ "enableDeviceSupport": true,
+ "deviceOnboardingCompleted": true,
+ "deviceHosts": [
+  {
+   "kind": "ssh",
+   "id": "studio",
+   "label": "Mac Studio",
+   "target": "sam@studio.local",
+   "identityFile": "~/.ssh/id_ed25519",
+   "port": 2222
+  },
+  {
+   "id": "mini",
+   "label": "Build mini",
+   "target": "ci@mini.lan"
+  }
+ ],
+ "easDeviceHosts": [
+  {
+   "kind": "eas",
+   "id": "eas-main",
+   "label": "EAS",
+   "appId": "c0ffee00-1234-4abc-9def-001122334455",
+   "accessToken": "",
+   "maxSessionMinutes": 40,
+   "idleMinutes": 5,
+   "maxConcurrentSessions": 3
+  },
+  {
+   "kind": "eas",
+   "id": "eas-team",
+   "label": "EAS (team)",
+   "accessToken": {
+    "provider": "1password",
+    "reference": "op://Team/Expo/token"
+   },
+   "maxSessionMinutes": 30,
+   "idleMinutes": 10,
+   "maxConcurrentSessions": 2
+  }
+ ],
+ "simlockDeviceHosts": [
+  {
+   "kind": "simlock",
+   "id": "lab",
+   "label": "Device lab",
+   "gatewayUrl": "https://gateway.example.ts.net:4700",
+   "agentToken": "",
+   "maxLeases": 4,
+   "maxLeaseMinutes": 120
+  },
+  {
+   "kind": "simlock",
+   "id": "lab-2",
+   "label": "Device lab 2",
+   "gatewayUrl": "http://10.0.0.12:4700",
+   "agentToken": {
+    "provider": "vault",
+    "reference": "secret/simlock/agent"
+   },
+   "maxLeases": 2,
+   "maxLeaseMinutes": 60
+  }
+ ],
+ "simlockDeviceHostsEnabled": true,
+ "sidebarAutoSettleAfterDays": 3,
+ "compactIdleThreads": true,
+ "idleCompaction": "beforeCacheExpires",
+ "snoozeLimitedThreads": true,
+ "autoResumeLimitedThreads": true,
+ "snoozePresets": [
+  {
+   "kind": "after",
+   "minutes": 30
+  },
+  {
+   "kind": "at",
+   "day": "tomorrow",
+   "time": "08:30"
+  },
+  {
+   "kind": "at",
+   "day": "friday",
+   "time": "17:00"
+  }
+ ],
+ "hiddenThreadTags": [
+  "wip",
+  "archive",
+  "experiments"
+ ],
+ "hideTaggedThreads": true,
+ "guestSharingEnabled": true,
+ "linkedEnvironmentsEnabled": true,
+ "promptSuggestionsEnabled": true,
+ "sidebarAutoSettleKeepPullRequests": true,
+ "sidebarAutoSettleOnMerge": false,
+ "backgroundActivity": {
+  "schemaVersion": 1,
+  "profile": "custom",
+  "baseProfile": "battery-saver",
+  "overrides": {
+   "automaticGitFetchInterval": 120000,
+   "providerHealthRefreshInterval": 900000,
+   "hostPowerMonitorActiveInterval": 5000,
+   "hostPowerMonitorIdleInterval": 60000,
+   "pauseWhenHostLocked": true,
+   "pauseWhenHostLowPower": true,
+   "pauseWhenClientLowPower": false,
+   "pauseWhenOnBattery": false
+  }
+ },
+ "automaticGitFetchInterval": 120000,
+ "providerHealthRefreshInterval": 900000,
+ "backgroundActivityProfile": "battery-saver",
+ "defaultTheme": "tokyo-night",
+ "defaultThemeSetAt": "2026-11-02T09:15:00.000Z",
+ "environmentIcon": "mac-studio",
+ "defaultThreadEnvMode": "worktree",
+ "newWorktreesStartFromOrigin": false,
+ "worktreeSubmodules": "top-level",
+ "addProjectBaseDirectory": "/Users/sam/src",
+ "ghqCloneLayout": true,
+ "textGenerationModelSelection": {
+  "instanceId": "fast-titles",
+  "model": "llama-4-8b"
+ },
+ "threadTitleInstructions": "Five words at most.",
+ "branchNamingMode": "semantic",
+ "branchNamePrefix": "sam",
+ "branchNameInstructions": "Lowercase, hyphenated.",
+ "removeAgentCreditsOnMerge": true,
+ "sourceControlWritingStyle": {
+  "mode": "custom",
+  "customInstructions": "Explain why, not what.",
+  "followChangeRequestTemplates": false
+ },
+ "sourceControlWriterModelSelection": {
+  "instanceId": "claudeAgent",
+  "model": "claude-haiku-5"
+ },
+ "reviewGuidesEnabled": true,
+ "reviewGuideModelSelection": {
+  "instanceId": "codex",
+  "model": "gpt-6",
+  "options": [
+   {
+    "id": "reasoningEffort",
+    "value": "medium"
+   }
+  ]
+ },
+ "reviewGuideInstructions": "Group changes by module.",
+ "pullRequestMergeMethod": "rebase",
+ "providerInstances": {
+  "codex": {
+   "driver": "codex",
+   "enabled": true,
+   "config": {
+    "binaryPath": "/opt/homebrew/bin/codex",
+    "homePath": "",
+    "launchArgs": "",
+    "customModels": []
+   }
+  },
+  "claude-work": {
+   "driver": "claudeAgent",
+   "displayName": "Claude (work)",
+   "accentColor": "#d97757",
+   "environment": [
+    {
+     "name": "ANTHROPIC_BASE_URL",
+     "value": "https://llm.example.com",
+     "sensitive": false
+    },
+    {
+     "name": "ANTHROPIC_API_KEY",
+     "value": "",
+     "sensitive": true,
+     "valueRedacted": true
+    },
+    {
+     "name": "ANTHROPIC_AUTH_TOKEN",
+     "value": "",
+     "sensitive": true,
+     "secret": {
+      "provider": "1password",
+      "reference": "op://Work/Anthropic/token"
+     }
+    }
+   ],
+   "enabled": false,
+   "config": {
+    "homePath": "~/.claude-work",
+    "idleCompaction": "onReturn"
+   }
+  },
+  "devReplay": {
+   "driver": "acpRegistry",
+   "displayName": "Replay (dev)",
+   "config": {
+    "source": "local",
+    "commandPath": "/usr/local/bin/node",
+    "commandArgs": [
+     "scripts/dev-replay-agent.ts"
+    ]
+   }
+  }
+ },
+ "observability": {
+  "otlpTracesUrl": "http://localhost:4318/v1/traces",
+  "otlpMetricsUrl": "http://localhost:4318/v1/metrics",
+  "otlpLogsUrl": "http://localhost:4318/v1/logs"
+ },
+ "sourceControlHosts": {
+  "github": {
+   "tokens": {
+    "github.com": "",
+    "ghe.acme.test": {
+     "provider": "1password",
+     "reference": "op://Work/GHE/token"
+    }
+   }
+  },
+  "bitbucket": {
+   "email": "sam@example.com",
+   "accessToken": ""
+  }
+ },
+ "offeredSourceControlProviders": {
+  "github": true,
+  "gitlab": true,
+  "bitbucket": false
+ },
+ "usageLimitSources": {
+  "hub": {
+   "kind": "cliproxy",
+   "label": "Team proxy",
+   "url": "https://cliproxy.example.com",
+   "managementKey": "",
+   "enabled": true
+  },
+  "home": {
+   "kind": "cliproxy",
+   "url": "http://localhost:8317",
+   "managementKey": {
+    "provider": "vault",
+    "reference": "secret/cliproxy/key"
+   },
+   "enabled": false
+  }
+ },
+ "textGenerators": {
+  "fast-titles": {
+   "kind": "openaiCompatible",
+   "label": "Local llama",
+   "baseUrl": "http://localhost:11434/v1",
+   "apiKey": "",
+   "enabled": true
+  },
+  "haiku-direct": {
+   "kind": "anthropic",
+   "baseUrl": "https://api.anthropic.com",
+   "apiKey": {
+    "provider": "1password",
+    "reference": "op://Private/Anthropic/key"
+   },
+   "enabled": false
+  }
+ },
+ "secretProviders": {
+  "1password": {
+   "kind": "one_password",
+   "label": "1Password",
+   "config": {
+    "account": "my.1password.com"
+   }
+  },
+  "vault": {
+   "kind": "vault",
+   "label": "Vault"
+  }
+ },
+ "usagePriceOverrides": {
+  "llama-4-8b": {
+   "inputCostPerMillionTokens": 0,
+   "outputCostPerMillionTokens": 0
+  },
+  "gpt-6": {
+   "inputCostPerMillionTokens": 1.25,
+   "outputCostPerMillionTokens": 10,
+   "cacheReadCostPerMillionTokens": 0.125,
+   "cacheWriteCostPerMillionTokens": 1.5625
+  }
+ },
+ "usageModelAliases": {
+  "gpt-6-2026-09-01": "gpt-6",
+  "claude-fable-5-20261001": "claude-fable-5"
+ },
+ "usageModelFilter": {
+  "include": [
+   {
+    "provider": "codex",
+    "model": "gpt-6"
+   },
+   {
+    "model": "claude-fable-5"
+   }
+  ],
+  "exclude": [
+   {
+    "provider": "fast-titles",
+    "model": "llama-4-8b"
+   }
+  ]
+ }
+}

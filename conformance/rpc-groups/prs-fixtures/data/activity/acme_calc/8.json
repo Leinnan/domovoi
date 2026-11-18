@@ -1,0 +1,106 @@
+{
+ "data": {
+  "repository": {
+   "pullRequest": {
+    "author": {
+     "login": "octocat",
+     "avatarUrl": "https://avatars.githubusercontent.com/octocat?v=4",
+     "__typename": "User",
+     "name": "The Octocat"
+    },
+    "reactionGroups": [
+     {
+      "content": "THUMBS_UP",
+      "viewerHasReacted": false,
+      "reactors": {
+       "totalCount": 0,
+       "nodes": []
+      }
+     },
+     {
+      "content": "THUMBS_DOWN",
+      "viewerHasReacted": false,
+      "reactors": {
+       "totalCount": 0,
+       "nodes": []
+      }
+     },
+     {
+      "content": "LAUGH",
+      "viewerHasReacted": false,
+      "reactors": {
+       "totalCount": 0,
+       "nodes": []
+      }
+     },
+     {
+      "content": "HOORAY",
+      "viewerHasReacted": false,
+      "reactors": {
+       "totalCount": 0,
+       "nodes": []
+      }
+     },
+     {
+      "content": "CONFUSED",
+      "viewerHasReacted": false,
+      "reactors": {
+       "totalCount": 0,
+       "nodes": []
+      }
+     },
+     {
+      "content": "HEART",
+      "viewerHasReacted": false,
+      "reactors": {
+       "totalCount": 0,
+       "nodes": []
+      }
+     },
+     {
+      "content": "ROCKET",
+      "viewerHasReacted": false,
+      "reactors": {
+       "totalCount": 0,
+       "nodes": []
+      }
+     },
+     {
+      "content": "EYES",
+      "viewerHasReacted": false,
+      "reactors": {
+       "totalCount": 0,
+       "nodes": []
+      }
+     }
+    ],
+    "latestReviews": {
+     "nodes": []
+    },
+    "comments": {
+     "totalCount": 0,
+     "pageInfo": {
+      "hasNextPage": false
+     },
+     "nodes": []
+    },
+    "reviews": {
+     "totalCount": 0,
+     "pageInfo": {
+      "hasNextPage": false
+     },
+     "nodes": []
+    },
+    "reviewThreads": {
+     "pageInfo": {
+      "hasNextPage": false
+     },
+     "nodes": []
+    },
+    "commits": {
+     "nodes": []
+    }
+   }
+  }
+ }
+}

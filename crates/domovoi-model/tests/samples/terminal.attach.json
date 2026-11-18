@@ -1,0 +1,110 @@
+[
+  {
+    "type": "snapshot",
+    "snapshot": {
+      "threadId": "6421f1e6-14f6-4d7a-89b3-6e82dac38210",
+      "terminalId": "term-1",
+      "cwd": "/HOME/Documents/IDEAS/t5code/.reference/playground",
+      "worktreePath": null,
+      "status": "running",
+      "pid": 12898,
+      "history": "\r\u001b[0m\u001b[27m\u001b[24m\u001b[Jtest@host playground % \u001b[K\u001b[?2004h",
+      "exitCode": null,
+      "exitSignal": null,
+      "label": "Terminal 1",
+      "updatedAt": "2026-11-13T15:34:18.737Z",
+      "sequence": 3,
+      "cols": 120,
+      "rows": 30
+    }
+  },
+  {
+    "threadId": "6421f1e6-14f6-4d7a-89b3-6e82dac38210",
+    "terminalId": "term-1",
+    "sequence": 4,
+    "type": "activity",
+    "hasRunningSubprocess": false,
+    "label": "Terminal 1",
+    "cols": 97,
+    "rows": 15
+  },
+  {
+    "threadId": "6421f1e6-14f6-4d7a-89b3-6e82dac38210",
+    "terminalId": "term-1",
+    "sequence": 5,
+    "type": "output",
+    "data": "g\bgit status --short && ls\u001b[?2004l\r\r\n"
+  },
+  {
+    "threadId": "6421f1e6-14f6-4d7a-89b3-6e82dac38210",
+    "terminalId": "term-1",
+    "sequence": 6,
+    "type": "output",
+    "data": " \u001b[31mM\u001b[m calc.py\r\nREADME.md\tcalc.py\r\n"
+  },
+  {
+    "threadId": "6421f1e6-14f6-4d7a-89b3-6e82dac38210",
+    "terminalId": "term-1",
+    "sequence": 7,
+    "type": "cleared"
+  },
+  {
+    "threadId": "6421f1e6-14f6-4d7a-89b3-6e82dac38210",
+    "terminalId": "term-1",
+    "sequence": 8,
+    "type": "exited",
+    "exitCode": 0,
+    "exitSignal": null
+  },
+  {
+    "threadId": "6421f1e6-14f6-4d7a-89b3-6e82dac38210",
+    "terminalId": "term-1",
+    "sequence": 9,
+    "type": "restarted",
+    "snapshot": {
+      "threadId": "6421f1e6-14f6-4d7a-89b3-6e82dac38210",
+      "terminalId": "term-1",
+      "cwd": "/HOME/Documents/IDEAS/t5code/.reference/playground",
+      "worktreePath": null,
+      "status": "starting",
+      "pid": 13402,
+      "history": "",
+      "exitCode": null,
+      "exitSignal": null,
+      "label": "Terminal 1",
+      "updatedAt": "2026-11-13T15:40:00.000Z",
+      "sequence": 9,
+      "cols": 97,
+      "rows": 15
+    }
+  },
+  {
+    "threadId": "6421f1e6-14f6-4d7a-89b3-6e82dac38210",
+    "terminalId": "term-1",
+    "sequence": 10,
+    "type": "activity",
+    "hasRunningSubprocess": true,
+    "label": "python3"
+  },
+  {
+    "threadId": "6421f1e6-14f6-4d7a-89b3-6e82dac38210",
+    "terminalId": "term-1",
+    "sequence": 11,
+    "type": "error",
+    "message": "The terminal's process could not be read."
+  },
+  {
+    "threadId": "6421f1e6-14f6-4d7a-89b3-6e82dac38210",
+    "terminalId": "term-1",
+    "sequence": 12,
+    "type": "exited",
+    "exitCode": null,
+    "exitSignal": 9
+  },
+  {
+    "threadId": "6421f1e6-14f6-4d7a-89b3-6e82dac38210",
+    "terminalId": "term-1",
+    "sequence": 13,
+    "type": "closed"
+  }
+]

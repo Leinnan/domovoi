@@ -1,0 +1,23 @@
+{
+  "entries": [
+    {
+      "path": "src",
+      "kind": "directory"
+    },
+    {
+      "path": "build",
+      "kind": "directory",
+      "ignored": true
+    },
+    {
+      "path": "README.md",
+      "kind": "file"
+    },
+    {
+      "path": "debug.log",
+      "kind": "file",
+      "ignored": true
+    }
+  ],
+  "truncated": false
+}

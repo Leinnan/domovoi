@@ -1,0 +1,227 @@
+[
+  {
+    "version": 1,
+    "revision": 1,
+    "type": "snapshot",
+    "payload": {
+      "pairingLinks": [
+        {
+          "id": "pairing-link-7",
+          "scopes": [
+            "orchestration:read",
+            "orchestration:operate",
+            "terminal:operate",
+            "relay:read",
+            "access:read",
+            "access:write",
+            "relay:write"
+          ],
+          "permissions": [
+            "orchestration:read",
+            "orchestration:operate",
+            "settings:write",
+            "providers:manage",
+            "environment:maintain",
+            "preview:operate",
+            "diagnostics:read",
+            "terminal:read",
+            "terminal:operate",
+            "source-control:write",
+            "filesystem:read",
+            "filesystem:write",
+            "relay:read",
+            "access:read",
+            "access:write",
+            "relay:write"
+          ],
+          "subject": "one-time-token",
+          "createdAt": "2026-11-17T10:12:05.660Z",
+          "expiresAt": "2026-11-17T10:22:05.660Z"
+        }
+      ],
+      "clientSessions": [
+        {
+          "sessionId": "5f0c1e7a9b3d4c2e8a6f0b1d2c3e4f5a",
+          "subject": "one-time-token",
+          "scopes": [
+            "orchestration:read",
+            "orchestration:operate",
+            "terminal:operate",
+            "relay:read",
+            "access:read",
+            "access:write",
+            "relay:write"
+          ],
+          "permissions": [
+            "orchestration:read",
+            "orchestration:operate",
+            "settings:write",
+            "providers:manage",
+            "environment:maintain",
+            "preview:operate",
+            "diagnostics:read",
+            "terminal:read",
+            "terminal:operate",
+            "source-control:write",
+            "filesystem:read",
+            "filesystem:write",
+            "relay:read",
+            "access:read",
+            "access:write",
+            "relay:write"
+          ],
+          "method": "browser-session-cookie",
+          "client": {
+            "deviceType": "unknown"
+          },
+          "issuedAt": "2026-11-13T15:26:45.731Z",
+          "expiresAt": "2026-12-17T09:58:03.214Z",
+          "lastConnectedAt": "2026-11-17T10:20:31.006Z",
+          "connected": true,
+          "current": true
+        },
+        {
+          "sessionId": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+          "subject": "one-time-token",
+          "scopes": [
+            "orchestration:read",
+            "orchestration:operate",
+            "terminal:operate",
+            "relay:read",
+            "access:read",
+            "access:write",
+            "relay:write"
+          ],
+          "permissions": [
+            "orchestration:read",
+            "orchestration:operate",
+            "settings:write",
+            "providers:manage",
+            "environment:maintain",
+            "preview:operate",
+            "diagnostics:read",
+            "terminal:read",
+            "terminal:operate",
+            "source-control:write",
+            "filesystem:read",
+            "filesystem:write",
+            "relay:read",
+            "access:read",
+            "access:write",
+            "relay:write"
+          ],
+          "method": "bearer-access-token",
+          "client": {
+            "label": "Pixel 9",
+            "deviceType": "mobile",
+            "os": "Android 16"
+          },
+          "issuedAt": "2026-11-14T18:03:27.940Z",
+          "expiresAt": "2026-12-16T21:47:10.552Z",
+          "lastConnectedAt": "2026-11-16T21:47:10.552Z",
+          "connected": false,
+          "current": false
+        }
+      ]
+    }
+  },
+  {
+    "version": 1,
+    "revision": 2,
+    "type": "pairingLinkUpserted",
+    "payload": {
+      "id": "pairing-link-8",
+      "scopes": [
+        "orchestration:read"
+      ],
+      "permissions": [
+        "orchestration:read",
+        "diagnostics:read",
+        "filesystem:read"
+      ],
+      "subject": "one-time-token",
+      "createdAt": "2026-11-17T10:21:58.302Z",
+      "expiresAt": "2026-11-17T10:31:58.302Z"
+    }
+  },
+  {
+    "version": 1,
+    "revision": 3,
+    "type": "pairingLinkRemoved",
+    "payload": {
+      "id": "pairing-link-7"
+    }
+  },
+  {
+    "version": 1,
+    "revision": 4,
+    "type": "pairingLinkRemoved",
+    "payload": {
+      "id": "pairing-link-8"
+    }
+  },
+  {
+    "version": 1,
+    "revision": 5,
+    "type": "clientUpserted",
+    "payload": {
+      "sessionId": "0f9e8d7c6b5a41327f6e5d4c3b2a1908",
+      "subject": "one-time-token",
+      "scopes": [
+        "orchestration:read"
+      ],
+      "permissions": [
+        "orchestration:read",
+        "diagnostics:read",
+        "filesystem:read"
+      ],
+      "method": "bearer-access-token",
+      "client": {
+        "label": "Living room iPad",
+        "deviceType": "tablet",
+        "os": "iPadOS 26"
+      },
+      "issuedAt": "2026-11-17T10:22:40.118Z",
+      "expiresAt": "2026-12-17T10:22:40.118Z",
+      "lastConnectedAt": null,
+      "connected": false,
+      "current": false
+    }
+  },
+  {
+    "version": 1,
+    "revision": 6,
+    "type": "clientUpserted",
+    "payload": {
+      "sessionId": "0f9e8d7c6b5a41327f6e5d4c3b2a1908",
+      "subject": "one-time-token",
+      "scopes": [
+        "orchestration:read"
+      ],
+      "permissions": [
+        "orchestration:read",
+        "diagnostics:read",
+        "filesystem:read"
+      ],
+      "method": "bearer-access-token",
+      "client": {
+        "label": "Living room iPad",
+        "deviceType": "tablet",
+        "os": "iPadOS 26"
+      },
+      "issuedAt": "2026-11-17T10:22:40.118Z",
+      "expiresAt": "2026-12-17T10:22:40.118Z",
+      "lastConnectedAt": "2026-11-17T10:22:41.730Z",
+      "connected": true,
+      "current": false
+    }
+  },
+  {
+    "version": 1,
+    "revision": 7,
+    "type": "clientRemoved",
+    "payload": {
+      "sessionId": "a1b2c3d4e5f60718293a4b5c6d7e8f90"
+    }
+  }
+]

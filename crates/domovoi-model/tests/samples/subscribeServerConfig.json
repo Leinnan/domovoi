@@ -1,0 +1,1547 @@
+[
+  {
+    "version": 1,
+    "type": "snapshot",
+    "config": {
+      "environment": {
+        "environmentId": "5f0c1c57-6f0e-4d0b-9a57-0e3f6f0a2b11",
+        "label": "Ada's MacBook Pro",
+        "platform": {
+          "os": "darwin",
+          "arch": "arm64",
+          "machine": "laptop"
+        },
+        "serverVersion": "0.1.9",
+        "orchestrationProtocolVersion": 2,
+        "databaseMigration": 89,
+        "capabilities": {
+          "repositoryIdentity": true,
+          "connectionProbe": true,
+          "attachmentUploads": true,
+          "questionAttachments": true,
+          "fileAttachments": {
+            "maxUploadBytes": 52428800
+          },
+          "pullRequests": true,
+          "pullRequestChecks": true,
+          "sideChats": true,
+          "vcsBranchStatus": true,
+          "inlineMessageContext": true,
+          "requiredWorktreeBootstrap": true,
+          "threadSettlement": true,
+          "threadAutoSettlement": true,
+          "storageCleanup": true,
+          "storageCleanupRun": true,
+          "databaseStorage": true,
+          "otlpEndpointCheck": true,
+          "secretSourceCheck": true,
+          "projectWorktreeCleanup": true,
+          "settledWorktreeCleanup": true,
+          "worktreesDirectory": true,
+          "fastWorktreeCheckout": true,
+          "threadAutoSettlementScope": true,
+          "threadRestartContinuation": true,
+          "projectSettingsOverrides": true,
+          "projectProviderInstanceOverrides": true,
+          "threadSnooze": true,
+          "threadForceStop": true,
+          "environmentThemes": true,
+          "usageLimitSources": true,
+          "providerWorkspaceSnapshotsOnDemand": true,
+          "modelCatalogRefresh": true,
+          "usagePriceOverrides": true,
+          "usageModelAliases": true,
+          "threadPinning": true,
+          "threadPinReorder": true,
+          "threadActiveReorder": true,
+          "threadAutoSettleOptOut": true,
+          "threadProjectFromScratch": true,
+          "threadTitleRegeneration": true,
+          "threadVisitedTracking": true,
+          "threadPullRequestLinking": true,
+          "serverResolvedCommandContext": true,
+          "threadStop": true,
+          "localServerStop": true,
+          "threadPullRequests": true,
+          "threadPullRequestWatch": true,
+          "pullRequestStackActions": true,
+          "npmReleaseLookup": true,
+          "agentActivityPublishing": false,
+          "projectCloneTracking": true,
+          "projectOrganization": true,
+          "ignoredFileListing": true,
+          "environmentIcon": true,
+          "commandOutputStreaming": true,
+          "serverBrowser": true,
+          "peerLinks": true,
+          "mcpModeLimitHeader": true,
+          "linkFence": true,
+          "mcpApprovalCodes": true,
+          "mcpHostedApproval": true,
+          "triage": true,
+          "oneTimeSchedules": true,
+          "freshContext": true,
+          "scheduledTaskThreadModes": true,
+          "voiceTranscription": true,
+          "cloudVoiceTranscription": true,
+          "shellThreadFamilies": true,
+          "shellOlderSettled": true,
+          "linkedThreadRefreshes": true,
+          "serverSelfUpdate": "respawn",
+          "serverInstallation": {
+            "kind": "npm-global",
+            "prefix": "/Users/ada/.npm-global"
+          },
+          "serverSelfUpdateProgress": true,
+          "serverUpdateThreadContinuation": true,
+          "desktopAppUpdate": true,
+          "desktopAppChannelSwitch": true
+        }
+      },
+      "auth": {
+        "policy": "remote-reachable",
+        "bootstrapMethods": [
+          "desktop-bootstrap",
+          "one-time-token"
+        ],
+        "sessionMethods": [
+          "browser-session-cookie",
+          "bearer-access-token",
+          "dpop-access-token"
+        ],
+        "sessionCookieName": "t3_session",
+        "serverUpdateScope": "environment:maintain"
+      },
+      "cwd": "/Users/ada/code/atlas",
+      "keybindingsConfigPath": "/Users/ada/.t3/userdata/keybindings.json",
+      "keybindings": [
+        {
+          "command": "sidebar.toggle",
+          "shortcut": {
+            "key": "b",
+            "metaKey": false,
+            "ctrlKey": false,
+            "shiftKey": false,
+            "altKey": false,
+            "modKey": true
+          }
+        },
+        {
+          "command": "script.dev.run",
+          "shortcut": {
+            "key": "d",
+            "metaKey": false,
+            "ctrlKey": false,
+            "shiftKey": true,
+            "altKey": false,
+            "modKey": true
+          },
+          "whenAst": {
+            "type": "or",
+            "left": {
+              "type": "identifier",
+              "name": "terminalFocus"
+            },
+            "right": {
+              "type": "not",
+              "node": {
+                "type": "identifier",
+                "name": "composerFocus"
+              }
+            }
+          }
+        },
+        {
+          "command": "commandPalette.toggle",
+          "shortcut": {
+            "key": "p",
+            "metaKey": false,
+            "ctrlKey": false,
+            "shiftKey": true,
+            "altKey": false,
+            "modKey": true
+          },
+          "whenAst": {
+            "type": "and",
+            "left": {
+              "type": "not",
+              "node": {
+                "type": "identifier",
+                "name": "terminalFocus"
+              }
+            },
+            "right": {
+              "type": "identifier",
+              "name": "isDesktop"
+            }
+          }
+        }
+      ],
+      "issues": [
+        {
+          "kind": "keybindings.malformed-config",
+          "message": "keybindings.json is not valid JSON: expected value at line 3 column 1"
+        },
+        {
+          "kind": "keybindings.invalid-entry",
+          "message": "Rule 4 has no command.",
+          "index": 4
+        }
+      ],
+      "providers": [
+        {
+          "instanceId": "claudeAgent",
+          "driver": "claudeAgent",
+          "displayName": "Claude",
+          "accentColor": "#d97757",
+          "iconUrl": "https://cdn.example.com/icons/claude.svg",
+          "badgeLabel": "Work",
+          "continuation": {
+            "groupKey": "claude:home:/Users/ada/.claude"
+          },
+          "showInteractionModeToggle": true,
+          "reportsContextWindow": true,
+          "supportedRuntimeModes": [
+            "approval-required",
+            "auto-accept-edits",
+            "auto",
+            "full-access"
+          ],
+          "supportsConversationRollback": true,
+          "supportsTextGeneration": true,
+          "setup": {
+            "canAuthenticate": true,
+            "canInstall": true,
+            "documentationUrl": "https://docs.example.com/claude"
+          },
+          "nativeSessions": {
+            "canList": true,
+            "canLoad": true,
+            "canResume": true,
+            "canDelete": false
+          },
+          "configurableProviders": false,
+          "runtimePaths": {
+            "homePath": "/Users/ada/.claude",
+            "shadowHomePath": "/Users/ada/.t3/userdata/claude-home"
+          },
+          "enabled": true,
+          "installed": true,
+          "version": "2.1.319",
+          "installedVersion": "2.1.319",
+          "status": "warning",
+          "auth": {
+            "status": "authenticated",
+            "type": "Claude Max",
+            "label": "Claude Max Subscription",
+            "email": "ada@example.com",
+            "canLogout": true,
+            "subscriptionSharing": false,
+            "profileId": "profile_1",
+            "workspaceId": "workspace_1"
+          },
+          "checkedAt": "2026-11-17T09:00:03.000Z",
+          "message": "Version 2.1.323 is out.",
+          "availability": "available",
+          "models": [
+            {
+              "slug": "claude-opus-5-5",
+              "name": "Claude Opus 5.5",
+              "shortName": "Opus 5.5",
+              "subProvider": "Anthropic",
+              "aliases": [
+                "opus",
+                "opus-5.5"
+              ],
+              "badge": "new",
+              "isCustom": false,
+              "isDefault": true,
+              "isLegacy": false,
+              "supportsTextGeneration": true,
+              "capabilities": {
+                "optionDescriptors": [
+                  {
+                    "id": "effort",
+                    "label": "Reasoning",
+                    "description": "How long the model thinks before it answers.",
+                    "type": "select",
+                    "options": [
+                      {
+                        "id": "low",
+                        "label": "Low"
+                      },
+                      {
+                        "id": "medium",
+                        "label": "Medium",
+                        "description": "Balanced",
+                        "isDefault": true
+                      },
+                      {
+                        "id": "ultrathink",
+                        "label": "Ultrathink"
+                      }
+                    ],
+                    "currentValue": "medium",
+                    "promptInjectedValues": [
+                      "ultrathink"
+                    ],
+                    "role": "reasoning"
+                  },
+                  {
+                    "id": "fastMode",
+                    "label": "Fast Mode",
+                    "description": "Faster answers at a higher price.",
+                    "type": "boolean",
+                    "currentValue": false
+                  }
+                ]
+              }
+            },
+            {
+              "slug": "claude-haiku-5-5",
+              "name": "Claude Haiku 5.5",
+              "isCustom": false,
+              "capabilities": {}
+            },
+            {
+              "slug": "my-proxy/custom-1",
+              "name": "Custom 1",
+              "isCustom": true,
+              "supportsTextGeneration": false,
+              "capabilities": null
+            }
+          ],
+          "updateRequiredModels": [
+            {
+              "slug": "claude-fable-5-2",
+              "name": "Claude Fable 5.2",
+              "badge": "new",
+              "minVersion": "2.1.330"
+            },
+            {
+              "slug": "claude-sonnet-6",
+              "name": "Claude Sonnet 6",
+              "minVersion": "2.2.0"
+            }
+          ],
+          "slashCommands": [
+            {
+              "name": "compact",
+              "description": "Summarize the conversation and reduce context",
+              "input": {
+                "hint": "<optional instructions>"
+              }
+            },
+            {
+              "name": "review",
+              "description": "Review the current changes"
+            },
+            {
+              "name": "usage-limits"
+            }
+          ],
+          "skills": [
+            {
+              "name": "pdf:pdf",
+              "description": "Read, create and verify PDF files.",
+              "path": "/Users/ada/.claude/skills/pdf/SKILL.md",
+              "scope": "user",
+              "enabled": true,
+              "displayName": "PDF",
+              "shortDescription": "Work with PDF files",
+              "userInvocationOnly": true,
+              "userInvocable": true
+            },
+            {
+              "name": "release-notes",
+              "path": "/Users/ada/code/atlas/.claude/skills/release-notes/SKILL.md",
+              "enabled": false,
+              "userInvocable": false
+            }
+          ],
+          "workspaceSnapshots": [
+            {
+              "cwd": "/Users/ada/code/atlas",
+              "checkedAt": "2026-11-17T09:00:04.000Z",
+              "slashCommands": [
+                {
+                  "name": "compact",
+                  "description": "Summarize the conversation and reduce context",
+                  "input": {
+                    "hint": "<optional instructions>"
+                  }
+                },
+                {
+                  "name": "review",
+                  "description": "Review the current changes"
+                }
+              ],
+              "slashCommandsPending": false,
+              "skills": [
+                {
+                  "name": "pdf:pdf",
+                  "description": "Read, create and verify PDF files.",
+                  "path": "/Users/ada/.claude/skills/pdf/SKILL.md",
+                  "scope": "user",
+                  "enabled": true,
+                  "displayName": "PDF",
+                  "shortDescription": "Work with PDF files",
+                  "userInvocationOnly": true,
+                  "userInvocable": true
+                },
+                {
+                  "name": "release-notes",
+                  "path": "/Users/ada/code/atlas/.claude/skills/release-notes/SKILL.md",
+                  "enabled": false,
+                  "userInvocable": false
+                }
+              ],
+              "optionDescriptors": [
+                {
+                  "id": "fastMode",
+                  "label": "Fast Mode",
+                  "description": "Faster answers at a higher price.",
+                  "type": "boolean",
+                  "currentValue": false
+                }
+              ],
+              "models": [
+                {
+                  "slug": "claude-opus-5-5",
+                  "name": "Claude Opus 5.5",
+                  "shortName": "Opus 5.5",
+                  "subProvider": "Anthropic",
+                  "aliases": [
+                    "opus",
+                    "opus-5.5"
+                  ],
+                  "badge": "new",
+                  "isCustom": false,
+                  "isDefault": true,
+                  "isLegacy": false,
+                  "supportsTextGeneration": true,
+                  "capabilities": {
+                    "optionDescriptors": [
+                      {
+                        "id": "effort",
+                        "label": "Reasoning",
+                        "description": "How long the model thinks before it answers.",
+                        "type": "select",
+                        "options": [
+                          {
+                            "id": "low",
+                            "label": "Low"
+                          },
+                          {
+                            "id": "medium",
+                            "label": "Medium",
+                            "description": "Balanced",
+                            "isDefault": true
+                          },
+                          {
+                            "id": "ultrathink",
+                            "label": "Ultrathink"
+                          }
+                        ],
+                        "currentValue": "medium",
+                        "promptInjectedValues": [
+                          "ultrathink"
+                        ],
+                        "role": "reasoning"
+                      },
+                      {
+                        "id": "fastMode",
+                        "label": "Fast Mode",
+                        "description": "Faster answers at a higher price.",
+                        "type": "boolean",
+                        "currentValue": false
+                      }
+                    ]
+                  }
+                },
+                {
+                  "slug": "claude-haiku-5-5",
+                  "name": "Claude Haiku 5.5",
+                  "isCustom": false,
+                  "capabilities": {}
+                }
+              ],
+              "modelsPending": false
+            },
+            {
+              "cwd": "/Users/ada/code/hermes",
+              "checkedAt": "2026-11-17T09:00:05.000Z",
+              "slashCommands": [],
+              "slashCommandsPending": true,
+              "skills": [],
+              "modelsPending": true
+            }
+          ],
+          "usageLimits": {
+            "checkedAt": "2026-11-17T09:00:03.000Z",
+            "windows": [
+              {
+                "id": "five_hour",
+                "kind": "session",
+                "label": "Session",
+                "usedPercent": 12.5,
+                "resetsAt": "2026-11-17T13:00:00.000Z",
+                "windowDurationMins": 300
+              },
+              {
+                "id": "seven_day_fable",
+                "kind": "weekly",
+                "label": "Weekly · Fable",
+                "modelIds": [
+                  "claude-fable-5-2"
+                ],
+                "providerIds": [
+                  "anthropic"
+                ],
+                "usedPercent": 40,
+                "resetsAt": "2026-11-20T15:00:00.000Z",
+                "windowDurationMins": 10080
+              },
+              {
+                "id": "extra",
+                "kind": "other",
+                "label": "Extra usage",
+                "usedPercent": 0
+              }
+            ],
+            "credentialFingerprint": "sha256:5b1f0e",
+            "resetCredits": {
+              "availableCount": 3,
+              "nextExpiresAt": "2026-11-30T18:38:44.000Z",
+              "nextCreditId": "credit_weekly_1",
+              "options": [
+                {
+                  "creditId": "credit_weekly_1",
+                  "label": "Weekly reset",
+                  "description": "Refills every weekly limit.",
+                  "availableCount": 2,
+                  "expiresAt": "2026-11-30T18:38:44.000Z"
+                },
+                {
+                  "creditId": "credit_fable_1",
+                  "label": "Fable reset",
+                  "description": "Refills the Fable weekly limit.",
+                  "availableCount": 1
+                }
+              ]
+            },
+            "externalUsage": {
+              "label": "Usage on claude.ai",
+              "url": "https://claude.ai/settings/usage"
+            }
+          },
+          "versionAdvisory": {
+            "status": "behind_latest",
+            "currentVersion": "2.1.319",
+            "latestVersion": "2.1.323",
+            "updateCommand": "/Users/ada/.local/bin/claude update",
+            "canUpdate": true,
+            "canInstallVersion": true,
+            "checkedAt": "2026-11-17T09:00:03.500Z",
+            "message": "Version 2.1.323 is out."
+          },
+          "compatibilityAdvisory": {
+            "status": "graceful",
+            "latestVersionStatus": "supported",
+            "message": "Some features need 2.1.320 or newer.",
+            "recommendedVersion": "2.1.323",
+            "recommendedRange": ">=2.1.301"
+          },
+          "updateState": {
+            "status": "failed",
+            "startedAt": "2026-11-17T08:55:00.000Z",
+            "finishedAt": "2026-11-17T08:55:20.000Z",
+            "message": "The update did not finish.",
+            "output": "npm error code EACCES"
+          },
+          "catalogDigest": "sha256:9d1c",
+          "loadedCatalogDigest": "sha256:9d1c"
+        },
+        {
+          "instanceId": "acp-gemini",
+          "driver": "acpRegistry",
+          "displayName": "Gemini CLI",
+          "enabled": true,
+          "installed": true,
+          "version": null,
+          "installedVersion": null,
+          "status": "error",
+          "auth": {
+            "status": "unauthenticated",
+            "action": {
+              "elicitationId": "elicit_1",
+              "url": "https://accounts.example.com/o/oauth2/auth?state=abc",
+              "message": "Sign in to continue.",
+              "createdAt": "2026-11-17T09:00:00Z",
+              "expiresAt": "2026-11-17T09:10:00Z"
+            }
+          },
+          "checkedAt": "2026-11-17T09:00:03.200Z",
+          "message": "Gemini CLI is waiting for you to sign in.",
+          "models": [],
+          "usageLimits": {
+            "checkedAt": "2026-11-17T09:00:03.000Z",
+            "windows": [],
+            "unavailable": {
+              "reason": "probeFailed",
+              "message": "The usage endpoint timed out."
+            }
+          },
+          "versionAdvisory": {
+            "status": "unknown",
+            "currentVersion": null,
+            "latestVersion": null,
+            "updateCommand": null,
+            "checkedAt": null,
+            "message": null
+          },
+          "compatibilityAdvisory": {
+            "status": "unknown",
+            "message": null,
+            "recommendedVersion": null,
+            "recommendedRange": null
+          },
+          "updateState": {
+            "status": "idle",
+            "startedAt": null,
+            "finishedAt": null,
+            "message": null,
+            "output": null
+          }
+        },
+        {
+          "instanceId": "cursor",
+          "driver": "cursor",
+          "displayName": "Cursor",
+          "enabled": false,
+          "installed": false,
+          "version": null,
+          "status": "disabled",
+          "auth": {
+            "status": "unknown"
+          },
+          "checkedAt": "2026-11-17T09:00:03.300Z",
+          "message": "Example Corp's policy does not allow Cursor.",
+          "availability": "unavailable",
+          "unavailableReason": "Example Corp's policy does not allow Cursor.",
+          "models": [],
+          "slashCommands": [],
+          "skills": []
+        }
+      ],
+      "availableEditors": [
+        "cursor",
+        "vscode",
+        "zed",
+        "file-manager"
+      ],
+      "remoteOpenTargets": [
+        {
+          "kind": "tailscale",
+          "host": "ada-mbp.tailnet-1234.ts.net",
+          "username": "ada"
+        },
+        {
+          "kind": "mdns",
+          "host": "ada-mbp.local"
+        }
+      ],
+      "directEndpoints": [
+        {
+          "kind": "lan",
+          "httpBaseUrl": "http://192.168.1.20:3773"
+        },
+        {
+          "kind": "tailnet",
+          "httpBaseUrl": "http://100.64.0.7:3773"
+        }
+      ],
+      "observability": {
+        "logsDirectoryPath": "/Users/ada/.t3/userdata/logs",
+        "localTracingEnabled": true,
+        "otlpTracesUrl": "https://otlp.example.com/v1/traces",
+        "otlpTracesSource": "settings",
+        "otlpTracesVariable": "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+        "otlpTracesEnabled": true,
+        "otlpMetricsUrl": "https://otlp.example.com/v1/metrics",
+        "otlpMetricsSource": "environment",
+        "otlpMetricsVariable": "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+        "otlpMetricsEnabled": true,
+        "otlpLogsUrl": "https://otlp.example.com/v1/logs",
+        "otlpLogsSource": "bootstrap",
+        "otlpLogsVariable": "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+        "otlpLogsEnabled": true
+      },
+      "settings": {
+        "favorites": null,
+        "providerModelPreferences": null,
+        "worktreeCleanup": null,
+        "storageCleanup": {
+          "worktreeKeepWhen": "uncommitted-changes",
+          "worktreeAfterDays": null,
+          "worktreeSettledAfterDays": null,
+          "worktreeOnMerge": false,
+          "worktreeOnDelete": false,
+          "worktreeUnchanged": false,
+          "browserArtifactsAfterDays": null,
+          "logsAfterDays": null
+        },
+        "worktreesDirectory": "",
+        "fastWorktreeCheckout": false,
+        "previousWorktreesDirectories": [],
+        "responseStreamingMode": "paragraph",
+        "enableProviderUpdateChecks": true,
+        "continueThreadsAfterServerUpdate": true,
+        "keepAwakeWhileAgentsWork": true,
+        "enableAgentBrowserAccess": true,
+        "cloudSpeechCredentials": {
+          "openai": "",
+          "xai": "",
+          "openrouter": ""
+        },
+        "speechModelId": "handy-computer/parakeet-unified-en-0.6b-gguf",
+        "speechAcceleration": "auto",
+        "speechModelUnloadTimeout": "min_15",
+        "speechProjectCustomWords": [],
+        "speechPostProcessingModelSelection": null,
+        "projectAgentBrowserAccessOverrides": {},
+        "defaultAutoPull": false,
+        "defaultProjectScripts": [],
+        "projectScriptOverrides": {},
+        "projectAutoPullOverrides": {},
+        "defaultModelSelection": null,
+        "fallbackModelSelection": null,
+        "defaultRuntimeMode": "full-access",
+        "projectSettingsOverrides": {},
+        "projectSettingsFolded": false,
+        "enableAgentDeviceAccess": false,
+        "enableDeviceSupport": false,
+        "deviceOnboardingCompleted": false,
+        "deviceHosts": [],
+        "easDeviceHosts": [],
+        "simlockDeviceHosts": [],
+        "simlockDeviceHostsEnabled": false,
+        "sidebarAutoSettleAfterDays": 7,
+        "compactIdleThreads": false,
+        "snoozeLimitedThreads": false,
+        "autoResumeLimitedThreads": false,
+        "snoozePresets": [
+          {
+            "kind": "after",
+            "minutes": 60
+          },
+          {
+            "kind": "after",
+            "minutes": 180
+          },
+          {
+            "kind": "at",
+            "day": "today",
+            "time": "18:00"
+          },
+          {
+            "kind": "at",
+            "day": "tomorrow",
+            "time": "09:00"
+          },
+          {
+            "kind": "at",
+            "day": "monday",
+            "time": "09:00"
+          }
+        ],
+        "hiddenThreadTags": [],
+        "hideTaggedThreads": false,
+        "guestSharingEnabled": false,
+        "linkedEnvironmentsEnabled": false,
+        "promptSuggestionsEnabled": false,
+        "sidebarAutoSettleKeepPullRequests": false,
+        "sidebarAutoSettleOnMerge": true,
+        "backgroundActivity": {
+          "schemaVersion": 1,
+          "profile": "balanced",
+          "overrides": {}
+        },
+        "automaticGitFetchInterval": 30000,
+        "providerHealthRefreshInterval": 300000,
+        "backgroundActivityProfile": "balanced",
+        "defaultTheme": "",
+        "defaultThemeSetAt": "",
+        "environmentIcon": null,
+        "newWorktreesStartFromOrigin": true,
+        "worktreeSubmodules": null,
+        "addProjectBaseDirectory": "",
+        "ghqCloneLayout": false,
+        "textGenerationModelSelection": {
+          "instanceId": "codex",
+          "model": "gpt-6-luna",
+          "options": [
+            {
+              "id": "reasoningEffort",
+              "value": "low"
+            }
+          ]
+        },
+        "threadTitleInstructions": "",
+        "branchNamingMode": "static",
+        "branchNamePrefix": "t3",
+        "branchNameInstructions": "",
+        "removeAgentCreditsOnMerge": false,
+        "sourceControlWritingStyle": {
+          "mode": "repo_conventions",
+          "customInstructions": "",
+          "followChangeRequestTemplates": true
+        },
+        "sourceControlWriterModelSelection": null,
+        "reviewGuidesEnabled": false,
+        "reviewGuideModelSelection": null,
+        "reviewGuideInstructions": "",
+        "pullRequestMergeMethod": null,
+        "providerInstances": {},
+        "observability": {
+          "otlpTracesUrl": "",
+          "otlpMetricsUrl": "",
+          "otlpLogsUrl": ""
+        },
+        "sourceControlHosts": {},
+        "offeredSourceControlProviders": {},
+        "usageLimitSources": {},
+        "textGenerators": {},
+        "secretProviders": {},
+        "usagePriceOverrides": {},
+        "usageModelAliases": {}
+      },
+      "managedPolicy": {
+        "organization": "Example Corp",
+        "supportUrl": "https://it.example.com/t3",
+        "lockedSettings": [
+          "storageCleanup.logsAfterDays",
+          "defaultRuntimeMode"
+        ],
+        "limits": {
+          "maxRuntimeMode": "auto-accept-edits",
+          "clients": [
+            "desktop",
+            "local-browser"
+          ],
+          "connect": false,
+          "webhookTasks": false,
+          "telemetry": false,
+          "browserCookieImport": false,
+          "providers": {
+            "allowedDrivers": [
+              "claudeAgent",
+              "codex",
+              "acpRegistry"
+            ],
+            "lockedInstanceFields": {
+              "claudeAgent": [
+                "config.binaryPath",
+                "environment.ANTHROPIC_BASE_URL"
+              ],
+              "codex": [
+                "environment"
+              ]
+            }
+          },
+          "updates": {
+            "mode": "off",
+            "allowNightly": false
+          }
+        }
+      },
+      "shellResumeCompletionMarker": true,
+      "shellThreadFamilies": true,
+      "threadLinkMetadata": true,
+      "shellOlderSettled": true,
+      "shellRevealInFileManager": true,
+      "shellRevealInFileManagerKind": "finder",
+      "threadResumeCompletionMarker": true,
+      "threadSnapshotPagination": true,
+      "threadFind": true,
+      "threadFindProgressive": true,
+      "secretProviderSettings": true,
+      "secretReferences": true,
+      "secretRequestReferences": true,
+      "scratchWorkspaceRoot": "/Users/ada/.t3/scratch",
+      "newProjectsRoot": "/Users/ada/code",
+      "lastEventLoopStall": {
+        "detectedAt": "2026-11-17T08:58:40.000Z",
+        "durationMs": 4200,
+        "loadAverage": 11.42,
+        "cpuCount": 10
+      },
+      "environmentThemes": [
+        {
+          "id": "solar-dawn",
+          "version": 1,
+          "name": "Solar Dawn",
+          "appearance": "light",
+          "canvas": "#fdf6e3",
+          "accent": "#b58900",
+          "colors": {
+            "background": "#fdf6e3",
+            "foreground": "#073642"
+          },
+          "variants": {
+            "light": {
+              "border": "#eee8d5"
+            },
+            "dark": {
+              "border": "#002b36",
+              "background": "#001f27"
+            }
+          }
+        },
+        {
+          "id": "ink",
+          "name": "Ink",
+          "appearance": "dark",
+          "colors": {
+            "background": "#111",
+            "foreground": "#eee",
+            "accent": "oklch(0.7 0.15 250)"
+          }
+        }
+      ],
+      "usageLimitSources": [
+        {
+          "id": "cliproxy-main",
+          "kind": "cliproxy",
+          "label": "Team proxy",
+          "checkedAt": "2026-11-17T09:00:06.000Z",
+          "accounts": [
+            {
+              "id": "acct_1",
+              "driver": "claudeAgent",
+              "email": "ada@example.com",
+              "plan": "Max",
+              "workspaceId": "workspace_1",
+              "usageLimits": {
+                "checkedAt": "2026-11-17T09:00:03.000Z",
+                "windows": [
+                  {
+                    "id": "five_hour",
+                    "kind": "session",
+                    "label": "Session",
+                    "usedPercent": 12.5,
+                    "resetsAt": "2026-11-17T13:00:00.000Z",
+                    "windowDurationMins": 300
+                  },
+                  {
+                    "id": "seven_day_fable",
+                    "kind": "weekly",
+                    "label": "Weekly · Fable",
+                    "modelIds": [
+                      "claude-fable-5-2"
+                    ],
+                    "providerIds": [
+                      "anthropic"
+                    ],
+                    "usedPercent": 40,
+                    "resetsAt": "2026-11-20T15:00:00.000Z",
+                    "windowDurationMins": 10080
+                  },
+                  {
+                    "id": "extra",
+                    "kind": "other",
+                    "label": "Extra usage",
+                    "usedPercent": 0
+                  }
+                ],
+                "credentialFingerprint": "sha256:5b1f0e",
+                "resetCredits": {
+                  "availableCount": 3,
+                  "nextExpiresAt": "2026-11-30T18:38:44.000Z",
+                  "nextCreditId": "credit_weekly_1",
+                  "options": [
+                    {
+                      "creditId": "credit_weekly_1",
+                      "label": "Weekly reset",
+                      "description": "Refills every weekly limit.",
+                      "availableCount": 2,
+                      "expiresAt": "2026-11-30T18:38:44.000Z"
+                    },
+                    {
+                      "creditId": "credit_fable_1",
+                      "label": "Fable reset",
+                      "description": "Refills the Fable weekly limit.",
+                      "availableCount": 1
+                    }
+                  ]
+                },
+                "externalUsage": {
+                  "label": "Usage on claude.ai",
+                  "url": "https://claude.ai/settings/usage"
+                }
+              }
+            },
+            {
+              "id": "acct_2",
+              "driver": "codex",
+              "usageLimits": {
+                "checkedAt": "2026-11-17T09:00:03.000Z",
+                "windows": [],
+                "unavailable": {
+                  "reason": "probeFailed",
+                  "message": "The usage endpoint timed out."
+                }
+              }
+            }
+          ]
+        },
+        {
+          "id": "cliproxy-backup",
+          "kind": "cliproxy",
+          "label": "Backup proxy",
+          "checkedAt": "2026-11-17T09:00:06.500Z",
+          "accounts": [],
+          "error": "The proxy did not answer."
+        }
+      ]
+    }
+  },
+  {
+    "version": 1,
+    "type": "environmentThemesUpdated",
+    "payload": {
+      "themes": [
+        {
+          "id": "solar-dawn",
+          "version": 1,
+          "name": "Solar Dawn",
+          "appearance": "light",
+          "canvas": "#fdf6e3",
+          "accent": "#b58900",
+          "colors": {
+            "background": "#fdf6e3",
+            "foreground": "#073642"
+          },
+          "variants": {
+            "light": {
+              "border": "#eee8d5"
+            },
+            "dark": {
+              "border": "#002b36",
+              "background": "#001f27"
+            }
+          }
+        },
+        {
+          "id": "ink",
+          "name": "Ink",
+          "appearance": "dark",
+          "colors": {
+            "background": "#111",
+            "foreground": "#eee",
+            "accent": "oklch(0.7 0.15 250)"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "version": 1,
+    "type": "usageLimitSourcesUpdated",
+    "payload": {
+      "sources": [
+        {
+          "id": "cliproxy-main",
+          "kind": "cliproxy",
+          "label": "Team proxy",
+          "checkedAt": "2026-11-17T09:00:06.000Z",
+          "accounts": [
+            {
+              "id": "acct_1",
+              "driver": "claudeAgent",
+              "email": "ada@example.com",
+              "plan": "Max",
+              "workspaceId": "workspace_1",
+              "usageLimits": {
+                "checkedAt": "2026-11-17T09:00:03.000Z",
+                "windows": [
+                  {
+                    "id": "five_hour",
+                    "kind": "session",
+                    "label": "Session",
+                    "usedPercent": 12.5,
+                    "resetsAt": "2026-11-17T13:00:00.000Z",
+                    "windowDurationMins": 300
+                  },
+                  {
+                    "id": "seven_day_fable",
+                    "kind": "weekly",
+                    "label": "Weekly · Fable",
+                    "modelIds": [
+                      "claude-fable-5-2"
+                    ],
+                    "providerIds": [
+                      "anthropic"
+                    ],
+                    "usedPercent": 40,
+                    "resetsAt": "2026-11-20T15:00:00.000Z",
+                    "windowDurationMins": 10080
+                  },
+                  {
+                    "id": "extra",
+                    "kind": "other",
+                    "label": "Extra usage",
+                    "usedPercent": 0
+                  }
+                ],
+                "credentialFingerprint": "sha256:5b1f0e",
+                "resetCredits": {
+                  "availableCount": 3,
+                  "nextExpiresAt": "2026-11-30T18:38:44.000Z",
+                  "nextCreditId": "credit_weekly_1",
+                  "options": [
+                    {
+                      "creditId": "credit_weekly_1",
+                      "label": "Weekly reset",
+                      "description": "Refills every weekly limit.",
+                      "availableCount": 2,
+                      "expiresAt": "2026-11-30T18:38:44.000Z"
+                    },
+                    {
+                      "creditId": "credit_fable_1",
+                      "label": "Fable reset",
+                      "description": "Refills the Fable weekly limit.",
+                      "availableCount": 1
+                    }
+                  ]
+                },
+                "externalUsage": {
+                  "label": "Usage on claude.ai",
+                  "url": "https://claude.ai/settings/usage"
+                }
+              }
+            },
+            {
+              "id": "acct_2",
+              "driver": "codex",
+              "usageLimits": {
+                "checkedAt": "2026-11-17T09:00:03.000Z",
+                "windows": [],
+                "unavailable": {
+                  "reason": "probeFailed",
+                  "message": "The usage endpoint timed out."
+                }
+              }
+            }
+          ]
+        },
+        {
+          "id": "cliproxy-backup",
+          "kind": "cliproxy",
+          "label": "Backup proxy",
+          "checkedAt": "2026-11-17T09:00:06.500Z",
+          "accounts": [],
+          "error": "The proxy did not answer."
+        }
+      ]
+    }
+  },
+  {
+    "version": 1,
+    "type": "providerStatusDeltas",
+    "payload": {
+      "providers": [
+        {
+          "instanceId": "claudeAgent",
+          "driver": "claudeAgent",
+          "displayName": "Claude",
+          "accentColor": "#d97757",
+          "iconUrl": "https://cdn.example.com/icons/claude.svg",
+          "badgeLabel": "Work",
+          "continuation": {
+            "groupKey": "claude:home:/Users/ada/.claude"
+          },
+          "showInteractionModeToggle": true,
+          "reportsContextWindow": true,
+          "supportedRuntimeModes": [
+            "approval-required",
+            "auto-accept-edits",
+            "auto",
+            "full-access"
+          ],
+          "supportsConversationRollback": true,
+          "supportsTextGeneration": true,
+          "setup": {
+            "canAuthenticate": true,
+            "canInstall": true,
+            "documentationUrl": "https://docs.example.com/claude"
+          },
+          "nativeSessions": {
+            "canList": true,
+            "canLoad": true,
+            "canResume": true,
+            "canDelete": false
+          },
+          "configurableProviders": false,
+          "runtimePaths": {
+            "homePath": "/Users/ada/.claude",
+            "shadowHomePath": "/Users/ada/.t3/userdata/claude-home"
+          },
+          "enabled": true,
+          "installed": true,
+          "version": "2.1.319",
+          "installedVersion": "2.1.319",
+          "status": "warning",
+          "auth": {
+            "status": "authenticated",
+            "type": "Claude Max",
+            "label": "Claude Max Subscription",
+            "email": "ada@example.com",
+            "canLogout": true,
+            "subscriptionSharing": false,
+            "profileId": "profile_1",
+            "workspaceId": "workspace_1"
+          },
+          "checkedAt": "2026-11-17T09:00:03.000Z",
+          "message": "Version 2.1.323 is out.",
+          "availability": "available",
+          "updateRequiredModels": [
+            {
+              "slug": "claude-fable-5-2",
+              "name": "Claude Fable 5.2",
+              "badge": "new",
+              "minVersion": "2.1.330"
+            },
+            {
+              "slug": "claude-sonnet-6",
+              "name": "Claude Sonnet 6",
+              "minVersion": "2.2.0"
+            }
+          ],
+          "workspaceSnapshots": [
+            {
+              "cwd": "/Users/ada/code/atlas",
+              "checkedAt": "2026-11-17T09:00:04.000Z",
+              "slashCommands": [
+                {
+                  "name": "compact",
+                  "description": "Summarize the conversation and reduce context",
+                  "input": {
+                    "hint": "<optional instructions>"
+                  }
+                },
+                {
+                  "name": "review",
+                  "description": "Review the current changes"
+                }
+              ],
+              "slashCommandsPending": false,
+              "skills": [
+                {
+                  "name": "pdf:pdf",
+                  "description": "Read, create and verify PDF files.",
+                  "path": "/Users/ada/.claude/skills/pdf/SKILL.md",
+                  "scope": "user",
+                  "enabled": true,
+                  "displayName": "PDF",
+                  "shortDescription": "Work with PDF files",
+                  "userInvocationOnly": true,
+                  "userInvocable": true
+                },
+                {
+                  "name": "release-notes",
+                  "path": "/Users/ada/code/atlas/.claude/skills/release-notes/SKILL.md",
+                  "enabled": false,
+                  "userInvocable": false
+                }
+              ],
+              "optionDescriptors": [
+                {
+                  "id": "fastMode",
+                  "label": "Fast Mode",
+                  "description": "Faster answers at a higher price.",
+                  "type": "boolean",
+                  "currentValue": false
+                }
+              ],
+              "models": [
+                {
+                  "slug": "claude-opus-5-5",
+                  "name": "Claude Opus 5.5",
+                  "shortName": "Opus 5.5",
+                  "subProvider": "Anthropic",
+                  "aliases": [
+                    "opus",
+                    "opus-5.5"
+                  ],
+                  "badge": "new",
+                  "isCustom": false,
+                  "isDefault": true,
+                  "isLegacy": false,
+                  "supportsTextGeneration": true,
+                  "capabilities": {
+                    "optionDescriptors": [
+                      {
+                        "id": "effort",
+                        "label": "Reasoning",
+                        "description": "How long the model thinks before it answers.",
+                        "type": "select",
+                        "options": [
+                          {
+                            "id": "low",
+                            "label": "Low"
+                          },
+                          {
+                            "id": "medium",
+                            "label": "Medium",
+                            "description": "Balanced",
+                            "isDefault": true
+                          },
+                          {
+                            "id": "ultrathink",
+                            "label": "Ultrathink"
+                          }
+                        ],
+                        "currentValue": "medium",
+                        "promptInjectedValues": [
+                          "ultrathink"
+                        ],
+                        "role": "reasoning"
+                      },
+                      {
+                        "id": "fastMode",
+                        "label": "Fast Mode",
+                        "description": "Faster answers at a higher price.",
+                        "type": "boolean",
+                        "currentValue": false
+                      }
+                    ]
+                  }
+                },
+                {
+                  "slug": "claude-haiku-5-5",
+                  "name": "Claude Haiku 5.5",
+                  "isCustom": false,
+                  "capabilities": {}
+                }
+              ],
+              "modelsPending": false
+            },
+            {
+              "cwd": "/Users/ada/code/hermes",
+              "checkedAt": "2026-11-17T09:00:05.000Z",
+              "slashCommands": [],
+              "slashCommandsPending": true,
+              "skills": [],
+              "modelsPending": true
+            }
+          ],
+          "usageLimits": {
+            "checkedAt": "2026-11-17T09:00:03.000Z",
+            "windows": [
+              {
+                "id": "five_hour",
+                "kind": "session",
+                "label": "Session",
+                "usedPercent": 12.5,
+                "resetsAt": "2026-11-17T13:00:00.000Z",
+                "windowDurationMins": 300
+              },
+              {
+                "id": "seven_day_fable",
+                "kind": "weekly",
+                "label": "Weekly · Fable",
+                "modelIds": [
+                  "claude-fable-5-2"
+                ],
+                "providerIds": [
+                  "anthropic"
+                ],
+                "usedPercent": 40,
+                "resetsAt": "2026-11-20T15:00:00.000Z",
+                "windowDurationMins": 10080
+              },
+              {
+                "id": "extra",
+                "kind": "other",
+                "label": "Extra usage",
+                "usedPercent": 0
+              }
+            ],
+            "credentialFingerprint": "sha256:5b1f0e",
+            "resetCredits": {
+              "availableCount": 3,
+              "nextExpiresAt": "2026-11-30T18:38:44.000Z",
+              "nextCreditId": "credit_weekly_1",
+              "options": [
+                {
+                  "creditId": "credit_weekly_1",
+                  "label": "Weekly reset",
+                  "description": "Refills every weekly limit.",
+                  "availableCount": 2,
+                  "expiresAt": "2026-11-30T18:38:44.000Z"
+                },
+                {
+                  "creditId": "credit_fable_1",
+                  "label": "Fable reset",
+                  "description": "Refills the Fable weekly limit.",
+                  "availableCount": 1
+                }
+              ]
+            },
+            "externalUsage": {
+              "label": "Usage on claude.ai",
+              "url": "https://claude.ai/settings/usage"
+            }
+          },
+          "versionAdvisory": {
+            "status": "behind_latest",
+            "currentVersion": "2.1.319",
+            "latestVersion": "2.1.323",
+            "updateCommand": "/Users/ada/.local/bin/claude update",
+            "canUpdate": true,
+            "canInstallVersion": true,
+            "checkedAt": "2026-11-17T09:00:03.500Z",
+            "message": "Version 2.1.323 is out."
+          },
+          "compatibilityAdvisory": {
+            "status": "graceful",
+            "latestVersionStatus": "supported",
+            "message": "Some features need 2.1.320 or newer.",
+            "recommendedVersion": "2.1.323",
+            "recommendedRange": ">=2.1.301"
+          },
+          "updateState": {
+            "status": "failed",
+            "startedAt": "2026-11-17T08:55:00.000Z",
+            "finishedAt": "2026-11-17T08:55:20.000Z",
+            "message": "The update did not finish.",
+            "output": "npm error code EACCES"
+          },
+          "catalogDigest": "sha256:9d1c",
+          "loadedCatalogDigest": "sha256:9d1c"
+        },
+        {
+          "instanceId": "acp-gemini",
+          "driver": "acpRegistry",
+          "displayName": "Gemini CLI",
+          "enabled": true,
+          "installed": true,
+          "version": null,
+          "installedVersion": null,
+          "status": "error",
+          "auth": {
+            "status": "unauthenticated",
+            "action": {
+              "elicitationId": "elicit_1",
+              "url": "https://accounts.example.com/o/oauth2/auth?state=abc",
+              "message": "Sign in to continue.",
+              "createdAt": "2026-11-17T09:00:00Z",
+              "expiresAt": "2026-11-17T09:10:00Z"
+            }
+          },
+          "checkedAt": "2026-11-17T09:00:03.200Z",
+          "message": "Gemini CLI is waiting for you to sign in.",
+          "usageLimits": {
+            "checkedAt": "2026-11-17T09:00:03.000Z",
+            "windows": [],
+            "unavailable": {
+              "reason": "probeFailed",
+              "message": "The usage endpoint timed out."
+            }
+          },
+          "versionAdvisory": {
+            "status": "unknown",
+            "currentVersion": null,
+            "latestVersion": null,
+            "updateCommand": null,
+            "checkedAt": null,
+            "message": null
+          },
+          "compatibilityAdvisory": {
+            "status": "unknown",
+            "message": null,
+            "recommendedVersion": null,
+            "recommendedRange": null
+          },
+          "updateState": {
+            "status": "idle",
+            "startedAt": null,
+            "finishedAt": null,
+            "message": null,
+            "output": null
+          }
+        },
+        {
+          "instanceId": "cursor",
+          "driver": "cursor",
+          "displayName": "Cursor",
+          "enabled": false,
+          "installed": false,
+          "version": null,
+          "status": "disabled",
+          "auth": {
+            "status": "unknown"
+          },
+          "checkedAt": "2026-11-17T09:00:03.300Z",
+          "message": "Example Corp's policy does not allow Cursor.",
+          "availability": "unavailable",
+          "unavailableReason": "Example Corp's policy does not allow Cursor.",
+          "models": [],
+          "slashCommands": [],
+          "skills": []
+        }
+      ]
+    }
+  },
+  {
+    "version": 1,
+    "type": "keybindingsUpdated",
+    "payload": {
+      "keybindings": [
+        {
+          "command": "sidebar.toggle",
+          "shortcut": {
+            "key": "b",
+            "metaKey": false,
+            "ctrlKey": false,
+            "shiftKey": false,
+            "altKey": false,
+            "modKey": true
+          }
+        },
+        {
+          "command": "script.dev.run",
+          "shortcut": {
+            "key": "d",
+            "metaKey": false,
+            "ctrlKey": false,
+            "shiftKey": true,
+            "altKey": false,
+            "modKey": true
+          },
+          "whenAst": {
+            "type": "or",
+            "left": {
+              "type": "identifier",
+              "name": "terminalFocus"
+            },
+            "right": {
+              "type": "not",
+              "node": {
+                "type": "identifier",
+                "name": "composerFocus"
+              }
+            }
+          }
+        }
+      ],
+      "issues": [
+        {
+          "kind": "keybindings.malformed-config",
+          "message": "keybindings.json is not valid JSON: expected value at line 3 column 1"
+        }
+      ]
+    }
+  }
+]

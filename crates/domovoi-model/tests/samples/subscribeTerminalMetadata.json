@@ -1,0 +1,104 @@
+[
+  {
+    "type": "snapshot",
+    "terminals": [
+      {
+        "threadId": "6421f1e6-14f6-4d7a-89b3-6e82dac38210",
+        "terminalId": "term-1",
+        "cwd": "/HOME/Documents/IDEAS/t5code/.reference/playground",
+        "worktreePath": null,
+        "status": "running",
+        "pid": 12898,
+        "exitCode": null,
+        "exitSignal": null,
+        "hasRunningSubprocess": false,
+        "label": "Terminal 1",
+        "updatedAt": "2026-11-13T15:34:18.737Z"
+      }
+    ]
+  },
+  {
+    "type": "upsert",
+    "terminal": {
+      "threadId": "6421f1e6-14f6-4d7a-89b3-6e82dac38210",
+      "terminalId": "term-2",
+      "cwd": "/HOME/Documents/IDEAS/t5code/.reference/playground",
+      "worktreePath": null,
+      "status": "running",
+      "pid": 13120,
+      "exitCode": null,
+      "exitSignal": null,
+      "hasRunningSubprocess": false,
+      "label": "Terminal 2",
+      "updatedAt": "2026-11-13T15:36:02.004Z"
+    }
+  },
+  {
+    "type": "upsert",
+    "terminal": {
+      "threadId": "6421f1e6-14f6-4d7a-89b3-6e82dac38210",
+      "terminalId": "term-1",
+      "cwd": "/HOME/Documents/IDEAS/t5code/.reference/playground",
+      "worktreePath": null,
+      "status": "running",
+      "pid": 12898,
+      "exitCode": null,
+      "exitSignal": null,
+      "hasRunningSubprocess": false,
+      "label": "Terminal 1",
+      "updatedAt": "2026-11-13T15:36:40.512Z"
+    }
+  },
+  {
+    "type": "upsert",
+    "terminal": {
+      "threadId": "6421f1e6-14f6-4d7a-89b3-6e82dac38210",
+      "terminalId": "term-2",
+      "cwd": "/HOME/Documents/IDEAS/t5code/.reference/playground",
+      "worktreePath": null,
+      "status": "exited",
+      "pid": null,
+      "exitCode": 130,
+      "exitSignal": null,
+      "hasRunningSubprocess": false,
+      "label": "Terminal 2",
+      "updatedAt": "2026-11-13T15:37:10.900Z"
+    }
+  },
+  {
+    "type": "remove",
+    "threadId": "6421f1e6-14f6-4d7a-89b3-6e82dac38210",
+    "terminalId": "term-2"
+  },
+  {
+    "type": "snapshot",
+    "terminals": [
+      {
+        "threadId": "6421f1e6-14f6-4d7a-89b3-6e82dac38210",
+        "terminalId": "term-1",
+        "cwd": "/HOME/Documents/IDEAS/t5code/.reference/playground",
+        "worktreePath": null,
+        "status": "running",
+        "pid": 12898,
+        "exitCode": null,
+        "exitSignal": null,
+        "hasRunningSubprocess": false,
+        "label": "Terminal 1",
+        "updatedAt": "2026-11-13T15:36:40.512Z"
+      },
+      {
+        "threadId": "6421f1e6-14f6-4d7a-89b3-6e82dac38210",
+        "terminalId": "term-3",
+        "cwd": "/HOME/Documents/IDEAS/t5code/.reference/playground",
+        "worktreePath": null,
+        "status": "running",
+        "pid": 13377,
+        "exitCode": null,
+        "exitSignal": null,
+        "hasRunningSubprocess": false,
+        "label": "Terminal 3",
+        "updatedAt": "2026-11-13T15:36:02.004Z"
+      }
+    ]
+  }
+]
