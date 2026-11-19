@@ -10,6 +10,7 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 use domovoi_core::socket::{SocketEvent, SocketOperation};
 use domovoi_core::store::{StoreOperation, StoreOutput};
 use domovoi_core::tunnel::{TunnelOperation, TunnelOutput};
+use domovoi_core::app::ScheduledTaskEdit;
 use domovoi_core::app::QuestionAnswer;
 use domovoi_core::sidebar::Grouping;
 use domovoi_core::{Effect, Event, Model, DomovoiApp};
@@ -724,11 +725,22 @@ fn composing_and_launching_a_thread() {
     assert_eq!(p["workspaceStrategy"], json!({ "type": "worktree", "baseRef": "main" }));
     assert_eq!(DomovoiApp.view(&model).composer.draft, "", "the draft clears once sent");
 
-    // The launch result opens the new thread.
+    // Shown at once, before the server answers: open, listed, its message on its way.
     let tid = p["threadId"].as_str().unwrap().to_owned();
+    assert!(sent.iter().all(|r| r["tag"] != "orchestration.subscribeThread"), "nothing to subscribe to before it is made");
+    let view = DomovoiApp.view(&model);
+    assert_eq!(view.route, "thread");
+    let page = view.thread.expect("the new thread's page, at once");
+    assert_eq!((page.id.as_str(), page.title.as_str(), page.loading), (tid.as_str(), "hi", false));
+    assert_eq!(page.pending_sends.iter().map(|p| p.text.as_str()).collect::<Vec<_>>(), ["hi"]);
+    assert_eq!(view.sidebar.surface_threads.first().map(|r| (r.id.as_str(), r.status_label.as_str())), Some((tid.as_str(), "Starting")));
+
+    // The launch result opens the new thread's stream.
     let sent = sent_requests(&sock(&mut model, exit_ok(launch["id"].as_str().unwrap(), json!({ "threadId": tid }))));
     assert!(sent.iter().any(|r| r["tag"] == "orchestration.subscribeThread" && r["payload"]["threadId"] == tid.as_str()));
     assert_eq!(model.selected_thread.as_deref(), Some(tid.as_str()));
+    let page = DomovoiApp.view(&model).thread.expect("page");
+    assert!(!page.loading && page.pending_sends.len() == 1, "its message stays shown until the thread's own copy comes");
 }
 
 /// Two providers whose models offer different efforts.
@@ -1311,6 +1323,7 @@ fn exit_fail(id: &str, error: Value) -> SocketEvent {
 fn the_import_picker_scans_then_imports_each_folder() {
     let (mut model, _) = connected();
     model.now_ms = 1_794_700_000_000; // 2026-11-14
+    model.shown_ms = model.now_ms;
     let sent = sent_requests(&run(&mut model, Event::ScanAgentSessions));
     assert_eq!(sent[0]["tag"], "agentSessions.scan");
     assert!(DomovoiApp.view(&model).agent_sessions.scanning);
@@ -1382,6 +1395,7 @@ fn the_folder_browser_walks_the_servers_folders() {
 fn imported_sessions_show_inside_their_project() {
     let (mut model, _) = connected();
     model.now_ms = 1_794_700_000_000;
+    model.shown_ms = model.now_ms;
     model.projects = vec![records::project(json!({ "id": "p1", "title": "calc", "workspaceRoot": "/w/calc" }))];
     let thread = |id: &str, updated: &str, settled: bool| {
         records::shell(json!({ "id": id, "projectId": "p1", "title": id, "updatedAt": updated, "deletedAt": null, "archivedAt": null,
@@ -1521,8 +1535,11 @@ fn a_launch_the_server_refuses_gives_the_text_back() {
     let sent = sent_requests(&run(&mut model, Event::Send));
     let launch = sent.iter().find(|r| r["tag"] == "orchestration.launchThread").unwrap();
     let failure = SocketEvent::Message { text: json!({ "_tag": "Exit", "requestId": launch["id"], "exit": { "_tag": "Failure", "cause": [{ "_tag": "Fail", "error": { "_tag": "OrchestrationV2ThreadLaunchError", "message": "Unknown project." } }] } }).to_string() };
+    assert_eq!(DomovoiApp.view(&model).route, "thread", "shown while it was being started");
     let _ = sock(&mut model, failure);
     let view = DomovoiApp.view(&model);
+    assert_eq!(view.route, "new-thread", "back where it was typed");
+    assert!(view.sidebar.surface_threads.iter().all(|r| r.status_label != "Starting"), "no longer listed");
     assert!(!view.composer.sending);
     assert_eq!(view.composer.draft, "Explore the passwords");
     assert!(view.toast.unwrap().message.contains("Unknown project."));
@@ -1591,6 +1608,42 @@ fn a_reconnect_resumes_the_open_thread_and_the_shell_instead_of_reloading() {
     assert_eq!(sub["payload"]["afterSequence"], 45, "only what happened since");
     let shell = sent.iter().find(|r| r["tag"] == "orchestration.subscribeShell").unwrap();
     assert_eq!(shell["payload"]["afterSequence"], 40);
+}
+
+/// A thread opened again shows at once, as it was left, with its rows; its
+/// stream resumes after what it had, with no loading state meanwhile.
+#[test]
+fn a_thread_opened_again_shows_at_once_and_resumes_its_stream() {
+    let (mut model, sent) = connected();
+    let shell_id = sent.iter().find(|r| r["tag"] == "orchestration.subscribeShell").unwrap()["id"].as_str().unwrap().to_owned();
+    let threads = json!([{ "id": "t1", "projectId": "p1", "title": "One" }, { "id": "t2", "projectId": "p1", "title": "Two" }]);
+    let _ = sock(&mut model, chunk(&shell_id, &[records::shell_snapshot(40, json!([{ "id": "p1", "title": "P", "workspaceRoot": "/p" }]), threads)]));
+    let open = |model: &mut Model, id: &str| {
+        let sent = sent_requests(&run(model, Event::SelectThread { thread_id: id.into() }));
+        sent.iter().find(|r| r["tag"] == "orchestration.subscribeThread").expect("subscription").clone()
+    };
+    let reply = |id: &str, text: &str| json!({ "id": format!("i-{id}"), "type": "assistant_message", "messageId": format!("m-{id}"), "text": text, "status": "completed", "ordinal": 1 });
+    let message = |id: &str, text: &str| json!({ "id": format!("m-{id}"), "role": "assistant", "text": text });
+    // t1, first open: a snapshot.
+    let sub = open(&mut model, "t1");
+    assert!(sub["payload"].get("afterSequence").is_none());
+    let snap = records::snapshot(41, json!({ "thread": { "id": "t1", "projectId": "p1", "title": "One" }, "messages": [message("t1", "first reply")], "turnItems": [reply("t1", "first reply")] }));
+    let _ = sock(&mut model, chunk(sub["id"].as_str().unwrap(), &[snap]));
+    let first = DomovoiApp.view(&model).thread.expect("t1 shown");
+    assert!(first.items.iter().any(|r| r.text.contains("first reply")));
+    // t2, then t1 again.
+    let sub = open(&mut model, "t2");
+    let snap = records::snapshot(42, json!({ "thread": { "id": "t2", "projectId": "p1", "title": "Two" }, "messages": [], "turnItems": [] }));
+    let _ = sock(&mut model, chunk(sub["id"].as_str().unwrap(), &[snap]));
+    let sub = open(&mut model, "t1");
+    assert_eq!(sub["payload"]["afterSequence"], 41, "only what happened since it was left");
+    let again = DomovoiApp.view(&model).thread.expect("t1 shown before any reply");
+    assert!(!again.loading, "nothing to wait for: it is on screen");
+    assert_eq!(again.items, first.items, "as it was left");
+    assert_eq!(model.item_cache.lock().unwrap().len(), first.items.len(), "with the rows built for it");
+    // Starting a new thread keeps the one left too.
+    let _ = run(&mut model, Event::NewThread { project_id: None });
+    assert!(model.recent_threads.iter().any(|r| r.id == "t1"));
 }
 
 #[test]
@@ -2174,6 +2227,7 @@ fn a_messages_images_load_through_signed_urls() {
 fn snoozed_threads_wait_apart_and_unread_ones_can_be_listed_alone() {
     let (mut model, _) = connected();
     model.now_ms = domovoi_core::millis_from_iso("2026-11-15T12:00:00.000Z");
+    model.shown_ms = model.now_ms;
     model.projects = vec![records::project(json!({ "id": "p1", "title": "calc", "workspaceRoot": "/w/calc" }))];
     let thread = |id: &str, extra: Value| {
         let mut t = json!({ "id": id, "projectId": "p1", "title": id, "updatedAt": "2026-11-15T11:00:00.000Z", "status": "completed", "lastVisitedAt": "2026-11-15T11:30:00.000Z" });
@@ -2227,6 +2281,7 @@ fn section_count(view: &domovoi_core::view::ViewModel, kind: &str) -> u32 {
 fn threads_are_grouped_by_what_they_need_from_you() {
     let (mut model, _) = connected();
     model.now_ms = domovoi_core::millis_from_iso("2026-11-15T12:00:00.000Z");
+    model.shown_ms = model.now_ms;
     model.projects = vec![records::project(json!({ "id": "p1", "title": "calc", "workspaceRoot": "/w/calc" }))];
     model.providers = vec![];
     let thread = |id: &str, extra: Value| {
@@ -2300,6 +2355,7 @@ fn threads_are_grouped_by_what_they_need_from_you() {
 fn a_thread_opened_from_the_inbox_stays_there_until_you_leave_it() {
     let (mut model, _) = connected();
     model.now_ms = domovoi_core::millis_from_iso("2026-11-15T12:00:00.000Z");
+    model.shown_ms = model.now_ms;
     model.projects = vec![records::project(json!({ "id": "p1", "title": "calc", "workspaceRoot": "/w/calc" }))];
     let thread = |id: &str, extra: Value| {
         let mut t = json!({ "id": id, "projectId": "p1", "title": id, "updatedAt": "2026-11-15T11:00:00.000Z", "status": "completed", "lastVisitedAt": "2026-11-15T10:00:00.000Z" });
@@ -2705,6 +2761,7 @@ fn favorite_models_come_first_on_every_client() {
 fn pi_sessions_and_models_are_named_as_pi() {
     let (mut model, sent) = connected();
     model.now_ms = 1_794_700_000_000;
+    model.shown_ms = model.now_ms;
     let scan = sent_requests(&run(&mut model, Event::ScanAgentSessions));
     let candidates = json!({ "candidates": [
         { "path": "/w/calc", "title": "calc", "sources": ["claudeAgent", "pi"], "threadCount": 2, "lastActiveAt": "2026-11-13T10:00:00.000Z", "alreadyImported": false, "git": null },
@@ -2970,6 +3027,17 @@ fn views_made_from_grown_rows_equal_views_built_whole() {
         if !frame.is_empty() {
             let _ = sock(&mut model, chunk(&stream, &frame));
         }
+        // Typing and quiet ticks between frames: they reach the composer, or nothing shown.
+        match pick(8) {
+            0 => {
+                let text = if step % 3 == 0 { String::new() } else if step % 3 == 1 { "/re".to_owned() } else { format!("a reply {step}") };
+                let _ = run_event(&mut model, Event::SetDraft { text });
+            }
+            1 => {
+                let _ = run_event(&mut model, Event::Tick { now_ms: 1_000 + i64::from(step) });
+            }
+            _ => {}
+        }
         // Read after some steps and not others: several changes meet in one view.
         if pick(5) < 3 {
             let delta: ViewDelta = ffi.view(&model);
@@ -2983,6 +3051,49 @@ fn views_made_from_grown_rows_equal_views_built_whole() {
     assert!(quick > 50 && u64::from(views) > quick + 50, "both ways of building the view were exercised ({quick} of {views})");
     let page = shadow.thread.expect("thread page");
     assert!(page.items.iter().any(|r| r.text.ends_with("more words ") || r.text.ends_with("and ")), "the reply's last words are shown");
+}
+
+/// Typing reaches the composer only: the send button follows the draft at
+/// once, and the next streamed token is still built from its row alone.
+#[test]
+fn typing_updates_the_composer_and_keeps_streamed_tokens_narrow() {
+    use domovoi_core::delta::{FfiApp, ViewDelta};
+    use domovoi_core::rpc::Route;
+    let (mut model, _) = connected();
+    long_thread(&mut model, 5);
+    model.changes.wide();
+    let (stream, _) = model.rpc.request("orchestration.subscribeThread", &json!({ "threadId": "t1" }), Route::Thread("t1".into()));
+    let ffi = FfiApp::checked();
+    let mut shadow = domovoi_core::view::ViewModel::default();
+    let reply = |text: &str, seq: u64| {
+        records::stream_event(seq, "turn-item.updated", &format!("3.{seq}"), json!({ "id": "il0", "threadId": "t1", "runId": "rl", "type": "assistant_message", "messageId": "ml0",
+            "ordinal": 1000, "status": "running", "text": text, "streaming": true, "updatedAt": format!("3.{seq}") }))
+    };
+    let _ = sock(&mut model, chunk(&stream, &[reply("Start.", 11)]));
+    ffi.view(&model).apply(&mut shadow);
+    assert!(!shadow.composer.can_send, "nothing typed yet");
+    // The first character asks for a render: the send button turns on.
+    let effects = run_event(&mut model, Event::SetDraft { text: "h".into() });
+    assert!(effects.iter().any(|e| matches!(e, Effect::Render(_))), "the send button changes, so the view is read");
+    let delta: ViewDelta = ffi.view(&model);
+    assert!(delta.composer.as_ref().is_some_and(|c| c.can_send) && delta.thread.is_none() && delta.sidebar.is_none(), "only the composer changed: {delta:?}");
+    delta.apply(&mut shadow);
+    // More characters change nothing the composer derives: no render.
+    let effects = run_event(&mut model, Event::SetDraft { text: "hello".into() });
+    assert!(!effects.iter().any(|e| matches!(e, Effect::Render(_))), "a keystroke that changes nothing shown is not rendered");
+    let _ = run_event(&mut model, Event::Tick { now_ms: 5_000 });
+    let _ = run_event(&mut model, Event::Tick { now_ms: 10_000 });
+    // The next token: from its row alone, though typing and ticks came between.
+    let from_rows = ffi.views_from_rows();
+    let _ = sock(&mut model, chunk(&stream, &[reply("Start. More.", 12)]));
+    ffi.view(&model).apply(&mut shadow);
+    assert_eq!(ffi.views_from_rows(), from_rows + 1, "the token after typing was built from its row");
+    assert_eq!(shadow, DomovoiApp.view(&model));
+    // Clearing the draft turns the button off again.
+    let effects = run_event(&mut model, Event::SetDraft { text: "  ".into() });
+    assert!(effects.iter().any(|e| matches!(e, Effect::Render(_))));
+    ffi.view(&model).apply(&mut shadow);
+    assert!(!shadow.composer.can_send);
 }
 
 /// An offline copy saved by the build that kept the thread list as the JSON
@@ -3497,6 +3608,16 @@ fn every_request_the_core_sends_is_as_recorded() {
     s.go("remove a keybinding", Event::RemoveKeybinding { command: "thread.new".into(), shortcut: "mod+n".into(), condition: String::new() });
     s.go("remove a keybinding with a condition", Event::RemoveKeybinding { command: "thread.new".into(), shortcut: "mod+n".into(), condition: "!terminalFocus".into() });
     s.go("the usage", Event::LoadUsage { days: 7 });
+    let weekly = ScheduledTaskEdit {
+        name: "Standup".into(), prompt: "Summarize yesterday".into(), project_id: "p1".into(), schedule_kind: "fixed_time".into(), time_of_day: "9:30".into(),
+        weekdays: vec![5, 1, 3, 1], thread_mode: "fresh_session".into(), thread_id: "t1".into(), workspace: "worktree".into(), base_branch: "main".into(),
+        model_instance: "codex".into(), model: "gpt-6".into(), runtime_mode: "full-access".into(), interaction_mode: "plan".into(), enabled: true, ..Default::default()
+    };
+    s.go("a scheduled task with every setting", Event::SaveScheduled { task: Box::new(weekly) });
+    let hook = ScheduledTaskEdit { id: "task-1".into(), name: "On push".into(), prompt: "Review {{body.ref}}".into(), project_id: "p1".into(), schedule_kind: "webhook".into(), enabled: false, ..Default::default() };
+    s.go("a scheduled task changed to a webhook", Event::SaveScheduled { task: Box::new(hook) });
+    s.go("a webhook task's new URL", Event::RotateWebhookToken { id: "task-1".into() });
+    s.go("a webhook task's deliveries", Event::LoadWebhookDeliveries { id: "task-1".into() });
 
     // ---- over HTTP ----
     s.go("a push token", Event::PushToken { token: "apns-1".into(), environment: "production".into() });

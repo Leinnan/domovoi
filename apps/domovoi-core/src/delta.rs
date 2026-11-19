@@ -197,7 +197,7 @@ macro_rules! page_header {
             id, title, project_id, project_title, branch, worktree_path, cwd, model_label, provider_instance_id,
             runtime_mode, interaction_mode, status, working, loading, pinned, settled, archived, pending_requests,
             pending_sends, working_since_ms, checkpoints, find, parent, can_merge_back, can_fork, context, queued,
-            queue_held, background
+            queue_held, background, limit_resets, limit_plan
         )
     };
 }
@@ -238,6 +238,8 @@ pub struct FfiApp {
 struct Sent {
     view: ViewModel,
     mark: (u64, u64),
+    /// `Changes::composer_mark` when the composer was last built.
+    composer: u64,
 }
 
 impl FfiApp {
@@ -257,9 +259,9 @@ impl FfiApp {
 }
 
 impl Sent {
-    /// The delta when rows' text grew and nothing else changed since this
-    /// view: those rows built again, with the view brought up to date.
-    /// `None` when more may have changed (the view is then built whole).
+    /// The delta when rows' text grew, or the composer changed, and nothing
+    /// else changed since this view: those built again, with the view brought
+    /// up to date. `None` when more may have changed (the view is then built whole).
     fn grown(&mut self, model: &Model) -> Option<ViewDelta> {
         let ids = model.changes.rows_since(self.mark)?;
         let mut rows: Vec<(usize, ItemView)> = Vec::with_capacity(ids.len());
@@ -274,17 +276,27 @@ impl Sent {
                 }
             }
         }
-        // Nothing failed: the view takes the rows, and the shell gets them.
+        if !rows.is_empty() && self.view.thread.is_none() {
+            return None;
+        }
+        // Typed in the composer: only the composer is built again.
+        let composer = (model.changes.composer_mark() != self.composer).then(|| crate::present::composer(model)).filter(|c| *c != self.view.composer);
+        // Nothing failed: the view takes the rows and the composer, and the shell gets them.
         self.mark = model.changes.mark();
-        if rows.is_empty() {
-            return Some(ViewDelta::default());
+        self.composer = model.changes.composer_mark();
+        let mut delta = ViewDelta::default();
+        if let Some(composer) = composer {
+            self.view.composer = composer.clone();
+            delta.composer = Some(composer);
         }
-        let page = self.view.thread.as_mut()?;
-        for (at, row) in &rows {
-            page.items[*at] = row.clone();
+        if let Some(page) = self.view.thread.as_mut().filter(|_| !rows.is_empty()) {
+            for (at, row) in &rows {
+                page.items[*at] = row.clone();
+            }
+            let patch = ThreadPatch { header: None, order: None, rows: rows.into_iter().map(|(_, row)| row).collect() };
+            delta.thread = Some(ThreadChange::Page(Box::new(patch)));
         }
-        let patch = ThreadPatch { header: None, order: None, rows: rows.into_iter().map(|(_, row)| row).collect() };
-        Some(ViewDelta { thread: Some(ThreadChange::Page(Box::new(patch))), ..ViewDelta::default() })
+        Some(delta)
     }
 }
 
@@ -331,7 +343,7 @@ impl App for FfiApp {
         }
         let new = DomovoiApp.view(model);
         let delta = ViewDelta::between(sent.as_ref().map(|s| &s.view), &new);
-        *sent = Some(Sent { view: new, mark: model.changes.mark() });
+        *sent = Some(Sent { view: new, mark: model.changes.mark(), composer: model.changes.composer_mark() });
         delta
     }
 }

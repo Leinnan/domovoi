@@ -38,6 +38,8 @@ pub struct LaunchOptions {
     /// `--mcp-config` JSON, and tools allowed without asking.
     pub mcp_config: Option<String>,
     pub allowed_tools: Vec<String>,
+    /// Added to Claude Code's own system prompt (`--append-system-prompt`).
+    pub append_system_prompt: Option<String>,
 }
 
 impl LaunchOptions {
@@ -70,6 +72,9 @@ impl LaunchOptions {
         }
         if !self.allowed_tools.is_empty() {
             a.push(format!("--allowedTools={}", self.allowed_tools.join(",")));
+        }
+        if let Some(p) = &self.append_system_prompt {
+            a.push(format!("--append-system-prompt={p}"));
         }
         if let Some(source) = &self.fork_from {
             a.push(format!("--resume={source}"));
@@ -201,6 +206,18 @@ impl ClaudeCli {
         self.send_user_content(Value::Array(content)).await
     }
 
+    /// A user message of several text blocks (a skill's command last), the images first.
+    pub async fn send_user_blocks(&self, texts: &[String], images: &[(String, std::path::PathBuf)]) -> std::io::Result<String> {
+        use base64::Engine as _;
+        let mut content = vec![];
+        for (mime, path) in images {
+            let bytes = std::fs::read(path)?;
+            content.push(json!({ "type": "image", "source": { "type": "base64", "media_type": mime, "data": base64::engine::general_purpose::STANDARD.encode(bytes) } }));
+        }
+        content.extend(texts.iter().map(|t| json!({ "type": "text", "text": t })));
+        self.send_user_content(Value::Array(content)).await
+    }
+
     async fn send_user_content(&self, content: Value) -> std::io::Result<String> {
         let uuid = crate::util::new_uuid();
         self.write(&json!({
@@ -215,7 +232,8 @@ impl ClaudeCli {
 
     /// A message for the turn in progress (`priority: now`): Claude reads it
     /// at its next step rather than after the turn (t3code steerTurn).
-    pub async fn send_steer(&self, text: &str, images: &[(String, std::path::PathBuf)]) -> std::io::Result<()> {
+    /// Returns the message's uuid, which Claude's `command_lifecycle` events name.
+    pub async fn send_steer(&self, text: &str, images: &[(String, std::path::PathBuf)]) -> std::io::Result<String> {
         use base64::Engine as _;
         let mut content = vec![];
         for (mime, path) in images {
@@ -223,14 +241,16 @@ impl ClaudeCli {
             content.push(json!({ "type": "image", "source": { "type": "base64", "media_type": mime, "data": base64::engine::general_purpose::STANDARD.encode(bytes) } }));
         }
         content.push(json!({ "type": "text", "text": text }));
+        let uuid = crate::util::new_uuid();
         self.write(&json!({
             "type": "user",
             "message": { "role": "user", "content": content },
             "parent_tool_use_id": null,
             "priority": "now",
-            "uuid": crate::util::new_uuid(),
+            "uuid": uuid,
         }))
-        .await
+        .await?;
+        Ok(uuid)
     }
 
     pub async fn interrupt(&self) -> std::io::Result<Value> {
@@ -302,7 +322,7 @@ mod tests {
         let opts = LaunchOptions {
             binary: "claude".into(), cwd: "/w".into(), model: "claude-haiku-5-5".into(),
             session_id: "s1".into(), resume: false, resume_at: None, permission_mode: "default".into(),
-            effort: Some("medium".into()), extra_dirs: vec![], fork_from: None, mcp_config: None, allowed_tools: vec![],
+            effort: Some("medium".into()), extra_dirs: vec![], fork_from: None, mcp_config: None, allowed_tools: vec![], append_system_prompt: None,
         };
         let a = opts.args();
         let recorded = include_str!("../../../fixtures/golden/ts-session1/claude-cli.args.txt");

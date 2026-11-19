@@ -78,7 +78,7 @@ impl Store {
     /// 0 read as "nothing yet" would send clients a snapshot or a resume
     /// point that is not the log's.
     pub fn latest_sequence(&self) -> Result<u64, StoreError> {
-        Ok(self.db.read(|c| c.query_row("SELECT COALESCE(MAX(sequence), 0) FROM events", [], |r| r.get::<_, i64>(0)))? as u64)
+        Ok(self.db.read(|c| c.prepare_cached("SELECT COALESCE(MAX(sequence), 0) FROM events")?.query_row([], |r| r.get::<_, i64>(0)))? as u64)
     }
 
     /// Which records the events in `(after, through]` changed, in order.
@@ -153,10 +153,9 @@ impl Store {
 
     pub fn get_project(&self, id: &str) -> Result<Option<ProjectShell>, StoreError> {
         Ok(self.db.read(|c| {
-            c.query_row("SELECT shell FROM projects WHERE id = ?1 AND deleted = 0", params![id], |r| {
-                r.get::<_, String>(0)
-            })
-            .optional()
+            c.prepare_cached("SELECT shell FROM projects WHERE id = ?1 AND deleted = 0")?
+                .query_row(params![id], |r| r.get::<_, String>(0))
+                .optional()
         })?
         .and_then(|s| decode_project(&s)))
     }

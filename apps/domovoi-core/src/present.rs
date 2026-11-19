@@ -523,10 +523,17 @@ fn thread_page(model: &Model) -> Option<ThreadPageView> {
     let status = shell.map_or(ShellStatus::Idle, shell_status);
     let project_title = shell.and_then(|shell| model.project(shell.project_id.as_str())).map(|p| p.title.clone()).unwrap_or_default();
     let model_label = current_model(model).map(|m| m.label).unwrap_or_default();
+    // Being started: shown from what was sent until the server's copy is.
+    let launching = model.launching_shown(tid);
+    let project_title = if project_title.is_empty() {
+        launching.and_then(|l| model.project(&l.project_id)).map(|p| p.title.clone()).unwrap_or_default()
+    } else {
+        project_title
+    };
     let mut page = ThreadPageView {
         id: tid.to_owned(),
-        title: shell.map(|shell| shell.title.clone()).unwrap_or_default(),
-        project_id: shell.map(|shell| shell.project_id.as_str().to_owned()).unwrap_or_default(),
+        title: shell.map(|shell| shell.title.clone()).or_else(|| launching.map(|l| l.title.clone())).unwrap_or_default(),
+        project_id: shell.map(|shell| shell.project_id.as_str().to_owned()).or_else(|| launching.map(|l| l.project_id.clone())).unwrap_or_default(),
         project_title,
         branch: shell.and_then(|shell| shell.branch.clone()).filter(|branch| !branch.is_empty()),
         worktree_path: shell.and_then(|shell| shell.worktree_path.clone()).filter(|path| !path.is_empty()),
@@ -536,13 +543,26 @@ fn thread_page(model: &Model) -> Option<ThreadPageView> {
         runtime_mode: composer_runtime_mode(model),
         interaction_mode: composer_interaction_mode(model),
         status: status.as_str().into(),
-        working: matches!(status, ShellStatus::Working | ShellStatus::Approval),
-        loading: model.thread.is_none() || model.thread_loading,
+        working: launching.is_some() || matches!(status, ShellStatus::Working | ShellStatus::Approval),
+        // Nothing to wait for while it is being started: its message is shown.
+        loading: launching.is_none() && (model.thread.is_none() || model.thread_loading),
         pinned: shell.is_some_and(is_pinned),
         settled: shell.is_some_and(is_settled),
         archived: shell.is_some_and(|shell| shell.archived_at.is_some()),
         ..Default::default()
     };
+    if let Some(shell) = shell
+        && shell.last_error_class.clone().flatten() == Some(domovoi_model::typed::ProviderFailureClass::UsageLimit)
+        && !page.working
+    {
+        let reset = shell.usage_limit_reset_at.clone().flatten();
+        page.limit_resets = reset.as_ref().map_or_else(|| "later".to_owned(), |r| crate::app::until_label(model.shown_ms, r.as_str()));
+        page.limit_plan = match shell.limit_recovery.clone().flatten() {
+            Some(r) if r.snooze == Some(true) && !r.auto_resume => "snooze".into(),
+            Some(r) if r.auto_resume => "resume".into(),
+            _ => String::new(),
+        };
+    }
     page.pending_sends = model
         .composer
         .outbox
@@ -560,6 +580,10 @@ fn thread_page(model: &Model) -> Option<ThreadPageView> {
             state: if model.connection == Connection::Connected { "sending".into() } else { "waiting".into() },
         })
         .collect();
+    if let Some(l) = launching {
+        let state = if model.connection == Connection::Connected { "sending" } else { "waiting" };
+        page.pending_sends.insert(0, PendingSendView { id: l.message_id.clone(), text: l.text.clone(), state: state.into() });
+    }
     page.parent = shell.and_then(|shell| Some((shell, shell.lineage.parent_thread_id.as_ref()?))).map(|(shell, parent)| ThreadLinkView {
         thread_id: parent.as_str().to_owned(),
         title: model.thread_shell(parent.as_str()).map(|t| t.title.clone()).filter(|t| !t.is_empty()).unwrap_or_else(|| "Earlier thread".into()),
@@ -949,7 +973,7 @@ fn model_picker(model: &Model, selected: Option<&ModelOption>) -> (Vec<ModelRowV
     (favorite_models, groups, count)
 }
 
-fn composer(model: &Model) -> ComposerView {
+pub(crate) fn composer(model: &Model) -> ComposerView {
     let selected = current_model(model);
     let (favorite_models, groups, model_count) = model_picker(model, selected.as_ref());
     let efforts = selected
@@ -1251,7 +1275,7 @@ fn settings(model: &Model) -> SettingsView {
             label: c.client.label.clone().filter(|label| !label.is_empty()).unwrap_or_else(|| if c.method == ServerAuthSessionMethod::BrowserSessionCookie { "Browser".into() } else { c.subject.clone() }),
             detail: {
                 let os = c.client.os.as_deref().filter(|os| !os.is_empty()).map(|o| format!("{o} · ")).unwrap_or_default();
-                format!("{os}Signed in {}", age_label(model.now_ms, c.issued_at.as_str()))
+                format!("{os}Signed in {}", age_label(model.shown_ms, c.issued_at.as_str()))
             },
             current: c.current,
             device_type: Some(c.client.device_type.as_str()).filter(|kind| !kind.is_empty()).unwrap_or(AuthClientDeviceType::Unknown.as_str()).to_owned(),
@@ -1299,6 +1323,7 @@ fn settings(model: &Model) -> SettingsView {
                 message: p.message.clone().unwrap_or_default(),
                 model_count: p.models.len() as u32,
                 enabled: p.enabled,
+                limits: limits_label(model.shown_ms, p.usage_limits.as_ref()),
             })
             .collect(),
         keybindings: model.keybindings.iter().map(keybinding_view).collect(),
@@ -1314,12 +1339,63 @@ fn settings(model: &Model) -> SettingsView {
                 next_run: t.next_run_at.as_ref().map(|n| n.as_str().replace('T', " ").chars().take(16).collect()).unwrap_or_else(|| "—".into()),
                 last_run: match &t.last_run_status {
                     ScheduledTaskRunStatus::Never => "Never run".into(),
-                    status => format!("{} {}", status.as_str(), age_label(model.now_ms, t.last_run_at.as_ref().map_or("", Timestamp::as_str))),
+                    status => format!("{} {}", status.as_str(), age_label(model.shown_ms, t.last_run_at.as_ref().map_or("", Timestamp::as_str))),
                 },
                 project_title: model.project(t.project_id.as_str()).map(|p| p.title.clone()).unwrap_or_default(),
+                project_id: t.project_id.as_str().to_owned(),
+                schedule_kind: match &t.schedule {
+                    ScheduledTaskSchedule::Interval(_) => "interval",
+                    ScheduledTaskSchedule::FixedTime(_) => "fixed_time",
+                    ScheduledTaskSchedule::Once(_) => "once",
+                    ScheduledTaskSchedule::Webhook(_) => "webhook",
+                    ScheduledTaskSchedule::Other(_) => "",
+                }
+                .to_owned(),
+                interval_minutes: match &t.schedule {
+                    ScheduledTaskSchedule::Interval(i) => u32::try_from(i.every_ms / 60_000).unwrap_or(u32::MAX),
+                    _ => 60,
+                },
+                time_of_day: match &t.schedule {
+                    ScheduledTaskSchedule::FixedTime(f) => f.time_of_day.clone(),
+                    _ => String::new(),
+                },
+                weekdays: match &t.schedule {
+                    ScheduledTaskSchedule::FixedTime(f) => f.weekdays.iter().flatten().filter_map(|d| u8::try_from(*d).ok()).collect(),
+                    _ => vec![],
+                },
+                run_at: match &t.schedule {
+                    ScheduledTaskSchedule::Once(o) => o.run_at.as_str().to_owned(),
+                    _ => String::new(),
+                },
+                thread_mode: t.thread_mode.as_ref().map_or_else(|| if t.thread_id.is_some() { "continue".into() } else { "new_thread".into() }, |m| m.as_str().to_owned()),
+                thread_id: t.thread_id.as_ref().map(|id| id.as_str().to_owned()).unwrap_or_default(),
+                workspace: if matches!(t.workspace_strategy, domovoi_model::typed::WorkspaceStrategy::Worktree { .. }) { "worktree".into() } else { "root".into() },
+                base_branch: match &t.workspace_strategy {
+                    domovoi_model::typed::WorkspaceStrategy::Worktree { base_ref, .. } => base_ref.clone(),
+                    _ => String::new(),
+                },
+                model_instance: t.model_selection.instance_id.as_str().to_owned(),
+                model: t.model_selection.model.clone(),
+                runtime_mode: t.runtime_mode.as_str().to_owned(),
+                interaction_mode: t.interaction_mode.as_str().to_owned(),
+                last_error: t.last_run_error.clone().unwrap_or_default(),
+                webhook_url: t.webhook.as_ref().map(|w| w.url.clone().unwrap_or_else(|| w.path.clone())).unwrap_or_default(),
             })
             .collect(),
         scheduled_time_zone: pages.scheduled_time_zone.clone(),
+        webhook_deliveries_task: pages.webhook_deliveries.as_ref().map(|(id, _)| id.clone()).unwrap_or_default(),
+        webhook_deliveries: pages
+            .webhook_deliveries
+            .iter()
+            .flat_map(|(_, list)| list.iter())
+            .map(|d| WebhookDeliveryView {
+                id: d.id.clone(),
+                received: age_label(model.shown_ms, &d.received_at),
+                method: d.method.clone(),
+                outcome: d.outcome.replace('_', " "),
+                detail: d.error.clone().unwrap_or_else(|| if d.missing_fields.is_empty() { String::new() } else { format!("Missing: {}", d.missing_fields.join(", ")) }),
+            })
+            .collect(),
         archived: crate::sidebar::thread_rows(model, &model.archived),
         storage: StorageView {
             database_size: pages.database.as_ref().and_then(|db| db.database_bytes.as_f64()).map(bytes_label).unwrap_or_default(),
@@ -1330,7 +1406,7 @@ fn settings(model: &Model) -> SettingsView {
                     cleanup.counts.removed,
                     cleanup.counts.kept,
                     bytes_label(cleanup.bytes_freed.as_ref().and_then(serde_json::Number::as_f64).unwrap_or(0.0)),
-                    age_label(model.now_ms, cleanup.finished_at.as_str())
+                    age_label(model.shown_ms, cleanup.finished_at.as_str())
                 ),
                 None => "Not run yet".into(),
             },
@@ -1398,6 +1474,23 @@ fn when_text(n: &KeybindingWhenNode) -> String {
     }
 }
 
+/// A provider's usage windows in a line; the fullest window says when it resets.
+fn limits_label(now_ms: i64, limits: Option<&domovoi_model::typed::ServerProviderUsageLimits>) -> String {
+    let Some(limits) = limits else { return String::new() };
+    let windows: Vec<_> = limits.windows.iter().collect();
+    if windows.is_empty() {
+        return String::new();
+    }
+    let used = |w: &domovoi_model::typed::ServerProviderUsageWindow| w.used_percent.as_f64().unwrap_or(0.0);
+    let mut line = windows.iter().map(|w| format!("{} {:.0}%", w.label, used(w))).collect::<Vec<_>>().join(" · ");
+    if let Some(fullest) = windows.iter().max_by(|a, b| used(a).total_cmp(&used(b))).filter(|w| used(w) >= 50.0)
+        && let Some(reset) = &fullest.resets_at
+    {
+        line.push_str(&format!(", resets {}", crate::app::until_label(now_ms, reset.as_str())));
+    }
+    line
+}
+
 fn schedule_label(s: &ScheduledTaskSchedule) -> String {
     match s {
         ScheduledTaskSchedule::Interval(interval) => {
@@ -1408,7 +1501,15 @@ fn schedule_label(s: &ScheduledTaskSchedule) -> String {
                 m => format!("Every {m} minute(s)"),
             }
         }
-        ScheduledTaskSchedule::FixedTime(fixed) => format!("Daily at {}", fixed.time_of_day),
+        ScheduledTaskSchedule::FixedTime(fixed) => match fixed.weekdays.as_deref() {
+            None | Some([]) => format!("Daily at {}", fixed.time_of_day),
+            Some(days) if days == [1, 2, 3, 4, 5] => format!("Weekdays at {}", fixed.time_of_day),
+            Some(days) => {
+                const NAMES: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+                let names: Vec<&str> = days.iter().filter_map(|d| NAMES.get(*d as usize).copied()).collect();
+                format!("{} at {}", names.join(", "), fixed.time_of_day)
+            }
+        },
         ScheduledTaskSchedule::Once(once) => format!("Once at {}", once.run_at),
         ScheduledTaskSchedule::Webhook(_) => "On webhook".into(),
         ScheduledTaskSchedule::Other(_) => String::new(),
@@ -1437,7 +1538,7 @@ fn pull_requests(model: &Model) -> PullRequestsView {
                 url: e.url.clone(),
                 head: e.head_branch.clone(),
                 base: e.base_branch.clone(),
-                age: age_label(model.now_ms, e.updated_at.as_str()),
+                age: age_label(model.shown_ms, e.updated_at.as_str()),
                 checks: e.checks_state.as_ref().map(|checks| checks.as_str().to_owned()).unwrap_or_default(),
             })
             .collect(),
@@ -1583,7 +1684,7 @@ pub fn source_label(source: &str) -> &'static str {
 
 fn agent_sessions(model: &Model) -> AgentSessionsView {
     let st = &model.sessions;
-    let two_weeks_ago = crate::app::iso_from_millis(model.now_ms - 14 * 24 * 60 * 60 * 1000);
+    let two_weeks_ago = crate::app::iso_from_millis(model.shown_ms - 14 * 24 * 60 * 60 * 1000);
     let candidates: Vec<AgentSessionCandidateView> = st
         .candidates
         .iter()
@@ -1601,7 +1702,7 @@ fn agent_sessions(model: &Model) -> AgentSessionsView {
                 title: c.title.clone(),
                 sources: sources.join(" · "),
                 thread_count: count,
-                detail: match age_label(model.now_ms, last).as_str() {
+                detail: match age_label(model.shown_ms, last).as_str() {
                     "now" => format!("{sessions} · active now"),
                     age => format!("{sessions} · {age} ago"),
                 },

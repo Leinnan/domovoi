@@ -52,6 +52,11 @@ pub trait ProviderHost: Send + Sync + 'static {
 
 /// Marks a run failed with a root `error` turn item the client renders.
 pub fn fail_run(store: &Store, thread_id: &str, run_id: &str, message: &str, class: ProviderFailureClass) {
+    fail_run_with(store, thread_id, run_id, message, class, None);
+}
+
+/// [`fail_run`], with when the limit that stopped it resets (a `usage_limit` failure).
+pub fn fail_run_with(store: &Store, thread_id: &str, run_id: &str, message: &str, class: ProviderFailureClass, reset_at: Option<Timestamp>) {
     let Ok(Some(run)) = store.record::<Run>(thread_id, run_id) else { return };
     let ts = Timestamp::from(domovoi_contracts::iso_now());
     let o = Origin { provider_instance_id: Some(run.provider_instance_id.as_str().to_owned()), ..Default::default() };
@@ -85,7 +90,7 @@ pub fn fail_run(store: &Store, thread_id: &str, run_id: &str, message: &str, cla
         updated_at: ts.clone(),
     };
     let item = turn_item!(Error(ErrorItem), shared, {
-        failure: ProviderFailure { class, message: message.to_owned(), code: None, retryable: Some(false), reset_at: None },
+        failure: ProviderFailure { class, message: message.to_owned(), code: None, retryable: Some(false), reset_at: reset_at.map(Some) },
         retry: None,
     });
     let _ = store.append_event(thread_id, EventBody::TurnItemUpdated(item), &o);

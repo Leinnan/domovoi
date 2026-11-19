@@ -13,6 +13,13 @@ enum Snapshots {
         ProcessInfo.processInfo.environment["DOMOVOI_SNAPSHOT_DIR"].map { URL(fileURLWithPath: $0) }
     }
 
+    /// Set while the snapshots run: the Scheduled tab opens its editor.
+    static var openScheduledEditorStore = false
+    static var openScheduledEditor: Bool {
+        get { openScheduledEditorStore }
+        set { openScheduledEditorStore = newValue; NotificationCenter.default.post(name: .snapshotOpenScheduledEditor, object: nil) }
+    }
+
     static func run(_ core: Core, openSettings: () -> Void) async {
         guard let dir = directory else { return }
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -102,6 +109,12 @@ enum Snapshots {
         await wait(10) { !core.view.settings.remote.link.isEmpty || core.view.settings.remote.error != nil }
         await settle(1.5)
         await capture("11-remote-access", dir)
+        SettingsTab.shared.selection = "scheduled"
+        await settle(1.5)
+        await capture("12-scheduled", dir)
+        openScheduledEditor = true
+        await settle(1.5)
+        await capture("13-scheduled-editor", dir)
         NSApp.terminate(nil)
     }
 
@@ -147,4 +160,8 @@ enum Snapshots {
             try? NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])?.write(to: file)
         }
     }
+}
+
+extension Notification.Name {
+    static let snapshotOpenScheduledEditor = Notification.Name("snapshotOpenScheduledEditor")
 }

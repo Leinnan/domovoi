@@ -681,3 +681,50 @@ fn frecency_decays_and_keeps_picks() {
     let later = record_open(Some(&first), 14 * 24 * 3600 * 1000, None);
     assert!((later.score.as_f64().unwrap() - 1.5).abs() < 1e-9);
 }
+
+#[tokio::test]
+async fn a_fresh_context_message_starts_a_new_session_that_later_messages_continue() {
+    let (o, _fx) = setup();
+    o.launch_thread(launch("t1")).await.unwrap();
+    let first = finish_run(&o, "t1", "Did one.");
+    let mut fresh = send("c-fresh", "t1", "m2", "start over", DispatchMode::QueueAfterActive);
+    fresh.fresh_context = Some(true);
+    o.dispatch(fresh.into()).await.unwrap();
+    let t = held(&o, "t1");
+    let run2 = t.runs.iter().find(|r| r.ordinal == 2).unwrap();
+    assert_eq!(run2.fresh_context, Some(true));
+    assert_ne!(run2.provider_thread_id, first.provider_thread_id, "a provider session of its own");
+    assert!(t.context_handoffs.is_empty(), "nothing from before is handed over");
+    let Some(TurnItem::UserMessage(item)) = t.turn_item_of_message(&"m2".into()) else { panic!("the message's turn item") };
+    assert_eq!(item.fresh_context, Some(true));
+
+    // The next message continues the fresh session.
+    let second = finish_run(&o, "t1", "Started over.");
+    o.dispatch(say("t1", "3", None)).await.unwrap();
+    let run3 = held(&o, "t1").runs.iter().find(|r| r.ordinal == 3).unwrap().provider_thread_id.clone();
+    assert_eq!(run3, second.provider_thread_id);
+
+    // Another provider gets the conversation since the fresh start only.
+    finish_run(&o, "t1", "Third.");
+    o.dispatch(say("t1", "4", Some(model("claudeAgent", "claude-haiku-5-5")))).await.unwrap();
+    let t = held(&o, "t1");
+    let handoff = t.context_handoffs.iter().next().expect("a handoff");
+    assert_eq!((handoff.covered_run_ordinals.from, handoff.covered_run_ordinals.to), (2, 3));
+}
+
+#[tokio::test]
+async fn a_scheduled_fresh_session_is_a_side_conversation() {
+    let (o, _fx) = setup();
+    o.launch_thread(launch("t1")).await.unwrap();
+    let first = finish_run(&o, "t1", "Did one.");
+    let mut scheduled = send("c-sched", "t1", "m2", "daily check", DispatchMode::QueueAfterActive);
+    scheduled.fresh_context = Some(true);
+    scheduled.scheduled_task_id = Some("task-1".into());
+    o.dispatch(scheduled.into()).await.unwrap();
+    let side = finish_run(&o, "t1", "All good.");
+    assert_ne!(side.provider_thread_id, first.provider_thread_id);
+    // The user's next message continues the thread's own conversation.
+    o.dispatch(say("t1", "3", None)).await.unwrap();
+    let run3 = held(&o, "t1").runs.iter().find(|r| r.ordinal == 3).unwrap().provider_thread_id.clone();
+    assert_eq!(run3, first.provider_thread_id);
+}

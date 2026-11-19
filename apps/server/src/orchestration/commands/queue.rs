@@ -15,10 +15,10 @@ use domovoi_model::typed::{
 /// The provider thread a run is given before the provider has one of its own
 /// for it: not loaded, with no native thread yet.
 pub(super) fn placeholder_provider_thread(thread_id: &str, instance: &ProviderInstanceId, run_id: &str, ordinal: u64, at: &Timestamp) -> ProviderThread {
-    let driver = driver_for_instance(instance.as_str());
+    let driver = &driver_for_instance(instance.as_str());
     ProviderThread {
         id: format!("provider-thread:provider:{driver}:native-thread:{}", enc(&format!("pending:{run_id}"))).into(),
-        driver: driver.into(),
+        driver: driver.as_str().into(),
         provider_instance_id: instance.clone(),
         provider_session_id: Some(provider_session_id(instance.as_str(), thread_id).into()),
         app_thread_id: Some(thread_id.into()),
@@ -182,6 +182,8 @@ impl Orchestrator {
             created_by: &message.created_by,
             creation_source: &message.creation_source,
             intent: InputIntent::PromotedQueuedToSteer,
+            scheduled_task_id: message.scheduled_task_id.as_ref(),
+            fresh_context: false,
         };
         self.steer_into(&c.command_id, &c.thread_id, steered, &outline, &target)
     }
@@ -206,21 +208,41 @@ impl Orchestrator {
         let (ordinal, instance) = (next.ordinal, &next.provider_instance_id);
         let at = now();
         let origin = Origin { provider_instance_id: Some(instance.as_str().to_owned()), ..Default::default() };
-        // The thread's provider thread for this instance, or a new one not yet loaded.
-        let held = outline.provider_threads.iter().find(|pt| thread.active_provider_thread_id.as_ref() == Some(&pt.id) && pt.provider_instance_id == *instance);
+        // The conversation's provider thread for this instance, or a new one not
+        // yet loaded (always, for a fresh-context run).
+        let fresh = next.fresh_context == Some(true);
+        let held = if fresh { None } else { super::message::conversation_provider_thread(&self.store, thread_id, &outline, &thread, instance) };
+        let reused = held.is_some();
         let mut provider_thread = match held {
-            Some(held) => (**held).clone(),
+            Some(held) => held,
             None => placeholder_provider_thread(thread_id, instance, run_id, ordinal, &at),
         };
         provider_thread.last_run_ordinal = Some(ordinal);
         provider_thread.updated_at = at.clone();
         let provider_thread_id = provider_thread.id.clone();
+        // A new provider thread (another provider, or the thread moved to
+        // another folder while this waited) gets the conversation so far.
+        let handoff = if reused || fresh || next.context_handoff_id.is_some() {
+            None
+        } else {
+            super::message::catch_up(&self.store, &thread.id, &outline, run_id, ordinal, &provider_thread_id, instance, &at)?
+        };
+        if let Some((made, _)) = &handoff {
+            provider_thread.handoff_ids.push(made.id.clone());
+        }
         self.store.append_event(thread_id, EventBody::ProviderThreadUpdated(Box::new(provider_thread)), &origin)?;
         let mut run = (**next).clone();
         run.status = RunStatus::Starting;
         run.queue_position = Some(None);
         run.provider_thread_id = Some(provider_thread_id.clone());
+        if let Some((made, _)) = &handoff {
+            run.context_handoff_id = Some(made.id.clone());
+        }
         self.store.append_event(thread_id, EventBody::RunUpdated(Box::new(run)), &origin)?;
+        if let Some((made, item)) = handoff {
+            self.store.append_event(thread_id, EventBody::ContextHandoffUpdated(Box::new(made)), &origin)?;
+            self.store.append_event(thread_id, EventBody::TurnItemUpdated(item), &origin)?;
+        }
         let message = self
             .store
             .record::<ConversationMessage>(thread_id, next.user_message_id.as_str())?
@@ -232,6 +254,8 @@ impl Orchestrator {
             created_by: &message.created_by,
             creation_source: &message.creation_source,
             intent: InputIntent::QueuedTurn,
+            scheduled_task_id: message.scheduled_task_id.as_ref(),
+            fresh_context: fresh,
         };
         let item = user_turn_item(thread_id, run_id, &root_node_id(run_id), Some(&provider_thread_id), ordinal, sent, &at);
         self.store.append_event(thread_id, EventBody::TurnItemUpdated(item), &origin)?;

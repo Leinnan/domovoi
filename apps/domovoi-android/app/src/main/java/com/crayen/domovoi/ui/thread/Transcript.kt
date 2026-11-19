@@ -205,6 +205,7 @@ fun Transcript(thread: ThreadPageView, retryBlocked: Boolean, actions: Transcrip
         ) {
             // Reversed: the end first.
             item("bottom") { Spacer(Modifier.height(1.dp)) }
+            if (thread.limitResets.isNotEmpty()) item("limit") { UsageLimitBanner(thread.limitResets, thread.limitPlan, actions) }
             if (thread.working) {
                 item("working") { WorkingRow(thread.status, thread.workingSinceMs, thread.background.ifEmpty { liveSummary(lines) }) }
             } else if (thread.status == "interrupted" && thread.pendingSends.isEmpty() && thread.items.isNotEmpty()) {
@@ -650,6 +651,28 @@ private fun ParentBanner(parent: ThreadLinkView, canMergeBack: Boolean, actions:
         confirmButton = { TextButton(onClick = { confirm = false; actions.send(Event.MergeBack) }) { Text("Merge back") } },
         dismissButton = { TextButton(onClick = { confirm = false }) { Text("Cancel") } },
     )
+}
+
+/** The last turn stopped on a usage limit: when it resets, and continuing (or snoozing) the thread then. */
+@Composable
+private fun UsageLimitBanner(resets: String, plan: String, actions: TranscriptActions) {
+    Surface(color = MaterialTheme.colorScheme.surfaceContainerLow, shape = MaterialTheme.shapes.medium, modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(Space.m), verticalArrangement = Arrangement.spacedBy(Space.s)) {
+            Text(if (resets == "now") "The usage limit has reset." else "Usage limit reached. It resets $resets.", style = MaterialTheme.typography.labelLarge)
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Space.s)) {
+                when (plan) {
+                    "resume", "snooze" -> {
+                        Text(if (plan == "resume") "Continues when it resets." else "Snoozed until it resets.", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        TextButton(onClick = { actions.send(Event.CancelLimitPlan) }) { Text("Cancel") }
+                    }
+                    else -> {
+                        androidx.compose.material3.FilledTonalButton(onClick = { actions.send(Event.PlanForLimitReset(false)) }) { Text("Resume at reset") }
+                        TextButton(onClick = { actions.send(Event.PlanForLimitReset(true)) }) { Text("Snooze until reset") }
+                    }
+                }
+            }
+        }
+    }
 }
 
 @Composable

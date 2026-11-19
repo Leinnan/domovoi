@@ -1,7 +1,7 @@
 //! `scheduledTasks.*` RPCs over [`crate::scheduled_tasks`].
 
-use super::Never;
-use crate::scheduled_tasks::{self as tasks, ScheduledTaskError, UpsertInput, task_error};
+
+use crate::scheduled_tasks::{self as tasks, ScheduledTaskError, UpsertInput};
 use crate::state::ConnCtx;
 use effect_rpc::Router;
 use futures::StreamExt;
@@ -36,11 +36,27 @@ struct Deleted {
     id: String,
 }
 
-/// `ScheduledTaskListWebhookDeliveriesResult`. Domovoi serves no webhook route, so
-/// no delivery is ever logged.
+/// `ScheduledTaskListWebhookDeliveriesInput` / `ScheduledTaskGetWebhookDeliveryInput`.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DeliveriesInput {
+    id: String,
+    #[serde(default)]
+    delivery_id: Option<String>,
+    #[serde(default)]
+    accept_any_outcome: Option<bool>,
+}
+
+/// `ScheduledTaskListWebhookDeliveriesResult`.
 #[derive(Serialize)]
 struct Deliveries {
-    deliveries: [Never; 0],
+    deliveries: Vec<crate::webhooks::Delivery>,
+}
+
+/// `ScheduledTaskGetWebhookDeliveryResult`.
+#[derive(Serialize)]
+struct OneDelivery {
+    delivery: crate::webhooks::Delivery,
 }
 
 /// Webhook URLs start agents, so only operate-scoped sessions see them.
@@ -109,10 +125,14 @@ pub fn register(r: Router<ConnCtx>) -> Router<ConnCtx> {
             service.notify_changed();
             Ok::<_, ScheduledTaskError>(TaskAnswer { task })
         })
-        .unary("scheduledTasks.listWebhookDeliveries", |_ctx: Arc<ConnCtx>, _input: IdInput| async move { Ok::<_, Never>(Deliveries { deliveries: [] }) })
-        // With no delivery logged, none is ever found (`ScheduledTaskGetWebhookDeliveryResult` is never answered).
-        .unary("scheduledTasks.getWebhookDelivery", |_ctx: Arc<ConnCtx>, input: IdInput| async move {
-            Err::<Never, _>(task_error("Webhook delivery not found.", Some(&input.id)))
+        .unary("scheduledTasks.listWebhookDeliveries", |ctx: Arc<ConnCtx>, input: DeliveriesInput| async move {
+            let deliveries = crate::webhooks::list(&ctx.state.store, &input.id, input.accept_any_outcome == Some(true))?;
+            Ok::<_, ScheduledTaskError>(Deliveries { deliveries })
+        })
+        .unary("scheduledTasks.getWebhookDelivery", |ctx: Arc<ConnCtx>, input: DeliveriesInput| async move {
+            let id = input.delivery_id.as_deref().unwrap_or_default();
+            let delivery = crate::webhooks::get(&ctx.state.store, &input.id, id, input.accept_any_outcome == Some(true))?;
+            Ok::<_, ScheduledTaskError>(OneDelivery { delivery })
         })
 }
 
@@ -142,7 +162,7 @@ mod tests {
         assert_eq!(json!(list), sent, "the list as an operating session gets it");
         let hidden = json!({ "tasks": [task("hook", hook, json!(null)), task("timed", json!({ "type": "interval", "everyMs": 60000 }), json!(null))], "timeZone": null });
         assert_eq!(json!(without_webhooks(list)), hidden);
-        assert_eq!(json!(Deliveries { deliveries: [] }), json!({ "deliveries": [] }));
+        assert_eq!(json!(Deliveries { deliveries: vec![] }), json!({ "deliveries": [] }));
         assert_eq!(json!(Deleted { id: "hook".into() }), json!({ "id": "hook" }));
     }
 }

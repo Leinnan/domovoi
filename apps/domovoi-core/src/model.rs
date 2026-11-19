@@ -72,6 +72,10 @@ pub struct TunnelState {
 #[derive(Default)]
 pub struct Model {
     pub now_ms: i64,
+    /// The time the view's relative ages ("2 min ago") are told from: `now_ms`
+    /// when the view was last built whole. A quiet tick moves `now_ms` only,
+    /// so it changes nothing shown.
+    pub shown_ms: i64,
     pub focused: bool,
     /// `desktop` | `mobile`
     pub surface: String,
@@ -214,6 +218,12 @@ pub struct Model {
     pub markdown_prefixes: std::sync::Mutex<rustc_hash::FxHashMap<String, crate::markdown::Prefix>>,
     /// Rows whose long output is shown in full.
     pub expanded: HashSet<String>,
+    /// Threads opened lately, newest last, with the rows built for them: one
+    /// opened again shows at once and only catches up on what happened since.
+    pub recent_threads: std::collections::VecDeque<RecentThread>,
+    /// The thread being started: shown, open and listed, from the moment it is
+    /// sent until the server has it (its shell and its first message).
+    pub starting_thread: Option<Launching>,
 
     /// Last status notified per thread, so each transition notifies once.
     pub notified: HashMap<String, ShellStatus>,
@@ -225,6 +235,75 @@ pub struct Model {
 /// current exactly while the thread still holds the records named here.
 /// They are kept, not just their addresses: a record that left the thread
 /// stays where it is, and no later one can be mistaken for it.
+/// A thread sent to be started, before the server has it (`Model::starting_thread`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Launching {
+    pub id: String,
+    pub project_id: String,
+    pub title: String,
+    pub message_id: String,
+    pub text: String,
+}
+
+impl Model {
+    /// The thread being started, while `id` is it and the server's copy is not
+    /// shown yet: no shell, or no first message in the open thread.
+    pub fn launching_shown(&self, id: &str) -> Option<&Launching> {
+        self.starting_thread.as_ref().filter(|l| l.id == id).filter(|l| !self.thread.as_ref().is_some_and(|t| t.messages.contains(l.message_id.as_str())))
+    }
+}
+
+/// A thread no longer open, as it was when it was left (`Model::recent_threads`).
+pub struct RecentThread {
+    pub id: String,
+    pub thread: domovoi_model::typed::Thread,
+    /// The last event of it applied: the stream resumes after it.
+    pub sequence: u64,
+    /// Its transcript's rows, as built.
+    pub rows: Vec<(TurnItemId, BuiltRow)>,
+}
+
+/// At most this many threads are kept once left ...
+pub const RECENT_THREADS: usize = 8;
+/// ... holding at most this many turn items between them (a long thread's
+/// items with their rows are a few KB each).
+pub const RECENT_TURN_ITEMS: usize = 12_000;
+
+impl Model {
+    /// Keeps the open thread, with its rows, among the recent ones, before
+    /// another is opened. One with gaps in its events, or not from a stream,
+    /// is not kept: it would be shown as it should not be.
+    pub fn keep_open_thread(&mut self) {
+        let (Some(id), Some(thread)) = (self.selected_thread.clone(), self.thread.take()) else { return };
+        if self.thread_sequence == 0 || self.thread_gaps > 0 {
+            return;
+        }
+        let rows: Vec<(TurnItemId, BuiltRow)> = self.item_cache.get_mut().unwrap_or_else(std::sync::PoisonError::into_inner).drain().collect();
+        self.recent_threads.retain(|r| r.id != id);
+        self.recent_threads.push_back(RecentThread { id, thread, sequence: self.thread_sequence, rows });
+        let mut items: usize = self.recent_threads.iter().map(|r| r.thread.turn_items.len()).sum();
+        while self.recent_threads.len() > RECENT_THREADS || (items > RECENT_TURN_ITEMS && self.recent_threads.len() > 1) {
+            if let Some(old) = self.recent_threads.pop_front() {
+                items -= old.thread.turn_items.len();
+            }
+        }
+        // The newest alone may be over the budget: kept only if it fits.
+        if items > RECENT_TURN_ITEMS {
+            self.recent_threads.clear();
+        }
+    }
+
+    /// The thread `id` as it was left, with its rows back in the cache.
+    pub fn take_recent_thread(&mut self, id: &str) -> Option<(domovoi_model::typed::Thread, u64)> {
+        let at = self.recent_threads.iter().position(|r| r.id == id)?;
+        let recent = self.recent_threads.remove(at)?;
+        let cache = self.item_cache.get_mut().unwrap_or_else(std::sync::PoisonError::into_inner);
+        cache.clear();
+        cache.extend(recent.rows);
+        Some((recent.thread, recent.sequence))
+    }
+}
+
 pub struct BuiltRow {
     pub item: Arc<TurnItem>,
     /// The message the item shows, if it shows one the thread holds.
@@ -455,10 +534,25 @@ pub struct Palette {
     pub highlighted: usize,
 }
 
+/// A webhook delivery as the task's log lists it (`ScheduledTaskWebhookDeliverySummary`).
+#[derive(Deserialize, Clone, Debug, PartialEq, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct WebhookDelivery {
+    pub id: String,
+    pub received_at: String,
+    pub method: String,
+    pub outcome: String,
+    pub signature_verified: bool,
+    pub missing_fields: Vec<String>,
+    pub error: Option<String>,
+}
+
 #[derive(Default)]
 pub struct Pages {
     pub scheduled: Vec<ScheduledTask>,
     pub scheduled_time_zone: String,
+    /// The deliveries of the webhook task last opened: its id and its log.
+    pub webhook_deliveries: Option<(String, Vec<WebhookDelivery>)>,
     pub access: Option<AuthAccessSnapshot>,
     pub database: Option<DatabaseStorageStatus>,
     pub cleanup: Option<StorageCleanupReport>,
@@ -491,8 +585,10 @@ pub struct Pages {
 /// from the rows named here when nothing wider happened since its last one.
 ///
 /// Every update goes through `DomovoiApp::update`, which counts it as wide unless
-/// it was a socket frame that says otherwise. Code that changes a `Model`
-/// some other way (a test, a bench) calls `wide` itself.
+/// it was a socket frame that says otherwise, or an update that said how far
+/// it reaches (`composer`, `nothing_shown`): a keystroke or a quiet tick must
+/// not make the next streamed token build the whole view. Code that changes a
+/// `Model` some other way (a test, a bench) calls `wide` itself.
 #[derive(Debug, Default)]
 pub struct Changes {
     /// Counts the updates that may have changed anything.
@@ -505,6 +601,10 @@ pub struct Changes {
     /// A socket frame is being applied, and something in it reaches further
     /// than a row's text.
     frame_wide: bool,
+    /// Counts the updates that changed the composer and nothing else.
+    composer: u64,
+    /// The update being applied said how far it reaches.
+    scoped: bool,
 }
 
 /// More rows than change between two views; a view further behind than
@@ -531,11 +631,41 @@ impl Changes {
         self.frame_wide = true;
     }
 
-    /// Ends a socket frame: counted as wide if anything in it was.
-    pub fn end_frame(&mut self) {
-        if std::mem::take(&mut self.frame_wide) {
+    /// Ends a socket frame: counted as wide if anything in it was. Whether it was.
+    pub fn end_frame(&mut self) -> bool {
+        self.scoped = false;
+        let wide = std::mem::take(&mut self.frame_wide);
+        if wide {
             self.wide();
         }
+        wide
+    }
+
+    /// The update being applied changes the composer and nothing else in the view.
+    pub fn composer(&mut self) {
+        self.composer += 1;
+        self.scoped = true;
+    }
+
+    /// The update being applied changes nothing the view shows.
+    pub fn nothing_shown(&mut self) {
+        self.scoped = true;
+    }
+
+    /// Ends an update that was no socket frame: wide unless it said how far
+    /// it reaches. Whether it was wide.
+    pub fn end_update(&mut self) -> bool {
+        let wide = !std::mem::take(&mut self.scoped);
+        if wide {
+            self.wide();
+        }
+        wide
+    }
+
+    /// How many composer-only updates there were: a view built at another
+    /// count builds its composer again.
+    pub fn composer_mark(&self) -> u64 {
+        self.composer
     }
 
     /// Where the changes stand: what a view remembers to ask `rows_since` later.
@@ -584,6 +714,9 @@ impl Model {
             parked,
             offline: self.offline,
             now_ms: self.now_ms,
+            shown_ms: self.shown_ms,
+            // Kept: a view's mark must never match a later model's by chance.
+            changes: std::mem::take(&mut self.changes),
             focused: self.focused,
             surface: std::mem::take(&mut self.surface),
             device_label: std::mem::take(&mut self.device_label),

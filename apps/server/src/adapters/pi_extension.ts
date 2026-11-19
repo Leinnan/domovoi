@@ -21,6 +21,7 @@ import { Type } from "typebox";
 
 const URL_ENV = "DOMOVOI_MCP_URL";
 const TOKEN_ENV = "DOMOVOI_MCP_TOKEN";
+const INSTRUCTIONS_ENV = "DOMOVOI_MCP_INSTRUCTIONS";
 const RUNTIME_MODE_ENV = "DOMOVOI_PI_RUNTIME_MODE";
 const EXTENSION_PATH_ENV = "DOMOVOI_PI_EXTENSION_PATH";
 const SERVER = "__DOMOVOI_MCP_SERVER__";
@@ -386,7 +387,18 @@ export default async function domovoiExtension(pi: ExtensionAPI) {
   // Tree navigation restores its saved loadout after session_start.
   pi.on("session_tree", (_event, ctx) => reconcileDiscovery(ctx));
   pi.on("model_select", (_event, ctx) => reconcileDiscovery(ctx));
-  pi.on("before_agent_start", (_event, ctx) => reconcileDiscovery(ctx));
+  // What Domovoi's tools are for, in the system prompt (so leading slash commands still expand).
+  pi.on("before_agent_start", (event, ctx) => {
+    reconcileDiscovery(ctx);
+    const instructions = env(INSTRUCTIONS_ENV);
+    if (instructions === undefined || instructions === "") return undefined;
+    const sections = event.systemPromptOptions?.sections;
+    if (sections && typeof sections === "object" && event.systemPromptOptions?.forceSystemPrompt === undefined) {
+      sections.domovoi_orchestration = instructions;
+      return undefined;
+    }
+    return typeof event.systemPrompt === "string" ? { systemPrompt: event.systemPrompt + "\n\n" + instructions } : undefined;
+  });
   pi.on("session_start", async (_event, ctx) => {
     reconcileDiscovery(ctx);
     try {

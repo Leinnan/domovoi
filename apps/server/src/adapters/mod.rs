@@ -1,6 +1,7 @@
 //! Provider adapters: run turns on Codex / Claude and record them through
 //! [`turn::Turn`]. [`Host`] implements the orchestrator's `ProviderHost`.
 
+pub mod acp;
 pub mod claude;
 pub mod codex;
 pub mod opencode;
@@ -63,6 +64,8 @@ pub struct Host {
     claude: Mutex<HashMap<String, Arc<claude::ClaudeSession>>>,
     /// One pi process per thread, as Claude's.
     pi: Mutex<HashMap<String, Arc<pi::PiSession>>>,
+    /// One ACP agent process per thread.
+    acp: Mutex<HashMap<String, Arc<acp::AcpSession>>>,
     /// Threads whose Claude conversation was rewound: next turn starts a new CLI session.
     fresh_claude: Mutex<HashSet<String>>,
     active: ActiveTurns,
@@ -124,7 +127,7 @@ impl Host {
     pub fn new(orch: Arc<Orchestrator>, userdata: PathBuf, log_dir: PathBuf) -> Arc<Self> {
         let _ = std::fs::create_dir_all(&log_dir);
         Arc::new(Host {
-            orch, userdata, log_dir, codex: Mutex::new(None), opencode: Mutex::new(None), claude: Mutex::new(HashMap::new()), pi: Mutex::new(HashMap::new()),
+            orch, userdata, log_dir, codex: Mutex::new(None), opencode: Mutex::new(None), claude: Mutex::new(HashMap::new()), pi: Mutex::new(HashMap::new()), acp: Mutex::new(HashMap::new()),
             fresh_claude: Mutex::new(HashSet::new()), active: ActiveTurns::default(),
         })
     }
@@ -138,6 +141,10 @@ impl Host {
         if let Some(s) = &pi {
             s.kill().await;
         }
+        let acp = self.acp.lock().await.remove(thread_id);
+        if let Some(s) = &acp {
+            s.kill().await;
+        }
         let active = self.active.lock().get(thread_id).map(|(_, tx)| tx.clone());
         if let Some(tx) = &active {
             let _ = tx.send(Control::Interrupt);
@@ -145,7 +152,7 @@ impl Host {
         if let Some(s) = &claude {
             s.kill().await;
         }
-        claude.is_some() || pi.is_some() || active.is_some()
+        claude.is_some() || pi.is_some() || acp.is_some() || active.is_some()
     }
 
     /// (thread, run) of every provider turn running now.
@@ -186,6 +193,10 @@ impl Host {
         }
         let pis: Vec<_> = self.pi.lock().await.drain().map(|(_, s)| s).collect();
         for s in pis {
+            s.kill().await;
+        }
+        let agents: Vec<_> = self.acp.lock().await.drain().map(|(_, s)| s).collect();
+        for s in agents {
             s.kill().await;
         }
     }
@@ -273,6 +284,22 @@ impl Host {
         Ok(s)
     }
 
+    /// The thread's ACP agent, started (again) when it has none, or one that
+    /// exited or runs in another runtime mode, folder or instance.
+    async fn acp_session(&self, thread_id: &str, turn: &turn::Turn, input: &TurnInput) -> Result<Arc<acp::AcpSession>, String> {
+        let existing = self.acp.lock().await.get(thread_id).cloned();
+        if let Some(s) = existing {
+            if s.usable() && s.runtime_mode == input.runtime_mode && s.cwd == input.cwd {
+                return Ok(s);
+            }
+            self.acp.lock().await.remove(thread_id);
+            s.kill().await;
+        }
+        let s = acp::AcpSession::start(input, turn.native_thread_id(), self.log_dir.clone()).await?;
+        self.acp.lock().await.insert(thread_id.to_owned(), s.clone());
+        Ok(s)
+    }
+
     /// Whether this thread's pi is still running.
     pub async fn has_live_pi(&self, thread_id: &str) -> bool {
         self.pi.lock().await.contains_key(thread_id)
@@ -284,7 +311,7 @@ impl Host {
             // A process that refuses this turn's permission mode (launched by an
             // older server without the flag that allows full access) is
             // replaced like one that exited.
-            if s.usable() && s.prepare(input).await {
+            if s.usable() && s.cwd == input.cwd && s.prepare(input).await {
                 return Ok(s);
             }
             // Exited, stuck on a request it could not be told about, or in the
@@ -425,6 +452,18 @@ impl ProviderHost for Host {
                     if usable {
                         session.start_idle_drain();
                     } else if let Some(s) = this.pi.lock().await.remove(&thread_id) {
+                        s.kill().await;
+                    }
+                    this.active.finish(&thread_id, &run_id);
+                    finalize_run(&this.orch, &thread_id, &run_id).await;
+                });
+            }
+            Some(ProviderDriver::AcpRegistry) => {
+                let session = self.acp_session(&thread_id, &turn, &input).await?;
+                registration.hand_over();
+                tokio::spawn(async move {
+                    let (_, usable) = session.run_turn(turn, input, rx).await;
+                    if !usable && let Some(s) = this.acp.lock().await.remove(&thread_id) {
                         s.kill().await;
                     }
                     this.active.finish(&thread_id, &run_id);

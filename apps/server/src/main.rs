@@ -1,6 +1,8 @@
 //! domovoi-server: Rust execution server, wire-compatible with t3code's `apps/server`.
 
+mod acp_registry;
 mod adapters;
+mod agent_instructions;
 mod attachments;
 mod agent_sessions;
 mod agent_sync;
@@ -41,6 +43,7 @@ mod rpc;
 mod service;
 mod settings;
 mod shell_env;
+mod skills;
 mod scheduled_tasks;
 #[cfg(test)]
 mod sent_tests;
@@ -53,9 +56,12 @@ mod text_gen;
 #[cfg(feature = "tray")]
 mod tray;
 mod usage;
+mod usage_limits;
+mod usage_recovery;
 mod util;
 mod vcs;
 mod vcs_ops;
+mod webhooks;
 mod worktree_setup;
 mod workspace;
 
@@ -117,6 +123,14 @@ struct Args {
     /// (for `connect`) sends everything through a relay.
     #[arg(long = "relay", global = true)]
     relays: Vec<String>,
+    /// Also serve webhook task URLs (`/api/hooks/...`), and nothing else, on
+    /// this address, such as `0.0.0.0:13780` behind a reverse proxy or tunnel.
+    #[arg(long)]
+    hooks_listen: Option<String>,
+    /// The public origin webhook URLs are shown with, such as
+    /// `https://hooks.example.com` (what the proxy in front of `--hooks-listen` answers on).
+    #[arg(long)]
+    hooks_url: Option<String>,
     #[command(subcommand)]
     command: Option<Cmd>,
 }
@@ -152,6 +166,10 @@ enum Cmd {
     },
     /// Stop the running server using this home directory.
     Stop,
+    /// Domovoi's agent tools over stdio, for an ACP agent that starts MCP
+    /// servers only as commands (started by the server, not by hand).
+    #[command(hide = true)]
+    AcpMcpBridge,
     /// Start the server with its status bar icon when you sign in: on, off
     /// or status. Uses this executable, home directory and port.
     Autostart {
@@ -214,6 +232,8 @@ struct Base {
 fn base(args: &Args, paths: &state::Paths) -> Fallible<Base> {
     let remote = Arc::new(remote::Remote::open(&paths.home, args.relays.clone())?);
     let _ = managed::HOME.set(paths.home.clone());
+    // Asked once and kept: answered off the startup path, before the first launch needs it.
+    std::thread::spawn(|| drop(managed::scratch_root()));
     let _ = vcs_ops::WORKTREES_DIR.set(paths.home.join("worktrees"));
     let db = db::Db::open(&paths.userdata.join("domovoi.sqlite"))?;
     let environment_id = match db.meta_get("environment_id")? {
@@ -258,6 +278,9 @@ fn run() -> Fallible {
     }
     // iroh brings reqwest's rustls backend without a crypto provider.
     let _ = rustls::crypto::ring::default_provider().install_default();
+    if matches!(args.command, Some(Cmd::AcpMcpBridge)) {
+        return runtime()?.block_on(mcp::bridge::run()).map_err(Into::into);
+    }
     let paths = state::Paths::new(args.home_dir.clone())?;
     match &args.command {
         Some(Cmd::Connect { link, bridge_port }) => {
@@ -275,6 +298,8 @@ fn run() -> Fallible {
             let base = base(&args, &paths)?;
             runtime()?.block_on(cli::remote(&base, &args.host, args.port, action))
         }
+        // Run before the home directory is touched (above).
+        Some(Cmd::AcpMcpBridge) => Ok(()),
         Some(Cmd::Stop) => {
             let _log = logging::init(None);
             let base = base(&args, &paths)?;
@@ -418,6 +443,7 @@ async fn serve(args: &Args, paths: state::Paths, base: Base, shutdown: tokio_uti
     let (orchestrator, effects) = orchestration::commands::Orchestrator::new(store.clone());
     let orchestrator = Arc::new(orchestrator);
     providers::init_claude_commands(&paths.userdata);
+    skills::init(&paths.userdata);
     let host = adapters::Host::new(orchestrator.clone(), paths.userdata.clone(), paths.logs.join("provider"));
     let _ = adapters::HOST.set(host.clone());
     orchestration::effects::spawn(orchestrator.clone(), host, effects);
@@ -527,7 +553,22 @@ async fn serve(args: &Args, paths: state::Paths, base: Base, shutdown: tokio_uti
         });
     }
     // Recovers interrupted scheduled runs and starts their timer.
+    if let Some(origin) = &args.hooks_url {
+        webhooks::set_public_origin(origin);
+    }
     scheduled_tasks::service(&state);
+    // Threads a usage limit stopped resume (or wake) when it resets.
+    usage_recovery::start(state.clone());
+    if let Some(addr) = &args.hooks_listen {
+        let hooks = tokio::net::TcpListener::bind(addr.as_str()).await?;
+        tracing::info!("Serving webhook URLs on http://{}", hooks.local_addr()?);
+        let (router, stop) = (http::hooks_router(state.clone()), shutdown.clone());
+        tokio::spawn(async move {
+            if let Err(e) = axum::serve(hooks, router).with_graceful_shutdown(stop.cancelled_owned()).await {
+                tracing::warn!(error = %e, "the webhook listener stopped");
+            }
+        });
+    }
 
     let listener = tokio::net::TcpListener::bind((args.host.as_str(), args.port)).await?;
     let local = listener.local_addr()?;

@@ -196,7 +196,7 @@ pub async fn generate<A: DeserializeOwned>(req: Request<'_, A>) -> Result<A, Tex
     let cwd = req.cwd.map(std::path::PathBuf::from).unwrap_or_else(|| scratch.clone());
     let timeout = if req.investigate { INVESTIGATION_TIMEOUT } else { TIMEOUT };
     let run = Run { operation: op, prompt: &req.prompt.text, schema: req.prompt.schema.to_string(), selection, model, investigate: req.investigate };
-    let result = match crate::orchestration::commands::driver_for_instance(&instance) {
+    let result = match crate::orchestration::commands::driver_for_instance(&instance).as_str() {
         "claudeAgent" => run_claude(&run, &cwd, timeout).await,
         "codex" => run_codex(&run, &cwd, &scratch, timeout).await,
         "pi" => run_pi(&run, &cwd, timeout).await,

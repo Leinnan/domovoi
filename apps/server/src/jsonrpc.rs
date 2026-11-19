@@ -36,6 +36,8 @@ type Pending = Arc<Mutex<HashMap<i64, oneshot::Sender<Result<Value, Value>>>>>;
 
 pub struct RpcClient {
     stdin: Mutex<ChildStdin>,
+    /// JSON-RPC 2.0 framing (`"jsonrpc": "2.0"` on every message), as ACP agents speak it.
+    jsonrpc2: bool,
     next_id: AtomicI64,
     pending: Pending,
     #[cfg_attr(not(test), allow(dead_code))]
@@ -51,8 +53,22 @@ impl RpcClient {
         cwd: Option<&str>,
         log: impl Fn(&str, &Value) + Send + Sync + 'static,
     ) -> Result<(Arc<Self>, mpsc::UnboundedReceiver<Incoming>), RpcError> {
+        Self::spawn_with(program, args, cwd, &[], false, log)
+    }
+
+    /// [`RpcClient::spawn`] with environment variables for the child, and
+    /// JSON-RPC 2.0 framing when `jsonrpc2`.
+    pub fn spawn_with(
+        program: &str,
+        args: &[&str],
+        cwd: Option<&str>,
+        env: &[(String, String)],
+        jsonrpc2: bool,
+        log: impl Fn(&str, &Value) + Send + Sync + 'static,
+    ) -> Result<(Arc<Self>, mpsc::UnboundedReceiver<Incoming>), RpcError> {
         let mut cmd = crate::process::command(program);
         cmd.args(args).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).kill_on_drop(true);
+        cmd.envs(env.iter().map(|(k, v)| (k, v)));
         if let Some(c) = cwd {
             cmd.current_dir(c);
         }
@@ -62,7 +78,7 @@ impl RpcClient {
         #[expect(clippy::disallowed_methods, reason = "the reader also delivers the answers callers wait for: made to wait for room here, it could never read the answer that frees them")]
         let (tx, rx) = mpsc::unbounded_channel();
         let pending: Pending = Arc::default();
-        let client = Arc::new(RpcClient { stdin: Mutex::new(stdin), next_id: AtomicI64::new(1), pending: pending.clone(), child: Mutex::new(child) });
+        let client = Arc::new(RpcClient { stdin: Mutex::new(stdin), jsonrpc2, next_id: AtomicI64::new(1), pending: pending.clone(), child: Mutex::new(child) });
         let log = Arc::new(log);
         let log_in = log;
         tokio::spawn(async move {
@@ -101,7 +117,11 @@ impl RpcClient {
     }
 
     async fn send(&self, msg: &Value) -> Result<(), RpcError> {
-        let mut line = serde_json::to_vec(msg).expect("serializable");
+        let mut msg = msg.clone();
+        if self.jsonrpc2 {
+            msg["jsonrpc"] = json!("2.0");
+        }
+        let mut line = serde_json::to_vec(&msg).expect("serializable");
         line.push(b'\n');
         let mut stdin = self.stdin.lock().await;
         stdin.write_all(&line).await?;
@@ -139,7 +159,6 @@ impl RpcClient {
         self.send(&json!({ "id": id, "error": { "code": code, "message": message } })).await
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
     pub async fn kill(&self) {
         let _ = self.child.lock().await.kill().await;
     }

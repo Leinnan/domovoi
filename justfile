@@ -45,6 +45,30 @@ test:
 rpc-groups groups="":
     DOMOVOI_NODE="${DOMOVOI_NODE:-$(command -v node || true)}" {{ if groups == "" { "" } else { "DOMOVOI_GROUPS=" + groups } }} cargo test -p domovoi-server --test rpc_calls every_rpc_group_answers_as_recorded -- --ignored --nocapture
 
+# Turns of the real agent CLIs (spends tokens): `just live claude`, `just live codex`,
+# `just live claude native_fork`. Models: DOMOVOI_LIVE_CLAUDE_MODEL (default
+# claude-haiku-5-5), DOMOVOI_LIVE_CODEX_MODEL (default gpt-6-luna). Every frame is
+# recorded and decoded with t3code's schemas afterwards (Node 26+ in DOMOVOI_NODE).
+live provider filter="":
+    #!/usr/bin/env bash
+    set -uo pipefail
+    case "{{provider}}" in
+      claude) export DOMOVOI_LIVE_CLAUDE_MODEL="${DOMOVOI_LIVE_CLAUDE_MODEL:-claude-haiku-5-5}" ;;
+      codex) export DOMOVOI_LIVE_CODEX_MODEL="${DOMOVOI_LIVE_CODEX_MODEL:-gpt-6-luna}" ;;
+      # Both: what goes from one to the other (a provider switch).
+      both) export DOMOVOI_LIVE_CLAUDE_MODEL="${DOMOVOI_LIVE_CLAUDE_MODEL:-claude-haiku-5-5}" DOMOVOI_LIVE_CODEX_MODEL="${DOMOVOI_LIVE_CODEX_MODEL:-gpt-6-luna}" ;;
+      *) echo "live: claude, codex or both" >&2; exit 2 ;;
+    esac
+    out="${DOMOVOI_WIRE_OUT:-target/live-{{provider}}.ndjson}"
+    rm -f "$out"
+    DOMOVOI_WIRE_OUT="$PWD/$out" cargo test -p domovoi-server --test provider_turns "live::{{ if provider == "both" { "a_thread_switched" } else { provider + "::" + filter } }}" -- --test-threads="${LIVE_THREADS:-3}" --nocapture
+    status=$?
+    node="${DOMOVOI_NODE:-$(command -v node || true)}"
+    if [ -n "$node" ] && [ -s "$out" ]; then
+      "$node" conformance/wire-check.ts "$out" || status=1
+    fi
+    exit $status
+
 # Build everything and fail on any compiler warning or lint-gate finding
 check:
     #!/usr/bin/env bash

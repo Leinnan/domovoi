@@ -49,7 +49,36 @@ const IDLE_READERS: usize = 4;
 
 /// Applied to every connection: wait for a lock instead of failing at once
 /// (`domovoi-server pair` writes the same file from another process).
-const CONNECTION_PRAGMAS: &str = "PRAGMA busy_timeout=5000;";
+/// Every connection's: temporary b-trees (sorts, `DISTINCT`) in memory, and an
+/// 8 MiB page cache (SQLite's default is 2 MiB).
+const CONNECTION_PRAGMAS: &str = "PRAGMA busy_timeout=5000; PRAGMA temp_store=MEMORY; PRAGMA cache_size=-8192;";
+
+/// How often the background checkpoint copies the WAL into the database.
+const CHECKPOINT_EVERY: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// Copies committed WAL pages into the database file from a connection of its
+/// own, every `CHECKPOINT_EVERY`, for as long as the database is open. Left to
+/// SQLite, the commit that grows the WAL past 1000 pages checkpoints it itself,
+/// holding the writer meanwhile: a launch or a flush now and then took several
+/// times as long. A PASSIVE checkpoint waits on no writer or reader, so the
+/// commit's own checkpoint is only a backstop.
+fn checkpoint_in_background(path: std::path::PathBuf, open: std::sync::Weak<ReentrantMutex<Writer>>) {
+    let spawned = std::thread::Builder::new().name("db-checkpoint".into()).spawn(move || {
+        let Ok(conn) = Connection::open(&path) else { return };
+        if conn.execute_batch(CONNECTION_PRAGMAS).is_err() {
+            return;
+        }
+        while open.strong_count() > 0 {
+            std::thread::sleep(CHECKPOINT_EVERY);
+            if let Err(e) = conn.query_row("PRAGMA wal_checkpoint(PASSIVE)", [], |_| Ok(())) {
+                tracing::debug!("background checkpoint: {e}");
+            }
+        }
+    });
+    if let Err(e) = spawned {
+        tracing::warn!("no background checkpoint (commits checkpoint themselves): {e}");
+    }
+}
 
 const MIGRATIONS: &[&str] = &[
     // 1: metadata, auth sessions, application event log, project projection.
@@ -124,6 +153,20 @@ const MIGRATIONS: &[&str] = &[
     // time so old ones can be pruned.
     "CREATE TABLE effect_outbox (key TEXT PRIMARY KEY, effect TEXT NOT NULL, created_at TEXT NOT NULL);
      ALTER TABLE command_receipts ADD COLUMN created_at TEXT;",
+    // 11: webhook tasks' deliveries (the log, redacted), the replay keys they
+    // claimed, and coalesce windows waiting to close.
+    "CREATE TABLE scheduled_task_webhook_deliveries (
+        delivery_id TEXT PRIMARY KEY, task_id TEXT NOT NULL, received_at TEXT NOT NULL, method TEXT NOT NULL,
+        content_type TEXT, body_bytes INTEGER NOT NULL, outcome TEXT NOT NULL, signature_verified INTEGER NOT NULL,
+        pending_window INTEGER, missing_json TEXT NOT NULL, error TEXT, query TEXT NOT NULL, headers_json TEXT NOT NULL,
+        body TEXT NOT NULL, body_truncated INTEGER NOT NULL, rendered_prompt TEXT, bucket TEXT NOT NULL);
+     CREATE INDEX scheduled_task_webhook_deliveries_by_task ON scheduled_task_webhook_deliveries (task_id, bucket, received_at);
+     CREATE TABLE scheduled_task_webhook_replay_keys (
+        task_id TEXT NOT NULL, replay_key TEXT NOT NULL, delivery_id TEXT NOT NULL, expires_at INTEGER NOT NULL,
+        PRIMARY KEY (task_id, replay_key));
+     CREATE TABLE scheduled_task_webhook_pending (
+        delivery_id TEXT PRIMARY KEY, task_id TEXT NOT NULL, coalesce_key TEXT NOT NULL, due_at INTEGER NOT NULL,
+        state TEXT NOT NULL, request_json TEXT NOT NULL, delivery_ids_json TEXT NOT NULL);",
 ];
 
 impl Db {
@@ -138,6 +181,7 @@ impl Db {
             readers: Some(Arc::new(Readers { path: path.to_owned(), idle: Mutex::new(Vec::new()) })),
         };
         db.migrate()?;
+        checkpoint_in_background(path.to_owned(), Arc::downgrade(&db.writer));
         Ok(db)
     }
 

@@ -241,6 +241,8 @@ pub struct Turn {
     held: HashMap<String, Held>,
     /// The last ordinal taken in the run's part of the timeline.
     last_ordinal: Option<u64>,
+    /// A usage limit stopped the turn: it fails as `usage_limit`, resetting then.
+    usage_limited: Option<Option<Timestamp>>,
 }
 
 pub(super) fn now() -> Timestamp {
@@ -300,6 +302,11 @@ fn request_kind(kind: &ProviderRequestKind) -> RuntimeRequestKind {
 }
 
 impl Turn {
+    /// A usage limit stopped this turn; it resets at `reset_at` when known.
+    pub fn usage_limited(&mut self, reset_at: Option<Timestamp>) {
+        self.usage_limited = Some(reset_at);
+    }
+
     /// Loads the run and its provider thread; `None` if either is missing.
     pub fn begin(store: Store, thread_id: &str, run_id: &str) -> Option<Self> {
         let run: Run = store.record(thread_id, run_id).ok()??;
@@ -315,7 +322,7 @@ impl Turn {
         Some(Turn {
             store, thread_id: thread_id.into(), run, driver, instance, session_id, root, provider_thread,
             provider_turn: None, items: HashMap::new(), nodes: HashMap::new(), requests: HashMap::new(),
-            last_flush: HashMap::new(), held: HashMap::new(), last_ordinal,
+            last_flush: HashMap::new(), held: HashMap::new(), last_ordinal, usage_limited: None,
         })
     }
 
@@ -990,7 +997,10 @@ impl Turn {
         self.thread_status(ProviderThreadStatus::Idle, None);
         if end == TurnEnd::Failed {
             let error = error.unwrap_or("The provider turn failed.");
-            crate::orchestration::effects::fail_run(&self.store, &self.thread_id, &self.run_id(), error, ProviderFailureClass::ProviderError);
+            match self.usage_limited.clone() {
+                Some(reset_at) => crate::orchestration::effects::fail_run_with(&self.store, &self.thread_id, &self.run_id(), error, ProviderFailureClass::UsageLimit, reset_at),
+                None => crate::orchestration::effects::fail_run(&self.store, &self.thread_id, &self.run_id(), error, ProviderFailureClass::ProviderError),
+            }
             return;
         }
         let settle = |run: &mut Run| {

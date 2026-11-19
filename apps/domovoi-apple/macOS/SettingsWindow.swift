@@ -86,6 +86,7 @@ struct ProvidersSettings: View {
                     if !p.version.isEmpty { LabeledContent("Version", value: p.version) }
                     if !p.auth.isEmpty { LabeledContent("Account", value: p.auth) }
                     LabeledContent("Models", value: "\(p.modelCount)")
+                    if !p.limits.isEmpty { LabeledContent("Limits", value: p.limits) }
                     if !p.message.isEmpty { Text(p.message).font(.caption).foregroundStyle(.secondary) }
                 } header: {
                     Text(p.name.isEmpty ? p.instanceId : p.name)
@@ -117,10 +118,7 @@ extension KeybindingView: @retroactive Identifiable {
 
 struct ScheduledSettings: View {
     @ObservedObject var core: Core
-    @State private var name = ""
-    @State private var prompt = ""
-    @State private var project = ""
-    @State private var minutes = 60
+    @State private var editing: ScheduledTaskEdit?
     @State private var deleting: ScheduledTaskView?
 
     var body: some View {
@@ -136,7 +134,10 @@ struct ScheduledSettings: View {
                                 Text(task.name).bold()
                             }
                             Spacer()
-                            Button("Run Now") { core.update(.runScheduledNow(id: task.id)) }
+                            if task.scheduleKind != "webhook" {
+                                Button("Run Now") { core.update(.runScheduledNow(id: task.id)) }
+                            }
+                            Button("Edit") { editing = ScheduledTaskEditor.from(task) }
                             Button(role: .destructive) { deleting = task } label: { Image(systemName: "trash") }
                                 .buttonStyle(.borderless)
                                 .help("Delete this task")
@@ -144,24 +145,18 @@ struct ScheduledSettings: View {
                         }
                         Text(task.prompt).font(.caption).foregroundStyle(.secondary).lineLimit(2)
                         Text("\(task.schedule) · \(task.projectTitle) · next \(task.nextRun) · \(task.lastRun)").font(.caption2).foregroundStyle(.tertiary)
+                        if !task.lastError.isEmpty {
+                            Text(task.lastError).font(.caption2).foregroundStyle(.red).lineLimit(2)
+                        }
+                        if task.scheduleKind == "webhook" {
+                            WebhookTaskDetails(core: core, task: task)
+                        }
                     }
                 }
             }
-            Section("New task") {
-                TextField("Name", text: $name)
-                TextField("Prompt", text: $prompt, axis: .vertical).lineLimit(2...4)
-                Picker("Project", selection: $project) {
-                    ForEach(core.view.settings.projects, id: \.id) { Text($0.title).tag($0.id) }
-                }
-                Picker("Every", selection: $minutes) {
-                    ForEach(ScheduleIntervals.all, id: \.minutes) { Text($0.label).tag($0.minutes) }
-                }
-                Button("Create") {
-                    core.update(.createScheduled(name: name, prompt: prompt, projectId: project, intervalMinutes: UInt32(minutes)))
-                    name = ""
-                    prompt = ""
-                }
-                .disabled(name.isEmpty || prompt.isEmpty || project.isEmpty)
+            Section {
+                Button("New Task…") { editing = ScheduledTaskEditor.new(projectId: core.view.settings.projects.first?.id ?? "") }
+                    .disabled(core.view.settings.projects.isEmpty)
             }
         }
         .formStyle(.grouped)
@@ -169,19 +164,24 @@ struct ScheduledSettings: View {
                                message: "It stops running. Threads it already started stay.") {
             core.update(.deleteScheduled(id: $0.id))
         }
-        .onAppear {
-            core.update(.loadSettings(section: "scheduled"))
-            pickProject(core.view.settings.projects)
+        .sheet(item: $editing) { draft in
+            NavigationStack {
+                ScheduledTaskEditor(core: core, draft: draft) { editing = nil }
+                    .navigationTitle(draft.id.isEmpty ? "New Task" : "Edit Task")
+            }
+            .frame(minWidth: 520, minHeight: 560)
         }
-        // Projects may arrive after the tab opens.
-        .onChange(of: core.view.settings.projects.map(\.id)) { _, _ in pickProject(core.view.settings.projects) }
+        .onAppear { core.update(.loadSettings(section: "scheduled")) }
+        .onReceive(NotificationCenter.default.publisher(for: .snapshotOpenScheduledEditor)) { _ in
+            var draft = ScheduledTaskEditor.new(projectId: core.view.settings.projects.first?.id ?? "")
+            draft.name = "Weekday standup"
+            draft.prompt = "Summarize what changed yesterday."
+            draft.weekdays = [1, 2, 3, 4, 5]
+            editing = draft
+        }
     }
-
-    private func pickProject(_ projects: [ProjectSettingsView]) {
-        if !projects.contains(where: { $0.id == project }) { project = projects.first?.id ?? "" }
-    }
-
 }
+
 
 struct ArchivedSettings: View {
     @ObservedObject var core: Core

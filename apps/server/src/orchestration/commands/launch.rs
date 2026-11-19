@@ -154,7 +154,7 @@ impl Orchestrator {
 
 /// The branch checked out in `cwd`, if it is a repository on a branch.
 async fn checked_out_branch(cwd: &str) -> Option<String> {
-    crate::vcs::branch_status(cwd).await.ref_name
+    crate::vcs::checked_out_branch(cwd).await
 }
 
 /// Creates a thread's worktree on a new branch from `base`, reporting

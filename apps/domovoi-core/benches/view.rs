@@ -26,6 +26,17 @@ fn long_thread(items: usize) -> Model {
     let mut model = Model::default();
     model.selected_thread = Some("t1".into());
     model.route = "thread".into();
+    let snapshot = ThreadStreamItem::from_value(json!({ "kind": "snapshot", "snapshotSequence": 1, "projection": projection(items) })).expect("the snapshot fits the schema");
+    let ThreadStreamItem::Snapshot(snapshot) = snapshot else { unreachable!("a snapshot") };
+    let thread = Thread::from_snapshot(*snapshot);
+    // Listed as its own records give it.
+    model.threads = vec![thread.shell()];
+    model.thread = Some(thread);
+    model
+}
+
+/// The projection of `long_thread(items)`'s thread, as the server sends it.
+fn projection(items: usize) -> Value {
     let md = "## Plan\n\nSome **bold** text with `code` and a [link](http://x).\n\n- one\n- two\n\n```rust\nfn main() { println!(\"hi\"); }\n```\n";
     let (mut messages, mut turn_items) = (vec![], vec![]);
     for t in 0..items / 4 {
@@ -51,13 +62,7 @@ fn long_thread(items: usize) -> Model {
             projection[kind.collection()] = json!([]);
         }
     }
-    let snapshot = ThreadStreamItem::from_value(json!({ "kind": "snapshot", "snapshotSequence": 1, "projection": projection })).expect("the snapshot fits the schema");
-    let ThreadStreamItem::Snapshot(snapshot) = snapshot else { unreachable!("a snapshot") };
-    let thread = Thread::from_snapshot(*snapshot);
-    // Listed as its own records give it.
-    model.threads = vec![thread.shell()];
-    model.thread = Some(thread);
-    model
+    projection
 }
 
 /// A message of thread `t1`, as the server sends it.
@@ -354,6 +359,100 @@ fn composer_keystroke(b: divan::Bencher, models: usize) {
     b.bench_local(|| {
         text.push('a');
         let _ = DomovoiApp.update(Event::SetDraft { text: text.clone() }, &mut model);
+        render_delta(&app, &model)
+    });
+}
+
+/// A keystroke in the composer, then a streamed flush: the flush should cost
+/// what `socket_token` costs, not a whole view (typing reaches the composer only).
+#[divan::bench(args = [2000])]
+fn keystroke_then_token(b: divan::Bencher, n: usize) {
+    let (mut model, request) = connected_thread(n);
+    let app = FfiApp::default();
+    let _ = render_delta(&app, &model);
+    let mut text = String::new();
+    let mut k = 0u64;
+    b.with_inputs(|| {
+        k += 1;
+        text.push_str("more words ");
+        let draft = if k % 2 == 0 { "a reply" } else { "a reply." };
+        (draft, flush_frame(&request, n, &text, k))
+    })
+    .bench_local_values(|(draft, frame)| {
+        let _ = DomovoiApp.update(Event::SetDraft { text: draft.into() }, &mut model);
+        feed(&mut model, frame);
+        render_delta(&app, &model)
+    });
+}
+
+/// Opening a thread once its snapshot is in: the snapshot frame through
+/// `update`, then the first view of the page. (Fetching it is the network's.)
+#[divan::bench(args = [200, 2000])]
+fn thread_open_snapshot(b: divan::Bencher, n: usize) {
+    let frame_of = |request: &str| chunk(request, &[json!({ "kind": "snapshot", "snapshotSequence": 1, "projection": projection(n) })]);
+    b.with_inputs(|| {
+        let (mut model, _) = connected_thread(4);
+        model.thread = None;
+        let app = FfiApp::default();
+        let _ = render_delta(&app, &model);
+        let (request, _) = model.rpc.request("orchestration.subscribeThread", &json!({ "threadId": "t1" }), Route::Thread("t1".into()));
+        let frame = frame_of(&request);
+        (model, app, frame)
+    })
+    .bench_local_values(|(mut model, app, frame)| {
+        feed(&mut model, frame);
+        render_delta(&app, &model)
+    });
+}
+
+/// The shell stream's first snapshot with 1,000 threads: decode, apply, view.
+#[divan::bench]
+fn shell_snapshot_apply_1000(b: divan::Bencher) {
+    let (_, shell, template) = recorded_boot();
+    let projects: Vec<Value> = shell.iter().find(|v| v["kind"] == "snapshot").map(|v| v["snapshot"]["projects"].clone()).and_then(|p| p.as_array().cloned()).unwrap_or_default();
+    let project = projects.first().map(|p| p["id"].clone()).unwrap_or(Value::Null);
+    let threads: Vec<Value> = (0..1000)
+        .map(|i| {
+            let mut thread = template.clone();
+            thread["id"] = json!(format!("s{i}"));
+            thread["projectId"] = project.clone();
+            thread
+        })
+        .collect();
+    let snapshot = json!({ "kind": "snapshot", "snapshot": { "schemaVersion": 1, "snapshotSequence": 5, "projects": projects, "threads": threads, "archivedThreads": [] } });
+    b.with_inputs(|| {
+        let (mut model, _) = connected_thread(4);
+        let app = FfiApp::default();
+        let _ = render_delta(&app, &model);
+        let (request, _) = model.rpc.request("orchestration.subscribeShell", &json!({}), Route::Shell);
+        let frame = chunk(&request, std::slice::from_ref(&snapshot));
+        (model, app, frame)
+    })
+    .bench_local_values(|(mut model, app, frame)| {
+        feed(&mut model, frame);
+        assert!(model.threads.len() >= 1000);
+        render_delta(&app, &model)
+    });
+}
+
+/// Opening a thread opened lately: shown from the recent threads with its
+/// rows, then the first view of the page, before anything arrives.
+#[divan::bench(args = [200, 2000])]
+fn thread_open_cached(b: divan::Bencher, n: usize) {
+    b.with_inputs(|| {
+        let (mut model, request) = connected_thread(n);
+        let app = FfiApp::default();
+        // Built once, as when it was read; its stream had a snapshot.
+        feed(&mut model, chunk(&request, &[json!({ "kind": "snapshot", "snapshotSequence": 7, "projection": projection(n) })]));
+        let _ = render_delta(&app, &model);
+        // Another thread opened meanwhile.
+        let _ = DomovoiApp.update(Event::SelectThread { thread_id: "s0".into() }, &mut model);
+        let _ = render_delta(&app, &model);
+        (model, app)
+    })
+    .bench_local_values(|(mut model, app)| {
+        let _ = DomovoiApp.update(Event::SelectThread { thread_id: "t1".into() }, &mut model);
+        assert!(model.thread.is_some(), "shown at once");
         render_delta(&app, &model)
     });
 }

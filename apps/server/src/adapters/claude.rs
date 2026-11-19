@@ -21,6 +21,8 @@ pub struct ClaudeSession {
     cli: Arc<ClaudeCli>,
     events: Mutex<mpsc::UnboundedReceiver<CliEvent>>,
     pub session_id: String,
+    /// The folder the CLI runs in: a thread that moved needs a new process.
+    pub cwd: String,
     pub permission_mode: Mutex<String>,
     /// The model's context window as the CLI last reported it (`modelUsage`).
     reported_window: std::sync::Mutex<Option<u64>>,
@@ -182,8 +184,9 @@ impl ClaudeSession {
             extra_dirs: vec![],
             fork_from: input.fork.as_ref().filter(|_| !resume).map(|(src, _)| src.clone()),
             mcp_config: crate::mcp::claude_config(&input.thread_id),
+            append_system_prompt: crate::mcp::enabled().then(crate::agent_instructions::system_prompt),
             allowed_tools: if crate::mcp::enabled() {
-                crate::mcp::READ_ONLY_TOOLS.iter().map(|t| format!("mcp__{}__{t}", crate::mcp::SERVER_NAME)).collect()
+                crate::mcp::read_only_tools().iter().map(|t| format!("mcp__{}__{t}", crate::mcp::SERVER_NAME)).collect()
             } else {
                 vec![]
             },
@@ -191,9 +194,10 @@ impl ClaudeSession {
         let log_path = log_dir.join(format!("claude-{session_id}.ndjson"));
         let log = crate::logging::protocol_log(log_path);
         let (cli, events) = ClaudeCli::spawn(&opts, log).map_err(|e| format!("could not start claude: {e}"))?;
-        cli.initialize().await.map_err(|e| format!("claude initialize failed: {e}"))?;
+        let initialized = cli.initialize().await.map_err(|e| format!("claude initialize failed: {e}"))?;
+        crate::skills::remember_descriptions(&initialized);
         Ok(Arc::new(ClaudeSession {
-            cli, events: Mutex::new(events), session_id: session_id.to_owned(), permission_mode: Mutex::new(mode),
+            cli, events: Mutex::new(events), session_id: session_id.to_owned(), cwd: input.cwd.clone(), permission_mode: Mutex::new(mode),
             reported_window: Default::default(), idle: Default::default(), broken: AtomicBool::new(false), echoes: AtomicBool::new(false),
         }))
     }
@@ -300,7 +304,12 @@ impl ClaudeSession {
                 CliEvent::Message(_) => {}
             }
         }
-        let sent = if input.images.is_empty() { self.cli.send_user_message(&input.text).await } else { self.cli.send_user_message_with_images(&input.text, &input.images).await };
+        // A `$skill` mention: Claude expands `/skill` at the start of the last text block.
+        let sent = match crate::skills::claude_dispatch(&input.text, &crate::skills::claude()) {
+            Some(blocks) => self.cli.send_user_blocks(&blocks, &input.images).await,
+            None if input.images.is_empty() => self.cli.send_user_message(&input.text).await,
+            None => self.cli.send_user_message_with_images(&input.text, &input.images).await,
+        };
         let message_uuid = match sent {
             Ok(uuid) => uuid,
             Err(e) => {
@@ -328,6 +337,14 @@ impl ClaudeSession {
         let mut finalized: std::collections::HashSet<String> = Default::default();
         // The user asked to stop: the turn ending in an error is that stop.
         let mut interrupt_requested = false;
+        // Steers sent this run that Claude has queued as commands of their own
+        // and not yet started (`command_lifecycle`). Claude ends the command
+        // it was working on with a `result` and then starts the steer: that
+        // result ends no run, the steered command's does.
+        let mut queued_steers: std::collections::HashSet<String> = Default::default();
+        // The limits that turned this turn away, by type, and when each resets.
+        let mut rejected_limits: HashMap<String, Option<domovoi_model::typed::Timestamp>> = HashMap::new();
+        let mut sent_steers: std::collections::HashSet<String> = Default::default();
         let window = |s: &Self| selected_window(&input.model_selection).or(*crate::util::locked(&s.reported_window));
         // The latest model call's usage, sent again once the window is known.
         let mut last_usage: Option<Value> = None;
@@ -407,7 +424,11 @@ impl ClaudeSession {
                         let _ = self.cli.interrupt().await;
                     }
                     Control::Steer { text, images, reply } => {
-                        let _ = reply.send(self.cli.send_steer(&text, &images).await.map_err(|e| e.to_string()));
+                        let sent = self.cli.send_steer(&text, &images).await;
+                        if let Ok(uuid) = &sent {
+                            sent_steers.insert(uuid.clone());
+                        }
+                        let _ = reply.send(sent.map(|_| ()).map_err(|e| e.to_string()));
                     }
                     Control::StopSubagent { native_id, reply } => {
                         let res = match task_ids.get(&native_id) {
@@ -468,7 +489,10 @@ impl ClaudeSession {
                             // Claude woke itself (a background agent reported back).
                             awaiting_background = false;
                             wake_deadline = None;
-                            crate::providers::remember_claude_commands(&msg)
+                            crate::providers::remember_claude_commands(&msg);
+                            if crate::skills::remember_claude(&msg, &input.cwd) {
+                                crate::providers::CLAUDE_COMMANDS_CHANGED.notify_one();
+                            }
                         }
                         "system" if msg["subtype"] == "task_started" => {
                             if let (Some(task), Some(tool)) = (msg["task_id"].as_str(), msg["tool_use_id"].as_str()) {
@@ -651,8 +675,36 @@ impl ClaudeSession {
                         }
                         // The bookkeeping result Claude sends for a task notice ends no turn.
                         "result" if awaiting_background && msg["subtype"] == "success" && msg["num_turns"] == 0 => {}
+                        "rate_limit_event" => {
+                            let info = &msg["rate_limit_info"];
+                            if let Some(w) = crate::usage_limits::claude_window(info) {
+                                crate::usage_limits::merge(input.model_selection.instance_id.as_str(), vec![w]);
+                            }
+                            let kind = info["rateLimitType"].as_str().unwrap_or("unknown").to_owned();
+                            if crate::usage_limits::claude_blocked(info) {
+                                rejected_limits.insert(kind, crate::usage_limits::claude_reset_at(info));
+                            } else {
+                                rejected_limits.remove(&kind);
+                            }
+                        }
+                        "command_lifecycle" => {
+                            if let Some(command) = msg["command_uuid"].as_str().filter(|c| sent_steers.contains(*c)) {
+                                if msg["state"] == "queued" {
+                                    queued_steers.insert(command.to_owned());
+                                } else {
+                                    queued_steers.remove(command);
+                                }
+                            }
+                        }
+                        // The command a steer cut short ended; the steer runs next, in this run.
+                        "result" if !queued_steers.is_empty() && !interrupt_requested => {}
                         "result" => {
                             let ok = msg["subtype"] == "success" && msg["is_error"] != true;
+                            if !ok && !rejected_limits.is_empty() {
+                                // The latest reset: resuming then finds every limit open again.
+                                let reset = rejected_limits.values().flatten().max_by(|a, b| a.as_str().cmp(b.as_str())).cloned();
+                                turn.usage_limited(reset);
+                            }
                             // A stop: asked for here, or reported as one (`terminal_reason`
                             // `aborted_streaming`, or a result naming the interrupt).
                             let interrupted = msg["subtype"] == "error_during_execution"

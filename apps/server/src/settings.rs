@@ -338,7 +338,9 @@ pub fn load(userdata: &Path) -> Settings {
     if let Some(Value::Object(saved)) = saved {
         merge(&mut fields, &saved);
     }
-    Settings::from_document(fields)
+    let settings = Settings::from_document(fields);
+    crate::providers::remember_instances(&settings);
+    settings
 }
 
 /// Writes settings atomically and announces them.
@@ -348,6 +350,7 @@ pub fn save(userdata: &Path, settings: &Settings) -> Result<(), Failure> {
     let tmp = p.with_extension("json.tmp");
     std::fs::write(&tmp, serde_json::to_string_pretty(&settings.fields()).expect("a JSON object serializes")).map_err(failed)?;
     std::fs::rename(&tmp, &p).map_err(failed)?;
+    crate::providers::remember_instances(settings);
     let _ = updates().send(settings.clone());
     Ok(())
 }

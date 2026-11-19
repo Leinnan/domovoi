@@ -58,6 +58,7 @@ struct ProvidersScreen: View {
                     if !p.version.isEmpty { LabeledContent("Version", value: p.version) }
                     if !p.auth.isEmpty { LabeledContent("Account", value: p.auth) }
                     LabeledContent("Models", value: "\(p.modelCount)")
+                    if !p.limits.isEmpty { LabeledContent("Limits", value: p.limits) }
                     if !p.message.isEmpty { Text(p.message).font(.caption).foregroundStyle(.secondary) }
                 } header: {
                     Text(p.name.isEmpty ? p.instanceId : p.name)
@@ -76,10 +77,10 @@ struct ProvidersScreen: View {
     }
 }
 
-/// Prompts the server runs on a schedule, each in a new thread.
+/// Prompts the server runs on a schedule (or on webhook requests).
 struct ScheduledTasksScreen: View {
     @ObservedObject var core: Core
-    @State private var creating = false
+    @State private var editing: ScheduledTaskEdit?
     @State private var deleting: ScheduledTaskView?
 
     private var settings: SettingsView { core.view.settings }
@@ -88,7 +89,7 @@ struct ScheduledTasksScreen: View {
         List {
             Section {
                 if settings.scheduledTasks.isEmpty {
-                    ContentUnavailableView("No scheduled tasks", systemImage: "calendar.badge.clock", description: Text("A scheduled task sends its prompt in a new thread, on its own."))
+                    ContentUnavailableView("No scheduled tasks", systemImage: "calendar.badge.clock", description: Text("A scheduled task sends its prompt on its own: at a time, every so often, or when its URL gets a request."))
                 }
                 ForEach(settings.scheduledTasks, id: \.id) { task in
                     VStack(alignment: .leading, spacing: Space.xs) {
@@ -96,15 +97,28 @@ struct ScheduledTasksScreen: View {
                             Text(task.name).font(.body.weight(.semibold))
                         }
                         Text(task.prompt).font(.caption).foregroundStyle(.secondary).lineLimit(2)
-                        Text([task.schedule, task.projectTitle, task.enabled ? "next \(task.nextRun)" : "", task.lastRun].filter { !$0.isEmpty }.joined(separator: " · "))
+                        Text([task.schedule, task.projectTitle, task.enabled && task.scheduleKind != "webhook" ? "next \(task.nextRun)" : "", task.lastRun].filter { !$0.isEmpty }.joined(separator: " · "))
                             .font(.caption2).foregroundStyle(.tertiary)
+                        if !task.lastError.isEmpty {
+                            Text(task.lastError).font(.caption2).foregroundStyle(.red).lineLimit(2)
+                        }
+                        if task.scheduleKind == "webhook" {
+                            WebhookTaskDetails(core: core, task: task)
+                        }
                     }
+                    .contentShape(Rectangle())
+                    .onTapGesture { editing = ScheduledTaskEditor.from(task) }
                     .swipeActions {
                         Button("Delete", role: .destructive) { deleting = task }
-                        Button("Run Now") { core.update(.runScheduledNow(id: task.id)) }.tint(.blue)
+                        if task.scheduleKind != "webhook" {
+                            Button("Run Now") { core.update(.runScheduledNow(id: task.id)) }.tint(.blue)
+                        }
                     }
                     .contextMenu {
-                        Button("Run Now", systemImage: "play") { core.update(.runScheduledNow(id: task.id)) }
+                        Button("Edit", systemImage: "pencil") { editing = ScheduledTaskEditor.from(task) }
+                        if task.scheduleKind != "webhook" {
+                            Button("Run Now", systemImage: "play") { core.update(.runScheduledNow(id: task.id)) }
+                        }
                         Button("Delete…", systemImage: "trash", role: .destructive) { deleting = task }
                     }
                 }
@@ -115,7 +129,7 @@ struct ScheduledTasksScreen: View {
         .navigationTitle("Scheduled Tasks")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            Button { creating = true } label: { Image(systemName: "plus") }
+            Button { editing = ScheduledTaskEditor.new(projectId: settings.projects.first?.id ?? "") } label: { Image(systemName: "plus") }
                 .accessibilityLabel("New Scheduled Task")
                 .disabled(settings.projects.isEmpty)
         }
@@ -129,56 +143,14 @@ struct ScheduledTasksScreen: View {
         } message: { _ in
             Text("It stops running. Threads it already started stay.")
         }
-        .sheet(isPresented: $creating) {
-            NavigationStack { NewScheduledTaskScreen(core: core, done: { creating = false }) }
+        .sheet(item: $editing) { draft in
+            NavigationStack {
+                ScheduledTaskEditor(core: core, draft: draft) { editing = nil }
+                    .navigationTitle(draft.id.isEmpty ? "New Scheduled Task" : "Edit Task")
+                    .navigationBarTitleDisplayMode(.inline)
+            }
         }
         .onAppear { core.update(.loadSettings(section: "scheduled")) }
-    }
-}
-
-private struct NewScheduledTaskScreen: View {
-    @ObservedObject var core: Core
-    let done: () -> Void
-    @State private var name = ""
-    @State private var prompt = ""
-    @State private var project = ""
-    @State private var minutes = 60
-
-    var body: some View {
-        Form {
-            Section {
-                TextField("Name", text: $name)
-                TextField("Prompt", text: $prompt, axis: .vertical).lineLimit(3...8)
-            }
-            Section {
-                Picker("Project", selection: $project) {
-                    ForEach(core.view.settings.projects, id: \.id) { Text($0.title).tag($0.id) }
-                }
-                Picker("Every", selection: $minutes) {
-                    ForEach(ScheduleIntervals.all, id: \.minutes) { Text($0.label).tag($0.minutes) }
-                }
-            }
-        }
-        .navigationTitle("New Scheduled Task")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .cancellationAction) { Button("Cancel", action: done) }
-            ToolbarItem(placement: .confirmationAction) {
-                Button("Create") {
-                    core.update(.createScheduled(name: name, prompt: prompt, projectId: project, intervalMinutes: UInt32(minutes)))
-                    done()
-                }
-                .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty || prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || project.isEmpty)
-            }
-        }
-        .onAppear { pickProject() }
-        // Projects may arrive after the sheet opens.
-        .onChange(of: core.view.settings.projects.map(\.id)) { _, _ in pickProject() }
-    }
-
-    private func pickProject() {
-        let projects = core.view.settings.projects
-        if !projects.contains(where: { $0.id == project }) { project = projects.first?.id ?? "" }
     }
 }
 

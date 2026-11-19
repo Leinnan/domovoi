@@ -325,7 +325,7 @@ fun ProvidersScreen(core: Core, onBack: () -> Unit) {
                     headlineContent = { Text(p.name) },
                     overlineContent = { Text(p.driver) },
                     supportingContent = {
-                        Text(listOf(p.version.ifEmpty { null }, p.auth.ifEmpty { null }, if (p.modelCount > 0u) "${p.modelCount} models" else null, p.message.ifEmpty { null }).filterNotNull().joinToString(" · "))
+                        Text(listOf(p.version.ifEmpty { null }, p.auth.ifEmpty { null }, if (p.modelCount > 0u) "${p.modelCount} models" else null, p.limits.ifEmpty { null }, p.message.ifEmpty { null }).filterNotNull().joinToString(" · "))
                     },
                     trailingContent = { Text(p.status, color = if (ok) tints.success else tints.caution, style = MaterialTheme.typography.labelLarge) },
                     colors = ListItemDefaults.colors(containerColor = clear),
@@ -345,41 +345,78 @@ fun ProvidersScreen(core: Core, onBack: () -> Unit) {
 fun ScheduledTasksScreen(core: Core, onBack: () -> Unit) {
     val settings by core.view.settings.watch()
     val sidebar by core.view.sidebar.watch()
-    var adding by remember { mutableStateOf(false) }
+    val composer by core.view.composer.watch()
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var editing by remember { mutableStateOf<com.crayen.domovoi.app.ScheduledTaskEdit?>(null) }
     var deleting by remember { mutableStateOf<com.crayen.domovoi.app.ScheduledTaskView?>(null) }
+    var rotating by remember { mutableStateOf<com.crayen.domovoi.app.ScheduledTaskView?>(null) }
     LaunchedEffect(Unit) { core.update(Event.LoadSettings("scheduled")) }
+    val projects = sidebar.projects.filter { !it.isScratch }
     ToolScaffold(
         "Scheduled tasks", onBack,
-        floatingActionButton = { ExtendedFloatingActionButton(onClick = { adding = true }, icon = { Icon(Icons.Outlined.Add, null) }, text = { Text("New task") }) },
+        floatingActionButton = {
+            ExtendedFloatingActionButton(onClick = { editing = newScheduledTask(projects.firstOrNull()?.id.orEmpty()) }, icon = { Icon(Icons.Outlined.Add, null) }, text = { Text("New task") })
+        },
     ) { padding ->
         LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = 96.dp)) {
             if (settings.scheduledTimeZone.isNotEmpty()) item("tz") { Text("Times in ${settings.scheduledTimeZone}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(Space.l)) }
-            if (settings.scheduledTasks.isEmpty()) item("none") { EmptyState(Icons.Outlined.CalendarMonth, "No scheduled tasks", "A task sends its prompt to a new thread on a schedule.") }
+            if (settings.scheduledTasks.isEmpty()) item("none") { EmptyState(Icons.Outlined.CalendarMonth, "No scheduled tasks", "A task sends its prompt on its own: at a time, every so often, or when its URL gets a request.") }
             items(settings.scheduledTasks, key = { it.id }) { task ->
                 var menu by remember { mutableStateOf(false) }
-                ListItem(
-                    headlineContent = { Text(task.name) },
-                    supportingContent = { Text(listOf(task.schedule, task.projectTitle, if (task.nextRun.isNotEmpty()) "next ${task.nextRun}" else null).filterNotNull().filter { it.isNotEmpty() }.joinToString(" · ")) },
-                    trailingContent = {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Switch(checked = task.enabled, onCheckedChange = { core.update(Event.SetScheduledEnabled(task.id, it)) })
-                            Box {
-                                IconButton(onClick = { menu = true }) { Icon(Icons.Outlined.MoreVert, "Actions for ${task.name}") }
-                                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                                    DropdownMenuItem(text = { Text("Run now") }, leadingIcon = { Icon(Icons.Outlined.PlayArrow, null) }, onClick = { menu = false; core.update(Event.RunScheduledNow(task.id)) })
-                                    DropdownMenuItem(text = { Text("Delete", color = MaterialTheme.colorScheme.error) }, leadingIcon = { Icon(Icons.Outlined.Delete, null) }, onClick = { menu = false; deleting = task })
+                val webhook = task.scheduleKind == "webhook"
+                Column(Modifier.clickable { editing = editedScheduledTask(task) }) {
+                    ListItem(
+                        headlineContent = { Text(task.name) },
+                        supportingContent = {
+                            Column {
+                                Text(listOf(task.schedule, task.projectTitle, if (task.nextRun.isNotEmpty() && !webhook) "next ${task.nextRun}" else null, task.lastRun).filterNotNull().filter { it.isNotEmpty() }.joinToString(" · "))
+                                if (task.lastError.isNotEmpty()) Text(task.lastError, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall, maxLines = 2)
+                            }
+                        },
+                        trailingContent = {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Switch(checked = task.enabled, onCheckedChange = { core.update(Event.SetScheduledEnabled(task.id, it)) })
+                                Box {
+                                    IconButton(onClick = { menu = true }) { Icon(Icons.Outlined.MoreVert, "Actions for ${task.name}") }
+                                    DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                                        DropdownMenuItem(text = { Text("Edit") }, leadingIcon = { Icon(Icons.Outlined.Tune, null) }, onClick = { menu = false; editing = editedScheduledTask(task) })
+                                        if (!webhook) DropdownMenuItem(text = { Text("Run now") }, leadingIcon = { Icon(Icons.Outlined.PlayArrow, null) }, onClick = { menu = false; core.update(Event.RunScheduledNow(task.id)) })
+                                        if (webhook) {
+                                            DropdownMenuItem(text = { Text("Copy URL") }, leadingIcon = { Icon(Icons.Outlined.ContentCopy, null) }, onClick = { menu = false; copyText(context, task.webhookUrl) })
+                                            DropdownMenuItem(text = { Text("New URL…") }, leadingIcon = { Icon(Icons.Outlined.Key, null) }, onClick = { menu = false; rotating = task })
+                                            DropdownMenuItem(text = { Text("Deliveries") }, leadingIcon = { Icon(Icons.Outlined.Download, null) }, onClick = { menu = false; core.update(Event.LoadWebhookDeliveries(task.id)) })
+                                        }
+                                        DropdownMenuItem(text = { Text("Delete", color = MaterialTheme.colorScheme.error) }, leadingIcon = { Icon(Icons.Outlined.Delete, null) }, onClick = { menu = false; deleting = task })
+                                    }
                                 }
                             }
+                        },
+                        colors = ListItemDefaults.colors(containerColor = clear),
+                    )
+                    if (webhook) {
+                        Text(task.webhookUrl, style = MaterialTheme.typography.bodySmall, maxLines = 1, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = Space.l))
+                        if (settings.webhookDeliveriesTask == task.id) {
+                            if (settings.webhookDeliveries.isEmpty()) Text("No requests yet.", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(horizontal = Space.l, vertical = Space.xs))
+                            settings.webhookDeliveries.forEach { d ->
+                                Text(listOf(d.outcome, d.method, d.detail, d.received).filter { it.isNotEmpty() }.joinToString(" · "), style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(horizontal = Space.l, vertical = 2.dp))
+                            }
                         }
-                    },
-                    colors = ListItemDefaults.colors(containerColor = clear),
-                )
+                    }
+                }
             }
         }
     }
-    if (adding) NewScheduledTaskSheet(sidebar.projects.filter { !it.isScratch }.map { it.id to it.title }, onDismiss = { adding = false }) { name, prompt, project, minutes ->
-        adding = false
-        core.update(Event.CreateScheduled(name, prompt, project, minutes.toUInt()))
+    editing?.let { draft ->
+        ScheduledTaskEditorSheet(
+            start = draft,
+            projects = projects.map { it.id to it.title },
+            threadsOf = { id -> projects.firstOrNull { it.id == id }?.let { p -> (p.threads + p.earlier).map { it.id to it.title } }.orEmpty() },
+            models = composer.modelGroups.flatMap { g -> g.models.map { "${it.option.instanceId}|${it.option.model}" to "${g.provider} · ${it.name}" } },
+            onDismiss = { editing = null },
+        ) { task ->
+            editing = null
+            core.update(Event.SaveScheduled(task))
+        }
     }
     deleting?.let { task ->
         AlertDialog(
@@ -389,38 +426,14 @@ fun ScheduledTasksScreen(core: Core, onBack: () -> Unit) {
             dismissButton = { TextButton(onClick = { deleting = null }) { Text("Cancel") } },
         )
     }
-}
-
-@Composable
-private fun NewScheduledTaskSheet(projects: List<Pair<String, String>>, onDismiss: () -> Unit, create: (String, String, String, Int) -> Unit) {
-    var name by rememberSaveable { mutableStateOf("") }
-    var prompt by rememberSaveable { mutableStateOf("") }
-    var project by rememberSaveable { mutableStateOf(projects.firstOrNull()?.first.orEmpty()) }
-    var hours by rememberSaveable { mutableFloatStateOf(24f) }
-    var open by remember { mutableStateOf(false) }
-    ModalBottomSheet(onDismissRequest = onDismiss) {
-        Column(Modifier.padding(horizontal = Space.xl), verticalArrangement = Arrangement.spacedBy(Space.m)) {
-            Text("New scheduled task", style = MaterialTheme.typography.titleLarge)
-            OutlinedTextField(name, { name = it }, label = { Text("Name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-            OutlinedTextField(prompt, { prompt = it }, label = { Text("Prompt") }, minLines = 3, modifier = Modifier.fillMaxWidth())
-            ExposedDropdownMenuBox(expanded = open, onExpandedChange = { open = it }) {
-                OutlinedTextField(
-                    value = projects.firstOrNull { it.first == project }?.second ?: "Project", onValueChange = {}, readOnly = true, label = { Text("Project") },
-                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(open) },
-                    modifier = Modifier.fillMaxWidth().menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable),
-                )
-                ExposedDropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-                    projects.forEach { (id, title) -> DropdownMenuItem(text = { Text(title) }, onClick = { open = false; project = id }) }
-                }
-            }
-            Text("Every ${hours.toInt()} hour${if (hours.toInt() == 1) "" else "s"}", style = MaterialTheme.typography.bodyLarge)
-            Slider(value = hours, onValueChange = { hours = it }, valueRange = 1f..168f, steps = 166)
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Space.s, Alignment.End)) {
-                TextButton(onClick = onDismiss) { Text("Cancel") }
-                Button(onClick = { create(name.trim(), prompt.trim(), project, hours.toInt() * 60) }, enabled = name.isNotBlank() && prompt.isNotBlank() && project.isNotEmpty()) { Text("Create") }
-            }
-            Spacer(Modifier.height(Space.xl))
-        }
+    rotating?.let { task ->
+        AlertDialog(
+            onDismissRequest = { rotating = null },
+            title = { Text("Give “${task.name}” a new URL?") },
+            text = { Text("The current URL stops working.") },
+            confirmButton = { TextButton(onClick = { rotating = null; core.update(Event.RotateWebhookToken(task.id)) }) { Text("New URL") } },
+            dismissButton = { TextButton(onClick = { rotating = null }) { Text("Cancel") } },
+        )
     }
 }
 

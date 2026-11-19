@@ -862,10 +862,9 @@ Android unit tests pass.
   `settings.json`), scheduled tasks, keybindings and source control. Where t3code
   depends on infrastructure Domovoi does not have, the method answers with t3code's own
   typed error or empty state and the module doc says so: T3 Connect relay, guest
-  sharing and peer links, the Expo/EAS device hub, the ACP registry, self-update and
+  sharing and peer links, the Expo/EAS device hub, self-update and
   desktop updates, provider CLI install/update and sign-in, GitHub App sign-in,
-  usage pricing, trace files, webhook-triggered scheduled tasks, and a
-  server-driven preview browser.
+  usage pricing, trace files, and a server-driven preview browser.
 - **Native client (Crux core + SwiftUI)**: `apps/domovoi-core` holds the client's
   logic (connection, sidebar, transcript, composer, terminals emulated with
   `vt100`, diffs, files, git, palette, settings, pull requests, usage,
@@ -969,7 +968,10 @@ Android unit tests pass.
     `node conformance/wire-check.ts <file>` (Node 26) decoded all 195 with
     t3code's schemas. `rpc_calls.rs` and `golden_replay.rs` pass with
     `DOMOVOI_NODE` pointing at Node 26.
-  - Not verified live: no real Codex or Claude turn exercised these paths
+  - Live (2026-11-19, see "Live turns of the real CLIs"): plans, approvals,
+    context use and image attachments against real Claude and Codex. Not yet
+    live: Codex question forms, permissions and elicitation requests, and
+    compaction. Before that: no real Codex or Claude turn exercised these paths
     yet (needs the CLIs signed in and the unmodified web client).
 - **Turn control** (second phase of the t3code gap plan):
   - `message.dispatch` honours `dispatchMode`: `steer_active` adds the
@@ -989,7 +991,9 @@ Android unit tests pass.
   - Verified: orchestrator unit tests (steer and fallback, queue editing,
     held queues, restart, delete), `provider_turns.rs` steering a scripted
     Claude turn, 8 new `rpc-calls` cases, and 390 recorded frames passing
-    `wire-check.ts`. Not verified live against real CLIs.
+    `wire-check.ts`. Live (2026-11-19): steer, queue and stop against real
+    Claude and Codex; the live run found Claude 2.1 queuing a steer as a
+    command of its own (see "Live turns of the real CLIs").
 - **Workspace lifecycle** (third phase of the t3code gap plan):
   - Setup scripts: a new worktree runs the project's `runOnWorktreeCreate`
     script (resolved as t3code does: per-project override, the project's
@@ -1014,7 +1018,8 @@ Android unit tests pass.
     `t3.json` setup script writes a file with t3code's environment;
     unit tests against real git repositories for every cleanup rule and
     each auto-pull condition; script resolution. Keep-awake is unit-tested
-    for its decision only; the assertion was not checked with `pmset`.
+    for its decision only. The live steer test sees the `caffeinate` held
+    while real Claude and Codex work (not checked with `pmset`).
 - **Text generation** (fourth phase of the t3code gap plan): `text_gen.rs`
   runs t3code's prompts through the local `claude -p` (JSON schema, no
   tools, no session) or `codex exec` (read-only, output schema), one at a
@@ -1038,7 +1043,8 @@ Android unit tests pass.
     commit without a message is committed with the written one; 342 frames
     pass `wire-check.ts`. Unit tests for prompts, answer parsing, title and
     branch cleanup, stale title answers, branch renaming and guide stops.
-    Not verified with real models; review guides were not run end to end.
+    Live (2026-11-19): titles, branch names and commit messages from real
+    Claude Haiku and Codex. Review guides were not run end to end.
 
 - **Fork and context handoff** (fifth phase of the t3code gap plan):
   - `thread.fork` creates the fork (lineage, `forkedFrom`, the source's
@@ -1056,9 +1062,10 @@ Android unit tests pass.
   - Verified: unit tests for the source point, transcript, native and
     portable forks, provider switch and merge-back; `provider_turns.rs`
     forks a scripted Claude session (checked flags) and hands a fork to
-    Codex as text; 88 frames pass `wire-check.ts`. Not verified against the
-    real CLIs: whether `claude` takes `--session-id` with `--fork-session`,
-    and Codex's `thread/fork`.
+    Codex as text; 88 frames pass `wire-check.ts`. Live (2026-11-19): a
+    Claude fork (`--session-id` with `--fork-session`) and a Codex fork
+    (`thread/fork`) remember what their source was told; a thread switched
+    from Claude to Codex keeps its conversation.
 - **Durability** (sixth phase of the t3code gap plan):
   - Effects that must happen even across a restart (a rollback, a title,
     a branch name, a settle script) are kept in `effect_outbox` from the
@@ -1093,7 +1100,9 @@ Android unit tests pass.
   - Verified: `provider_turns.rs` runs a scripted Claude subagent (child
     thread contents, the parent left clean, progress, stop through
     `stop_task`); 103 frames pass `wire-check.ts`. The Codex collab mapping
-    is not exercised by a test.
+    is not exercised by a test. Live (2026-11-19): a real Claude `Task`
+    subagent gets its child thread; Codex 0.170 spawned none (its
+    multi-agent feature is off by default).
 - **Agent MCP server** (eighth phase of the t3code gap plan): `/mcp`
   answers MCP over Streamable HTTP (JSON-RPC POSTs answered as JSON) for
   the agents Domovoi runs, from this machine only, each session with its own
@@ -1106,15 +1115,16 @@ Android unit tests pass.
     worktree), `task_status`, `task_cancel`, `schedule_task`,
     `t3_project_info`. When a delegated task's work settles, the thread that
     delegated it gets a system message with its outcome and last reply.
-  - Not done: t3code's other toolkits (worktree handoff, preview, PR
-    links, secrets, HTML preview), developer instructions describing the
-    tools, and t3code's exact tool contracts (names follow t3code; inputs
-    are Domovoi's own, smaller).
+  - Since then (see "Agent tools and instructions" below): 27 tools, with
+    t3code's names and inputs. Not done: t3code's preview, device, HTML,
+    attachment, PR-link, environment-link and secret toolkits.
   - Verified: `provider_turns.rs` reads the endpoint and token from a
     scripted Claude's arguments, calls the tools over HTTP (refused without
     a token and outside the project), delegates a task that runs in a child
     thread, and sees the completion message arrive in the parent; 77
-    frames pass `wire-check.ts`. Not tried with a real Claude or Codex.
+    frames pass `wire-check.ts`. Live (2026-11-19): real Claude and Codex
+    call `t3_project_info`, and delegate a task with `delegate_task` and
+    `t3_thread_wait`.
 - **OpenCode** (ninth phase of the t3code gap plan): `adapters/opencode.rs`
   drives `opencode serve` (the v2 HTTP API, OpenCode 2.0.18 or newer;
   `DOMOVOI_OPENCODE_BINARY` names the executable). One server per Domovoi, on
@@ -1194,3 +1204,231 @@ Android unit tests pass.
     (5,142 frames) pass `wire-check.ts`. Real pi kept entry ids through
     `--fork`, and wrote no file for a session forked to before its first
     message (hence the new-session rule).
+
+## Live turns of the real CLIs
+
+`apps/server/tests/live/mod.rs` (a module of `provider_turns.rs`, sharing
+its harness) runs each scenario against the real `claude` and `codex`, as
+this user, found on PATH (or `DOMOVOI_CLAUDE_BINARY` /
+`DOMOVOI_CODEX_BINARY`). A test runs only when its provider's model is
+named; `just live claude`, `just live codex` and `just live both` name
+cheap ones (`claude-haiku-5-5`, `gpt-6-luna`), record every frame to
+`target/live-<provider>.ndjson` and decode them with `wire-check.ts`.
+`DOMOVOI_KEEP_FAILED=1` keeps a failed test's home, with the provider
+protocol logs under `home/userdata/logs/provider/`. Each run spends real
+tokens; the prompts are a line each.
+
+Scenarios, each for both providers: a command that asks first (and the
+context used reported), plan mode then implementing the plan, a steer, a
+queued message and a stop (with keep-awake held on macOS), a native fork,
+a subagent, an agent MCP tool, a delegated task, text generation (title,
+branch name, commit message), a turn continued after the server is stopped
+with SIGTERM, an image attachment, and a scheduled task run now. `just live
+both` also switches a thread from Claude to Codex.
+
+2026-11-19, Claude Code 2.1.319 (Haiku 5.5) and codex-cli 0.170.0
+(gpt-6-luna): all 23 pass; the frames (about 14,000) pass `wire-check.ts`.
+What the live runs found:
+
+- Claude Code 2.1 queues a `priority: "now"` steer as a command of its own
+  (`command_lifecycle` `queued`), ends the command it was working on with a
+  `result` (`stop_reason: tool_use`), then runs the steer and answers it
+  with a result of its own. Domovoi ended the run at the first result, so
+  the reply to the steer was lost. The Claude adapter now keeps the run
+  open while a steer it sent is queued, and the scripted `claude` behaves
+  as the real one does.
+- Real CLIs run read-only commands (a bare `echo`) without asking even in
+  approval-required mode; the approval scenario uses a command that writes.
+- Codex 0.170 spawns no subagents unless its multi-agent feature is on.
+- Not live yet: Codex question forms, permission and elicitation requests,
+  compaction, review guides, and real APNs delivery.
+
+## Scheduled tasks: fresh sessions and webhooks
+
+- `freshContext` (a scheduled task's "fresh session", `t3_thread_send`):
+  the run gets a provider thread of its own and no handoff; later messages
+  continue it, and a provider switch hands over only the runs since. A
+  scheduled task's fresh-session run is a side conversation: the user's next
+  message continues the thread's own conversation (t3code
+  `conversationProviderThread`). Unit tests in `orchestration/commands/tests.rs`.
+- Webhook tasks (`webhooks.rs`): `POST|PUT|PATCH|GET
+  /api/hooks/<task>/<token>` on the server's port, and with `--hooks-listen`
+  on an address that serves nothing else; `--hooks-url` gives the public
+  origin a task's `webhook.url` is shown with. In t3code's order: token (a
+  wrong one is a 404, as an unknown hook), a flood guard, enabled, HMAC-SHA256
+  signature over the exact body (hex or base64, prefix), filters, the replay
+  key (7 days), the coalesce window (the run takes the window's last request
+  when it closes; windows survive a restart), 60 runs a minute, 20 queued per
+  task, and the 120,000-character prompt cap. Values are framed in
+  `<webhook-data-…>` tags with mentions broken; headers and query parameters
+  that name credentials are redacted in `{{request}}`, `{{headers}}` and the
+  log. Each task keeps its last 50 deliveries, and 20 each of filtered and
+  duplicate ones. Not ported: T3 Connect relay delivery proofs (so
+  `maxDeliveryAgeMinutes` never expires a request) and managed policy.
+- Verified: unit tests for placeholders, filters, signatures and redaction;
+  `provider_turns.rs` `a_signed_webhook_runs_its_task_once` (wrong signature,
+  wrong token, filtered, accepted with a scripted Claude turn, duplicate, a
+  coalesced window run once with its last request, the log and one delivery);
+  158 frames pass `wire-check.ts`.
+
+## Agent tools and instructions
+
+- `apps/server/src/mcp/` serves 27 tools: threads (`t3_thread_list`,
+  `_read` with an `activity` view, `_search`, `_send` with modes and
+  `freshContext`, `_wait` for a run, `_launch`, `_configure`, `_interrupt`,
+  `_update`, `_organize`, `_transfer`, `t3_queue`, `t3_pending_request`),
+  delegation (`orchestrator_capabilities`, `delegate_task` with a `target`
+  and `mode: "wait"`, `task_status`, `task_cancel`, `create_threads`,
+  `t3_workflow_stop`), schedules (`schedule_task` that also changes a task,
+  `list_scheduled_tasks`, `delete_scheduled_task`, `run_scheduled_task_now`),
+  `t3_project_info`, and worktrees (`t3_worktree_status`, `_list`,
+  `_handoff`). Inputs follow t3code's contracts and still take the earlier
+  names (`name`, `thisThread`); `clientRequestId` makes a retried call one
+  change. Claude's `--allowedTools` lists every tool annotated read-only.
+- A worktree handoff moves the thread; a provider session never changes
+  folders, so the next turn starts a new one there and is handed the
+  conversation (also when the handoff came from the thread's first turn,
+  whose run is handed over once it ends).
+- `agent_instructions.rs`: two sections (each under Codex's 4,000 bytes,
+  naming only tools the server has, which a unit test checks) go to Claude as
+  `--append-system-prompt`, to Codex as `turn/start` `additionalContext`, and
+  to Pi through its extension's system prompt. Not done: OpenCode gets neither
+  the tools nor the instructions (Domovoi drives OpenCode's v2 API, whose MCP
+  and system-prompt calls are unverified).
+- Verified: `provider_turns.rs` `agents_organize_threads_schedule_and_hand_off_to_a_worktree`
+  (every new tool over HTTP, as the scripted Claude's session) and
+  `a_handoff_in_the_first_turn_takes_the_conversation_along` (fails without
+  the queue's catch-up); live, real Claude and Codex call `t3_project_info`
+  and hand themselves off to a worktree, where the continuation remembers a
+  codeword and runs `pwd` in the worktree. The live run found the first-turn
+  case.
+
+## Skills
+
+- Claude (`skills.rs`): the skills its last session loaded, as `system/init`
+  names them (Claude's own rules choose user, project and plugin skills),
+  with descriptions from the `initialize` command list, which Claude's slash
+  commands now carry too. Kept in `userdata/claude-skills.json` across
+  restarts. A `$name` mention of one is sent as `/name` starting the last text
+  block (t3code `planClaudeSkillDispatch`; earlier user-only skills get their
+  file named).
+- Codex: the `SKILL.md` folders under `<CODEX_HOME>/skills` and
+  `skills/.system`, from their front matter, read on each snapshot; Codex
+  reads `$name` itself. t3code asks the app-server (`skills/list`) instead,
+  which also sees project skills; Domovoi does not yet.
+- Verified: unit tests for the mention rewrite (prices, unknown names,
+  several mentions), front matter, and Claude's init as Claude Code 2.1.319
+  sends it.
+
+## Usage limits and resuming at the reset
+
+- `usage_limits.rs`: Claude's `rate_limit_event` (its five-hour and weekly
+  windows, utilization 0-1) and Codex's `account/rateLimits/updated` (the
+  `primary`/`secondary` positions and a monthly credit limit; model-scoped
+  limits are not the account's) update each provider's `usageLimits`, sent
+  with the provider list (also in `refreshProviders` answers, which now carry
+  Claude's live commands and skills too).
+- A Claude turn that ends in an error while a limit rejects it (no overage
+  to carry on in), and a Codex turn whose error is `usageLimitExceeded`,
+  `rateLimitExceeded` or a 429 after retries, fail as `usage_limit` with the
+  latest reset among the limits that stopped it.
+- `thread.metadata.update` takes `limitRecovery` for the thread's latest run
+  when a usage limit failed it and nothing is pending (`snooze` snoozes the
+  thread until the reset); `null` clears it. `usage_recovery.rs` arms it by
+  itself with `autoResumeLimitedThreads` / `snoozeLimitedThreads` (not for a
+  reset more than a day past) and, once the reset has passed and the thread
+  is not snoozed, sends "Continue where you left off."
+  (`usageLimitContinuationOfRunId`), then clears it. It looks every 30 s.
+- Not done: reading limits before a turn reports them (Claude `get_usage`,
+  Codex `account/rateLimits/read`), reset credits
+  (`provider.consumeResetCredit` still answers `noCredit`), and the
+  system notice t3code shows in the timeline when a limit is hit.
+- Verified: unit tests for both providers' messages as they send them;
+  `provider_turns.rs` `a_usage_limited_thread_resumes_when_the_limit_resets`
+  (a scripted Claude turned away; the windows on the provider; a wrong run
+  refused; the continuation). Not live: no real limit was hit on purpose.
+
+## ACP agents
+
+- `adapters/acp.rs`: any Agent Client Protocol agent, as a provider
+  instance of driver `acpRegistry` (t3code's) whose config names a local
+  command (`source: "local"`, `commandPath`, `commandArgs`, and the
+  instance's `environment`) or a registry agent (`agentId`). One process per
+  thread: `initialize` (protocol 1; no client file system or terminal),
+  `session/new` in the thread's folder (`authenticate` with the instance's
+  `authMethodId`, or the agent's first agent-side method, when it needs
+  signing in), or `session/load` / `session/resume` of the thread's session
+  when its process starts again (the replayed history is dropped).
+  `session/prompt` runs a turn; `session/update` gives messages, thoughts,
+  tool calls (by kind: command, file change from a diff, web search, tool),
+  the plan, context use (`usage_update`) and the agent's slash commands;
+  `session/cancel` stops it. `session/request_permission` asks as an
+  approval (decisions pick `allow_once` / `allow_always` / `reject_once`),
+  unless full access or auto-accept-edits decides it; reads are allowed.
+  The model is the session's model option or `session/set_model`; plan mode
+  is a mode whose id ends in `plan` or `architect`, and the previous mode
+  comes back after. Domovoi's MCP tools go as an HTTP server when the agent
+  takes one, else through `domovoi-server acp-mcp-bridge` (stdio); the first
+  prompt of a session carries the instructions about them. No steering
+  (ACP has none): a message sent while a turn runs waits for it.
+- Instances are probed on `refreshProviders` (`initialize` and `session/new`
+  in a scratch folder, for the agent's name, version and models), kept 15
+  minutes; an instance removed from settings leaves the list.
+- Verified: `provider_turns.rs` `an_acp_agent_runs_turns` against a scripted
+  ACP agent (probe; every kind of update; an approval; model and plan mode;
+  the tools over HTTP and the instructions; a failure; a stop with
+  `session/cancel`; mode restored; the session loaded by a new process).
+  Live: `DOMOVOI_LIVE_ACP_COMMAND="opencode acp"
+  DOMOVOI_LIVE_ACP_MODEL=ollama/qwen3.5:4b cargo test -p domovoi-server --test
+  provider_turns live::a_real_acp` probes OpenCode 2.1.3 over ACP (626
+  models) and runs a turn that replies with a command's output.
+- The registry (`acp_registry.rs`): `searchAcpRegistry` lists the agents of
+  `https://cdn.agentclientprotocol.com/registry/v1/latest/registry.json` that
+  run here (a binary for this platform, else npm, else uv, each only with its
+  tool on PATH; read again after 5 minutes, a copy kept for when it can't be
+  reached; icons only from the registry's own host).
+  `prepareAcpRegistryAgent` installs one under `<home>/acp-registry/`: an
+  archive downloaded, its sha256 checked when given, unpacked (tar or zip, or
+  a bare executable); an npm package installed into the agent's own folder
+  (its first `bin` runs); a uv package run with `uvx`. A receipt names the
+  command, which instances of `source: "registry"` start.
+  `uninstallAcpRegistryManagedBinary` is refused while an instance uses the
+  agent. The agent's own sessions, model providers and sign-out are answered
+  with t3code's typed `*_unsupported` reasons; `acceptAcpRegistryUrlAuth`
+  accepts nothing (no agent asks for URL authentication). Grok and Kiro run
+  as the registry's `grok-build` and `kiro` agents (t3code's own flavours of
+  them are not ported).
+- Verified: unit tests for the search (what runs here, ids, icons) and a
+  binary install with its checksum (and a wrong one refused); the
+  `rpc-calls` and `admin-server` cases search a fixture registry
+  (`conformance/acp-registry.json`, never the network), and their answers
+  decode with t3code's schemas. Live: `DOMOVOI_LIVE_ACP_REGISTRY_AGENT=pi-acp
+  cargo test -p domovoi-server --test provider_turns live::a_registry_agent`
+  finds the 46 agents of the real registry, installs `pi-acp` through npm,
+  and its instance starts and is ready.
+
+## Clients: scheduled tasks, limits
+
+- The core (`ScheduledTaskEdit`, `SaveScheduled`): one editor creates and
+  changes a task with every setting it has: at a time on chosen weekdays,
+  once, every so often, or on webhook requests; a new thread each time, or
+  one thread continued or started fresh; the project folder or a new
+  worktree from a base branch; a model (or the composer's), permissions,
+  plan mode, enabled. `RotateWebhookToken` and `LoadWebhookDeliveries` serve
+  a webhook task's URL and its log. The list shows the schedule with its
+  weekdays, the last error and a webhook task's URL. `PlanForLimitReset`
+  (resume, or snooze) and `CancelLimitPlan` act on a thread a usage limit
+  stopped, whose page shows when the limit resets; providers show their
+  limits in a line.
+- The Mac, iPhone and Android apps use them: the editor (a sheet on the Mac
+  and iPhone, a bottom sheet on Android) for new and existing tasks, webhook
+  URL copy, new URL and deliveries, the usage-limit banner at the end of a
+  thread, and a provider's limits in Providers. Android's interval is now the
+  same list of presets as the Apple apps (it was 1 to 168 hours).
+- Verified: `client_replay.rs` records the four new requests (a task with
+  every setting, one changed to a webhook, a new URL, deliveries) and checks
+  the rest are unchanged; the Mac and iPhone (simulator) apps and the
+  Android APK build, Android's unit tests pass; `just mac-snapshots` captures
+  the Scheduled tab and the editor (`13-scheduled-editor`). Not driven on a
+  device or emulator by hand.
+

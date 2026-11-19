@@ -14,16 +14,25 @@ const ICON_BACKGROUNDS: [&str; 15] = [
 ];
 const MAX_NAMED_FOLDER_ATTEMPTS: usize = 100;
 
+/// `scratch_root`, once the home is known: whether the home is inside a git
+/// checkout is asked once (t3code caches it for good too). Every launch asks
+/// for it, and running `git` each time cost a process per launch.
+static SCRATCH_ROOT: OnceLock<Option<PathBuf>> = OnceLock::new();
+
 /// The scratch root, unless the home sits inside a git checkout (scratch
 /// folders would inherit its status and checkpoints).
 pub fn scratch_root() -> Option<PathBuf> {
     let home = HOME.get()?;
-    let inside_repo = crate::process::output_blocking(
-        crate::process::blocking_command("git").args(["rev-parse", "--show-toplevel"]).current_dir(home),
-        crate::process::QUICK,
-    )
-    .is_ok_and(|o| o.status.success());
-    (!inside_repo).then(|| home.join("scratch"))
+    SCRATCH_ROOT
+        .get_or_init(|| {
+            let inside_repo = crate::process::output_blocking(
+                crate::process::blocking_command("git").args(["rev-parse", "--show-toplevel"]).current_dir(home),
+                crate::process::QUICK,
+            )
+            .is_ok_and(|o| o.status.success());
+            (!inside_repo).then(|| home.join("scratch"))
+        })
+        .clone()
 }
 
 pub fn named_projects_root() -> Option<PathBuf> {

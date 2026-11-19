@@ -94,6 +94,29 @@ impl Orchestrator {
     /// regenerate the title.
     pub(super) fn metadata_update(&self, c: &ThreadMetadataUpdate) -> Result<DispatchResult, Refusal> {
         let regenerate = c.regenerate_title == Some(true);
+        // Limit recovery (t3code): only for the thread's latest run, failed on a
+        // usage limit that resets at the time given, with nothing pending.
+        let recovery = match &c.limit_recovery {
+            None => None,
+            Some(None) => Some(None),
+            Some(Some(update)) => {
+                let tid = c.thread_id.as_str();
+                let runs = self.store.records::<domovoi_model::typed::Run>(tid)?;
+                let latest = runs.iter().max_by_key(|run| run.ordinal).ok_or(Refusal::NotUsageLimited)?;
+                let failure = crate::usage_recovery::usage_limit_reset(&self.store, tid, latest);
+                let pending = self.store.records::<domovoi_model::typed::RuntimeRequest>(tid)?.iter().any(|r| r.status.as_str() == "pending");
+                if latest.id != update.run_id || failure.is_none() || pending {
+                    return Err(Refusal::NotUsageLimited);
+                }
+                Some(Some(domovoi_model::typed::LimitRecovery {
+                    request_id: Some(c.command_id.clone()),
+                    run_id: update.run_id.clone(),
+                    reset_at: update.reset_at.clone(),
+                    auto_resume: update.auto_resume == Some(true),
+                    snooze: update.snooze,
+                }))
+            }
+        };
         let answer = self.edit_thread(&c.thread_id, &c.command_id, ThreadChange::MetadataUpdated, true, |thread| {
             if let Some(title) = &c.title {
                 thread.title = title.clone();
@@ -106,6 +129,12 @@ impl Orchestrator {
             }
             if regenerate {
                 thread.title_regeneration = Some(Some(TitleRegeneration { request_id: c.command_id.clone(), started_at: now() }));
+            }
+            if let Some(recovery) = &recovery {
+                if let Some(r) = recovery.as_ref().filter(|r| r.snooze == Some(true)) {
+                    thread.snoozed_until = Some(Some(r.reset_at.clone()));
+                }
+                thread.limit_recovery = Some(recovery.clone());
             }
         })?;
         if regenerate {

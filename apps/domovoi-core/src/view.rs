@@ -303,6 +303,11 @@ pub struct ThreadPageView {
     /// The agent replied but work it started in the background goes on
     /// ("Waiting for 2 background agents"); empty when there is none.
     pub background: String,
+    /// The last turn stopped on a usage limit: when it resets ("in 3h", or
+    /// "now" once it has); empty when it isn't limited.
+    pub limit_resets: String,
+    /// What is set for the reset: `resume`, `snooze`, or empty.
+    pub limit_plan: String,
 }
 
 /// Another thread this one comes from.
@@ -794,6 +799,9 @@ pub struct SettingsView {
     pub keybindings: Vec<KeybindingView>,
     pub scheduled_tasks: Vec<ScheduledTaskView>,
     pub scheduled_time_zone: String,
+    /// The webhook task whose deliveries are open, and the deliveries.
+    pub webhook_deliveries_task: String,
+    pub webhook_deliveries: Vec<WebhookDeliveryView>,
     pub archived: Vec<ThreadRowView>,
     pub storage: StorageView,
     pub diagnostics: DiagnosticsView,
@@ -831,6 +839,9 @@ pub struct ProviderView {
     pub message: String,
     pub model_count: u32,
     pub enabled: bool,
+    /// The account's usage limits as last reported ("Session 45% · Weekly
+    /// 97%, resets in 2d"); empty when the provider has said none.
+    pub limits: String,
 }
 
 #[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
@@ -851,6 +862,35 @@ pub struct ScheduledTaskView {
     pub next_run: String,
     pub last_run: String,
     pub project_title: String,
+    /// What the editor opens with (see `ScheduledTaskEdit`).
+    pub project_id: String,
+    pub schedule_kind: String,
+    pub interval_minutes: u32,
+    pub time_of_day: String,
+    pub weekdays: Vec<u8>,
+    pub run_at: String,
+    pub thread_mode: String,
+    pub thread_id: String,
+    pub workspace: String,
+    pub base_branch: String,
+    pub model_instance: String,
+    pub model: String,
+    pub runtime_mode: String,
+    pub interaction_mode: String,
+    /// Why the last run failed; empty otherwise.
+    pub last_error: String,
+    /// A webhook task's URL (or its path, when the server has no public address).
+    pub webhook_url: String,
+}
+
+/// A webhook delivery as the task's log shows it.
+#[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct WebhookDeliveryView {
+    pub id: String,
+    pub received: String,
+    pub method: String,
+    pub outcome: String,
+    pub detail: String,
 }
 
 #[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]

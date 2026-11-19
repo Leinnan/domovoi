@@ -29,6 +29,9 @@ pub enum ProviderDriver {
     ClaudeAgent,
     OpenCode,
     Pi,
+    /// An agent speaking the Agent Client Protocol (t3code's `acpRegistry`
+    /// driver): from the ACP registry, or a local command.
+    AcpRegistry,
 }
 
 impl ProviderDriver {
@@ -39,6 +42,7 @@ impl ProviderDriver {
             "claudeAgent" => Some(Self::ClaudeAgent),
             "opencode" => Some(Self::OpenCode),
             "pi" => Some(Self::Pi),
+            "acpRegistry" => Some(Self::AcpRegistry),
             _ => None,
         }
     }
@@ -49,6 +53,7 @@ impl ProviderDriver {
             Self::ClaudeAgent => "claudeAgent",
             Self::OpenCode => "opencode",
             Self::Pi => "pi",
+            Self::AcpRegistry => "acpRegistry",
         }
     }
 

@@ -161,6 +161,22 @@ can live in `<home>/push.json` (`keyPath`, `keyId`, `teamId`, `topic`,
 `privateAlerts`). The topic defaults to the iPhone app's bundle id,
 `com.crayen.domovoi`.
 
+## Webhook tasks
+
+A scheduled task can run when a URL receives a request (GitHub, CI, any
+service that sends webhooks). The URL is on the server's own port, which
+listens on this machine only. To take requests from the internet, serve the
+webhook URLs (and nothing else) on an address your reverse proxy or tunnel
+reaches, and tell the server the public origin so the apps show full URLs:
+
+```sh
+domovoi-server --hooks-listen 127.0.0.1:13780 --hooks-url https://hooks.example.com
+```
+
+Point the proxy's `https://hooks.example.com/api/hooks/` at
+`http://127.0.0.1:13780/api/hooks/`. Each task's URL carries its own token;
+add a signature secret in the task for senders that sign their requests.
+
 ## The iPhone app on a device
 
 The Xcode project is generated (`just mac-generate`) and signs the iPhone app

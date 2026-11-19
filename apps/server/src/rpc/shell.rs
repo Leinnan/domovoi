@@ -69,21 +69,60 @@ pub fn snapshot_of(store: &crate::store::Store) -> Result<ShellSnapshot, StoreEr
     })
 }
 
+/// The roots whose repository identity is resolved: every project's, once each.
 fn identity_roots(projects: &[ProjectShell]) -> Vec<String> {
-    projects.iter().map(|p| p.workspace_root.clone()).collect()
+    let mut roots: Vec<String> = Vec::with_capacity(projects.len());
+    for p in projects {
+        if !roots.contains(&p.workspace_root) {
+            roots.push(p.workspace_root.clone());
+        }
+    }
+    roots
 }
 
-/// `shellStreamItemsFromInitialSnapshot`: the authoritative snapshot, then the
-/// same snapshot carrying its resolved identity roots.
-fn initial_items(snap: ShellSnapshot) -> Vec<ShellStreamItem> {
+/// The shell with its projects only: what a resumed stream's identity item needs.
+/// No thread is read.
+fn projects_snapshot(store: &crate::store::Store) -> Result<ShellSnapshot, StoreError> {
+    let snapshot_sequence = store.latest_sequence()?;
+    Ok(ShellSnapshot { schema_version: SHELL_SCHEMA_VERSION, snapshot_sequence, threads: vec![], archived_threads: vec![], projects: store.list_projects()? })
+}
+
+async fn projects_snapshot_off_runtime(state: crate::state::SharedState) -> Result<ShellSnapshot, StoreError> {
+    tokio::task::spawn_blocking(move || projects_snapshot(&state.store))
+        .await
+        .unwrap_or_else(|e| Err(StoreError::Invalid(format!("the shell projects did not finish: {e}"))))
+}
+
+/// The repository-identity item (`shellStreamItemsFromInitialSnapshot`'s
+/// second item): the projects whose roots resolved and those roots, with no
+/// thread. It only updates project metadata, so it repeats no thread row.
+fn identity_item(snap: ShellSnapshot) -> Option<ShellStreamItem> {
     let roots = identity_roots(&snap.projects);
     if roots.is_empty() {
-        return vec![ShellStreamItem::Snapshot { snapshot: Box::new(snap), resolved_repository_identity_roots: None }];
+        return None;
     }
-    vec![
-        ShellStreamItem::Snapshot { snapshot: Box::new(snap.clone()), resolved_repository_identity_roots: None },
-        ShellStreamItem::Snapshot { snapshot: Box::new(snap), resolved_repository_identity_roots: Some(roots) },
-    ]
+    let projects = snap.projects.into_iter().filter(|p| roots.contains(&p.workspace_root)).collect();
+    Some(ShellStreamItem::Snapshot {
+        snapshot: Box::new(ShellSnapshot { threads: vec![], archived_threads: vec![], projects, ..snap }),
+        resolved_repository_identity_roots: Some(roots),
+    })
+}
+
+/// `shellStreamItemsFromInitialSnapshot`: the authoritative snapshot of the
+/// active threads, then the repository-identity item. Archived threads are not
+/// on the stream (as in t3code): `getArchivedShellSnapshot` serves them.
+pub(crate) fn initial_items(snap: ShellSnapshot) -> Vec<ShellStreamItem> {
+    let snap = ShellSnapshot { archived_threads: vec![], ..snap };
+    let identity = identity_item(ShellSnapshot {
+        schema_version: snap.schema_version,
+        snapshot_sequence: snap.snapshot_sequence,
+        threads: vec![],
+        archived_threads: vec![],
+        projects: snap.projects.clone(),
+    });
+    let mut items = vec![ShellStreamItem::Snapshot { snapshot: Box::new(snap), resolved_repository_identity_roots: None }];
+    items.extend(identity);
+    items
 }
 
 /// What the shell stream sends for the event `sequence`, which changed the
@@ -142,14 +181,8 @@ fn shell_stream(ctx: Arc<ConnCtx>, input: ShellSubscription) -> BoxStream<'stati
         match input.after_sequence {
             Some(after) if after <= high_water => {
                 // Resumable: we keep the full event log.
-                let snap = match snapshot_off_runtime(state.clone()).await { Ok(s) => s, Err(e) => { yield Err(failure(e)); return; } };
-                let roots = identity_roots(&snap.projects);
-                if !roots.is_empty() {
-                    yield Ok(ShellStreamItem::Snapshot {
-                        snapshot: Box::new(ShellSnapshot { threads: vec![], archived_threads: vec![], ..snap }),
-                        resolved_repository_identity_roots: Some(roots),
-                    });
-                }
+                let snap = match projects_snapshot_off_runtime(state.clone()).await { Ok(s) => s, Err(e) => { yield Err(failure(e)); return; } };
+                if let Some(item) = identity_item(snap) { yield Ok(item); }
                 match state.store.events_after(after, high_water) {
                     Ok(events) => for e in &events {
                         if let Some(item) = item_for_event(&state, e.sequence, &e.aggregate_kind, &e.aggregate_id, &e.event_type) { yield Ok(item); }
@@ -658,6 +691,46 @@ mod tests {
         let ids = |shells: &[Arc<ThreadShell>]| shells.iter().map(|s| s.id.as_str().to_owned()).collect::<Vec<_>>();
         assert_eq!((ids(&snapshot.threads), ids(&snapshot.archived_threads)), (vec!["t1".to_owned()], vec!["t2".to_owned()]));
         assert_eq!(serde_json::to_value(&snapshot).unwrap()["threads"][0], serde_json::to_value(&*snapshot.threads[0]).unwrap());
+    }
+
+    /// t3code `ShellStream.test.ts` "keeps thread rows out of the metadata-only enrichment frame".
+    #[test]
+    fn the_identity_item_repeats_no_thread_and_the_stream_snapshot_has_no_archive() {
+        let store = Store::new(crate::db::Db::open_in_memory().unwrap());
+        let o = Origin::default();
+        store.create_project(project(), None).unwrap();
+        append(&store, "t1", "thread.created", thread("t1", "p"), &o).unwrap();
+        let archived = crate::test_records::with(thread("t2", "p"), serde_json::json!({ "archivedAt": crate::test_records::AT }));
+        append(&store, "t2", "thread.created", archived, &o).unwrap();
+        let items = initial_items(snapshot_of(&store).unwrap());
+        let sent: Vec<serde_json::Value> = items.iter().map(|i| serde_json::to_value(i).unwrap()).collect();
+        assert_eq!(sent.len(), 2);
+        // The authoritative snapshot: the active threads only, and no identity roots.
+        assert_eq!(sent[0]["kind"], "snapshot");
+        assert!(sent[0].get("resolvedRepositoryIdentityRoots").is_none());
+        assert_eq!(sent[0]["snapshot"]["threads"].as_array().unwrap().len(), 1);
+        assert_eq!(sent[0]["snapshot"]["threads"][0]["id"], "t1");
+        assert_eq!(sent[0]["snapshot"]["archivedThreads"], serde_json::json!([]));
+        // The identity item: the projects and their roots, no thread rows.
+        assert_eq!(sent[1]["resolvedRepositoryIdentityRoots"], serde_json::json!(["/w"]));
+        assert_eq!(sent[1]["snapshot"]["threads"], serde_json::json!([]));
+        assert_eq!(sent[1]["snapshot"]["archivedThreads"], serde_json::json!([]));
+        assert_eq!(sent[1]["snapshot"]["projects"][0]["id"], "p");
+        assert_eq!(sent[1]["snapshot"]["snapshotSequence"], sent[0]["snapshot"]["snapshotSequence"]);
+        // A resumed stream's identity item has the same shape, read without any thread.
+        let resumed = serde_json::to_value(identity_item(projects_snapshot(&store).unwrap()).unwrap()).unwrap();
+        assert_eq!(resumed, sent[1]);
+        // With no project there is no identity item.
+        let empty = Store::new(crate::db::Db::open_in_memory().unwrap());
+        assert_eq!(initial_items(snapshot_of(&empty).unwrap()).len(), 1);
+        assert!(identity_item(projects_snapshot(&empty).unwrap()).is_none());
+    }
+
+    #[test]
+    fn identity_roots_name_each_root_once() {
+        let mut other = project();
+        other.id = "q".into();
+        assert_eq!(identity_roots(&[project(), other]), vec!["/w".to_owned()]);
     }
 
     #[test]

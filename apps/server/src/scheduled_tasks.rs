@@ -3,12 +3,12 @@
 //! orchestrator (a new thread per run, or a message to the bound thread).
 //!
 //! Differences from t3code:
-//! - webhook tasks are stored and get a URL token, but Domovoi serves no
-//!   `/api/hooks` route, so they never receive deliveries and their delivery
-//!   log is always empty;
+//! - webhook deliveries (`crate::webhooks`) have no T3 Connect relay;
 //! - no managed policy (`blockedByPolicy`, runtime-mode ceilings), no scratch
-//!   projects and no agent secret requests (`secretRef` is refused);
-//! - a fresh-session run sends `freshContext`, which Domovoi's dispatch ignores.
+//!   projects and no agent secret requests (`secretRef` is refused).
+//!
+//! A fresh-session run sends `freshContext`: the occurrence starts a provider
+//! session of its own, a side conversation the thread's own continues past.
 //!
 //! A task is the record clients read ([`ScheduledTask`]). Its row holds the
 //! schedule, the workspace strategy and the model selection as the JSON those
@@ -182,7 +182,7 @@ pub fn task_error(message: &str, task_id: Option<&str>) -> ScheduledTaskError {
     ScheduledTaskError { message: message.to_owned(), task_id: task_id.map(str::to_owned), cause: None }
 }
 
-fn task_error_cause(message: &str, task_id: Option<&str>, cause: impl std::fmt::Display) -> ScheduledTaskError {
+pub(crate) fn task_error_cause(message: &str, task_id: Option<&str>, cause: impl std::fmt::Display) -> ScheduledTaskError {
     ScheduledTaskError { cause: Some(cause.to_string()), ..task_error(message, task_id) }
 }
 
@@ -337,7 +337,10 @@ fn task_from_row(r: &Row<'_>) -> rusqlite::Result<StoredTask> {
     let token: Option<String> = r.get(21)?;
     let secret: Option<String> = r.get(22)?;
     let webhook = match (&schedule, token) {
-        (ScheduledTaskSchedule::Webhook(_), Some(token)) => Some(ScheduledTaskWebhookEndpoint { path: webhook_path(&id, &token), url: None, has_secret: secret.is_some() }),
+        (ScheduledTaskSchedule::Webhook(_), Some(token)) => {
+            let path = webhook_path(&id, &token);
+            Some(ScheduledTaskWebhookEndpoint { url: crate::webhooks::public_url(&path), path, has_secret: secret.is_some() })
+        }
         _ => None,
     };
     let task = ScheduledTask {
@@ -423,7 +426,7 @@ pub fn list_result(store: &Store) -> Result<ScheduledTaskList, ScheduledTaskErro
     Ok(ScheduledTaskList { tasks: list(store)?.into(), time_zone: Some(time_zone_name()) })
 }
 
-fn webhook_credentials(store: &Store, id: &str) -> Result<Option<(Option<String>, Option<String>)>, ScheduledTaskError> {
+pub(crate) fn webhook_credentials(store: &Store, id: &str) -> Result<Option<(Option<String>, Option<String>)>, ScheduledTaskError> {
     store
         .db()
         .with(|c| {
@@ -909,9 +912,11 @@ pub struct ScheduledTasks {
 
 /// What starts a run: the timer, or `runNow`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Trigger {
+pub(crate) enum Trigger {
     Scheduled,
     Manual,
+    /// A webhook delivery (or a coalesced window of them).
+    Webhook,
 }
 
 impl Trigger {
@@ -920,8 +925,17 @@ impl Trigger {
         match self {
             Trigger::Scheduled => "scheduled",
             Trigger::Manual => "manual",
+            Trigger::Webhook => "webhook",
         }
     }
+}
+
+/// What starts a run, and what it sends when that is not the task's prompt.
+struct Occurrence {
+    trigger: Trigger,
+    prompt: Option<String>,
+    /// Names the run's command and message; by default the start time and trigger.
+    key: Option<String>,
 }
 
 /// A task's run in progress: while held, the task does not start again.
@@ -996,11 +1010,18 @@ impl ScheduledTasks {
     }
 
     async fn run_timer(self: Arc<Self>) {
+        crate::webhooks::recover(self.store());
         loop {
+            crate::webhooks::run_closed_windows(&self);
             self.clone().run_due().await;
             let now = Timestamp::now();
-            let wait = earliest_next_run(self.store())
-                .map(|next| Duration::from_millis(next.as_millisecond().saturating_sub(now.as_millisecond()).max(0) as u64))
+            let next = earliest_next_run(self.store()).map(|next| next.as_millisecond());
+            let window = crate::webhooks::next_window_close(self.store());
+            let wait = next
+                .into_iter()
+                .chain(window)
+                .min()
+                .map(|next| Duration::from_millis(next.saturating_sub(now.as_millisecond()).max(0) as u64))
                 .unwrap_or(MAX_IDLE_WAIT)
                 .min(MAX_IDLE_WAIT);
             tokio::select! {
@@ -1044,6 +1065,18 @@ impl ScheduledTasks {
     /// The run is a task of its own: a caller that goes away (an RPC
     /// cancelled when its socket closes) does not stop it half way.
     async fn run_task(self: Arc<Self>, task: &ScheduledTask, trigger: Trigger) -> Result<ScheduledTask, ScheduledTaskError> {
+        self.run_occurrence(task, Occurrence { trigger, prompt: None, key: None }).await
+    }
+
+    /// A webhook delivery's run: the task with the prompt its request filled
+    /// in, keyed by the delivery so a retry of the dispatch is one run.
+    pub(crate) async fn run_webhook(self: Arc<Self>, task: &ScheduledTask, prompt: String, delivery_id: &str) -> Result<ScheduledTask, ScheduledTaskError> {
+        let key = format!("{}:{delivery_id}", task.id.as_str());
+        self.run_occurrence(task, Occurrence { trigger: Trigger::Webhook, prompt: Some(prompt), key: Some(key) }).await
+    }
+
+    async fn run_occurrence(self: Arc<Self>, task: &ScheduledTask, occurrence: Occurrence) -> Result<ScheduledTask, ScheduledTaskError> {
+        let trigger = occurrence.trigger;
         let id = task.id.as_str().to_owned();
         let Some(reservation) = Reservation::take(&self.active, self.store(), task) else {
             return if trigger == Trigger::Scheduled { Ok(task.clone()) } else { Err(task_error("Schedule task is already running.", Some(&id))) };
@@ -1053,7 +1086,7 @@ impl ScheduledTasks {
             // The whole guard moves in (not just the field set below), so it
             // lives as long as the run, not as long as the caller.
             let mut reservation = reservation;
-            let result = self.run_reserved(&task, trigger).await;
+            let result = self.run_reserved(&task, occurrence).await;
             // `run_reserved` records every outcome it returns.
             reservation.recorded = true;
             result
@@ -1061,7 +1094,8 @@ impl ScheduledTasks {
         run.await.unwrap_or_else(|e| Err(task_error(&format!("Schedule task run stopped: {e}"), Some(&id))))
     }
 
-    async fn run_reserved(self: Arc<Self>, task: &ScheduledTask, trigger: Trigger) -> Result<ScheduledTask, ScheduledTaskError> {
+    async fn run_reserved(self: Arc<Self>, task: &ScheduledTask, occurrence: Occurrence) -> Result<ScheduledTask, ScheduledTaskError> {
+        let trigger = occurrence.trigger;
         let store = self.store().clone();
         let id = task.id.as_str().to_owned();
         let started = local_now();
@@ -1102,7 +1136,12 @@ impl ScheduledTasks {
         }
         self.notify_changed();
 
-        let fire_key = format!("{id}:{}:{}", started.timestamp().as_millisecond(), trigger.as_str());
+        let fire_key = occurrence.key.clone().unwrap_or_else(|| format!("{id}:{}:{}", started.timestamp().as_millisecond(), trigger.as_str()));
+        // A webhook's run says what its request filled in.
+        let active = match &occurrence.prompt {
+            Some(prompt) => ScheduledTask { prompt: prompt.clone(), ..active },
+            None => active,
+        };
         let command_id = format!("scheduled-task:{fire_key}");
         let message_id = format!("scheduled-task-message:{fire_key}");
         let mode = thread_mode(&active);

@@ -293,6 +293,8 @@ pub fn environment(runtime_mode: &str, mcp: Option<(String, String)>) -> Vec<(St
     if let Some((url, token)) = mcp {
         env.push((MCP_URL_ENV.into(), Some(url)));
         env.push((MCP_TOKEN_ENV.into(), Some(token.strip_prefix("Bearer ").unwrap_or(&token).to_owned())));
+        // What the tools are for, for the extension to add to pi's system prompt.
+        env.push(("DOMOVOI_MCP_INSTRUCTIONS".into(), Some(crate::agent_instructions::system_prompt())));
     }
     env
 }

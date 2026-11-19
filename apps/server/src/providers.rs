@@ -70,7 +70,7 @@ pub fn claude_commands_from_init(init: &Value) -> Vec<ServerProviderSlashCommand
         .filter_map(Value::as_str)
         .map(|n| n.trim().trim_start_matches('/'))
         .filter(|n| !n.is_empty() && !terminal.contains(n) && !n.starts_with("__") && seen.insert(n.to_owned()))
-        .map(|n| ServerProviderSlashCommand { name: n.to_owned(), description: None, input: None })
+        .map(|n| ServerProviderSlashCommand { name: n.to_owned(), description: crate::skills::description(n), input: None })
         .collect()
 }
 
@@ -95,6 +95,40 @@ pub fn remember_claude_commands(init: &Value) {
 
 fn claude_commands() -> Vec<ServerProviderSlashCommand> {
     CLAUDE_COMMANDS.read().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+/// The provider instances settings add (`providerInstances`), by id: kept
+/// here, outside the settings lock, for the code that only asks which driver
+/// an instance runs.
+static INSTANCES: std::sync::RwLock<std::collections::BTreeMap<String, domovoi_model::typed::ProviderInstanceConfig>> = std::sync::RwLock::new(std::collections::BTreeMap::new());
+
+/// ACP agents' slash commands as each instance's agent last listed them.
+static ACP_COMMANDS: std::sync::RwLock<std::collections::BTreeMap<String, Vec<ServerProviderSlashCommand>>> = std::sync::RwLock::new(std::collections::BTreeMap::new());
+
+/// Remembers an ACP agent's commands (`available_commands_update`).
+pub fn remember_acp_commands(instance: &str, commands: Option<Vec<(String, Option<String>)>>) {
+    let Some(commands) = commands else { return };
+    let list: Vec<ServerProviderSlashCommand> = commands.into_iter().map(|(name, description)| ServerProviderSlashCommand { name, description, input: None }).collect();
+    let changed = ACP_COMMANDS.write().unwrap_or_else(|e| e.into_inner()).insert(instance.to_owned(), list.clone()).as_ref() != Some(&list);
+    if changed {
+        CLAUDE_COMMANDS_CHANGED.notify_one();
+    }
+}
+
+/// Remembers the instances of settings as loaded or saved.
+pub fn remember_instances(settings: &domovoi_model::typed::ServerSettings) {
+    let instances = settings.provider_instances.clone().unwrap_or_default().into_iter().map(|(id, c)| (id.as_str().to_owned(), c)).collect();
+    *INSTANCES.write().unwrap_or_else(|e| e.into_inner()) = instances;
+}
+
+/// A settings instance's configuration.
+pub fn instance(id: &str) -> Option<domovoi_model::typed::ProviderInstanceConfig> {
+    INSTANCES.read().unwrap_or_else(|e| e.into_inner()).get(id).cloned()
+}
+
+/// Every settings instance of `driver`.
+pub fn instances_of(driver: &str) -> Vec<(String, domovoi_model::typed::ProviderInstanceConfig)> {
+    INSTANCES.read().unwrap_or_else(|e| e.into_inner()).iter().filter(|(_, c)| c.driver.as_str() == driver).map(|(id, c)| (id.clone(), c.clone())).collect()
 }
 
 pub const CLAUDE_TOOL: Tool = Tool { program: "claude", label: "Claude Code", env: "DOMOVOI_CLAUDE_BINARY" };
@@ -664,6 +698,115 @@ pub async fn probe_pi() -> Option<ServerProvider> {
     Some(v)
 }
 
+/// What changes between probes: Claude's commands and skills as of its
+/// latest session, Codex's skills, and each account's usage limits.
+fn overlay(current: &mut [ServerProvider]) {
+    // Claude's commands as of its latest session, not of the last probe.
+    for p in current.iter_mut() {
+        if let Some(limits) = crate::usage_limits::get(p.instance_id.as_str()) {
+            p.usage_limits = Some(limits);
+        }
+        match p.instance_id.as_str() {
+            CLAUDE => {
+                p.slash_commands = Some(claude_commands());
+                p.skills = Some(crate::skills::claude());
+            }
+            // Read each time: a skill installed since shows at once.
+            CODEX if p.installed => p.skills = Some(crate::skills::codex()),
+            id => {
+                if let Some(commands) = ACP_COMMANDS.read().unwrap_or_else(|e| e.into_inner()).get(id) {
+                    p.slash_commands = Some(commands.clone());
+                }
+            }
+        }
+    }
+}
+
+/// ACP probes, kept 15 minutes (starting an agent can take a while).
+static ACP_PROBES: std::sync::Mutex<std::collections::BTreeMap<String, (std::time::Instant, ServerProvider)>> = std::sync::Mutex::new(std::collections::BTreeMap::new());
+const ACP_PROBE_FRESH: std::time::Duration = std::time::Duration::from_secs(15 * 60);
+
+fn acp_model(slug: &str, name: &str) -> ServerProviderModel {
+    ServerProviderModel { slug: slug.to_owned(), name: name.to_owned(), short_name: None, sub_provider: None, aliases: None, badge: None, is_custom: false,
+        is_default: None, is_legacy: None, supports_text_generation: None, capabilities: None }
+}
+
+/// An ACP instance (t3code `acpRegistry` probe): its agent started in a
+/// scratch folder, `initialize`, then `session/new` for its models; then
+/// stopped. `force` probes again within the 15 minutes.
+pub async fn probe_acp(id: &str, config: &domovoi_model::typed::ProviderInstanceConfig, force: bool) -> ServerProvider {
+    if !force && let Some((at, kept)) = crate::util::locked(&ACP_PROBES).get(id).cloned() && at.elapsed() < ACP_PROBE_FRESH {
+        return kept;
+    }
+    let c = config.config.clone().unwrap_or(Value::Null);
+    let name = config.display_name.clone().or_else(|| c["agentId"].as_str().map(str::to_owned)).unwrap_or_else(|| id.to_owned());
+    let mut v = entry(id, "acpRegistry", &name);
+    v.enabled = config.enabled != Some(false);
+    let probed = tokio::time::timeout(std::time::Duration::from_secs(60), probe_acp_agent(id)).await.unwrap_or_else(|_| Err("The ACP agent did not answer within a minute.".into()));
+    match probed {
+        Ok((agent, models, authenticated)) => {
+            v.installed = true;
+            v.version = agent["version"].as_str().map(str::to_owned);
+            if let Some(title) = agent["title"].as_str().or(agent["name"].as_str()).filter(|_| config.display_name.is_none()) {
+                v.display_name = Some(title.to_owned());
+            }
+            v.models = if models.is_empty() { vec![acp_model("default", "Default")] } else { models };
+            if authenticated {
+                v.status = ServerProviderState::Ready;
+                v.auth = auth(ServerProviderAuthStatus::Authenticated, None, None);
+            } else {
+                v.status = ServerProviderState::Error;
+                v.auth = auth(ServerProviderAuthStatus::Unauthenticated, None, None);
+                v.message = Some(format!("{name} needs signing in. Sign in with its own command, then refresh."));
+            }
+        }
+        Err(e) => {
+            v.status = ServerProviderState::Error;
+            v.message = Some(e);
+        }
+    }
+    crate::util::locked(&ACP_PROBES).insert(id.to_owned(), (std::time::Instant::now(), v.clone()));
+    v
+}
+
+/// `initialize` and `session/new` of an instance's agent: its info, models, and whether it is signed in.
+async fn probe_acp_agent(id: &str) -> Result<(Value, Vec<ServerProviderModel>, bool), String> {
+    let spawn = crate::adapters::acp::spawn_for(id)?;
+    let scratch = std::env::temp_dir().join(format!("domovoi-acp-probe-{}", crate::util::new_uuid()));
+    std::fs::create_dir_all(&scratch).map_err(|e| e.to_string())?;
+    let cwd = scratch.to_string_lossy().into_owned();
+    let args: Vec<&str> = spawn.args.iter().map(String::as_str).collect();
+    let (rpc, _events) = crate::jsonrpc::RpcClient::spawn_with(&spawn.program, &args, Some(&cwd), &spawn.env, true, |_, _| {}).map_err(|e| format!("Could not start the ACP agent: {e}"))?;
+    let result = async {
+        let init = rpc.request("initialize", crate::adapters::acp::initialize_params()).await.map_err(|e| format!("The ACP agent did not initialize: {e}"))?;
+        let session = match rpc.request("session/new", serde_json::json!({ "cwd": cwd, "mcpServers": [] })).await {
+            Ok(s) => s,
+            Err(crate::jsonrpc::RpcError::Remote(e)) if e["code"] == -32000 => return Ok((init["agentInfo"].clone(), vec![], false)),
+            Err(e) => return Err(format!("The ACP agent started no session: {e}")),
+        };
+        let mut models: Vec<ServerProviderModel> = session["models"]["availableModels"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|m| Some(acp_model(m["modelId"].as_str()?, m["name"].as_str().or(m["modelId"].as_str())?)))
+            .collect();
+        if models.is_empty() {
+            let option = session["configOptions"].as_array().and_then(|o| o.iter().find(|o| o["category"] == "model").cloned());
+            models = option
+                .and_then(|o| o["options"].as_array().cloned())
+                .into_iter()
+                .flatten()
+                .filter_map(|m| Some(acp_model(m["value"].as_str()?, m["name"].as_str().or(m["value"].as_str())?)))
+                .collect();
+        }
+        Ok((init["agentInfo"].clone(), models, true))
+    }
+    .await;
+    rpc.kill().await;
+    let _ = std::fs::remove_dir_all(&scratch);
+    result
+}
+
 impl ProviderRegistry {
     pub async fn refresh(&self, only: Option<&str>) -> Vec<ServerProvider> {
         let mut current = self.statuses.read().await.clone();
@@ -685,6 +828,14 @@ impl ProviderRegistry {
                 fresh.push(p);
             }
         }
+        // ACP instances settings add; one removed from settings leaves the list.
+        let acp = instances_of("acpRegistry");
+        current.retain(|p| p.driver.as_str() != "acpRegistry" || acp.iter().any(|(id, _)| id == p.instance_id.as_str()));
+        for (id, config) in &acp {
+            if wanted(id) {
+                fresh.push(probe_acp(id, config, only == Some(id.as_str())).await);
+            }
+        }
         for f in fresh {
             match current.iter_mut().find(|c| c.instance_id == f.instance_id) {
                 Some(slot) => *slot = f,
@@ -699,6 +850,7 @@ impl ProviderRegistry {
             _ => 2,
         });
         *self.statuses.write().await = current.clone();
+        overlay(&mut current);
         current
     }
 
@@ -707,10 +859,7 @@ impl ProviderRegistry {
         if current.is_empty() {
             current = self.refresh(None).await;
         }
-        // Claude's commands as of its latest session, not of the last probe.
-        for p in current.iter_mut().filter(|p| p.instance_id.as_str() == CLAUDE) {
-            p.slash_commands = Some(claude_commands());
-        }
+        overlay(&mut current);
         // macOS stopped this process reading a project folder.
         crate::folder_access::apply(&mut current);
         current

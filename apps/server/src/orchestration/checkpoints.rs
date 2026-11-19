@@ -99,7 +99,7 @@ pub async fn capture_after_run(store: &Store, thread_id: &str, run: &Run) -> Opt
         captured_at: ts.clone(),
     };
     store.append_event(thread_id, EventBody::CheckpointCaptured(Box::new(taken)), &o).ok()?;
-    let driver = driver_for_instance(instance);
+    let driver = &driver_for_instance(instance);
     let shared = Shared {
         id: format!("turn-item:provider:{driver}:native-item:{}", enc(&format!("checkpoint:{id}"))).into(),
         thread_id: thread_id.into(),

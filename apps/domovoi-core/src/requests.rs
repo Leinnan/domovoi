@@ -465,6 +465,47 @@ pub struct NewScheduledTask<'a> {
     pub runtime_mode: &'a RuntimeMode,
 }
 
+/// A task with every setting its editor has (`id` for one that exists).
+pub struct EditedScheduledTask<'a> {
+    pub id: Option<&'a str>,
+    pub title: &'a str,
+    pub prompt: &'a str,
+    pub enabled: bool,
+    pub schedule: &'a ScheduledTaskSchedule,
+    pub project: &'a ProjectId,
+    pub thread_mode: &'a str,
+    pub thread_id: Option<&'a str>,
+    pub workspace: &'a WorkspaceStrategy,
+    pub model_selection: &'a ModelSelection,
+    pub runtime_mode: &'a RuntimeMode,
+    pub interaction_mode: &'a InteractionMode,
+}
+
+pub fn scheduled_tasks_save(task: EditedScheduledTask) -> Request {
+    let mut payload = json!({
+        "title": task.title, "prompt": task.prompt, "enabled": task.enabled, "schedule": task.schedule,
+        "projectId": task.project, "threadMode": task.thread_mode, "workspaceStrategy": task.workspace,
+        "modelSelection": task.model_selection, "runtimeMode": task.runtime_mode, "interactionMode": task.interaction_mode,
+        "creationSource": CreationSource::Web,
+    });
+    if let Some(id) = task.id {
+        payload["id"] = json!(id);
+        payload["requireExisting"] = json!(true);
+    }
+    if let Some(thread) = task.thread_id {
+        payload["threadId"] = json!(thread);
+    }
+    built("scheduledTasks.upsert", payload)
+}
+
+pub fn scheduled_tasks_rotate_webhook_token(task: &ScheduledTaskId) -> Request {
+    built("scheduledTasks.rotateWebhookToken", json!({ "id": task }))
+}
+
+pub fn scheduled_tasks_list_webhook_deliveries(task: &ScheduledTaskId) -> Request {
+    built("scheduledTasks.listWebhookDeliveries", json!({ "id": task, "acceptAnyOutcome": true }))
+}
+
 pub fn scheduled_tasks_upsert(task: NewScheduledTask) -> Request {
     built("scheduledTasks.upsert", json!({
         "title": task.title, "prompt": task.prompt, "enabled": true, "schedule": task.schedule,

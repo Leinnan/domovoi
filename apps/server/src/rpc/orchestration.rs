@@ -326,7 +326,7 @@ fn snippet(text: &str, match_start: usize) -> String {
 /// A thread with messages that match a search, shown by its newest one.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct ThreadMatch {
+pub(crate) struct ThreadMatch {
     thread_id: ThreadId,
     project_id: ProjectId,
     message_id: Option<MessageId>,
@@ -348,6 +348,12 @@ struct ThreadsFound {
     snapshot_sequence: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     threads: Option<Vec<ThreadShell>>,
+}
+
+/// The threads of one project whose messages match `query`, for the agent tools.
+pub(crate) fn search_in_project(state: &AppState, query: &str, project_id: &str, limit: usize) -> Result<Vec<ThreadMatch>, String> {
+    let input = SearchThreadsInput { query: query.to_owned(), limit: Some(limit), older_settled_before: None, project_ids: Some(vec![project_id.to_owned()]), titles_only: false };
+    search_threads(state, &input).map(|found| found.matches).map_err(|e| e.to_string())
 }
 
 fn search_threads(state: &AppState, input: &SearchThreadsInput) -> Result<ThreadsFound, Failure> {

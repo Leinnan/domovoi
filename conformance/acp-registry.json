@@ -1,0 +1,77 @@
+{
+ "version": "1.0.0",
+ "agents": [
+  {
+   "id": "fixture-bin",
+   "name": "Fixture agent",
+   "version": "1.0.0",
+   "description": "A binary ACP agent for the conformance cases",
+   "authors": [
+    "Domovoi"
+   ],
+   "license": "MIT",
+   "website": null,
+   "repository": null,
+   "icon": "https://cdn.agentclientprotocol.com/registry/v1/latest/fixture-bin.svg",
+   "distribution": {
+    "binary": {
+     "darwin-aarch64": {
+      "archive": "file:///nonexistent/fixture-bin.tar.gz",
+      "cmd": "./fixture-bin",
+      "args": [
+       "acp"
+      ],
+      "sha256": "00"
+     },
+     "darwin-x86_64": {
+      "archive": "file:///nonexistent/fixture-bin.tar.gz",
+      "cmd": "./fixture-bin",
+      "args": [
+       "acp"
+      ],
+      "sha256": "00"
+     },
+     "linux-x86_64": {
+      "archive": "file:///nonexistent/fixture-bin.tar.gz",
+      "cmd": "./fixture-bin",
+      "args": [
+       "acp"
+      ],
+      "sha256": "00"
+     },
+     "linux-aarch64": {
+      "archive": "file:///nonexistent/fixture-bin.tar.gz",
+      "cmd": "./fixture-bin",
+      "args": [
+       "acp"
+      ],
+      "sha256": "00"
+     },
+     "windows-x86_64": {
+      "archive": "file:///nonexistent/fixture-bin.tar.gz",
+      "cmd": "./fixture-bin",
+      "args": [
+       "acp"
+      ],
+      "sha256": "00"
+     }
+    }
+   }
+  },
+  {
+   "id": "fixture-npm",
+   "name": "Fixture npm agent",
+   "version": "2.0.0",
+   "description": "An npm ACP agent",
+   "authors": [],
+   "distribution": {
+    "npx": {
+     "package": "fixture-npm@2.0.0",
+     "args": [
+      "--acp"
+     ]
+    }
+   }
+  }
+ ]
+}

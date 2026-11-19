@@ -54,6 +54,8 @@ pub enum Refusal {
     InvalidTag,
     #[error("snoozedUntil must be a date and time.")]
     SnoozeNotATime,
+    #[error("That run is not the thread's latest, stopped by a usage limit that resets then.")]
+    NotUsageLimited,
     #[error("Thread {thread} cannot move to missing project {}.", quoted(.project.as_str()))]
     AdoptMissingProject { thread: ThreadId, project: ProjectId },
     #[error("Thread {thread} does not work in {root}.")]

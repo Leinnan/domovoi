@@ -6,8 +6,8 @@
 //! `requests.rs` from what it is about. Nothing here writes JSON.
 
 use crate::app::{Event, iso_from_millis};
-use crate::model::{Attachment, Connection, Mention, Model, Outgoing, Palette};
-use crate::requests::{self, DiffSource, FindStep, NewScheduledTask, ProjectChange, Request, SettingsPatch};
+use crate::model::{Attachment, Connection, Launching, Mention, Model, Outgoing, Palette};
+use crate::requests::{self, DiffSource, EditedScheduledTask, FindStep, NewScheduledTask, ProjectChange, Request, SettingsPatch};
 use crate::rpc::Route;
 use crate::socket::{SocketEvent, SocketOperation};
 use crate::terminal::{self, Session};
@@ -208,9 +208,10 @@ pub fn subscribe_thread(model: &mut Model, thread_id: &str) -> Cmd {
     if model.rpc.has(&route) {
         return Command::done();
     }
-    model.thread_loading = true;
-    // Already showing it (a reconnect): only what happened since.
+    // Already showing it (a reconnect, or opened again from the recent ones):
+    // only what happened since, with what is shown left on screen meanwhile.
     let showing = model.thread.is_some() && model.selected_thread.as_deref() == Some(thread_id) && model.thread_sequence > 0;
+    model.thread_loading = !showing;
     let request = requests::orchestration_subscribe_thread(&thread_id.into(), showing.then_some(model.thread_sequence));
     call(model, request, route)
 }
@@ -509,9 +510,19 @@ pub fn mention_query(draft: &str) -> Option<String> {
     (boundary && !q.contains(char::is_whitespace) && q.len() <= 120).then(|| q.to_owned())
 }
 
+/// A draft opens a slash command menu: `/` and a word being typed.
+fn slash_typed(draft: &str) -> bool {
+    draft.strip_prefix('/').is_some_and(|q| !q.contains(char::is_whitespace))
+}
+
 fn set_draft(model: &mut Model, text: String) -> Cmd {
+    // Only the composer shows a draft.
+    model.changes.composer();
     model.drafts_dirty = true;
     let key = model.draft_key();
+    // What the composer derives from the draft: whether it can be sent, and the slash menu.
+    let before = model.composer.drafts.get(&key).map(String::as_str).unwrap_or_default();
+    let derived_moved = before.trim().is_empty() != text.trim().is_empty() || slash_typed(before) || slash_typed(&text);
     model.composer.drafts.insert(key, text.clone());
     let at = text.rfind('@');
     if model.composer.mention_dismissed_at.is_some() && model.composer.mention_dismissed_at != at {
@@ -531,7 +542,7 @@ fn set_draft(model: &mut Model, text: String) -> Cmd {
         }
         _ => {
             let had = model.composer.mention.take().is_some();
-            if had { render() } else { Command::done() }
+            if had || derived_moved { render() } else { Command::done() }
         }
     }
 }
@@ -658,7 +669,7 @@ pub fn finish_send(model: &mut Model, thread_id: &str, message_id: &str, new_thr
         creation_source: Some(CreationSource::Web),
         thread_id: Some(thread_id.into()),
         reuse_existing_thread: None,
-        project_id: project.into(),
+        project_id: project.clone().into(),
         title: if title.is_empty() { "New thread".to_owned() } else { title },
         generate_title: Some(true),
         model_selection: model_selection(model, &opt),
@@ -670,8 +681,58 @@ pub fn finish_send(model: &mut Model, thread_id: &str, message_id: &str, new_thr
         delegated_from: None,
     };
     let request = requests::orchestration_launch_thread(launch);
-    let out = Outgoing { request, message_id: None, route: Route::Launch(thread_id.to_owned()), label: "Start thread".into(), draft_key: key, text, sent_ms: model.now_ms };
-    send_outgoing(model, out).and(render())
+    let shown_title = launch_title(&text);
+    let out = Outgoing { request, message_id: None, route: Route::Launch(thread_id.to_owned()), label: "Start thread".into(), draft_key: key, text: text.clone(), sent_ms: model.now_ms };
+    let sent = send_outgoing(model, out);
+    // Shown at once, as the server will have it: the thread open, listed,
+    // with its first message on its way.
+    model.starting_thread = Some(Launching { id: thread_id.to_owned(), project_id: project.clone(), title: shown_title, message_id: message_id.to_owned(), text });
+    open_launching(model, thread_id);
+    sent.and(render())
+}
+
+/// What the sidebar and the page call a thread being started.
+fn launch_title(text: &str) -> String {
+    let title: String = text.lines().next().unwrap_or_default().chars().take(60).collect();
+    if title.trim().is_empty() { "New thread".to_owned() } else { title }
+}
+
+/// Opens the thread being started, before the server has it: nothing to
+/// subscribe to yet (`opened_launched` does once it is made).
+fn open_launching(model: &mut Model, thread_id: &str) {
+    model.keep_open_thread();
+    model.route = "thread".into();
+    model.selected_thread = Some(thread_id.to_owned());
+    model.thread = None;
+    model.thread_sequence = 0;
+    model.thread_gaps = 0;
+    model.thread_loading = false;
+    model.find = Default::default();
+    model.panel.diff = Default::default();
+}
+
+/// The server made the thread being started: its stream, and the visit an
+/// opened thread gets, if it is still the one open.
+pub fn opened_launched(model: &mut Model, thread_id: &str) -> Cmd {
+    if model.selected_thread.as_deref() != Some(thread_id) || model.route != "thread" {
+        return Command::done();
+    }
+    if model.rpc.has(&Route::Thread(thread_id.to_owned())) {
+        return render();
+    }
+    let visit = ThreadVisit { command_id: command_id(), thread_id: thread_id.into(), visited_at: now(model), opened: Some(true), search_query: None };
+    let cmds = vec![subscribe_thread(model, thread_id), dispatch(model, visit, "Open thread"), refresh_context(model), adopt_terminals(model)];
+    Command::all(cmds).and(render())
+}
+
+/// The thread being started was not: it leaves the list, and its page goes
+/// back to a new thread's, where the text is given back.
+pub fn launch_failed(model: &mut Model, thread_id: &str) -> Cmd {
+    let Some(launching) = model.starting_thread.take_if(|l| l.id == thread_id) else { return Command::done() };
+    if model.selected_thread.as_deref() == Some(thread_id) {
+        return start_new_thread(model, Some(launching.project_id));
+    }
+    Command::done()
 }
 
 /// A server that doesn't answer a send within this long (while connected)
@@ -719,15 +780,16 @@ pub fn give_back(model: &mut Model, out: &Outgoing) {
 }
 
 /// Sends unanswered for too long while connected: given back.
-fn expire_outbox(model: &mut Model) {
+/// What a thread being started that timed out leaves to do: its page goes back.
+fn expire_outbox(model: &mut Model) -> Cmd {
     if model.connection != Connection::Connected {
-        return;
+        return Command::done();
     }
     let now = model.now_ms;
     let (late, keep): (Vec<Outgoing>, Vec<Outgoing>) = std::mem::take(&mut model.composer.outbox).into_iter().partition(|o| now - o.sent_ms >= SEND_TIMEOUT_MS);
     model.composer.outbox = keep;
     if late.is_empty() {
-        return;
+        return Command::done();
     }
     for out in &late {
         if let Some(rpc_id) = model.rpc.id_of(&out.route) {
@@ -738,12 +800,14 @@ fn expire_outbox(model: &mut Model) {
         }
         give_back(model, out);
     }
+    let back: Vec<Cmd> = late.iter().filter_map(|out| if let Route::Launch(tid) = &out.route { Some(launch_failed(model, tid)) } else { None }).collect();
     if late.iter().any(|o| !o.text.is_empty()) {
         model.toast("error", "The server didn't answer, so your message is back in the composer. Check the thread list before sending it again.");
     } else {
         let labels: Vec<&str> = late.iter().map(|o| o.label.as_str()).collect();
         model.toast("error", format!("The server didn't answer: {} may not have happened.", labels.join(", ")));
     }
+    Command::all(back)
 }
 
 /// Saves how this device lays out the thread list.
@@ -760,13 +824,20 @@ pub fn select_thread(model: &mut Model, thread_id: String) -> Cmd {
     let mut cmds = vec![unsubscribe_threads(model, Some(&thread_id)), detach_terminals(model)];
     model.route = "thread".into();
     model.held_section = crate::sidebar::hold_for(model, &thread_id);
-    model.selected_thread = Some(thread_id.clone());
     model.drafts_dirty = true;
     if project.is_some() {
         model.selected_project = project;
     }
-    model.thread = None;
-    model.thread_sequence = 0;
+    // The thread left is kept; one opened lately is shown at once, as it was,
+    // and its stream resumes after what it had.
+    model.keep_open_thread();
+    let (thread, sequence) = match model.take_recent_thread(&thread_id) {
+        Some((thread, sequence)) => (Some(thread), sequence),
+        None => (None, 0),
+    };
+    model.selected_thread = Some(thread_id.clone());
+    model.thread = thread;
+    model.thread_sequence = sequence;
     model.thread_gaps = 0;
     model.find = Default::default();
     model.panel.diff = Default::default();
@@ -827,6 +898,7 @@ pub fn start_new_thread(model: &mut Model, project_id: Option<String>) -> Cmd {
         model.selected_project = model.projects.first().map(|p| p.id.as_str().to_owned());
     }
     model.route = "new-thread".into();
+    model.keep_open_thread();
     model.selected_thread = None;
     model.thread = None;
     model.thread_sequence = 0;
@@ -1157,7 +1229,7 @@ pub fn update(event: Event, model: &mut Model) -> Cmd {
             if model.cache_dirty && now_ms - model.cache_saved_ms >= crate::offline::CACHE_EVERY_MS {
                 save = save.and(crate::offline::save_cache(model));
             }
-            expire_outbox(model);
+            save = save.and(expire_outbox(model));
             let mut changed = model.composer.outbox.len() != pending;
             // A pairing link past its expiry is of no use: stop showing it.
             if model.pages.remote_link.as_ref().is_some_and(|link| crate::app::millis_from_iso(link.expires_at.as_str()) <= now_ms) {
@@ -1169,10 +1241,13 @@ pub fn update(event: Event, model: &mut Model) -> Cmd {
                 model.tick_rendered_ms = now_ms;
                 return save.and(render());
             }
+            // The view tells ages from `shown_ms`: a quiet tick shows nothing new.
+            model.changes.nothing_shown();
             save
         }
         Event::AppFocus { focused } => {
             model.focused = focused;
+            model.changes.nothing_shown();
             Command::done()
         }
         Event::DismissToast => {
@@ -1279,6 +1354,45 @@ pub fn update(event: Event, model: &mut Model) -> Cmd {
                 linked_pull_request: None,
             };
             dispatch(model, rename, "Rename thread")
+        }
+        Event::PlanForLimitReset { snooze } => {
+            let Some(tid) = model.selected_thread.clone() else { return render() };
+            let Some(shell) = model.thread_shell(&tid) else { return render() };
+            let (Some(run), Some(reset)) = (shell.latest_run_id.clone(), shell.usage_limit_reset_at.clone().flatten()) else {
+                model.toast("error", "The limit's reset time is not known.");
+                return render();
+            };
+            let plan = ThreadMetadataUpdate {
+                command_id: command_id(),
+                thread_id: tid.as_str().into(),
+                title: None,
+                regenerate_title: None,
+                branch: None,
+                worktree_path: None,
+                expected_worktree_path: None,
+                expected_branch: None,
+                expected_empty: None,
+                limit_recovery: Some(Some(domovoi_model::typed::command::LimitRecoveryUpdate { run_id: run, reset_at: reset, auto_resume: Some(!snooze), snooze: Some(snooze) })),
+                linked_pull_request: None,
+            };
+            dispatch(model, plan, if snooze { "Snooze until reset" } else { "Resume at reset" })
+        }
+        Event::CancelLimitPlan => {
+            let Some(tid) = model.selected_thread.clone() else { return render() };
+            let cancel = ThreadMetadataUpdate {
+                command_id: command_id(),
+                thread_id: tid.as_str().into(),
+                title: None,
+                regenerate_title: None,
+                branch: None,
+                worktree_path: None,
+                expected_worktree_path: None,
+                expected_branch: None,
+                expected_empty: None,
+                limit_recovery: Some(None),
+                linked_pull_request: None,
+            };
+            dispatch(model, cancel, "Cancel")
         }
         Event::PinThread { thread_id, pinned } => {
             if pinned {
@@ -1929,6 +2043,50 @@ pub fn update(event: Event, model: &mut Model) -> Cmd {
             };
             call(model, requests::scheduled_tasks_upsert(task), Route::Command("Create task".into()))
         }
+        Event::SaveScheduled { task } => {
+            let Some(schedule) = edited_schedule(&task) else {
+                model.toast("error", "That schedule is not complete.");
+                return render();
+            };
+            let selection = if task.model.is_empty() {
+                let Some(opt) = current_model(model) else {
+                    model.toast("error", "No provider is ready.");
+                    return render();
+                };
+                model_selection(model, &opt)
+            } else {
+                ModelSelection { instance_id: task.model_instance.as_str().into(), model: task.model.clone(), options: None }
+            };
+            let runtime = if task.runtime_mode.is_empty() { composer_runtime_mode(model) } else { task.runtime_mode.clone() };
+            let interaction = if task.interaction_mode == "plan" { InteractionMode::Plan } else { InteractionMode::Default };
+            let workspace = if task.workspace == "worktree" && !task.base_branch.is_empty() {
+                WorkspaceStrategy::Worktree { base_ref: task.base_branch.clone(), branch: None, start_from_origin: None }
+            } else {
+                WorkspaceStrategy::Root { branch: None }
+            };
+            let bound = matches!(task.thread_mode.as_str(), "continue" | "fresh_session") && !task.thread_id.is_empty();
+            let edited = EditedScheduledTask {
+                id: (!task.id.is_empty()).then_some(task.id.as_str()),
+                title: &task.name,
+                prompt: &task.prompt,
+                enabled: task.enabled,
+                schedule: &schedule,
+                project: &task.project_id.as_str().into(),
+                thread_mode: if bound { &task.thread_mode } else { "new_thread" },
+                thread_id: bound.then_some(task.thread_id.as_str()),
+                workspace: &workspace,
+                model_selection: &selection,
+                runtime_mode: &RuntimeMode::from(runtime.as_str()),
+                interaction_mode: &interaction,
+            };
+            let label = if task.id.is_empty() { "Create task" } else { "Save task" };
+            call(model, requests::scheduled_tasks_save(edited), Route::Command(label.into()))
+        }
+        Event::RotateWebhookToken { id } => call(model, requests::scheduled_tasks_rotate_webhook_token(&id.into()), Route::Command("New webhook URL".into())),
+        Event::LoadWebhookDeliveries { id } => {
+            model.pages.webhook_deliveries = Some((id.clone(), vec![]));
+            call(model, requests::scheduled_tasks_list_webhook_deliveries(&id.as_str().into()), Route::WebhookDeliveries(id)).and(render())
+        }
         Event::RemoveKeybinding { command, shortcut, condition } => {
             let when = (!condition.is_empty()).then_some(condition.as_str());
             call(model, requests::server_remove_keybinding(&shortcut, &command, when), Route::Keybindings)
@@ -2003,5 +2161,30 @@ mod tests {
         assert_eq!(mention_query("@").as_deref(), Some(""));
         assert_eq!(mention_query("mail me@example.com"), None);
         assert_eq!(mention_query("@done with it"), None);
+    }
+}
+
+/// The schedule an editor's fields describe; `None` when they say too little.
+pub fn edited_schedule(task: &crate::app::ScheduledTaskEdit) -> Option<ScheduledTaskSchedule> {
+    use domovoi_model::typed::{FixedTimeSchedule, OnceSchedule, WebhookSchedule};
+    match task.schedule_kind.as_str() {
+        "interval" | "" => Some(ScheduledTaskSchedule::Interval(IntervalSchedule { every_ms: u64::from(task.interval_minutes.max(1)) * 60_000 })),
+        "fixed_time" => {
+            let (h, m) = task.time_of_day.split_once(':')?;
+            let ok = |s: &str, max: u8| s.parse::<u8>().is_ok_and(|v| v <= max) && (1..=2).contains(&s.len());
+            if !ok(h, 23) || !ok(m, 59) || m.len() != 2 {
+                return None;
+            }
+            let mut days: Vec<u64> = task.weekdays.iter().filter(|d| **d <= 6).map(|d| u64::from(*d)).collect();
+            days.sort_unstable();
+            days.dedup();
+            Some(ScheduledTaskSchedule::FixedTime(FixedTimeSchedule {
+                time_of_day: format!("{:0>2}:{m}", h),
+                weekdays: (!days.is_empty() && days.len() < 7).then_some(days),
+            }))
+        }
+        "once" => (!task.run_at.trim().is_empty()).then(|| ScheduledTaskSchedule::Once(OnceSchedule { run_at: task.run_at.trim().into() })),
+        "webhook" => Some(ScheduledTaskSchedule::Webhook(WebhookSchedule { signature: None, max_delivery_age_minutes: None, dedupe: None, filters: None })),
+        _ => None,
     }
 }

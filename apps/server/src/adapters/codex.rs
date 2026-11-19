@@ -46,6 +46,13 @@ impl CodexServer {
         let router_rpc = rpc.clone();
         tokio::spawn(async move {
             while let Some(msg) = rx.recv().await {
+                // The account's limits: no thread's, so no turn hears them.
+                if let Incoming::Notification { method, params } = &msg
+                    && method == "account/rateLimits/updated"
+                {
+                    crate::usage_limits::merge(crate::providers::CODEX, crate::usage_limits::codex_windows(&params["rateLimits"]));
+                    continue;
+                }
                 let thread = match &msg {
                     Incoming::Notification { params, .. } | Incoming::Request { params, .. } => {
                         params["threadId"].as_str().or(params["conversationId"].as_str()).map(str::to_owned)
@@ -153,6 +160,14 @@ impl CodexServer {
             settings["reasoning_effort"] = json!(e);
         }
         params["collaborationMode"] = json!({ "mode": if input.interaction_mode == "plan" { "plan" } else { "default" }, "settings": settings });
+        // What Domovoi's tools are for, while the thread's agent has them.
+        if crate::mcp::session_for(&input.thread_id).is_some() {
+            let mut context = serde_json::Map::new();
+            for (i, section) in crate::agent_instructions::SECTIONS.iter().enumerate() {
+                context.insert(format!("t3_code_orchestration_{:02}", i + 1), json!({ "kind": "application", "value": section }));
+            }
+            params["additionalContext"] = Value::Object(context);
+        }
         let native_turn = match self.rpc.request("turn/start", params).await {
             Ok(r) => r["turn"]["id"].as_str().unwrap_or_default().to_owned(),
             Err(e) => {
@@ -250,7 +265,15 @@ impl CodexServer {
                                 turn.token_usage(u);
                             }
                         }
+                        "error" if params["willRetry"] != true => {
+                            if crate::usage_limits::codex_usage_error(&params["error"]["codexErrorInfo"]) {
+                                turn.usage_limited(crate::usage_limits::exhausted_reset_at(crate::providers::CODEX));
+                            }
+                        }
                         "turn/completed" => {
+                            if crate::usage_limits::codex_usage_error(&params["turn"]["error"]["codexErrorInfo"]) {
+                                turn.usage_limited(crate::usage_limits::exhausted_reset_at(crate::providers::CODEX));
+                            }
                             let status = match params["turn"]["status"].as_str() {
                                 Some("completed") => "completed",
                                 Some("interrupted") => "interrupted",

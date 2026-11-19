@@ -280,6 +280,8 @@ fn thread_chunk(model: &mut Model, tid: &str, item: Value) -> Vec<Cmd> {
             model.thread = Some(Thread::from_snapshot(*snapshot));
             model.thread_gaps = 0;
             model.thread_loading = false;
+            // The server's copy of a thread being started is in: it shows itself now.
+            model.starting_thread.take_if(|l| l.id == tid);
             // Rows are kept by the records they were built from, and every
             // record is a new one: none of them, or of what was worked out
             // for them, is of use again.
@@ -512,7 +514,8 @@ fn exit_ok(model: &mut Model, route: Route, value: Value) -> Vec<Cmd> {
         Route::Launch(tid) => {
             update::outbox_done(model, &Route::Launch(tid.clone()));
             model.composer.sending = false;
-            vec![update::select_thread(model, tid)]
+            // Shown since it was sent: now there is a stream to open.
+            vec![update::opened_launched(model, &tid)]
         }
         Route::Send(_) => {
             update::outbox_done(model, &route);
@@ -705,6 +708,18 @@ fn exit_ok(model: &mut Model, route: Route, value: Value) -> Vec<Cmd> {
             model.pages.pr_checks = read::<PullRequestChecksResult>(model, "a pull request's checks", value).flatten();
             vec![]
         }
+        Route::WebhookDeliveries(task) => {
+            #[derive(serde::Deserialize)]
+            struct Listed {
+                deliveries: Vec<crate::model::WebhookDelivery>,
+            }
+            if let Some(list) = read::<Listed>(model, "the webhook deliveries", value)
+                && model.pages.webhook_deliveries.as_ref().is_some_and(|(id, _)| *id == task)
+            {
+                model.pages.webhook_deliveries = Some((task, list.deliveries));
+            }
+            vec![]
+        }
         Route::Usage => {
             model.pages.usage_loading = false;
             let usage = read::<UsageSummary>(model, "the usage summary", value);
@@ -792,11 +807,15 @@ fn exit_failed(model: &mut Model, route: Route, cause: &Value) -> Vec<Cmd> {
             // Sent again after a dropped connection, and the first one had
             // got as far as creating it: it is there to open.
             if message.contains("already exists") {
-                return vec![update::select_thread(model, tid.clone())];
+                return vec![update::opened_launched(model, tid)];
             }
             if let Some(out) = out {
                 update::give_back(model, &out);
             }
+            // Back to a new thread's page, where the text is given back.
+            let back = update::launch_failed(model, tid);
+            model.toast("error", format!("Start thread: {message}"));
+            return vec![back];
         }
         Route::Send(_) => {
             if let Some(out) = update::outbox_done(model, &route) {

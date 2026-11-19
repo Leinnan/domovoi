@@ -55,6 +55,28 @@ async fn update_settings(ctx: Arc<ConnCtx>, input: UpdateSettingsInput) -> Resul
     Ok(next)
 }
 
+/// `AcpRegistrySearchInput`.
+#[derive(serde::Deserialize)]
+struct AcpSearchInput {
+    #[serde(default)]
+    query: String,
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+/// `AcpRegistrySearchResult`.
+#[derive(serde::Serialize)]
+struct AcpSearchResult {
+    agents: Vec<crate::acp_registry::Listed>,
+}
+
+/// `AcpRegistryPrepareInput`, `AcpRegistryManagedBinaryUninstallInput`.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AcpAgentInput {
+    agent_id: String,
+}
+
 /// What `server.updateProvider` is asked (`ServerProviderUpdateInput`), of which only the driver is read.
 #[derive(serde::Deserialize)]
 struct UpdateProviderInput {
@@ -842,22 +864,26 @@ pub fn register(r: Router<ConnCtx>) -> Router<ConnCtx> {
         .unary("server.updateProvider", |_ctx: Arc<ConnCtx>, i: UpdateProviderInput| async move {
             Err::<Never, _>(ConfigFailure::ProviderUpdate { provider: i.provider, reason: "This server does not update provider CLIs; update them with their own installer.".into() })
         });
-    // No ACP agent is running, so there is no pending URL authentication to accept.
+    // Domovoi's ACP agents never ask for URL authentication, so none is pending.
     let r = r.unary("server.acceptAcpRegistryUrlAuth", |_ctx: Arc<ConnCtx>, _: IgnoredAny| async move { Ok::<_, Never>(UrlAuthAccepted { accepted: false }) });
+    let r = r
+        .unary("server.searchAcpRegistry", |_ctx: Arc<ConnCtx>, i: AcpSearchInput| async move {
+            crate::acp_registry::search(&i.query, i.limit).await.map(|agents| AcpSearchResult { agents })
+        })
+        .unary("server.prepareAcpRegistryAgent", |_ctx: Arc<ConnCtx>, i: AcpAgentInput| async move { crate::acp_registry::prepare(&i.agent_id, None).await })
+        .unary("server.uninstallAcpRegistryManagedBinary", |_ctx: Arc<ConnCtx>, i: AcpAgentInput| async move { crate::acp_registry::uninstall(&i.agent_id) });
+    use crate::rpc::admin_failure::AcpRegistryReason as Why;
     [
-        "server.searchAcpRegistry",
-        "server.prepareAcpRegistryAgent",
-        "server.uninstallAcpRegistryManagedBinary",
-        "server.listAcpRegistrySessions",
-        "server.importAcpRegistrySession",
-        "server.deleteAcpRegistrySession",
-        "server.listAcpRegistryProviders",
-        "server.setAcpRegistryProvider",
-        "server.disableAcpRegistryProvider",
-        "server.logoutAcpRegistry",
+        ("server.listAcpRegistrySessions", Why::SessionListUnsupported, "Domovoi does not list an ACP agent's own sessions; its threads continue their sessions."),
+        ("server.importAcpRegistrySession", Why::SessionListUnsupported, "Domovoi does not import an ACP agent's own sessions."),
+        ("server.deleteAcpRegistrySession", Why::SessionDeleteUnsupported, "Domovoi does not delete an ACP agent's own sessions."),
+        ("server.listAcpRegistryProviders", Why::ProvidersUnsupported, "Domovoi does not configure an ACP agent's model providers; use the agent's own settings."),
+        ("server.setAcpRegistryProvider", Why::ProvidersUnsupported, "Domovoi does not configure an ACP agent's model providers; use the agent's own settings."),
+        ("server.disableAcpRegistryProvider", Why::ProvidersUnsupported, "Domovoi does not configure an ACP agent's model providers; use the agent's own settings."),
+        ("server.logoutAcpRegistry", Why::LogoutUnsupported, "Sign the ACP agent out with its own command."),
     ]
     .into_iter()
-    .fold(r, |r, tag| r.unary(tag, |_ctx: Arc<ConnCtx>, _: IgnoredAny| async move { Err::<Never, _>(Failure::acp_registry()) }))
+    .fold(r, |r, (tag, why, message)| r.unary(tag, move |_ctx: Arc<ConnCtx>, _: IgnoredAny| async move { Err::<Never, _>(Failure::acp_unsupported(why, message)) }))
 }
 
 #[cfg(test)]

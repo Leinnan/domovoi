@@ -111,6 +111,9 @@ struct Transcript: View {
                     } else if thread.status == "interrupted", thread.pendingSends.isEmpty, !thread.items.isEmpty {
                         StoppedRow(retryBlocked: retryBlocked, actions: actions).id("stopped")
                     }
+                    if !thread.limitResets.isEmpty {
+                        UsageLimitBanner(resets: thread.limitResets, plan: thread.limitPlan, actions: actions).id("limit")
+                    }
                     // The bottom padding is the marker itself: a scroll to the
                     // marker and one to the edge land on the same spot.
                     Color.clear.frame(height: Space.l).id("bottom")

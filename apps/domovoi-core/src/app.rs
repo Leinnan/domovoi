@@ -19,6 +19,35 @@ pub struct QuestionAnswer {
     pub values: Vec<String>,
 }
 
+/// A scheduled task as its editor saves it (`id` empty for a new one).
+///
+/// `schedule_kind`: `interval` (`interval_minutes`), `fixed_time`
+/// (`time_of_day` "HH:MM", `weekdays` 0 = Sunday, none for every day), `once`
+/// (`run_at`, ISO with an offset) or `webhook`. `thread_mode`: `new_thread`,
+/// `continue` or `fresh_session` (both with `thread_id`). `workspace`: `root`,
+/// or `worktree` from `base_branch`. An empty model uses the composer's.
+#[derive(Facet, Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+pub struct ScheduledTaskEdit {
+    pub id: String,
+    pub name: String,
+    pub prompt: String,
+    pub project_id: String,
+    pub schedule_kind: String,
+    pub interval_minutes: u32,
+    pub time_of_day: String,
+    pub weekdays: Vec<u8>,
+    pub run_at: String,
+    pub thread_mode: String,
+    pub thread_id: String,
+    pub workspace: String,
+    pub base_branch: String,
+    pub model_instance: String,
+    pub model: String,
+    pub runtime_mode: String,
+    pub interaction_mode: String,
+    pub enabled: bool,
+}
+
 #[derive(Facet, Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[repr(C)]
 pub enum Event {
@@ -93,6 +122,11 @@ pub enum Event {
     ShowAllInSection { section: String },
     SetSearch { query: String },
     RenameThread { thread_id: String, title: String },
+    /// The open thread, stopped by a usage limit: continue it when the limit
+    /// resets (`snooze` false), or snooze it until then (`snooze` true).
+    PlanForLimitReset { snooze: bool },
+    /// Takes back what `PlanForLimitReset` set.
+    CancelLimitPlan,
     PinThread { thread_id: String, pinned: bool },
     SettleThread { thread_id: String, settled: bool },
     /// Hides the thread until `until_ms` (Unix ms); 0 wakes it now.
@@ -237,6 +271,12 @@ pub enum Event {
     RunScheduledNow { id: String },
     DeleteScheduled { id: String },
     CreateScheduled { name: String, prompt: String, project_id: String, interval_minutes: u32 },
+    /// Creates or changes a scheduled task with every setting it has.
+    SaveScheduled { task: Box<ScheduledTaskEdit> },
+    /// A webhook task's URL gets a new token (the old one stops working).
+    RotateWebhookToken { id: String },
+    /// The deliveries a webhook task received, newest first.
+    LoadWebhookDeliveries { id: String },
     RemoveKeybinding { command: String, shortcut: String, condition: String },
 
     // Remote access (the connected server's iroh side)
@@ -357,7 +397,10 @@ impl App for DomovoiApp {
         // may change any part of the view.
         let frame = matches!(event, Event::Socket { event: SocketEvent::Message { .. }, .. });
         let command = crate::update::update(event, model);
-        if frame { model.changes.end_frame() } else { model.changes.wide() }
+        let wide = if frame { model.changes.end_frame() } else { model.changes.end_update() };
+        if wide {
+            model.shown_ms = model.now_ms;
+        }
         command
     }
 
@@ -400,6 +443,21 @@ pub fn millis_from_iso(s: &str) -> i64 {
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
     let days = era * 146_097 + doe - 719_468;
     days * 86_400_000 + hh * 3_600_000 + mm * 60_000 + ss * 1000 + ms
+}
+
+/// How long until `iso`: `in 5m`, `in 3h`, `in 2d`, or `now` once it passed.
+pub fn until_label(now_ms: i64, iso: &str) -> String {
+    let t = millis_from_iso(iso);
+    if t == 0 || now_ms == 0 {
+        return String::new();
+    }
+    let secs = (t - now_ms) / 1000;
+    match secs {
+        ..60 => "now".into(),
+        60..3600 => format!("in {}m", secs / 60),
+        3600..86_400 => format!("in {}h", secs / 3600),
+        _ => format!("in {}d", secs / 86_400),
+    }
 }
 
 /// `now`, `5m`, `3h`, `2d`, `6w`.

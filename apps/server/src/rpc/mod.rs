@@ -1,13 +1,13 @@
 //! WebSocket RPC handlers (t3code `WsRpcGroup` subset).
 
 mod access;
-mod admin_failure;
+pub(crate) mod admin_failure;
 mod connect;
 mod device;
 mod agent_sessions;
 mod fs;
 mod git_ops;
-mod orchestration;
+pub(crate) mod orchestration;
 pub(crate) mod projects;
 mod local_servers;
 mod preview;

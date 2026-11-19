@@ -659,7 +659,7 @@ impl Store {
     pub fn command_receipt<T: DeserializeOwned>(&self, command_id: &str) -> Result<Option<T>, StoreError> {
         let stored: Option<String> = self
             .db()
-            .read(|c| c.query_row("SELECT result FROM command_receipts WHERE command_id = ?1", params![command_id], |r| r.get(0)).optional())?;
+            .read(|c| c.prepare_cached("SELECT result FROM command_receipts WHERE command_id = ?1")?.query_row(params![command_id], |r| r.get(0)).optional())?;
         match stored {
             None => Ok(None),
             Some(text) => serde_json::from_str(&text)
@@ -671,11 +671,9 @@ impl Store {
     pub fn put_command_receipt<T: Serialize>(&self, command_id: &str, result: &T) -> Result<(), StoreError> {
         let text = serde_json::to_string(result).map_err(|e| StoreError::Invalid(format!("the answer to {command_id} does not encode: {e}")))?;
         self.db().with(|c| {
-            c.execute(
-                "INSERT OR REPLACE INTO command_receipts (command_id, result, created_at) VALUES (?1, ?2, ?3)",
-                params![command_id, text, domovoi_contracts::iso_now()],
-            )
-            .map(|_| ())
+            c.prepare_cached("INSERT OR REPLACE INTO command_receipts (command_id, result, created_at) VALUES (?1, ?2, ?3)")?
+                .execute(params![command_id, text, domovoi_contracts::iso_now()])
+                .map(|_| ())
         })?;
         Ok(())
     }

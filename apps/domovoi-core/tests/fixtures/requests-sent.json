@@ -2332,6 +2332,96 @@
     ]
   },
   {
+    "step": "a scheduled task with every setting",
+    "sent": [
+      {
+        "payload": {
+          "creationSource": "web",
+          "enabled": true,
+          "interactionMode": "plan",
+          "modelSelection": {
+            "instanceId": "codex",
+            "model": "gpt-6"
+          },
+          "projectId": "p1",
+          "prompt": "Summarize yesterday",
+          "runtimeMode": "full-access",
+          "schedule": {
+            "timeOfDay": "09:30",
+            "type": "fixed_time",
+            "weekdays": [
+              1,
+              3,
+              5
+            ]
+          },
+          "threadId": "t1",
+          "threadMode": "fresh_session",
+          "title": "Standup",
+          "workspaceStrategy": {
+            "baseRef": "main",
+            "type": "worktree"
+          }
+        },
+        "rpc": "scheduledTasks.upsert"
+      }
+    ]
+  },
+  {
+    "step": "a scheduled task changed to a webhook",
+    "sent": [
+      {
+        "payload": {
+          "creationSource": "web",
+          "enabled": false,
+          "id": "task-1",
+          "interactionMode": "default",
+          "modelSelection": {
+            "instanceId": "codex",
+            "model": "gpt-6"
+          },
+          "projectId": "p1",
+          "prompt": "Review {{body.ref}}",
+          "requireExisting": true,
+          "runtimeMode": "full-access",
+          "schedule": {
+            "signature": null,
+            "type": "webhook"
+          },
+          "threadMode": "new_thread",
+          "title": "On push",
+          "workspaceStrategy": {
+            "type": "root"
+          }
+        },
+        "rpc": "scheduledTasks.upsert"
+      }
+    ]
+  },
+  {
+    "step": "a webhook task's new URL",
+    "sent": [
+      {
+        "payload": {
+          "id": "task-1"
+        },
+        "rpc": "scheduledTasks.rotateWebhookToken"
+      }
+    ]
+  },
+  {
+    "step": "a webhook task's deliveries",
+    "sent": [
+      {
+        "payload": {
+          "acceptAnyOutcome": true,
+          "id": "task-1"
+        },
+        "rpc": "scheduledTasks.listWebhookDeliveries"
+      }
+    ]
+  },
+  {
     "step": "a push token",
     "sent": [
       {
@@ -2409,6 +2499,14 @@
     "sent": [
       {
         "payload": {
+          "afterSequence": 7,
+          "requestCompletionMarker": true,
+          "threadId": "t1"
+        },
+        "rpc": "orchestration.subscribeThread"
+      },
+      {
+        "payload": {
           "cols": 100,
           "cwd": "/w",
           "rows": 24,
@@ -2426,13 +2524,6 @@
           "visitedAt": "2026-11-18T11:06:40.000Z"
         },
         "rpc": "orchestration.dispatchCommand"
-      },
-      {
-        "payload": {
-          "requestCompletionMarker": true,
-          "threadId": "t1"
-        },
-        "rpc": "orchestration.subscribeThread"
       },
       {
         "rpc": "Interrupt"

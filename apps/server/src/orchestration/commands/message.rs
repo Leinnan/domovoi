@@ -7,6 +7,7 @@ use super::{DispatchResult, Effect, Orchestrator, Refusal, attempt_id, can_nativ
 use crate::adapters::turn::{Shared, turn_item};
 use crate::orchestration::context;
 use crate::orchestration::events::{Outline, enc};
+use crate::store::Store;
 use std::collections::BTreeSet;
 use domovoi_contracts::time_fmt::{iso_from_millis, now_millis};
 use domovoi_model::typed::command::MessageDispatch;
@@ -14,8 +15,8 @@ use domovoi_model::typed::{
     Actor, AppThread, ChatAttachment, CheckpointScope, CheckpointScopeKind, CommandId, ContextHandoff, ContextTransfer, ContextTransferId,
     ContextTransferResolution, ContextTransferStatus, ContextTransferType, ConversationMessage, CreationSource, DispatchMode, EventBody,
     ExecutionNode, HandoffStatus, HandoffStrategy, InputIntent, MessageId, MessageRole, NodeKind, NodeStatus, PlanArtifact, PlanStatus,
-    ProviderInstanceId, ProviderThreadFork, ProviderThreadId, ProviderTurn, ProviderTurnStatus, Run, RunAttempt, RunAttemptReason,
-    RunAttemptStatus, RunId, RunOrdinalRange, RunStatus, Thread, ThreadChange, ThreadId, Timestamp, TitleRegeneration, TurnItem, TurnItemStatus,
+    ProviderInstanceId, ProviderThread, ProviderThreadFork, ProviderThreadId, ProviderTurn, ProviderTurnStatus, Run, RunAttempt, RunAttemptReason,
+    RunAttemptStatus, RunId, RunOrdinalRange, RunStatus, ScheduledTaskId, Thread, ThreadChange, ThreadId, Timestamp, TitleRegeneration, TurnItem, TurnItemStatus,
 };
 
 /// A message as it reaches the agent: what the user message and its turn item share.
@@ -27,6 +28,10 @@ pub(super) struct Steered<'a> {
     pub creation_source: &'a CreationSource,
     /// How it reached the agent: starting a turn, from the queue, or into a running turn.
     pub intent: InputIntent,
+    /// The scheduled task whose occurrence this is.
+    pub scheduled_task_id: Option<&'a ScheduledTaskId>,
+    /// The run starts a new provider session (`freshContext`).
+    pub fresh_context: bool,
 }
 
 /// The user's message as a record of the conversation, belonging to run `run_id`.
@@ -35,7 +40,7 @@ fn user_message(thread_id: &ThreadId, run_id: &str, node_id: &str, sent: &Steere
         notification: None,
         created_by: sent.created_by.clone(),
         creation_source: sent.creation_source.clone(),
-        scheduled_task_id: None,
+        scheduled_task_id: sent.scheduled_task_id.cloned(),
         sender_thread_id: None,
         linked_sender: None,
         idle_compaction: None,
@@ -86,12 +91,12 @@ pub(super) fn user_turn_item(
         created_by: sent.created_by.clone(),
         creation_source: sent.creation_source.clone(),
         message_id: sent.message_id.clone(),
-        scheduled_task_id: None,
+        scheduled_task_id: sent.scheduled_task_id.cloned(),
         sender_thread_id: None,
         linked_sender: None,
         idle_compaction: None,
         workflow_script: None,
-        fresh_context: None,
+        fresh_context: sent.fresh_context.then_some(true),
         input_intent: sent.intent,
         text: sent.text.to_owned(),
         text_omitted: None,
@@ -121,7 +126,7 @@ fn running_provider_turn<'a>(outline: &'a Outline, run: &Run) -> Option<&'a Prov
 /// take more input mid-turn.
 pub(super) fn steerable_run(outline: &Outline, run_id: &RunId) -> Option<Run> {
     let run = outline.runs.iter().find(|run| run.id == *run_id && run.status == RunStatus::Running)?;
-    let driver = driver_for_instance(run.provider_instance_id.as_str());
+    let driver = &driver_for_instance(run.provider_instance_id.as_str());
     (can_steer(driver) && running_provider_turn(outline, run).is_some()).then(|| (**run).clone())
 }
 
@@ -138,6 +143,82 @@ struct HandoffTarget<'a> {
 
 /// A ready handoff of runs `from..=to` of `source` for the target's run, and
 /// the `handoff` turn item that shows it; `None` when there is nothing to say.
+/// Where the conversation the provider sees begins (t3code
+/// `contextBoundaryOrdinal`): the latest started fresh-context run that was
+/// not a scheduled task's side conversation. Runs before it never reach a
+/// provider again. 0 when there is none.
+pub(super) fn context_boundary(store: &Store, thread_id: &str, outline: &Outline) -> u64 {
+    outline
+        .runs
+        .iter()
+        .filter(|run| run.fresh_context == Some(true) && run.provider_thread_id.is_some() && !matches!(run.status, RunStatus::Queued | RunStatus::Cancelled))
+        .filter(|run| !scheduled_fresh_run(store, thread_id, run))
+        .map(|run| run.ordinal)
+        .max()
+        .unwrap_or(0)
+}
+
+/// A scheduled task's fresh-session occurrence: a side conversation, which
+/// the thread's own conversation continues past (t3code `isScheduledFreshRun`).
+fn scheduled_fresh_run(store: &Store, thread_id: &str, run: &Run) -> bool {
+    run.fresh_context == Some(true)
+        && store.record::<ConversationMessage>(thread_id, run.user_message_id.as_str()).ok().flatten().is_some_and(|m| m.scheduled_task_id.is_some())
+}
+
+/// The provider thread a message continues on `instance` (t3code
+/// `conversationProviderThread`): the thread's active one, unless a scheduled
+/// task's fresh-session run started it; then the latest one of the thread's
+/// own conversation since the boundary.
+pub(super) fn conversation_provider_thread(store: &Store, thread_id: &str, outline: &Outline, thread: &AppThread, instance: &ProviderInstanceId) -> Option<ProviderThread> {
+    let active = outline.provider_threads.iter().find(|pt| thread.active_provider_thread_id.as_ref() == Some(&pt.id) && pt.provider_instance_id == *instance)?;
+    // A session works in one folder: a thread moved since (into a worktree)
+    // starts a new one there, which the conversation is handed to.
+    let folder = thread.worktree_path.clone().or_else(|| store.get_project(thread.project_id.as_str()).ok().flatten().map(|p| p.workspace_root));
+    let worked_in = outline.checkpoint_scopes.iter().filter(|scope| scope.provider_thread_id.as_ref() == Some(&active.id)).max_by_key(|scope| scope.created_at.as_str()).map(|scope| scope.cwd.clone());
+    if let (Some(now), Some(then)) = (&folder, &worked_in)
+        && now != then
+    {
+        return None;
+    }
+    let started_by_scheduled = |pt: &ProviderThread| {
+        outline.runs.iter().any(|run| Some(run.ordinal) == pt.first_run_ordinal && run.provider_thread_id.as_ref() == Some(&pt.id) && scheduled_fresh_run(store, thread_id, run))
+    };
+    if !started_by_scheduled(active) {
+        return Some((**active).clone());
+    }
+    let boundary = context_boundary(store, thread_id, outline);
+    let own = outline
+        .provider_threads
+        .iter()
+        .filter(|pt| pt.provider_instance_id == *instance && pt.owner_node_id.is_none() && pt.last_run_ordinal.is_some_and(|last| last >= boundary))
+        .filter(|pt| !started_by_scheduled(pt))
+        .max_by_key(|pt| pt.last_run_ordinal);
+    Some((**own.unwrap_or(active)).clone())
+}
+
+/// A new provider thread picks up this thread's conversation: the runs
+/// before `ordinal` since the latest fresh start, as a handoff for run `run_id`.
+#[expect(clippy::too_many_arguments, reason = "the run and provider thread a handoff is made for, each named")]
+pub(super) fn catch_up(
+    store: &Store,
+    thread_id: &ThreadId,
+    outline: &Outline,
+    run_id: &str,
+    ordinal: u64,
+    provider_thread_id: &ProviderThreadId,
+    instance: &ProviderInstanceId,
+    at: &Timestamp,
+) -> Result<Option<(ContextHandoff, TurnItem)>, crate::store::StoreError> {
+    let tid = thread_id.as_str();
+    let boundary = context_boundary(store, tid, outline);
+    if !outline.runs.iter().any(|run| run.ordinal < ordinal && run.ordinal >= boundary && context::forkable(&run.status)) {
+        return Ok(None);
+    }
+    let target = HandoffTarget { thread_id, run_id, provider_thread_id, instance, transfer: None, at };
+    let why = "Earlier turns of this conversation ran with another agent or session.";
+    Ok(store.load_thread(tid)?.and_then(|whole| handoff_for(&whole, boundary.max(1), ordinal - 1, &target, HandoffStrategy::FullThreadSummary, why)))
+}
+
 fn handoff_for(source: &Thread, from: u64, to: u64, target: &HandoffTarget<'_>, strategy: HandoffStrategy, why: &str) -> Option<(ContextHandoff, TurnItem)> {
     let (text, covered_from, covered_to) = context::transcript(source, from, to)?;
     let covered = || source.runs.iter().filter(|run| run.ordinal >= covered_from && run.ordinal <= covered_to);
@@ -243,6 +324,8 @@ impl Orchestrator {
                 Some((plan, named))
             }
         };
+        // A fresh-context message starts a new provider session (and is never steered into a running one).
+        let fresh = c.fresh_context == Some(true);
         // Steering: the message joins the running turn (t3code dispatchSteerIntoRun).
         let sent = |intent: InputIntent| Steered {
             message_id: &c.message_id,
@@ -251,8 +334,10 @@ impl Orchestrator {
             created_by: &c.created_by,
             creation_source: &c.creation_source,
             intent,
+            scheduled_task_id: c.scheduled_task_id.as_ref(),
+            fresh_context: fresh,
         };
-        if let (DispatchMode::SteerActive { target_run_id }, None) = (&c.dispatch_mode, &source_plan)
+        if let (DispatchMode::SteerActive { target_run_id }, None, false) = (&c.dispatch_mode, &source_plan, fresh)
             && let Some(target) = steerable_run(&outline, target_run_id)
         {
             return self.steer_into(command_id, thread_id, sent(InputIntent::Steer), &outline, &target);
@@ -310,20 +395,19 @@ impl Orchestrator {
             emit(thread_event(change, &thread))?;
         }
         let instance = thread.provider_instance_id.clone();
-        let driver = driver_for_instance(instance.as_str());
+        let driver = &driver_for_instance(instance.as_str());
         let ordinal = runs.iter().map(|run| run.ordinal).max().unwrap_or(0) + 1;
         let rid = run_id(tid, ordinal);
         let attempt = attempt_id(&rid, 1);
         let node = root_node_id(&rid);
         let active = runs.iter().any(|run| is_active(&run.status) || run.status == RunStatus::Queued);
 
-        // Provider thread: reuse the active one for this instance, otherwise a new not-yet-loaded one.
-        let reusable =
-            outline.provider_threads.iter().find(|pt| thread.active_provider_thread_id.as_ref() == Some(&pt.id) && pt.provider_instance_id == instance);
+        // Provider thread: the conversation's for this instance, otherwise a new not-yet-loaded one.
+        let reusable = if fresh { None } else { conversation_provider_thread(&self.store, tid, &outline, &thread, &instance) };
         let reused = reusable.is_some();
         let mut provider_thread = match reusable {
             Some(held) => {
-                let mut held = (**held).clone();
+                let mut held = held;
                 held.last_run_ordinal = Some(ordinal);
                 held.updated_at = at.clone();
                 held
@@ -393,12 +477,8 @@ impl Orchestrator {
                 }
             }
             transfer_update = Some(transfer);
-        } else if !reused && runs.iter().any(|run| context::forkable(&run.status)) {
-            // A provider (or a new provider thread) picks up this thread's conversation.
-            let to = runs.iter().map(|run| run.ordinal).max().unwrap_or(0);
-            let target = HandoffTarget { thread_id, run_id: &rid, provider_thread_id: &provider_thread_id, instance: &instance, transfer: None, at: &at };
-            let why = "Earlier turns of this conversation ran with another agent or session.";
-            handoff = self.store.load_thread(tid)?.and_then(|whole| handoff_for(&whole, 1, to, &target, HandoffStrategy::FullThreadSummary, why));
+        } else if !reused && !fresh {
+            handoff = catch_up(&self.store, thread_id, &outline, &rid, ordinal, &provider_thread_id, &instance, &at)?;
         }
         if let Some((made, _)) = &handoff {
             provider_thread.handoff_ids.push(made.id.clone());
@@ -434,14 +514,14 @@ impl Orchestrator {
             checkpoint_id: None,
             context_handoff_id: handoff.as_ref().map(|(made, _)| made.id.clone()),
             restart_continuation_of_run_id: c.restart_continuation_of_run_id.clone(),
-            usage_limit_continuation_of_run_id: None,
+            usage_limit_continuation_of_run_id: c.usage_limit_continuation_of_run_id.clone(),
             delegated_task_id: None,
             work_started_at: None,
             restart_cancelled_background_work: None,
             source_plan_ref: source_plan.as_ref().map(|(_, named)| (*named).clone()),
             delegated_completion: None,
             workspace_preparation: None,
-            fresh_context: None,
+            fresh_context: fresh.then_some(true),
         })))?;
         if let Some(transfer) = transfer_update {
             emit(EventBody::ContextTransferUpdated(Box::new(transfer)))?;

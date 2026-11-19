@@ -72,9 +72,9 @@
     { "tag": "server.commitDesktopUpdate", "payload": { "requestId": "r1" }, "expect": "failure", "error": "ServerSelfUpdateError" },
 
     { "tag": "server.acceptAcpRegistryUrlAuth", "payload": { "instanceId": "i", "elicitationId": "e" } },
-    { "tag": "server.searchAcpRegistry", "payload": { "query": "agent" }, "expect": "failure", "error": "AcpRegistryOperationError" },
+    { "tag": "server.searchAcpRegistry", "payload": { "query": "agent" }, "expect": "success" },
     { "tag": "server.prepareAcpRegistryAgent", "payload": { "agentId": "a" }, "expect": "failure", "error": "AcpRegistryOperationError" },
-    { "tag": "server.uninstallAcpRegistryManagedBinary", "payload": { "agentId": "a" }, "expect": "failure", "error": "AcpRegistryOperationError" },
+    { "tag": "server.uninstallAcpRegistryManagedBinary", "payload": { "agentId": "a" }, "expect": "success" },
     { "tag": "server.listAcpRegistrySessions", "payload": { "instanceId": "i", "projectId": "$PROJECT" }, "expect": "failure", "error": "AcpRegistryOperationError" },
     { "tag": "server.importAcpRegistrySession", "payload": { "instanceId": "i", "projectId": "$PROJECT", "sessionId": "s" }, "expect": "failure", "error": "AcpRegistryOperationError" },
     { "tag": "server.deleteAcpRegistrySession", "payload": { "instanceId": "i", "projectId": "$PROJECT", "sessionId": "s" }, "expect": "failure", "error": "AcpRegistryOperationError" },

@@ -97,6 +97,8 @@ fn start_env(dir: &Path, transport: Transport, env: &[(String, String)]) -> Serv
         .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
         // Agent-session scans read this empty home, never the real ~/.claude or ~/.codex.
         .env("DOMOVOI_AGENT_SESSIONS_HOME", dir.join("agent-home"))
+        // The ACP registry the cases search: a file, not the network.
+        .env("DOMOVOI_ACP_REGISTRY_URL", format!("file://{}/../../conformance/acp-registry.json", env!("CARGO_MANIFEST_DIR")))
         .envs(env.iter().map(|(key, value)| (key.as_str(), value.as_str())))
         .stdout(Stdio::piped())
         .stderr(Stdio::null())

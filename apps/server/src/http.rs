@@ -67,8 +67,56 @@ pub fn router(state: SharedState) -> Router {
             post(attachment_upload).layer(axum::extract::DefaultBodyLimit::max(50 * 1024 * 1024)),
         )
         .route("/ws", get(ws))
+        .route("/api/hooks/{task}/{token}", hooks_route())
         .layer(axum::middleware::from_fn_with_state(state.clone(), gate_unknown_peers))
         .with_state(state)
+}
+
+/// Webhook task URLs and nothing else, for `--hooks-listen`.
+pub fn hooks_router(state: SharedState) -> Router {
+    Router::new().route("/api/hooks/{task}/{token}", hooks_route()).with_state(state)
+}
+
+fn hooks_route() -> axum::routing::MethodRouter<SharedState> {
+    axum::routing::any(webhook).layer(axum::extract::DefaultBodyLimit::max(crate::webhooks::MAX_BODY_BYTES))
+}
+
+/// A webhook task's URL (t3code `webhookRoute`): the body is read raw, so the
+/// signature is checked over the exact bytes.
+async fn webhook(
+    State(state): State<SharedState>,
+    axum::extract::Path((task, token)): axum::extract::Path<(String, String)>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
+    headers: axum::http::HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    use axum::http::{HeaderValue, Method};
+    let respond = |status: u16, body: String, outcome: &'static str| -> Response {
+        let mut res = Response::new(axum::body::Body::from(body));
+        *res.status_mut() = StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+        res.headers_mut().insert(axum::http::header::CONTENT_TYPE, HeaderValue::from_static("application/json"));
+        res.headers_mut().insert("x-t3-hook-outcome", HeaderValue::from_static(outcome));
+        res
+    };
+    if !matches!(method, Method::GET | Method::POST | Method::PUT | Method::PATCH) {
+        // Link checkers probe with HEAD.
+        let mut res = respond(405, "{\"error\":\"method_not_allowed\"}".into(), "method_not_allowed");
+        res.headers_mut().insert(axum::http::header::ALLOW, HeaderValue::from_static("GET, POST, PUT, PATCH"));
+        return res;
+    }
+    let headers = headers.iter().filter_map(|(k, v)| v.to_str().ok().map(|v| (k.as_str().to_ascii_lowercase(), v.to_owned()))).collect();
+    let request = crate::webhooks::WebhookRequest {
+        method: method.as_str().to_owned(),
+        path: format!("/api/hooks/{}", crate::util::encode_uri_component(&task)),
+        query: uri.query().unwrap_or_default().to_owned(),
+        headers,
+        body_text: String::from_utf8_lossy(&body).into_owned(),
+        body: body.to_vec(),
+    };
+    let service = crate::scheduled_tasks::service(&state);
+    let (status, json, outcome) = crate::webhooks::trigger(service, &task, &token, request).await.http();
+    respond(status, json, outcome)
 }
 
 /// iroh peers without a live session reach only the pairing routes, and

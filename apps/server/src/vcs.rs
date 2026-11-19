@@ -37,6 +37,74 @@ pub async fn is_repo(cwd: &str) -> bool {
     is_dir(cwd).await && git(cwd, &["rev-parse", "--is-inside-work-tree"]).await.is_some_and(|s| s.trim() == "true")
 }
 
+/// The branch checked out in `cwd`, read from the repository's files with no
+/// `git` process: `Some(None)` outside a repository or on a detached head,
+/// `None` when the layout is one only `git` reads (the caller then asks it).
+///
+/// Finds `.git` the way `git` does (walking up; a `gitdir:` file for a linked
+/// worktree), then reads `HEAD`. Anything unusual is left to `git`: the `GIT_*`
+/// variables that move discovery, a `.git` owned by someone else (`git`'s
+/// `safe.directory` rule), a HEAD that is no plain branch ref (reftable), a
+/// folder inside `.git`.
+pub fn head_branch_in_process(cwd: &str) -> Option<Option<String>> {
+    use std::os::unix::fs::MetadataExt;
+    if ["GIT_DIR", "GIT_WORK_TREE", "GIT_CEILING_DIRECTORIES", "GIT_DISCOVERY_ACROSS_FILESYSTEM", "GIT_COMMON_DIR"].iter().any(|v| std::env::var_os(v).is_some()) {
+        return None;
+    }
+    let start = Path::new(cwd);
+    if !start.is_absolute() || start.components().any(|c| c.as_os_str() == ".git") {
+        return None;
+    }
+    if !start.is_dir() {
+        return Some(None);
+    }
+    // SAFETY: `geteuid` has no preconditions and cannot fail.
+    let me = unsafe { libc::geteuid() };
+    let mut dir = Some(start);
+    while let Some(d) = dir {
+        let dot_git = d.join(".git");
+        match std::fs::symlink_metadata(&dot_git) {
+            Ok(meta) => {
+                if meta.uid() != me {
+                    return None;
+                }
+                let git_dir = if meta.is_dir() {
+                    dot_git
+                } else if meta.is_file() {
+                    let text = std::fs::read_to_string(&dot_git).ok()?;
+                    let target = text.strip_prefix("gitdir:")?.trim();
+                    let target = Path::new(target);
+                    if target.is_absolute() { target.to_owned() } else { d.join(target) }
+                } else {
+                    return None;
+                };
+                let head = std::fs::read_to_string(git_dir.join("HEAD")).ok()?;
+                let head = head.trim_end_matches(['\n', '\r']);
+                if let Some(name) = head.strip_prefix("ref: refs/heads/") {
+                    // reftable keeps a placeholder here; a name git would refuse is left to it.
+                    return (!name.is_empty() && name != ".invalid" && !name.contains(char::is_whitespace)).then(|| Some(name.to_owned()));
+                }
+                // A detached head is an object id.
+                return (head.len() >= 40 && head.chars().all(|c| c.is_ascii_hexdigit())).then_some(None);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => dir = d.parent(),
+            Err(_) => return None,
+        }
+    }
+    Some(None)
+}
+
+/// The branch checked out in `cwd`, if it is a repository on a branch: from
+/// the repository's files when they say, else from `git`.
+pub async fn checked_out_branch(cwd: &str) -> Option<String> {
+    let path = cwd.to_owned();
+    let read = tokio::task::spawn_blocking(move || head_branch_in_process(&path));
+    match tokio::time::timeout(GIT_TIMEOUT, read).await {
+        Ok(Ok(Some(branch))) => branch,
+        _ => branch_status(cwd).await.ref_name,
+    }
+}
+
 /// `VcsBranchStatus`.
 pub async fn branch_status(cwd: &str) -> VcsBranchStatus {
     if !is_repo(cwd).await {
@@ -427,6 +495,48 @@ pub async fn discover_source_control() -> SourceControlDiscovery {
 
 #[cfg(test)]
 mod tests {
+    use super::{Path, branch_status, head_branch_in_process};
+
+    /// The branch read from a repository's files is what `git` says, in a
+    /// repository, a linked worktree, on a detached head and outside any.
+    #[tokio::test]
+    async fn the_branch_read_from_files_is_what_git_says() {
+        let dir = std::env::temp_dir().join(format!("domovoi-head-{}", crate::util::new_uuid()));
+        let (repo, linked, plain) = (dir.join("repo"), dir.join("linked"), dir.join("plain"));
+        std::fs::create_dir_all(&repo).unwrap();
+        std::fs::create_dir_all(&plain).unwrap();
+        let git = |cwd: &Path, args: &[&str]| {
+            let out = std::process::Command::new("git").args(args).current_dir(cwd).env("GIT_CONFIG_GLOBAL", "/dev/null").env("GIT_CONFIG_NOSYSTEM", "1").output().unwrap();
+            assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        };
+        git(&repo, &["init", "-q", "-b", "main"]);
+        git(&repo, &["-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "--allow-empty", "-m", "init"]);
+        git(&repo, &["worktree", "add", "-q", "-b", "feature/x", linked.to_str().unwrap()]);
+        std::fs::create_dir_all(repo.join("sub/deeper")).unwrap();
+        let both = |p: &Path| {
+            let p = p.to_str().unwrap().to_owned();
+            async move { (head_branch_in_process(&p), branch_status(&p).await.ref_name) }
+        };
+        let (read, asked) = both(&repo).await;
+        assert_eq!((read, asked.clone()), (Some(Some("main".into())), Some("main".into())));
+        let (read, asked) = both(&repo.join("sub/deeper")).await;
+        assert_eq!(read, Some(asked));
+        let (read, asked) = both(&linked).await;
+        assert_eq!((read, asked.clone()), (Some(Some("feature/x".into())), Some("feature/x".into())));
+        git(&repo, &["checkout", "-q", "--detach"]);
+        let (read, asked) = both(&repo).await;
+        assert_eq!((read, asked), (Some(None), None));
+        // Outside a repository (the temp folder is in none), and a folder that is not there.
+        if branch_status(plain.to_str().unwrap()).await.is_repo == Some(false) {
+            assert_eq!(head_branch_in_process(plain.to_str().unwrap()), Some(None));
+        }
+        assert_eq!(head_branch_in_process(dir.join("gone").to_str().unwrap()), Some(None));
+        // Inside `.git`, or a relative path: left to git.
+        assert_eq!(head_branch_in_process(repo.join(".git").to_str().unwrap()), None);
+        assert_eq!(head_branch_in_process("relative"), None);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     use super::{DiscoveredProvider, DiscoveredTool, DiscoveredVcs, Maybe, ProviderAuth, ProviderAuthStatus, parse_remote};
     use serde_json::json;
 

@@ -483,6 +483,78 @@ fn perf_shell_snapshot_of_many_threads() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// A project at `root`, for launches there.
+fn project_at(store: &Store, id: &str, root: &std::path::Path) {
+    store
+        .create_project(domovoi_contracts::shell::ProjectShell {
+            id: id.into(), title: id.into(), has_custom_title: false, workspace_root: root.to_string_lossy().into(),
+            repository_identity: None, default_model_selection: None, default_thread_env_mode: None, auto_pull: false,
+            favicon_path: None, project_icon: None, scripts: vec![], pinned_at: None, archived_at: None,
+            created_at: "t".into(), updated_at: "t".into(),
+        }, None)
+        .expect("project");
+}
+
+/// Idle launches (`orchestration.launchThread` with no first message, in the
+/// project's own folder), as a client creating threads makes them: in a
+/// folder that is no repository, and in a git repository (its branch is
+/// looked up). The server's home is set, as it is when it runs.
+#[tokio::test]
+#[ignore = "measurement; run with --ignored --nocapture"]
+async fn perf_launch_idle_thread() {
+    let (store, dir) = temp_store("launch");
+    let _ = crate::managed::HOME.set(dir.join("home"));
+    let (plain, repo) = (dir.join("plain"), dir.join("repo"));
+    std::fs::create_dir_all(&plain).expect("plain");
+    std::fs::create_dir_all(&repo).expect("repo");
+    let git = |args: &[&str]| {
+        let done = std::process::Command::new("git").args(args).current_dir(&repo).env("GIT_CONFIG_GLOBAL", "/dev/null").env("GIT_CONFIG_NOSYSTEM", "1").output().expect("git");
+        assert!(done.status.success(), "git {args:?}");
+    };
+    git(&["init", "-q", "-b", "main"]);
+    git(&["-c", "user.name=perf", "-c", "user.email=perf@example.invalid", "commit", "-q", "--allow-empty", "-m", "init"]);
+    project_at(&store, "plain", &plain);
+    project_at(&store, "repo", &repo);
+    let (o, _effects) = Orchestrator::new(store.clone());
+    for project in ["plain", "repo"] {
+        let mut times = vec![];
+        for i in 0..500 {
+            let mut launch = crate::test_records::launch(&format!("c-{project}-{i}"), &format!("{project}-{i}"), project, "codex", "");
+            launch.initial_message = None;
+            let started = Instant::now();
+            let launched = o.launch_thread(launch).await.expect("launch");
+            times.push(started.elapsed());
+            if project == "repo" && i == 0 {
+                assert_eq!(launched.projection.thread.branch.as_deref(), Some("main"), "the branch was looked up");
+            }
+        }
+        println!("perf idle launch, {project:>5}: {}", spread(times));
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// The shell stream's first items for 1,000 threads: the snapshot, the
+/// items, and their JSON, as a subscriber gets them; bytes per item.
+#[test]
+#[ignore = "measurement; run with --ignored --nocapture"]
+fn perf_shell_first_items_encode() {
+    let (store, dir) = temp_store("shell-items");
+    project_at(&store, "p1", &dir);
+    for t in 0..1000 {
+        test_records::append(&store, &format!("t{t}"), "thread.created", with(test_records::thread(&format!("t{t}"), "p1"), json!({ "title": "Perf" })), &origin()).expect("thread");
+    }
+    let mut times = vec![];
+    let mut bytes = vec![];
+    for _ in 0..20 {
+        let started = Instant::now();
+        let items = crate::rpc::shell::initial_items(crate::rpc::shell::snapshot_of(&store).expect("snapshot"));
+        bytes = items.iter().map(|i| serde_json::to_string(&serde_json::to_value(i).expect("value")).expect("text").len()).collect();
+        times.push(started.elapsed());
+    }
+    println!("perf shell first items, 1000 threads: {} ; bytes per item {bytes:?}", spread(times));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 #[tokio::test]
 #[ignore = "measurement; run with --ignored --nocapture"]
 async fn perf_bytes_allocated_by_streamed_deltas() {

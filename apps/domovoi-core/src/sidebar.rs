@@ -116,7 +116,7 @@ fn shown_at(t: &ThreadShell) -> &str {
 /// When a snoozed thread wakes (Unix ms), while that's ahead; a thread
 /// waiting on you isn't hidden by a snooze.
 fn snoozed_until(model: &Model, t: &ThreadShell) -> Option<i64> {
-    let until = t.snoozed_until.as_ref()?.as_ref().map(|until| crate::app::millis_from_iso(until.as_str())).filter(|u| *u > model.now_ms)?;
+    let until = t.snoozed_until.as_ref()?.as_ref().map(|until| crate::app::millis_from_iso(until.as_str())).filter(|u| *u > model.shown_ms)?;
     (shell_status(t) != ShellStatus::Approval).then_some(until)
 }
 
@@ -211,7 +211,7 @@ fn status_label(model: &Model, t: &ThreadShell) -> String {
         }
         ShellStatus::Working => {
             let started = t.activity_run_started_at.as_ref().and_then(Option::as_ref).or(t.latest_run_started_at.as_ref().and_then(Option::as_ref));
-            match started.map(|at| age_label(model.now_ms, at.as_str())) {
+            match started.map(|at| age_label(model.shown_ms, at.as_str())) {
                 Some(age) if !age.is_empty() && age != "now" => format!("Working {age}"),
                 _ => "Working".into(),
             }
@@ -236,7 +236,7 @@ fn row(model: &Model, labels: &Labels, t: &ThreadShell) -> ThreadRowView {
         archived: t.archived_at.is_some(),
         branch: t.branch.clone().filter(|branch| !branch.is_empty()),
         in_worktree: t.worktree_path.is_some(),
-        age: age_label(model.now_ms, shown_at(t)),
+        age: age_label(model.shown_ms, shown_at(t)),
         source: thread_source(t).into(),
         snoozed_until_ms: snoozed_until(model, t).unwrap_or(0),
         relation: if relation(t) == "fork" { "fork".into() } else { String::new() },
@@ -290,7 +290,34 @@ pub fn sidebar(model: &Model) -> SidebarView {
         }
         Grouping::Project => by_project(model, &labels, &all_live, &q, &matches, &mut view),
     }
+    list_launching(model, &labels, &mut view);
     view
+}
+
+/// The thread being started, listed first until the server's shell of it is.
+fn list_launching(model: &Model, labels: &Labels, view: &mut SidebarView) {
+    let Some(l) = model.starting_thread.as_ref() else { return };
+    if model.thread_shell(&l.id).is_some() || !model.search.query.trim().is_empty() {
+        return;
+    }
+    let row = ThreadRowView {
+        id: l.id.clone(),
+        project_id: l.project_id.clone(),
+        project_title: labels.projects.get(l.project_id.as_str()).copied().unwrap_or_default().to_owned(),
+        title: l.title.clone(),
+        status_label: "Starting".into(),
+        status: "working".into(),
+        age: "now".into(),
+        ..ThreadRowView::default()
+    };
+    view.surface_threads.insert(0, row.clone());
+    if let Some(section) = view.sections.first_mut() {
+        section.rows.insert(0, row.clone());
+        section.count += 1;
+    }
+    if let Some(project) = view.projects.iter_mut().find(|p| p.id == l.project_id) {
+        project.threads.insert(0, row);
+    }
 }
 
 /// The threads most worth a glance: waiting on you, working, unread, then

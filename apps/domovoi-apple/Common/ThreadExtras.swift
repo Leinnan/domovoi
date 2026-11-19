@@ -255,3 +255,39 @@ struct ContextMeter: View {
         context.high ? Tint.caution : context.percent >= 50 ? Color.accentColor : .secondary
     }
 }
+
+/// The last turn stopped on a usage limit: when it resets, and continuing
+/// (or snoozing) the thread then.
+struct UsageLimitBanner: View {
+    let resets: String
+    let plan: String
+    let actions: TranscriptActions
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Space.s) {
+            Label(resets == "now" ? "The usage limit has reset." : "Usage limit reached. It resets \(resets).", systemImage: "gauge.with.dots.needle.100percent")
+                .fontWeight(.medium)
+            HStack(spacing: Space.s) {
+                switch plan {
+                case "resume":
+                    Text("Continues when it resets.").foregroundStyle(.secondary)
+                    Button("Cancel") { actions.send(.cancelLimitPlan) }.controlSize(.small)
+                case "snooze":
+                    Text("Snoozed until it resets.").foregroundStyle(.secondary)
+                    Button("Cancel") { actions.send(.cancelLimitPlan) }.controlSize(.small)
+                default:
+                    Button("Resume at Reset") { actions.send(.planForLimitReset(snooze: false)) }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                        .help("Send “Continue where you left off.” once the limit resets")
+                    Button("Snooze Until Reset") { actions.send(.planForLimitReset(snooze: true)) }
+                        .controlSize(.small)
+                }
+            }
+        }
+        .font(TypeRole.meta)
+        .padding(Space.m)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .cardSurface()
+    }
+}

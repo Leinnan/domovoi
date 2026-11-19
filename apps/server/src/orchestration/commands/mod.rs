@@ -160,11 +160,11 @@ impl ThreadLocks {
     }
 }
 
-pub fn driver_for_instance(instance_id: &str) -> &str {
+pub fn driver_for_instance(instance_id: &str) -> String {
     match instance_id {
-        "claudeAgent" => "claudeAgent",
-        "codex" => "codex",
-        other => other,
+        "claudeAgent" | "codex" | "opencode" | "pi" => instance_id.to_owned(),
+        // An instance settings add runs the driver it names.
+        other => crate::providers::instance(other).map_or_else(|| other.to_owned(), |c| c.driver.as_str().to_owned()),
     }
 }
 

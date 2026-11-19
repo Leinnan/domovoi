@@ -65,6 +65,8 @@ pub enum Route {
     PullRequestThread(String),
     Usage,
     Archived,
+    /// A webhook task's deliveries, by task id.
+    WebhookDeliveries(String),
 }
 
 #[derive(Debug, Default)]

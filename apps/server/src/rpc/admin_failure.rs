@@ -129,6 +129,18 @@ pub enum McpAppReason {
 #[serde(rename_all = "snake_case")]
 pub enum AcpRegistryReason {
     RegistryUnavailable,
+    AgentNotFound,
+    AgentNotConfigured,
+    UnsupportedPlatform,
+    RunnerUnavailable,
+    InstallFailed,
+    DownloadFailed,
+    ArchiveInvalid,
+    ChecksumMismatch,
+    SessionListUnsupported,
+    SessionDeleteUnsupported,
+    ProvidersUnsupported,
+    LogoutUnsupported,
 }
 
 /// A failed call of the administration groups, written as its tagged error.
@@ -229,7 +241,7 @@ pub enum Failure {
 
     #[error("{message}")]
     #[serde(rename = "AcpRegistryOperationError")]
-    AcpRegistry { reason: AcpRegistryReason, message: &'static str },
+    AcpRegistry { reason: AcpRegistryReason, message: String },
 
     /// The one failure t3code has no tagged error for: its telemetry stream
     /// cannot fail this way. Written as the message alone.
@@ -259,9 +271,10 @@ impl Failure {
         Failure::ServerSelfUpdate { reason: "This server is not installed from npm or the desktop app, so it cannot update itself." }
     }
 
-    /// Domovoi runs no ACP agents.
-    pub fn acp_registry() -> Self {
-        Failure::AcpRegistry { reason: AcpRegistryReason::RegistryUnavailable, message: "This server does not run ACP registry agents." }
+    /// What the ACP agents Domovoi runs cannot do (sessions of their own,
+    /// configurable providers, signing out from here).
+    pub fn acp_unsupported(reason: AcpRegistryReason, message: &str) -> Self {
+        Failure::AcpRegistry { reason, message: message.to_owned() }
     }
 }
 
@@ -365,8 +378,8 @@ mod tests {
             json!({ "_tag": "ServerSelfUpdateError", "reason": "This server is not installed from npm or the desktop app, so it cannot update itself." })
         );
         assert_eq!(
-            json!(Failure::acp_registry()),
-            json!({ "_tag": "AcpRegistryOperationError", "reason": "registry_unavailable", "message": "This server does not run ACP registry agents." })
+            json!(Failure::acp_unsupported(AcpRegistryReason::SessionListUnsupported, "No sessions.")),
+            json!({ "_tag": "AcpRegistryOperationError", "reason": "session_list_unsupported", "message": "No sessions." })
         );
         assert_eq!(json!(Failure::TelemetryUnavailable { message: "No telemetry." }), json!({ "message": "No telemetry." }));
     }

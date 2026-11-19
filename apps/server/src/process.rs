@@ -67,6 +67,9 @@ pub fn output_blocking(cmd: &mut std::process::Command, limit: Duration) -> std:
     let stdout = read(child.stdout.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
     let stderr = read(child.stderr.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
     let deadline = Instant::now() + limit;
+    // Checked often at first, then less: a quick command (most are) is seen
+    // done within a fraction of a millisecond, not rounded up to the poll.
+    let mut pause = Duration::from_micros(100);
     let status = loop {
         if let Some(status) = child.try_wait()? {
             break status;
@@ -76,7 +79,8 @@ pub fn output_blocking(cmd: &mut std::process::Command, limit: Duration) -> std:
             let _ = child.wait();
             return Err(gave_up(limit));
         }
-        std::thread::sleep(Duration::from_millis(5));
+        std::thread::sleep(pause);
+        pause = (pause * 2).min(Duration::from_millis(5));
     };
     Ok(Output { status, stdout: stdout.join().unwrap_or_default(), stderr: stderr.join().unwrap_or_default() })
 }
