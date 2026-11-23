@@ -1,7 +1,7 @@
 # domovoi: the Rust server, the Crux client core and the macOS and iPhone apps.
 # `just` lists the recipes. Packaging needs Xcode, xcodegen and boltffi
-# (`cargo install boltffi_cli`); the Rust targets aarch64-apple-darwin and
-# x86_64-apple-darwin give universal binaries.
+# (`cargo install boltffi_cli`); the Mac builds are Apple silicon only
+# (Rust target aarch64-apple-darwin).
 
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
@@ -22,9 +22,12 @@ avd := "Pixel_5"
 # The Linux machine `just linux-*` deploys to and manages (ssh destination).
 linux_host := env("DOMOVOI_LINUX_HOST", "piotr@192.168.1.99")
 android_id := "com.crayen.domovoi"
+# Size budgets (MB) of the Mac apps' executables; `mac-package` fails above them.
+client_budget := "30"
+server_budget := "60"
 lsregister := "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
 
-# Signing team for the iPhone app; `DEVELOPMENT_TEAM=<team> just …` picks another.
+# Signing team for the macOS release and iPhone apps.
 export DEVELOPMENT_TEAM := env("DEVELOPMENT_TEAM", "LALG9U2L97")
 
 default:
@@ -46,7 +49,7 @@ rpc-groups groups="":
     DOMOVOI_NODE="${DOMOVOI_NODE:-$(command -v node || true)}" {{ if groups == "" { "" } else { "DOMOVOI_GROUPS=" + groups } }} cargo test -p domovoi-server --test rpc_calls every_rpc_group_answers_as_recorded -- --ignored --nocapture
 
 # Turns of the real agent CLIs (spends tokens): `just live claude`, `just live codex`,
-# `just live claude native_fork`. Models: DOMOVOI_LIVE_CLAUDE_MODEL (default
+# `just live claude native_fork`, `just live antigravity`. Models: DOMOVOI_LIVE_CLAUDE_MODEL (default
 # claude-haiku-5-5), DOMOVOI_LIVE_CODEX_MODEL (default gpt-6-luna). Every frame is
 # recorded and decoded with t3code's schemas afterwards (Node 26+ in DOMOVOI_NODE).
 live provider filter="":
@@ -57,11 +60,13 @@ live provider filter="":
       codex) export DOMOVOI_LIVE_CODEX_MODEL="${DOMOVOI_LIVE_CODEX_MODEL:-gpt-6-luna}" ;;
       # Both: what goes from one to the other (a provider switch).
       both) export DOMOVOI_LIVE_CLAUDE_MODEL="${DOMOVOI_LIVE_CLAUDE_MODEL:-claude-haiku-5-5}" DOMOVOI_LIVE_CODEX_MODEL="${DOMOVOI_LIVE_CODEX_MODEL:-gpt-6-luna}" ;;
-      *) echo "live: claude, codex or both" >&2; exit 2 ;;
+      # Signs a fresh profile in (finishes by itself only when Google asks for no browser).
+      antigravity) export DOMOVOI_LIVE_ANTIGRAVITY_MODEL="${DOMOVOI_LIVE_ANTIGRAVITY_MODEL:-gemini-3.8-flash}" ;;
+      *) echo "live: claude, codex, both or antigravity" >&2; exit 2 ;;
     esac
     out="${DOMOVOI_WIRE_OUT:-target/live-{{provider}}.ndjson}"
     rm -f "$out"
-    DOMOVOI_WIRE_OUT="$PWD/$out" cargo test -p domovoi-server --test provider_turns "live::{{ if provider == "both" { "a_thread_switched" } else { provider + "::" + filter } }}" -- --test-threads="${LIVE_THREADS:-3}" --nocapture
+    DOMOVOI_WIRE_OUT="$PWD/$out" cargo test -p domovoi-server --test provider_turns "live::{{ if provider == "both" { "a_thread_switched" } else if provider == "antigravity" { "antigravity::" + filter } else { provider + "::" + filter } }}" -- --test-threads="${LIVE_THREADS:-{{ if provider == "antigravity" { "1" } else { "3" } }}}" --nocapture
     status=$?
     node="${DOMOVOI_NODE:-$(command -v node || true)}"
     if [ -n "$node" ] && [ -s "$out" ]; then
@@ -70,7 +75,7 @@ live provider filter="":
     exit $status
 
 # Build everything and fail on any compiler warning or lint-gate finding
-check:
+check: lfs-check
     #!/usr/bin/env bash
     set -uo pipefail
     for cmd in "cargo build --workspace" "cargo test --workspace --no-run"; do
@@ -86,6 +91,31 @@ check:
       -D clippy::unwrap_used -D clippy::await_holding_lock -D clippy::large_enum_variant \
       -D clippy::disallowed_methods -D clippy::disallowed_types -D clippy::disallowed_macros \
       -D unfulfilled_lint_expectations
+
+# The checkout has its Git LFS files (images and icons), not pointer files
+# in their place, and every file a `.gitattributes` rule puts in LFS is stored
+# there. `check` and the packaging recipes run it first.
+lfs-check:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+      echo "lfs-check: not a git checkout; skipped"; exit 0
+    fi
+    if ! git lfs version >/dev/null 2>&1; then
+      echo "lfs-check: Git LFS is not installed (https://git-lfs.com). Install it, then run: git lfs install && git lfs pull" >&2
+      exit 1
+    fi
+    # `git lfs ls-files` marks a file whose working copy is still a pointer with `-`.
+    pointers=$(git lfs ls-files | awk '$2 == "-" { $1 = ""; $2 = ""; sub(/^  /, ""); print }')
+    if [ -n "$pointers" ]; then
+      echo "lfs-check: these Git LFS files are pointer files, not their contents:" >&2
+      sed 's/^/  /' <<<"$pointers" >&2
+      echo "Run: git lfs pull" >&2
+      exit 1
+    fi
+    # Files a rule puts in LFS but committed as plain blobs, and the reverse.
+    git lfs fsck --pointers >/dev/null || { git lfs fsck --pointers >&2; exit 1; }
+    echo "lfs-check: $(git lfs ls-files | wc -l | tr -d ' ') Git LFS files present"
 
 # Run the server (debug) on `port` with state in `home`
 server port=port home=home:
@@ -119,13 +149,19 @@ check-linux *args="test --no-fail-fast -p domovoi-server -p domovoi-remote -p do
 mac-typegen:
     cargo run -q -p domovoi_core --bin codegen --features codegen -- --output-dir {{mac}}/generated
 
-# The core as a Swift package (universal xcframework); `release=true` optimizes it
+# The core as a Swift package (xcframework: macOS arm64, iOS, simulator); `release=true` optimizes it
 mac-ffi release="false":
     cd apps/domovoi-core && boltffi pack apple {{ if release == "true" { "--release" } else { "" } }}
 
 # Generated sources and the Xcode project
 mac-generate release="false": mac-typegen (mac-ffi release)
     cd {{mac}} && xcodegen -q
+
+# Package only the macOS slice for the Mac release.
+[private]
+_mac-release-generate: mac-typegen
+    cd apps/domovoi-core && boltffi pack apple --release --overlay boltffi-macos.toml
+    cd {{mac}} && xcodegen -q --spec project-macos.yml
 
 # Debug build of the app ("Domovoi Dev", com.crayen.domovoi.mac.debug), the smoke tool and "Domovoi Server.app" beside the app
 mac-build: mac-generate
@@ -200,20 +236,36 @@ ios-archive: (mac-generate "true")
       CURRENT_PROJECT_VERSION=$(git rev-list --count HEAD) -skipPackagePluginValidation -quiet archive
     @echo "{{dist}}/DomovoiIOS.xcarchive"
 
-# Universal release build of the app and "Domovoi Server.app", signed ad hoc
-mac-release: (mac-generate "true")
-    xcodebuild -project {{mac}}/Domovoi.xcodeproj -scheme Domovoi -configuration Release -derivedDataPath {{derived}} \
-      ARCHS="arm64 x86_64" ONLY_ACTIVE_ARCH=NO MARKETING_VERSION={{version}} \
+# Print the Developer ID identity for the configured team, or fail before building.
+[private]
+_mac-client-identity:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    identities=$(security find-identity -v -p codesigning)
+    identity=$(awk -v team="($DEVELOPMENT_TEAM)" \
+      '/"Developer ID Application:/ && index($0, team "\"") && !found++ { print $2 }' <<<"$identities")
+    if [[ -z "$identity" ]]; then
+      echo "mac-release requires a Developer ID Application signing identity for team $DEVELOPMENT_TEAM" >&2
+      exit 1
+    fi
+    echo "$identity"
+
+# Release build (arm64, stripped) of the apps, with a stable Keychain identity for the client
+mac-release: _mac-client-identity _mac-release-generate
+    xcodebuild -project {{mac}}/DomovoiMacRelease.xcodeproj -scheme Domovoi -configuration Release -derivedDataPath {{derived}} \
+      MARKETING_VERSION={{version}} \
       CURRENT_PROJECT_VERSION=$(git rev-list --count HEAD) -skipPackagePluginValidation -quiet build
-    codesign --force --deep --sign - {{derived}}/Build/Products/Release/Domovoi.app
+    identity=$("{{just_executable()}}" --justfile "{{justfile()}}" _mac-client-identity); \
+      codesign --force --sign "$identity" {{derived}}/Build/Products/Release/Domovoi.app; \
+      codesign --verify --deep --strict {{derived}}/Build/Products/Release/Domovoi.app
     @"{{just_executable()}}" --justfile "{{justfile()}}" _mac-register "{{derived}}/Build/Products/Release/Domovoi.app"
-    @"{{just_executable()}}" --justfile "{{justfile()}}" tray-app "{{derived}}/Build/Products/Release" true true
+    @"{{just_executable()}}" --justfile "{{justfile()}}" tray-app "{{derived}}/Build/Products/Release" true aarch64-apple-darwin
     @lipo -archs {{derived}}/Build/Products/Release/Domovoi.app/Contents/MacOS/Domovoi
     @lipo -archs "{{derived}}/Build/Products/Release/Domovoi Server.app/Contents/MacOS/domovoi-server"
 
 # The release apps as dist/Domovoi.app and dist/Domovoi Server.app, a .zip each and one drag-to-Applications .dmg
-mac-package: mac-release
-    rm -rf {{dist}}/Domovoi.app "{{dist}}/Domovoi Server.app" {{dist}}/dmg && mkdir -p {{dist}}/dmg
+mac-package: lfs-check mac-release
+    rm -rf {{dist}}/*.app {{dist}}/*-macos.zip {{dist}}/*-macos.dmg {{dist}}/dmg && mkdir -p {{dist}}/dmg
     ditto {{derived}}/Build/Products/Release/Domovoi.app {{dist}}/Domovoi.app
     ditto "{{derived}}/Build/Products/Release/Domovoi Server.app" "{{dist}}/Domovoi Server.app"
     @"{{just_executable()}}" --justfile "{{justfile()}}" _mac-register {{dist}}/Domovoi.app
@@ -227,6 +279,16 @@ mac-package: mac-release
     {{lsregister}} -u {{dist}}/dmg/Domovoi.app "{{dist}}/dmg/Domovoi Server.app" 2>/dev/null || true
     rm -rf {{dist}}/dmg
     @ls -lh {{dist}}
+    @"{{just_executable()}}" --justfile "{{justfile()}}" size-report
+
+# The Mac apps' executables segment by segment, against their budgets (tools/size-report.py)
+size-report:
+    python3 tools/size-report.py "{{dist}}/Domovoi.app={{client_budget}}" "{{dist}}/Domovoi Server.app={{server_budget}}"
+
+# The server's code by crate: a release build that keeps its symbols, in its own target folder
+size-crates n="30":
+    CARGO_PROFILE_RELEASE_STRIP=none cargo build -q --release -p domovoi-server --target aarch64-apple-darwin --target-dir target/size
+    python3 tools/size-report.py --crates {{n}} target/size/aarch64-apple-darwin/release/domovoi-server
 
 # Tell Launch Services about a freshly built app. xcodebuild rewrites what's
 # inside the bundle but not the bundle folder's date, which is what the icon
@@ -273,9 +335,9 @@ android-ffi release="false":
 # Types and native libraries (run after changing the core)
 android-generate release="false": android-typegen (android-ffi release)
 
-# Android app (debug APK)
-android-build: android-generate
-    cd {{droid}} && JAVA_HOME="{{android_jdk}}" ./gradlew -q :app:assembleDebug
+# Android debug APK. Pass arm64-v8a or x86_64 for a smaller local install.
+android-build abi="all": android-generate
+    cd {{droid}} && JAVA_HOME="{{android_jdk}}" ./gradlew -q :app:assembleDebug -PdomovoiAbi="{{abi}}"
     @echo "{{droid}}/app/build/outputs/apk/debug/app-debug.apk"
 
 # Kotlin unit tests for the shell (effects, store, the core's thread and render coalescing)
@@ -302,18 +364,17 @@ android-pair home=home:
 
 # --- server packaging ---
 
-# Universal release build of domovoi-server in dist/
-server-package:
+# Release build (arm64) of domovoi-server in dist/
+server-package: lfs-check
     cargo build --release -p domovoi-server --target aarch64-apple-darwin
-    cargo build --release -p domovoi-server --target x86_64-apple-darwin
     mkdir -p {{dist}}
-    lipo -create -output {{dist}}/domovoi-server target/aarch64-apple-darwin/release/domovoi-server target/x86_64-apple-darwin/release/domovoi-server
+    cp target/aarch64-apple-darwin/release/domovoi-server {{dist}}/domovoi-server
     codesign --force --sign - {{dist}}/domovoi-server
     tar -C {{dist}} -czf {{dist}}/domovoi-server-{{version}}-macos.tar.gz domovoi-server
     @lipo -archs {{dist}}/domovoi-server
 
 # Headless Linux release build of domovoi-server in dist/ (cross-built with zig, glibc 2.34+; `TARGET=aarch64-unknown-linux-gnu` for ARM)
-server-package-linux:
+server-package-linux: lfs-check
     #!/usr/bin/env bash
     set -euo pipefail
     bin=$(tools/cross/linux.sh)
@@ -342,20 +403,17 @@ linux-logs:
     ssh -t {{linux_host}} 'journalctl --user -u domovoi-server -f -n 100'
 
 # "Domovoi Server.app" in `out`: the server with its status bar icon, as something to double-click (no Dock icon).
-# `release=false` builds debug; `universal=true` gives arm64 and x86_64. The Mac app recipes build it too
-tray-app out=dist release="true" universal="false":
+# `release=false` builds debug; `target` cross-builds (`aarch64-apple-darwin`). The Mac app recipes build it too
+tray-app out=dist release="true" target="":
     #!/usr/bin/env bash
     set -euo pipefail
     profile=debug; flag=
     if [[ "{{release}}" == true ]]; then profile=release; flag=--release; fi
     app="{{out}}/Domovoi Server.app"
     rm -rf "$app" && mkdir -p "$app/Contents/MacOS"
-    if [[ "{{universal}}" == true ]]; then
-      for target in aarch64-apple-darwin x86_64-apple-darwin; do
-        cargo build $flag -p domovoi-server --target $target
-      done
-      lipo -create -output "$app/Contents/MacOS/domovoi-server" \
-        target/aarch64-apple-darwin/$profile/domovoi-server target/x86_64-apple-darwin/$profile/domovoi-server
+    if [[ -n "{{target}}" ]]; then
+      cargo build $flag -p domovoi-server --target {{target}}
+      cp target/{{target}}/$profile/domovoi-server "$app/Contents/MacOS/domovoi-server"
     else
       cargo build $flag -p domovoi-server
       cp target/$profile/domovoi-server "$app/Contents/MacOS/domovoi-server"
@@ -389,10 +447,71 @@ package: mac-package server-package
     cd {{dist}} && shasum -a 256 *.zip *.dmg *.tar.gz > SHA256SUMS
     @cat {{dist}}/SHA256SUMS
 
-# Redraw the app icons (tools/icons.py); `export` also renders PNGs and the server's Windows .ico (needs Xcode 26 and Pillow)
+# Redraw the app icons (tools/icons.py); `export` also renders PNGs and the server's Windows .ico (needs Xcode 26 and Pillow),
+# which are kept in Git LFS
 icons *args:
     python3 tools/icons.py {{args}}
+    @case " {{args}} " in *" export "*) "{{just_executable()}}" --justfile "{{justfile()}}" lfs-check ;; esac
 
 # Remove build products (keeps the Rust cache)
 clean:
-    rm -rf {{dist}} {{derived}} {{mac}}/generated {{mac}}/Domovoi.xcodeproj {{droid}}/shared-types {{droid}}/shared/src/main/kotlin {{droid}}/shared/src/main/jniLibs {{droid}}/app/build {{droid}}/shared/build
+    rm -rf {{dist}} {{derived}} {{mac}}/generated {{mac}}/Domovoi.xcodeproj {{mac}}/DomovoiMacRelease.xcodeproj {{droid}}/shared-types {{droid}}/shared/src/main/kotlin {{droid}}/shared/src/main/jniLibs {{droid}}/app/build {{droid}}/shared/build
+
+# --- Desktop app (Iced: Linux, Windows, macOS) ---
+
+# Run the Iced desktop app (release build)
+desktop:
+    cargo run -p domovoi-iced --release
+
+# Run the Iced desktop app (debug build, quicker compile while iterating)
+desktop-dev:
+    cargo run -p domovoi-iced
+
+# Unit tests and headless Iced UI snapshot flows (snapshots in target/ui-snapshots/)
+desktop-test:
+    cargo test -p domovoi-iced
+
+# Package the Iced desktop app for this OS into dist/: .app/.zip (macOS), .tar.gz with .desktop (Linux), or .exe (Windows)
+desktop-package: lfs-check
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cargo build --release -p domovoi-iced
+    bin=target/release/domovoi-desktop
+    iced=apps/domovoi-iced
+    mkdir -p {{dist}}
+    case "{{os()}}" in
+      macos)
+        app="{{dist}}/Domovoi Desktop.app"
+        rm -rf "$app" && mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+        cp "$bin" "$app/Contents/MacOS/domovoi-desktop"
+        sed -e "s/@VERSION@/{{version}}/" -e "s/@BUILD@/$(git rev-list --count HEAD)/" \
+          "$iced/packaging/macos/Info.plist" > "$app/Contents/Info.plist"
+        if xcrun --find actool >/dev/null 2>&1; then
+          xcrun actool apps/domovoi-apple/Common/AppIcon.icon --compile "$app/Contents/Resources" --platform macosx \
+            --minimum-deployment-target 13.0 --app-icon AppIcon --output-partial-info-plist /dev/null \
+            --errors --output-format human-readable-text >/dev/null
+        fi
+        codesign --force --sign - "$app"
+        @"{{just_executable()}}" --justfile "{{justfile()}}" _mac-register "$app" || true
+        rm -f "{{dist}}/Domovoi-Desktop-{{version}}-macos.zip"
+        ditto -c -k --keepParent "$app" "{{dist}}/Domovoi-Desktop-{{version}}-macos.zip"
+        echo "$app"
+        echo "{{dist}}/Domovoi-Desktop-{{version}}-macos.zip"
+        ;;
+      linux)
+        name="domovoi-desktop-{{version}}-linux-$(uname -m)"
+        stage="{{dist}}/$name"
+        rm -rf "$stage" && mkdir -p "$stage/bin" "$stage/share/applications" "$stage/share/icons/hicolor/256x256/apps"
+        cp "$bin" "$stage/bin/"
+        cp "$iced/packaging/linux/domovoi.desktop" "$stage/share/applications/"
+        cp "$iced/assets/app-icon-256.png" "$stage/share/icons/hicolor/256x256/apps/domovoi.png"
+        install -m 755 "$iced/packaging/linux/install.sh" "$stage/install.sh"
+        tar -C {{dist}} -czf "{{dist}}/$name.tar.gz" "$name"
+        rm -rf "$stage"
+        echo "{{dist}}/$name.tar.gz"
+        ;;
+      windows)
+        cp "$bin.exe" "{{dist}}/domovoi-desktop-{{version}}-windows.exe"
+        echo "{{dist}}/domovoi-desktop-{{version}}-windows.exe"
+        ;;
+    esac

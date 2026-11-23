@@ -64,7 +64,7 @@ out.
 On macOS, `just tray-app` builds `dist/Domovoi Server.app` (no Dock icon) to move to
 /Applications. Building the Mac app builds it too: `just mac-build` puts a debug
 copy beside `Domovoi.app` in `apps/domovoi-apple/build/Build/Products/Debug`, and `just
-mac-package` ships a universal one in `dist/` (its own .zip, and in the .dmg
+mac-package` ships an Apple silicon one in `dist/` (its own .zip, and in the .dmg
 next to `Domovoi.app`). Its executable is `domovoi-server` itself, which starts with
 the icon and without a pairing code when it is an app's executable. A launcher
 script that `exec`s the server would not do: macOS 26 then hides the icon.
@@ -156,7 +156,16 @@ wait for approval:
 domovoi-server --apns-key AuthKey_XXXX.p8 --apns-key-id XXXX --apns-team-id YYYY [--apns-private-alerts]
 ```
 
-`--apns-private-alerts` keeps thread titles away from Apple. The same settings
+The same key keeps the iPhone's Live Activities current while the app sleeps:
+the step under way (a command, a file, a tool), the turn's to-do progress, what
+an approval or a question asks, and how the turn came out (how long it took, the
+start of its answer or its error). A change of status is pushed at once;
+progress alone at most every 15 seconds, at a priority that does not use up
+the activity's budget.
+
+`--apns-private-alerts` keeps thread titles away from Apple, and Live
+Activities then say only what kind of step runs and how far the to-do list has
+got, never what a command, file, question or answer says. The same settings
 can live in `<home>/push.json` (`keyPath`, `keyId`, `teamId`, `topic`,
 `privateAlerts`). The topic defaults to the iPhone app's bundle id,
 `com.crayen.domovoi`.

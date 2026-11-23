@@ -5,9 +5,14 @@ import SwiftUI
 struct ThreadView: View {
     @ObservedObject var core: Core
     @State private var confirmDelete = false
+    @State private var artifacts = false
+    @State private var progress = false
+    @State private var artifactJump: String?
     /// The thread the delete dialog was opened for: the selection can move
     /// while it is up (a notification, a fork), and must not take the delete.
     @State private var deletingId: String?
+    /// A scheduled task for the open thread, being set up.
+    @State private var scheduling: ScheduledTaskEdit?
 
     /// Reads only the thread's header: the rows (which change on every
     /// streamed token) are read by `ThreadContent`, so the title, toolbar
@@ -18,7 +23,21 @@ struct ThreadView: View {
         #endif
         let header = core.view.header
         VStack(spacing: 0) {
-            if header != nil { ThreadContent(core: core) }
+            if header != nil { ThreadContent(core: core, artifactJump: artifactJump) }
+            ForEach(header?.waitingChildren ?? [], id: \.threadId) { child in
+                WaitingChildBanner(child: child) { core.update(.selectThread(threadId: $0)) }
+                    .padding(.horizontal, Space.gutter)
+                    .padding(.top, Space.xs)
+                    .frame(maxWidth: Space.column)
+                    .frame(maxWidth: .infinity)
+            }
+            if let header, header.plan != nil || header.tasks != nil {
+                WorkProgressStrip(plan: header.plan, tasks: header.tasks) { progress = true }
+                    .padding(.horizontal, Space.gutter)
+                    .padding(.top, Space.xs)
+                    .frame(maxWidth: Space.column)
+                    .frame(maxWidth: .infinity)
+            }
             ComposerPane(core: core)
         }
         .navigationTitle(header.map { $0.title.isEmpty ? "New Thread" : $0.title } ?? "Thread")
@@ -26,8 +45,27 @@ struct ThreadView: View {
         .toolbar {
             if let thread = header {
                 ToolbarItem { PlanBadge(core: core) }
-                if let context = thread.context {
-                    ToolbarItem { ContextMeter(context: context, showsLabel: true).padding(.horizontal, Space.xs) }
+                ToolbarItem { ScriptsToolbarButton(core: core) }
+                ToolbarItem {
+                    Button {
+                        core.update(.showPanel(tab: "artifacts"))
+                    } label: {
+                        HStack(spacing: Space.xxs) {
+                            Image(systemName: "sparkles.rectangle.stack")
+                            if thread.artifactCount > 0 {
+                                Text("\(thread.artifactCount)")
+                                    .font(.caption2.monospacedDigit().weight(.semibold))
+                            }
+                        }
+                    }
+                    .help("Artifacts (⌘⇧A)")
+                    .accessibilityLabel(thread.artifactCount > 0 ? "Artifacts (\(thread.artifactCount))" : "Artifacts")
+                }
+                if let usage = thread.usage {
+                    ToolbarItem {
+                        UsageMeter(usage: usage, showsLabel: true, compact: { core.update(.compact) }, showAll: { core.update(.showRoute(route: "usage")) })
+                            .padding(.horizontal, Space.xs)
+                    }
                 }
                 ToolbarItemGroup {
                     Menu {
@@ -51,6 +89,14 @@ struct ThreadView: View {
                             Button("Reveal Working Folder") { NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: thread.cwd) }
                         }
                         Button("Copy Thread ID") { Platform.copy(thread.id) }
+                        Button("Schedule This Thread…") {
+                            guard let page = core.view.thread, page.id == thread.id else { return }
+                            core.update(.loadSettings(section: "scheduled"))
+                            scheduling = ScheduledTaskEditor.new(thread: page)
+                        }
+                        .disabled(thread.archived)
+                        Button("Forget Allowed Tools") { core.update(.forgetThreadPermissions(threadId: thread.id)) }
+                            .help("The tools “Allow for Thread” allowed here are asked about again from the agent’s next start")
                         Divider()
                         Button("Delete Thread…", role: .destructive) {
                             deletingId = thread.id
@@ -62,6 +108,31 @@ struct ThreadView: View {
                 }
             }
         }
+        .sheet(isPresented: $artifacts) {
+            if let page = core.view.thread {
+                ArtifactGallery(core: core, thread: page, close: { artifacts = false }) { item in
+                    core.update(.closeFind)
+                    artifactJump = item
+                    artifacts = false
+                }
+                .id(page.id)
+            }
+        }
+        .sheet(item: $scheduling) { draft in
+            NavigationStack {
+                ScheduledTaskEditor(core: core, draft: draft) { scheduling = nil }
+                    .navigationTitle("Schedule Thread")
+            }
+            .frame(minWidth: 520, minHeight: 560)
+        }
+        .sheet(isPresented: $progress) {
+            if let header {
+                WorkProgressPanel(core: core, threadID: header.id) { progress = false }
+            }
+        }
+        .onChange(of: header?.id) { artifacts = false; progress = false; artifactJump = nil }
+        .animation(.snappy, value: header?.tasks == nil && header?.plan == nil)
+        .animation(.snappy, value: header?.waitingChildren.map(\.threadId))
         .confirmationDialog("Delete this thread?", isPresented: $confirmDelete, titleVisibility: .visible) {
             Button("Delete Thread", role: .destructive) {
                 if let id = deletingId { core.update(.deleteThread(threadId: id)) }
@@ -76,6 +147,7 @@ struct ThreadView: View {
 /// thread view that follows its rows.
 private struct ThreadContent: View {
     @ObservedObject var core: Core
+    let artifactJump: String?
 
     var body: some View {
         if let thread = core.view.thread {
@@ -85,7 +157,7 @@ private struct ThreadContent: View {
             }
             // One per thread: another thread starts at its own end (or where
             // it was read), not with this one's scroll state.
-            Transcript(core: core, thread: thread)
+            Transcript(core: core, thread: thread, artifactJump: artifactJump)
                 .id(thread.id)
             ApprovalArea(core: core)
         }
@@ -160,12 +232,8 @@ struct NewThreadView: View {
         VStack(spacing: 0) {
             Spacer()
             VStack(spacing: Space.m) {
-                if let project, !project.isScratch {
-                    Text(project.monogram)
-                        .font(.system(size: 20, weight: .bold))
-                        .frame(width: 52, height: 52)
-                        .background(Color.accentColor.opacity(0.18), in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
-                        .foregroundStyle(.tint)
+                if let project {
+                    ProjectIconTile(icon: project.icon, size: 52, core: core)
                 } else {
                     Image(systemName: "bubble.left.and.text.bubble.right")
                         .font(.system(size: 32))

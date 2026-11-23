@@ -7,6 +7,8 @@ version = "0.1.0"
 output = "../domovoi-apple/generated/Shared"
 include_macos = true
 include_ios = true
+# The Mac app is arm64 only (no Intel slice).
+macos_architectures = ["arm64"]
 
 [targets.apple.swift]
 module_name = "Shared"

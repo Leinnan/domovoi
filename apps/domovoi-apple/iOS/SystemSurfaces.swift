@@ -11,6 +11,8 @@ final class SystemSurfaces {
     static let shared = SystemSurfaces()
     /// Activities whose push tokens are being watched.
     private var watching: Set<String> = []
+    /// Activities about to be ended here (by id).
+    private var ending: Set<String> = []
     private var lastSnapshot: [WidgetSnapshot.Thread] = []
     private var lastServer = ""
     private var lastProjects: [WidgetSnapshot.Project] = []
@@ -46,25 +48,51 @@ final class SystemSurfaces {
                     var state = activity.content.state
                     state.status = "idle"
                     state.detail = "No longer in the list"
+                    let gone = ActivityContent(state: state, staleDate: nil)
                     nonisolated(unsafe) let handle = activity
-                    Task { await handle.end(ActivityContent(state: state, staleDate: nil), dismissalPolicy: .immediate) }
+                    Task { await handle.end(gone, dismissalPolicy: .immediate) }
                 }
                 continue
             }
             var state = activity.content.state
             if ["working", "approval"].contains(row.status) {
-                guard state.status != row.status else { continue }
-                state.status = row.status
-                state.detail = row.status == "approval" ? "Needs your approval" : ""
+                // A new turn: an end waited for is not wanted any more.
+                ending.remove(activity.id)
+                let request = row.status == "approval" ? (row.question ? "question" : "approval") : nil
+                guard state.status != row.status || state.request != request else { continue }
+                // The server's pushes say what the turn does; here only its
+                // status moves, so a push arriving later is not undone.
+                let fresh = AgentActivityAttributes.ContentState.starting(status: row.status, question: row.question, startedAtMs: state.startedAtMs)
+                state.status = fresh.status
+                state.detail = fresh.detail
+                state.request = fresh.request
+                if row.workingSinceMs > 0 { state.startedAtMs = Double(row.workingSinceMs) }
                 // ActivityKit's handle isn't Sendable; it is only used here.
+                let updated = ActivityContent(state: state, staleDate: Self.staleDate())
                 nonisolated(unsafe) let handle = activity
-                Task { await handle.update(ActivityContent(state: state, staleDate: nil)) }
+                Task { await handle.update(updated) }
             } else {
                 // The turn is over: the activity says how, then leaves.
                 state.status = row.status
-                state.detail = row.status == "failed" ? "Failed" : "Finished"
+                state.detail = switch row.status {
+                case "failed": "Failed"
+                case "interrupted": "Stopped"
+                default: "Finished"
+                }
+                state.request = nil
+                state.endedAtMs = state.endedAtMs ?? Date.now.timeIntervalSince1970 * 1000
+                let ended = ActivityContent(state: state, staleDate: nil)
                 nonisolated(unsafe) let handle = activity
-                Task { await handle.end(ActivityContent(state: state, staleDate: nil), dismissalPolicy: .after(.now.addingTimeInterval(15 * 60))) }
+                // A server that pushes ends the activity itself, with how the
+                // turn came out (its answer, its error): that end is waited
+                // for a while, this one only stands in if it never comes.
+                let wait: Duration = core.view.settings.remote.pushConfigured ? .seconds(30) : .zero
+                guard ending.insert(activity.id).inserted else { continue }
+                Task { [weak self] in
+                    try? await Task.sleep(for: wait)
+                    guard let self, self.ending.remove(handle.id) != nil, handle.activityState == .active else { return }
+                    await handle.end(ended, dismissalPolicy: .after(.now.addingTimeInterval(15 * 60)))
+                }
             }
         }
 
@@ -81,10 +109,14 @@ final class SystemSurfaces {
         for (project, row) in live where !running.contains(row.id) {
             guard count < Self.maxActivities else { break }
             count += 1
-            let attributes = AgentActivityAttributes(threadId: row.id, title: row.title, project: project, serverId: Self.serverId(core))
-            let state = AgentActivityAttributes.ContentState(status: row.status, detail: row.status == "approval" ? "Needs your approval" : "", startedAtMs: Date.now.timeIntervalSince1970 * 1000)
+            let attributes = AgentActivityAttributes(
+                threadId: row.id, title: row.title, project: project, serverId: Self.serverId(core),
+                model: row.modelLabel.isEmpty ? nil : row.modelLabel, branch: row.branch
+            )
+            let started = row.workingSinceMs > 0 ? Double(row.workingSinceMs) : Date.now.timeIntervalSince1970 * 1000
+            let state = AgentActivityAttributes.ContentState.starting(status: row.status, question: row.question, startedAtMs: started)
             do {
-                let activity = try Activity.request(attributes: attributes, content: ActivityContent(state: state, staleDate: nil), pushType: .token)
+                let activity = try Activity.request(attributes: attributes, content: ActivityContent(state: state, staleDate: Self.staleDate()), pushType: .token)
                 watch(activity, core: core)
             } catch {
                 print("live activity: \(error.localizedDescription)")
@@ -93,6 +125,10 @@ final class SystemSurfaces {
         // Activities from an earlier launch keep sending their tokens.
         for activity in current where !watching.contains(activity.id) { watch(activity, core: core) }
     }
+
+    /// When an activity nothing has updated says it may be out of date (the
+    /// server's pushes move it on as they come).
+    private static func staleDate() -> Date { .now.addingTimeInterval(30 * 60) }
 
     private func watch(_ activity: Activity<AgentActivityAttributes>, core: Core) {
         guard watching.insert(activity.id).inserted else { return }
@@ -164,7 +200,7 @@ struct SystemSurfacesSync: ViewModifier {
     @ObservedObject var core: Core
 
     private var signature: [String] {
-        [core.view.connection.environmentLabel] + core.view.sidebar.pickableRows.map { "\($0.id)|\($0.status)|\($0.unread)|\($0.title)" }
+        [core.view.connection.environmentLabel] + core.view.sidebar.pickableRows.map { "\($0.id)|\($0.status)|\($0.question)|\($0.unread)|\($0.title)" }
     }
 
     func body(content: Content) -> some View {

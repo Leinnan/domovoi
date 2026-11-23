@@ -2,6 +2,8 @@
 //! `ProviderInstallation`, `subscribeChatGptHandoff` and the
 //! `provider.uploadFeedback` / `provider.consumeResetCredit` handlers.
 //!
+//! Antigravity instances sign in here (`crate::antigravity::auth`).
+//!
 //! Domovoi runs the plain Codex and Claude drivers. In t3code those drivers have no
 //! sign-in controller (sign-in happens in the CLIs) and only Codex in managed
 //! setup mode has a managed installation, so the auth methods answer with
@@ -62,8 +64,12 @@ async fn instance(ctx: &ConnCtx, id: &str) -> Option<Instance> {
     })
 }
 
-/// `ProviderAuthService.getController`: neither driver has a sign-in controller.
+/// `ProviderAuthService.getController`: neither driver has a sign-in
+/// controller; Antigravity's takes no other operations.
 async fn auth_controller(ctx: &ConnCtx, id: &str, operation: &'static str) -> Failure {
+    if crate::antigravity::is_instance(id) {
+        return Failure::setup(id, operation, "Antigravity's sign-in does not support this operation.");
+    }
     let detail = if instance(ctx, id).await.is_some() {
         "This provider does not support sign-in in T3 Code."
     } else {
@@ -137,6 +143,23 @@ async fn idle_install_state(ctx: &ConnCtx) -> InstallState {
         can_remove: false,
         message: None,
     }
+}
+
+/// An install state of either driver that has one.
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+enum AnyInstall {
+    Codex(InstallState),
+    Antigravity(crate::antigravity::install::InstallState),
+}
+
+/// `ProviderInstallCancelInput`.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CancelInstallInput {
+    instance_id: String,
+    #[serde(default)]
+    operation_id: String,
 }
 
 /// A stream that fails at once.
@@ -237,6 +260,23 @@ async fn upload_feedback(ctx: Arc<ConnCtx>, input: FeedbackInput) -> Result<Feed
     }
 }
 
+/// `ProviderAuthCompleteInput`, `ProviderAuthCancelInput` (and the instance of any other).
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FlowInput {
+    instance_id: String,
+    #[serde(default)]
+    flow_id: String,
+    #[serde(default)]
+    callback_url: String,
+}
+
+/// The sign-in controller of an Antigravity instance (the only driver here
+/// with one): `None` for any other instance.
+fn antigravity(id: &str) -> Option<&str> {
+    crate::antigravity::is_instance(id).then_some(id)
+}
+
 pub fn register(r: Router<ConnCtx>) -> Router<ConnCtx> {
     let r = r
         .unary("provider.consumeResetCredit", consume_reset_credit)
@@ -245,16 +285,40 @@ pub fn register(r: Router<ConnCtx>) -> Router<ConnCtx> {
             failing_stream(Failure::setup(&input.instance_id, "start", "ChatGPT sign-in handoff is not available on this server."))
         })
         .stream("provider.auth.subscribe", |ctx: Arc<ConnCtx>, input: InstanceInput| {
-            futures::stream::once(async move { Err::<Never, _>(auth_controller(&ctx, &input.instance_id, "subscribe").await) }).boxed()
+            if let Some(id) = antigravity(&input.instance_id) {
+                return crate::antigravity::auth::subscribe(id, ctx.session.token_hash.clone()).map(Ok::<_, Failure>).boxed();
+            }
+            futures::stream::once(async move { Err(auth_controller(&ctx, &input.instance_id, "subscribe").await) }).boxed()
+        })
+        .unary("provider.auth.start", |ctx: Arc<ConnCtx>, input: InstanceInput| async move {
+            match antigravity(&input.instance_id) {
+                Some(id) => crate::antigravity::auth::start(id, &ctx.session.token_hash).await,
+                None => Err(auth_controller(&ctx, &input.instance_id, "start").await),
+            }
+        })
+        .unary("provider.auth.complete", |ctx: Arc<ConnCtx>, input: FlowInput| async move {
+            match antigravity(&input.instance_id) {
+                Some(id) => crate::antigravity::auth::complete(id, &ctx.session.token_hash, &input.flow_id, &input.callback_url).await,
+                None => Err(auth_controller(&ctx, &input.instance_id, "complete").await),
+            }
+        })
+        .unary("provider.auth.cancel", |ctx: Arc<ConnCtx>, input: FlowInput| async move {
+            match antigravity(&input.instance_id) {
+                Some(id) => crate::antigravity::auth::cancel(id, &ctx.session.token_hash, &input.flow_id).await,
+                None => Err(auth_controller(&ctx, &input.instance_id, "cancel").await),
+            }
+        })
+        .unary("provider.auth.logout", |ctx: Arc<ConnCtx>, input: InstanceInput| async move {
+            match antigravity(&input.instance_id) {
+                Some(id) => crate::antigravity::auth::logout(id).await,
+                None => Err(auth_controller(&ctx, &input.instance_id, "logout").await),
+            }
         });
-    // Every other sign-in operation fails at the controller lookup.
+    // Every other sign-in operation fails at the controller lookup (or, for
+    // Antigravity, takes nothing its sign-in asks).
     let auth_ops = [
-        ("provider.auth.start", "start"),
-        ("provider.auth.complete", "complete"),
         ("provider.auth.respond", "respond"),
-        ("provider.auth.cancel", "cancel"),
         ("provider.auth.removeMethod", "removeMethod"),
-        ("provider.auth.logout", "logout"),
         ("provider.chatgpt.reconnect-profile", "export"),
         ("provider.chatgpt.import-profile", "import"),
     ];
@@ -264,24 +328,36 @@ pub fn register(r: Router<ConnCtx>) -> Router<ConnCtx> {
         })
     });
     r.unary("provider.install.start", |ctx: Arc<ConnCtx>, input: InstanceInput| async move {
+        if let Some(id) = antigravity(&input.instance_id) {
+            return crate::antigravity::install::start(id).await.map(AnyInstall::Antigravity);
+        }
         managed_codex(&ctx, &input.instance_id, "install", true).await?;
-        Err::<Never, _>(Failure::setup(&input.instance_id, "install", "Managed Codex installation is not available on this server."))
+        Err(Failure::setup(&input.instance_id, "install", "Managed Codex installation is not available on this server."))
     })
     .unary("provider.install.remove", |ctx: Arc<ConnCtx>, input: InstanceInput| async move {
+        if let Some(id) = antigravity(&input.instance_id) {
+            return crate::antigravity::install::remove(id).map(AnyInstall::Antigravity);
+        }
         managed_codex(&ctx, &input.instance_id, "remove-install", true).await?;
-        Err::<Never, _>(Failure::setup(&input.instance_id, "remove-install", "There is no managed Codex installation to remove."))
+        Err(Failure::setup(&input.instance_id, "remove-install", "There is no managed Codex installation to remove."))
     })
-    .unary("provider.install.cancel", |ctx: Arc<ConnCtx>, input: InstanceInput| async move {
+    .unary("provider.install.cancel", |ctx: Arc<ConnCtx>, input: CancelInstallInput| async move {
+        if let Some(id) = antigravity(&input.instance_id) {
+            return crate::antigravity::install::cancel(id, &input.operation_id).map(AnyInstall::Antigravity);
+        }
         managed_codex(&ctx, &input.instance_id, "cancel-install", false).await?;
         // Nothing is ever installing, so there is nothing to cancel.
-        Ok::<_, Failure>(idle_install_state(&ctx).await)
+        Ok::<_, Failure>(AnyInstall::Codex(idle_install_state(&ctx).await))
     })
     .stream("provider.install.subscribe", |ctx: Arc<ConnCtx>, input: InstanceInput| {
+        if antigravity(&input.instance_id).is_some() {
+            return crate::antigravity::install::subscribe().map(|s| Ok::<_, Failure>(AnyInstall::Antigravity(s))).boxed();
+        }
         async_stream::stream! {
             match managed_codex(&ctx, &input.instance_id, "observe-install", false).await {
                 Err(e) => yield Err(e),
                 Ok(_) => {
-                    yield Ok(idle_install_state(&ctx).await);
+                    yield Ok(AnyInstall::Codex(idle_install_state(&ctx).await));
                     futures::future::pending::<()>().await;
                 }
             }

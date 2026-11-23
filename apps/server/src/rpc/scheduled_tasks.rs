@@ -93,6 +93,21 @@ fn subscribe(ctx: Arc<ConnCtx>) -> BoxStream<'static, Result<ScheduledTaskList, 
     .boxed()
 }
 
+/// `scheduledTasks.listRuns`: one task's runs, or every task's latest.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RunsInput {
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    limit: Option<u32>,
+}
+
+#[derive(Serialize)]
+struct Runs {
+    runs: Vec<tasks::TaskRun>,
+}
+
 pub fn register(r: Router<ConnCtx>) -> Router<ConnCtx> {
     r.stream("scheduledTasks.subscribe", |ctx: Arc<ConnCtx>, _input: IgnoredAny| subscribe(ctx))
         .unary("scheduledTasks.upsert", |ctx: Arc<ConnCtx>, input: UpsertInput| async move {
@@ -128,6 +143,11 @@ pub fn register(r: Router<ConnCtx>) -> Router<ConnCtx> {
         .unary("scheduledTasks.listWebhookDeliveries", |ctx: Arc<ConnCtx>, input: DeliveriesInput| async move {
             let deliveries = crate::webhooks::list(&ctx.state.store, &input.id, input.accept_any_outcome == Some(true))?;
             Ok::<_, ScheduledTaskError>(Deliveries { deliveries })
+        })
+        // Domovoi's own: t3code keeps only a task's last run.
+        .unary("scheduledTasks.listRuns", |ctx: Arc<ConnCtx>, input: RunsInput| async move {
+            let runs = tasks::list_runs(&ctx.state.store, input.id.as_deref(), input.limit.unwrap_or(50).clamp(1, 50))?;
+            Ok::<_, ScheduledTaskError>(Runs { runs })
         })
         .unary("scheduledTasks.getWebhookDelivery", |ctx: Arc<ConnCtx>, input: DeliveriesInput| async move {
             let id = input.delivery_id.as_deref().unwrap_or_default();

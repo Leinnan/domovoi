@@ -3,8 +3,8 @@ import Speech
 import SwiftUI
 
 /// Dictation into the composer with Apple's speech recognition, on the
-/// iPhone when it can (nothing leaves the device then). `start` hands each
-/// growing transcript to `onText`; `stop` ends it.
+/// device when it can (nothing leaves it then). `start` hands each growing
+/// transcript to `onText`; `stop` ends it.
 @MainActor
 final class Dictation: ObservableObject {
     @Published private(set) var listening = false
@@ -94,9 +94,12 @@ private final class SpeechSession: @unchecked Sendable {
     }
 
     func start(onText: @escaping @Sendable (String) -> Void, onEnd: @escaping @Sendable (String?) -> Void) throws {
+        // The Mac has no audio session: the engine takes the input as is.
+        #if os(iOS)
         let audio = AVAudioSession.sharedInstance()
         try audio.setCategory(.record, mode: .measurement, options: .duckOthers)
         try audio.setActive(true, options: .notifyOthersOnDeactivation)
+        #endif
         request.shouldReportPartialResults = true
         request.addsPunctuation = true
         if recognizer.supportsOnDeviceRecognition { request.requiresOnDeviceRecognition = true }
@@ -141,6 +144,8 @@ private final class SpeechSession: @unchecked Sendable {
         engine.inputNode.removeTap(onBus: 0)
         request.endAudio()
         task?.finish()
+        #if os(iOS)
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        #endif
     }
 }

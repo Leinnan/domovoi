@@ -7,6 +7,7 @@
 // DOMOVOI_SMOKE_MAX_STALL_MS=<ms> fails the run if the main thread stalls longer.
 import App
 import Foundation
+import ImageIO
 
 /// How long the main thread goes without running: a timer on another queue
 /// posts to the main queue every 2 ms and records how late each post runs.
@@ -147,6 +148,23 @@ func run() async -> Int32 {
     if let file = core.view.panel.files.entries.first(where: { !$0.directory }) {
         core.update(.openFile(path: file.path))
         expect(await check("file preview opens \(file.path)", 10, { core.view.panel.files.preview.map { !$0.loading } ?? false }))
+    }
+    // Images when the workspace is this repository: an SVG (drawn as PNG by
+    // the server) and a PNG kept in Git LFS.
+    for image in ["apps/domovoi-apple/Common/AppIcon.icon/Assets/eyes.svg", "apps/domovoi-iced/assets/app-icon-256.png"] {
+        core.update(.openFile(path: image))
+        _ = await waitFor(10, { core.view.panel.files.preview.map { $0.path == image && !$0.loading } ?? false })
+        guard let preview = core.view.panel.files.preview, preview.path == image, preview.error == nil else {
+            print("  image preview skipped: \(core.view.panel.files.preview?.error ?? "no \(image) in this workspace")")
+            continue
+        }
+        expect(await check("image preview of \(image) has a URL", 1, { preview.imageUrl != nil }))
+        if let address = preview.imageUrl, let url = URL(string: address), url.scheme?.hasPrefix("http") == true {
+            let data = try? await URLSession.shared.data(from: url).0
+            let decoded = data.flatMap { CGImageSourceCreateWithData($0 as CFData, nil) }
+                .flatMap { CGImageSourceCreateImageAtIndex($0, 0, nil) }
+            expect(await check("image preview loads (\(data?.count ?? 0) bytes)", 1, { decoded != nil }))
+        }
     }
 
     core.update(.showPanel(tab: "git"))

@@ -3,6 +3,11 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
+val domovoiAbi = providers.gradleProperty("domovoiAbi").orNull?.takeUnless { it == "all" }
+require(domovoiAbi == null || domovoiAbi in setOf("arm64-v8a", "x86_64")) {
+    "domovoiAbi must be all, arm64-v8a, or x86_64"
+}
+
 android {
     namespace = "com.crayen.domovoi"
     compileSdk = 37
@@ -14,6 +19,7 @@ android {
         targetSdk = 36
         versionCode = 1
         versionName = "0.1.0"
+        if (domovoiAbi != null) ndk.abiFilters.add(domovoiAbi)
     }
 
     buildTypes {

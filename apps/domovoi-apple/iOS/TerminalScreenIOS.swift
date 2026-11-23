@@ -18,6 +18,10 @@ struct TerminalScreenIOS: View {
 
     private var terminal: TerminalPanelView { core.view.panel.terminal }
 
+    /// The screen's margin inside its frame: the text, the cursor and the
+    /// rows and columns that fit all count from it.
+    private let inset = Space.tight
+
     private var font: UIFont { UIFont.monospacedSystemFont(ofSize: fontSize, weight: .regular) }
     private var cell: CGSize {
         let size = ("M" as NSString).size(withAttributes: [.font: font])
@@ -28,22 +32,24 @@ struct TerminalScreenIOS: View {
         VStack(spacing: 0) {
             if terminal.tabs.count > 1 {
                 ScrollView(.horizontal, showsIndicators: false) {
-                    HStack {
+                    HStack(spacing: Space.s) {
                         ForEach(terminal.tabs, id: \.id) { tab in
                             Button { core.update(.selectTerminal(terminalId: tab.id)) } label: {
-                                HStack(spacing: 4) {
-                                    Circle().fill(tab.running ? Color.green : Color.secondary).frame(width: 6, height: 6)
+                                HStack(spacing: Space.xs) {
+                                    Circle().fill(tab.running ? Tint.success : Color.secondary).frame(width: Size.dot, height: Size.dot)
                                     Text(tab.label)
                                 }
-                                .font(.caption)
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 5)
-                                .background(tab.active ? Color.accentColor.opacity(0.2) : Color.clear, in: Capsule())
+                                .font(TypeRole.meta)
+                                .padding(.horizontal, Space.m)
+                                .frame(minHeight: Size.chip)
+                                .glassChip(selected: tab.active)
+                                .contentShape(Capsule())
                             }
                             .buttonStyle(.plain)
+                            .accessibilityAddTraits(tab.active ? .isSelected : [])
                         }
                     }
-                    .padding(8)
+                    .padding(Space.s)
                 }
                 Divider()
             }
@@ -59,12 +65,12 @@ struct TerminalScreenIOS: View {
                                     .fixedSize()
                             }
                         }
-                        .padding(6)
+                        .padding(inset)
                         if screen.cursorVisible {
                             Rectangle()
                                 .fill(Color.accentColor.opacity(typing ? 0.7 : 0.35))
                                 .frame(width: cell.width, height: cell.height)
-                                .offset(x: 6 + CGFloat(screen.cursorCol) * cell.width, y: 6 + CGFloat(screen.cursorRow) * cell.height)
+                                .offset(x: inset + CGFloat(screen.cursorCol) * cell.width, y: inset + CGFloat(screen.cursorRow) * cell.height)
                         }
                         TerminalKeyInput(active: $typing, cellHeight: cell.height) { key, text, ctrl, alt in
                             core.update(.terminalKey(key: key, text: text, ctrl: ctrl, alt: alt))
@@ -80,9 +86,9 @@ struct TerminalScreenIOS: View {
                                 core.update(.terminalScroll(lines: -Int32(screen.scrollbackOffset)))
                             } label: {
                                 Label("\(screen.scrollbackOffset) lines back", systemImage: "arrow.down.to.line")
-                                    .font(.caption.weight(.medium))
+                                    .font(TypeRole.meta.weight(.medium))
                                     .padding(.horizontal, Space.m)
-                                    .padding(.vertical, Space.tight)
+                                    .frame(minHeight: Size.chip)
                                     .glassChip()
                             }
                             .buttonStyle(.plain)
@@ -91,16 +97,17 @@ struct TerminalScreenIOS: View {
                             .accessibilityLabel("Back to the live screen")
                         }
                         if screen.exited {
+                            // A chip like the tabs and the way back down.
                             HStack(spacing: Space.s) {
-                                Text("Process exited").font(.caption)
+                                Text("Process exited").font(TypeRole.meta)
                                 Button("New Terminal") { core.update(.newTerminal) }
-                                    .font(.caption.weight(.semibold))
+                                    .font(TypeRole.meta.weight(.semibold))
                                     .buttonStyle(.borderless)
                             }
                             .padding(.horizontal, Space.m)
-                            .padding(.vertical, Space.tight)
-                            .background(.regularMaterial, in: Capsule())
-                            .padding(8)
+                            .frame(minHeight: Size.chip)
+                            .glassChip()
+                            .padding(Space.s)
                             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
                         }
                     }
@@ -147,8 +154,8 @@ struct TerminalScreenIOS: View {
     private func resize(_ size: CGSize, _ screen: TerminalScreenView) {
         // A size mid-layout can be infinite or NaN, which a UInt32 can't hold.
         guard size.width.isFinite, size.height.isFinite else { return }
-        let cols = UInt32(min(max(20, (size.width - 12) / cell.width), 1000))
-        let rows = UInt32(min(max(4, (size.height - 12) / cell.height), 500))
+        let cols = UInt32(min(max(20, (size.width - 2 * inset) / cell.width), 1000))
+        let rows = UInt32(min(max(4, (size.height - 2 * inset) / cell.height), 500))
         if cols != screen.cols || rows != screen.rows {
             core.update(.terminalResize(rows: rows, cols: cols))
         }
@@ -337,16 +344,17 @@ struct TerminalKeyInput: UIViewRepresentable {
             ("⎘", "paste", "Paste"),
         ]
 
-        /// Scrolls sideways when the keys don't all fit; 44 points tall, with
-        /// text that follows the user's size.
+        /// Scrolls sideways when the keys don't all fit; keys a tap target
+        /// tall, with text that follows the user's size.
         private lazy var accessoryBar: UIView = {
-            let container = UIInputView(frame: CGRect(x: 0, y: 0, width: 320, height: 52), inputViewStyle: .keyboard)
+            let margin = Space.xs
+            let container = UIInputView(frame: CGRect(x: 0, y: 0, width: 320, height: Size.tap + 2 * margin), inputViewStyle: .keyboard)
             let scroll = UIScrollView()
             scroll.showsHorizontalScrollIndicator = false
             scroll.translatesAutoresizingMaskIntoConstraints = false
             let bar = UIStackView()
             bar.axis = .horizontal
-            bar.spacing = 6
+            bar.spacing = Space.tight
             bar.translatesAutoresizingMaskIntoConstraints = false
             let font = UIFontMetrics(forTextStyle: .body).scaledFont(for: .monospacedSystemFont(ofSize: 15, weight: .medium), maximumPointSize: 22)
             for (title, name, spoken) in Self.keys {
@@ -355,11 +363,11 @@ struct TerminalKeyInput: UIViewRepresentable {
                 button.titleLabel?.font = font
                 button.titleLabel?.adjustsFontForContentSizeCategory = true
                 button.backgroundColor = .tertiarySystemBackground
-                button.layer.cornerRadius = 8
+                button.layer.cornerRadius = Radius.chip
                 button.accessibilityLabel = spoken
                 button.addAction(UIAction { [weak self] _ in self?.press(name) }, for: .touchUpInside)
-                button.widthAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true
-                button.contentEdgeInsets = UIEdgeInsets(top: 0, left: 10, bottom: 0, right: 10)
+                button.widthAnchor.constraint(greaterThanOrEqualToConstant: Size.tap).isActive = true
+                button.contentEdgeInsets = UIEdgeInsets(top: 0, left: Space.m, bottom: 0, right: Space.m)
                 if name == "ctrl" { ctrlButton = button }
                 bar.addArrangedSubview(button)
             }
@@ -370,12 +378,12 @@ struct TerminalKeyInput: UIViewRepresentable {
                 scroll.trailingAnchor.constraint(equalTo: container.trailingAnchor),
                 scroll.topAnchor.constraint(equalTo: container.topAnchor),
                 scroll.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-                bar.leadingAnchor.constraint(equalTo: scroll.contentLayoutGuide.leadingAnchor, constant: 6),
-                bar.trailingAnchor.constraint(equalTo: scroll.contentLayoutGuide.trailingAnchor, constant: -6),
-                bar.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor, constant: 4),
-                bar.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor, constant: -4),
-                bar.heightAnchor.constraint(equalTo: scroll.frameLayoutGuide.heightAnchor, constant: -8),
-                bar.heightAnchor.constraint(greaterThanOrEqualToConstant: 44),
+                bar.leadingAnchor.constraint(equalTo: scroll.contentLayoutGuide.leadingAnchor, constant: Space.tight),
+                bar.trailingAnchor.constraint(equalTo: scroll.contentLayoutGuide.trailingAnchor, constant: -Space.tight),
+                bar.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor, constant: margin),
+                bar.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor, constant: -margin),
+                bar.heightAnchor.constraint(equalTo: scroll.frameLayoutGuide.heightAnchor, constant: -2 * margin),
+                bar.heightAnchor.constraint(greaterThanOrEqualToConstant: Size.tap),
             ])
             return container
         }()

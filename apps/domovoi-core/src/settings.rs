@@ -73,8 +73,11 @@ plain_settings! {
         "continueThreadsAfterServerUpdate" => continue_threads_after_server_update,
         "removeAgentCreditsOnMerge" => remove_agent_credits_on_merge,
         "reviewGuidesEnabled" => review_guides_enabled,
+        "autoResumeLimitedThreads" => auto_resume_limited_threads,
+        "snoozeLimitedThreads" => snooze_limited_threads,
     }
     texts {
+        "threadTitleInstructions" => thread_title_instructions,
         "worktreesDirectory" => worktrees_directory,
         "branchNamePrefix" => branch_name_prefix,
         "addProjectBaseDirectory" => add_project_base_directory,

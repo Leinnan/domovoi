@@ -15,8 +15,8 @@ use std::sync::Arc;
 use domovoi_contracts::shell::ProjectShell;
 use domovoi_model::typed::command::ThreadProjectAdoptFolder;
 use domovoi_model::typed::{
-    AppThread, LucideProjectIcon, ProjectCreateFromThreadResult, ProjectCreateNewResult, ProjectEnsureScratchResult, ProjectEntryKind, ProjectIcon,
-    ProjectIconColor, ProjectId, RepositoryIdentity, Run, RuntimeRequest,
+    AppThread, ProjectCreateFromThreadResult, ProjectCreateNewResult, ProjectEnsureScratchResult, ProjectEntryKind,
+    ProjectId, RepositoryIdentity, Run, RuntimeRequest,
 };
 
 #[derive(Deserialize)]
@@ -174,8 +174,7 @@ async fn ensure_scratch(ctx: Arc<ConnCtx>, _input: IgnoredAny) -> Result<Project
         // Set once at create, so a user's own icon choice is never overwritten.
         let store = &ctx.state.store;
         if let Some(mut p) = store.get_project(&project_id).map_err(|e| dispatch_error(e.to_string()))? {
-            let icon = LucideProjectIcon { name: "message-square-dashed".into(), color: ProjectIconColor::Gray, monogram_text: None, monogram: None };
-            p.project_icon = Some(ProjectIcon::Lucide(icon));
+            p.project_icon = Some(crate::project_icons::scratch_default());
             store.update_project(p, Some(&format!("scratch-project-icon:{id}"))).map_err(|e| dispatch_error(e.to_string()))?;
         }
     }
@@ -291,7 +290,26 @@ pub fn register(r: Router<ConnCtx>) -> Router<ConnCtx> {
                 query_length: input.query.encode_utf16().count(),
                 limit: input.limit,
             })?;
-            Ok::<_, workspace::Failure>(workspace::search(&root, &input.query, input.limit, input.kind.as_ref(), input.image_only.unwrap_or(false)))
+            let image_only = input.image_only.unwrap_or(false);
+            // The web picker already sends kind=file with imageOnly. Ordinary file and image searches keep their existing semantics.
+            let icon_picker = image_only && input.kind == Some(ProjectEntryKind::File);
+            if icon_picker && input.query.trim().is_empty() {
+                let (paths, truncated) = crate::project_icons::ranked_paths(&root, false);
+                return Ok(domovoi_model::typed::ProjectEntriesResult {
+                    truncated: truncated || paths.len() > input.limit,
+                    entries: paths.into_iter().take(input.limit).map(|path| domovoi_model::typed::ProjectEntry {
+                        path, kind: ProjectEntryKind::File, ignored: None,
+                    }).collect(),
+                });
+            }
+            let limit = if icon_picker { workspace::MAX_ENTRIES } else { input.limit };
+            let mut result = workspace::search(&root, &input.query, limit, input.kind.as_ref(), image_only);
+            if icon_picker {
+                result.entries.retain(|entry| crate::project_icons::supported(&entry.path));
+                result.truncated |= result.entries.len() > input.limit;
+                result.entries.truncate(input.limit);
+            }
+            Ok::<_, workspace::Failure>(result)
         })
         .await
     })

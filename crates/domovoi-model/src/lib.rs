@@ -32,6 +32,8 @@ pub enum ProviderDriver {
     /// An agent speaking the Agent Client Protocol (t3code's `acpRegistry`
     /// driver): from the ACP registry, or a local command.
     AcpRegistry,
+    /// Google's Antigravity CLI over ACP (t3code's `antigravity` driver).
+    Antigravity,
 }
 
 impl ProviderDriver {
@@ -43,6 +45,7 @@ impl ProviderDriver {
             "opencode" => Some(Self::OpenCode),
             "pi" => Some(Self::Pi),
             "acpRegistry" => Some(Self::AcpRegistry),
+            "antigravity" => Some(Self::Antigravity),
             _ => None,
         }
     }
@@ -54,6 +57,7 @@ impl ProviderDriver {
             Self::OpenCode => "opencode",
             Self::Pi => "pi",
             Self::AcpRegistry => "acpRegistry",
+            Self::Antigravity => "antigravity",
         }
     }
 

@@ -51,6 +51,10 @@ struct ComposerPane: View {
     /// An image that couldn't be attached, shown under the field for a moment.
     @State private var attachError: String?
     @State private var dropTargeted = false
+    @StateObject private var dictation = Dictation()
+    @State private var showingLimits = false
+    /// The text before dictation started: the transcript goes after it.
+    @State private var dictationBase = ""
     private let commands = ComposerCommands.shared
 
     private var composer: ComposerView { core.view.composer }
@@ -62,8 +66,11 @@ struct ComposerPane: View {
             if let mention = composer.mention, !mention.suggestions.isEmpty {
                 mentions(mention)
                     .transition(.opacity.combined(with: .move(edge: .bottom)))
+            } else if !composer.skills.isEmpty {
+                commandList(composer.skills, sigil: "$", pick: { core.update(.pickSkill(name: $0)) })
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
             } else if !composer.slashCommands.isEmpty {
-                slashCommands(composer.slashCommands)
+                commandList(composer.slashCommands, sigil: "/", pick: { core.update(.pickSlashCommand(name: $0)) })
                     .transition(.opacity.combined(with: .move(edge: .bottom)))
             }
             panel
@@ -75,14 +82,21 @@ struct ComposerPane: View {
         .frame(maxWidth: .infinity)
         .animation(.snappy, value: composer.mention?.suggestions.isEmpty ?? true)
         .animation(.snappy, value: composer.slashCommands.isEmpty)
+        .animation(.snappy, value: composer.skills.isEmpty)
+        // `/model` asks for the model picker.
+        .onChange(of: composer.modelPickerRequested) { old, new in
+            if new > old { commands.open = .model }
+        }
         .onChange(of: text) { _, value in
             if value != composer.draft { core.update(.setDraft(text: value)) }
         }
         .onChange(of: composer.draftRevision) { _, _ in reload() }
         .onChange(of: core.view.threadId) { _, _ in
+            dictation.stop()
             reload()
             commands.focus()
         }
+        .onDisappear { dictation.stop() }
         .background { ProjectWatcher(core: core, changed: reload) }
         .onChange(of: composer.attachments.map(\.name)) { _, names in
             thumbnails = thumbnails.filter { names.contains($0.key) }
@@ -113,26 +127,35 @@ struct ComposerPane: View {
             // Sizes itself to its text; starts flush with the + button.
             ComposerTextView(
                 text: $text,
-                placeholder: planning ? "Describe what to plan…" : composer.placeholder,
+                placeholder: dictation.listening ? "Listening…" : (planning ? "Describe what to plan…" : composer.placeholder),
                 focusToken: commands.focusToken,
                 handleKey: handleKey,
                 submit: send,
                 takeImages: takeImages
             )
-            if let attachError {
-                Label(attachError, systemImage: "exclamationmark.triangle.fill")
-                    .font(TypeRole.meta)
-                    .foregroundStyle(Tint.caution)
-                    .transition(.opacity)
+            if let problem = attachError ?? dictation.error {
+                HStack(alignment: .firstTextBaseline, spacing: Space.s) {
+                    Label(problem, systemImage: "exclamationmark.triangle.fill")
+                        .font(TypeRole.meta)
+                        .foregroundStyle(Tint.caution)
+                    // Access was refused: the way to change that.
+                    if dictation.needsSettings, attachError == nil,
+                       let settings = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") {
+                        Link("Open System Settings", destination: settings).font(TypeRole.meta.weight(.semibold))
+                    }
+                }
+                .transition(.opacity)
             }
             HStack(alignment: .center, spacing: Space.s) {
                 attachButton
+                stashMenu
                 // A narrow window scrolls the chips instead of squeezing them.
                 ScrollView(.horizontal, showsIndicators: false) {
                     chips.padding(.vertical, Space.xxs)
                 }
                 .scrollBounceBehavior(.basedOnSize)
                 .fixedSize(horizontal: false, vertical: true)
+                micButton
                 actionButtons
             }
         }
@@ -153,7 +176,30 @@ struct ComposerPane: View {
         .animation(.snappy, value: composer.canStop)
         .animation(.snappy, value: composer.sending)
         .animation(.snappy, value: attachError)
+        .animation(.snappy, value: dictation.error)
         .animation(.snappy, value: dropTargeted)
+    }
+
+    /// Dictation: speak instead of typing; the words land after what's typed.
+    private var micButton: some View {
+        Button {
+            if !dictation.listening { dictationBase = text }
+            dictation.toggle { transcript in
+                let base = dictationBase
+                let gap = base.isEmpty || base.hasSuffix(" ") || base.hasSuffix("\n") ? "" : " "
+                text = base + gap + transcript
+            }
+        } label: {
+            Image(systemName: dictation.listening ? "waveform" : "mic")
+                .font(.callout)
+                .foregroundStyle(dictation.listening ? Tint.danger : .secondary)
+                .symbolEffect(.variableColor.iterative, isActive: dictation.listening)
+                .frame(width: 28, height: 28)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .help(dictation.listening ? "Stop dictation" : "Dictate")
+        .accessibilityLabel(dictation.listening ? "Stop Dictation" : "Dictate")
     }
 
     private var attachButton: some View {
@@ -171,6 +217,31 @@ struct ComposerPane: View {
             Button("Choose Images…", action: pickImages)
             Button("Paste Image") { _ = takeImages(.general) }
                 .disabled(!ImagePasteboard.hasImages(.general))
+            Divider()
+            stashItems
+        }
+    }
+
+    private var stashItems: some View {
+        StashMenuItems(stash: composer.stash, hasDraft: typed, stashDraft: stashDraft, update: { core.update($0) })
+    }
+
+    /// Drafts put aside, beside the + button once there are any.
+    @ViewBuilder private var stashMenu: some View {
+        if !composer.stash.isEmpty {
+            Menu { stashItems } label: {
+                HStack(spacing: Space.xxs) {
+                    Image(systemName: "tray.full")
+                    Text("\(composer.stash.count)").monospacedDigit()
+                }
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("Stashed drafts")
+            .accessibilityLabel("Stashed drafts, \(composer.stash.count)")
         }
     }
 
@@ -196,14 +267,20 @@ struct ComposerPane: View {
                     .accessibilityAddTraits(planning ? .isSelected : [])
                 }
 
-                if !composer.efforts.isEmpty {
+                if !composer.efforts.isEmpty || !composer.traits.isEmpty {
                     // Values only: the label closure runs after this body.
                     let levels = composer.efforts.count
                     let index = composer.efforts.firstIndex { $0.value == composer.selectedEffort } ?? -1
                     let label = index >= 0 ? composer.efforts[index].label : nil
-                    ComposerChip(help: "Reasoning effort (⌘[ and ⌘])", action: { toggle(.effort) }) {
-                        EffortMeter(levels: levels, selected: index)
-                        Text(label ?? "Effort")
+                    let hasEffort = levels > 0
+                    ComposerChip(help: hasEffort ? "Reasoning effort and model options (⌘[ and ⌘])" : "Model options", action: { toggle(.effort) }) {
+                        if hasEffort {
+                            EffortMeter(levels: levels, selected: index)
+                            Text(label ?? "Effort")
+                        } else {
+                            Image(systemName: "slider.horizontal.3")
+                            Text("Options")
+                        }
                     }
                     .popover(isPresented: shown(.effort), arrowEdge: .top) { OptionPopover(core: core, option: .effort) }
                     .accessibilityLabel("Effort")
@@ -228,7 +305,36 @@ struct ComposerPane: View {
                 .accessibilityLabel("Model")
                 .accessibilityValue(composer.selectedModel?.label ?? "None")
 
-                if composer.isNewThread {
+                if !composer.limitsChip.isEmpty {
+                    // An account window nearly used up: which, and when it refills.
+                    ComposerChip(tint: Tint.caution, help: "Usage limits", action: { showingLimits.toggle() }) {
+                        Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Tint.caution)
+                        Text(composer.limitsChip).lineLimit(1).fixedSize()
+                    }
+                    .popover(isPresented: $showingLimits, arrowEdge: .top) {
+                        VStack(alignment: .leading, spacing: Space.m) {
+                            OptionHeader("Usage Limits", "gauge.with.dots.needle.67percent")
+                            LimitWindowsList(windows: composer.limits)
+                        }
+                        .padding(Space.l)
+                        .frame(width: 300)
+                    }
+                    .accessibilityLabel("Usage limits")
+                    .accessibilityValue(composer.limitsChip)
+                }
+
+                if composer.isNewThread, !composer.prWorktree.isEmpty {
+                    // Checked out from a pull request: the thread works there.
+                    HStack(spacing: Space.tight) {
+                        Image(systemName: "arrow.triangle.pull")
+                        Text(composer.prWorktree).lineLimit(1).fixedSize()
+                    }
+                    .font(.callout.weight(.medium))
+                    .padding(.horizontal, Space.s + Space.xxs)
+                    .frame(minHeight: 28)
+                    .glassChip()
+                    .help("The thread works in this pull request's worktree")
+                } else if composer.isNewThread {
                     ComposerChip(help: "Where the thread works", action: { toggle(.workspace) }) {
                         if composer.workspaceMode == "worktree" {
                             Image(systemName: "arrow.triangle.branch")
@@ -274,6 +380,21 @@ struct ComposerPane: View {
                 .accessibilityLabel("Stop")
                 .transition(.scale.combined(with: .opacity))
             }
+            if composer.canForceStop {
+                // The agent didn't stop when asked: end the turn anyway.
+                Button { core.update(.forceStop) } label: {
+                    Text("Force Stop")
+                        .font(TypeRole.meta.weight(.semibold))
+                        .foregroundStyle(Tint.danger)
+                        .padding(.horizontal, Space.s)
+                        .frame(height: 24)
+                        .background(Capsule().strokeBorder(Tint.danger.opacity(0.6)))
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .help("End the turn even though the agent hasn't stopped")
+                .transition(.scale.combined(with: .opacity))
+            }
             if composer.canSteer, typed {
                 // Into the turn under way, rather than after it.
                 Button(action: steer) {
@@ -308,7 +429,7 @@ struct ComposerPane: View {
                 .buttonStyle(.plain)
                 .disabled(!composer.canSend)
                 .help(composer.canStop ? "Send after this turn (↩)" : "Send (↩)")
-                .accessibilityLabel(composer.sending ? "Sending" : "Send")
+                .accessibilityLabel(composer.sending ? "Sending" : (composer.canStop || composer.queuesOffline) ? "Queue message" : "Send")
                 .transition(.scale.combined(with: .opacity))
             }
         }
@@ -385,17 +506,27 @@ struct ComposerPane: View {
         .glassPanel(in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
     }
 
-    /// Commands for a draft that is `/` and a word; ⇥ or ↩ takes the first.
-    private func slashCommands(_ list: [SlashCommandView]) -> some View {
+    /// Commands for a draft that is `/` and a word (or skills for `$` and a
+    /// word); ⇥ or ↩ takes the first.
+    private func commandList(_ list: [SlashCommandView], sigil: String, pick: @escaping (String) -> Void) -> some View {
         VStack(alignment: .leading, spacing: Space.xxs) {
             ForEach(Array(list.enumerated()), id: \.offset) { index, command in
-                Button { core.update(.pickSlashCommand(name: command.name)) } label: {
+                Button { pick(command.name) } label: {
                     HStack(spacing: Space.s) {
-                        Text("/\(command.name)").font(.callout.monospaced())
+                        Text("\(sigil)\(command.name)").font(.callout.monospaced())
+                        if !command.hint.isEmpty {
+                            Text(command.hint).font(.callout.monospaced()).foregroundStyle(.tertiary)
+                        }
                         if !command.description.isEmpty {
                             Text(command.description).foregroundStyle(.secondary).lineLimit(1)
                         }
                         Spacer(minLength: 0)
+                        if command.isBuiltin {
+                            Image(systemName: "app.badge")
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                                .help("Domovoi's own command")
+                        }
                     }
                     .padding(.horizontal, Space.s)
                     .padding(.vertical, Space.tight)
@@ -403,6 +534,8 @@ struct ComposerPane: View {
                     .hoverHighlight(Radius.chip, active: index == 0)
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("\(sigil)\(command.name)\(command.isBuiltin ? ", built in" : "")")
+                .accessibilityHint(command.description)
             }
             Text("⇥ or ↩ insert the first · keep typing to narrow")
                 .font(.caption2)
@@ -421,18 +554,30 @@ struct ComposerPane: View {
         text = composer.draft
     }
 
+    private func stashDraft() {
+        dictation.stop()
+        if text != composer.draft { core.update(.setDraft(text: text)) }
+        core.update(.stashDraft)
+    }
+
     private func steer() {
+        dictation.stop()
         core.update(.setDraft(text: text))
         core.update(.steer)
     }
 
     private func send() {
         guard composer.canSend else { return }
+        dictation.stop()
         core.update(.setDraft(text: text))
         core.update(.send)
     }
 
     private func handleKey(_ key: ComposerKey) -> Bool {
+        if composer.mention == nil, let first = composer.skills.first, key == .tab || key == .returnKey {
+            core.update(.pickSkill(name: first.name))
+            return true
+        }
         if composer.mention == nil, let first = composer.slashCommands.first, key == .tab || key == .returnKey {
             core.update(.pickSlashCommand(name: first.name))
             return true
@@ -452,7 +597,7 @@ struct ComposerPane: View {
             case .escape:
                 core.update(.dismissMention)
                 return true
-            case .backtab:
+            case .backtab, .upAtStart, .downAtEnd:
                 break
             }
         }
@@ -464,6 +609,12 @@ struct ComposerPane: View {
         case .escape:
             guard commands.open != nil else { return false }
             commands.open = nil
+            return true
+        case .upAtStart, .downAtEnd:
+            // The thread's earlier messages, as a shell's history (no list open).
+            guard composer.mention == nil, composer.slashCommands.isEmpty, composer.skills.isEmpty, core.view.threadId != nil else { return false }
+            if text != composer.draft { core.update(.setDraft(text: text)) }
+            core.update(.recallPrompt(delta: key == .upAtStart ? -1 : 1))
             return true
         default:
             return false
@@ -604,25 +755,59 @@ private struct ProjectChip: View {
         if projects.count > 1 {
             let current = projects.first { $0.id == sidebar.selectedProjectId }
             ComposerChip(help: "Project", action: { open.toggle() }) {
-                Text(current?.monogram ?? "?")
-                    .font(.system(size: 9, weight: .bold))
-                    .frame(width: 16, height: 16)
-                    .background(Color.accentColor.opacity(0.25), in: RoundedRectangle(cornerRadius: Space.xs))
+                if let current { ProjectIconTile(icon: current.icon, size: 16, core: core) }
                 Text(current?.title ?? "Project").lineLimit(1)
             }
             .frame(maxWidth: 200)
             .popover(isPresented: $open, arrowEdge: .top) {
-                VStack(alignment: .leading, spacing: Space.xxs) {
-                    OptionHeader("Project", "folder").padding(.horizontal, Space.s).padding(.bottom, Space.xs)
-                    ForEach(projects, id: \.id) { project in
-                        Button {
-                            core.update(.newThread(projectId: project.id))
-                            open = false
-                        } label: {
+                // Its own view: its search and focus start fresh on each open.
+                ProjectPicker(core: core, projects: projects, selectedId: sidebar.selectedProjectId) { project in
+                    core.update(.newThread(projectId: project.id))
+                    open = false
+                }
+            }
+        }
+    }
+}
+
+/// The project chip's popover: a search field over a short, scrolling list.
+private struct ProjectPicker: View {
+    let core: Core
+    let projects: [SidebarProjectView]
+    let selectedId: String?
+    let pick: (SidebarProjectView) -> Void
+    @State private var query = ""
+    @FocusState private var searchFocused: Bool
+
+    /// Matches the title or the folder, ignoring case. A local filter: a
+    /// project list is short, unlike the model list.
+    private var matches: [SidebarProjectView] {
+        let q = query.trimmingCharacters(in: .whitespaces)
+        guard !q.isEmpty else { return projects }
+        return projects.filter { $0.title.localizedCaseInsensitiveContains(q) || $0.workspaceRoot.localizedCaseInsensitiveContains(q) }
+    }
+
+    var body: some View {
+        let matches = matches
+        VStack(alignment: .leading, spacing: Space.xs) {
+            OptionHeader("Project", "folder").padding(.horizontal, Space.s)
+            TextField("Search projects", text: $query)
+                .textFieldStyle(.roundedBorder)
+                .focused($searchFocused)
+                .onSubmit {
+                    guard let first = matches.first else { return }
+                    Platform.selectionChanged()
+                    pick(first)
+                }
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: Space.xxs) {
+                    ForEach(matches, id: \.id) { project in
+                        Button { pick(project) } label: {
                             HStack(spacing: Space.s) {
+                                ProjectIconTile(icon: project.icon, size: 16, core: core)
                                 Text(project.title).lineLimit(1)
                                 Spacer()
-                                if project.id == sidebar.selectedProjectId { Image(systemName: "checkmark").foregroundStyle(.tint) }
+                                if project.id == selectedId { Image(systemName: "checkmark").foregroundStyle(.tint) }
                             }
                             .padding(.horizontal, Space.s)
                             .padding(.vertical, Space.tight)
@@ -630,12 +815,25 @@ private struct ProjectChip: View {
                             .hoverHighlight(Radius.chip)
                         }
                         .buttonStyle(.plain)
+                        .help(project.workspaceRoot)
+                    }
+                    if matches.isEmpty {
+                        Text("No matching projects")
+                            .font(TypeRole.meta)
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, Space.s)
+                            .padding(.vertical, Space.tight)
                     }
                 }
-                .padding(Space.s)
-                .frame(width: 260)
             }
+            .scrollBounceBehavior(.basedOnSize)
+            // About eight rows; a shorter list takes only its own height.
+            .frame(maxHeight: 280)
+            .fixedSize(horizontal: false, vertical: true)
         }
+        .padding(Space.s)
+        .frame(width: 260)
+        .onAppear { searchFocused = true }
     }
 }
 
@@ -655,7 +853,12 @@ private struct OptionPopover: View {
                 if option != .workspace { WorkingNote(core: core) }
                 switch option {
                 case .effort:
-                    EffortPicker(composer: composer) { core.update(.selectEffort(value: $0)) }
+                    if !composer.efforts.isEmpty {
+                        EffortPicker(composer: composer) { core.update(.selectEffort(value: $0)) }
+                    }
+                    if !composer.traits.isEmpty {
+                        TraitControls(traits: composer.traits) { core.update(.setModelOption(id: $0, value: $1)) }
+                    }
                 case .permissions:
                     PermissionCards(composer: composer) { commands.setPermissions($0, core: core) }
                 case .model:

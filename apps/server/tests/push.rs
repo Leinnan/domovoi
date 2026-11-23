@@ -242,6 +242,51 @@ async fn a_failed_turn_pushes_to_closed_apps() {
     assert_eq!(status["push"], json!({ "configured": true, "devices": 2 }));
 }
 
+const ACTIVITY: &str = "ff66ff66ff66ff66ff66ff66ff66ff66ff66ff66ff66ff66ff66ff66ff66ff66";
+
+/// A thread's Live Activity follows its turn and ends with it, saying how:
+/// `liveactivity` pushes to the activity's own token, the end at once.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_live_activity_ends_with_its_turn() {
+    let (apns_port, received) = mock_apns().await;
+    let server = start_with("activity", &[("DOMOVOI_APNS_URL", format!("http://127.0.0.1:{apns_port}"))]);
+    let open = phone(&server).await;
+    let mut ws = socket(&server, &open).await;
+    let res = http()
+        .post(format!("http://127.0.0.1:{}/api/domovoi/push/activities", server.port))
+        .bearer_auth(&open)
+        .json(&json!({ "token": ACTIVITY, "threadId": "t1", "environment": "sandbox" }))
+        .send()
+        .await
+        .unwrap();
+    assert!(res.status().is_success(), "{}", res.text().await.unwrap());
+
+    let workspace = server.dir.join("w").canonicalize().unwrap();
+    let r = call(&mut ws, "1", "projects.mutate", json!({ "type": "project.create", "commandId": "c1", "projectId": "p1", "title": "w",
+        "workspaceRoot": workspace, "createWorkspaceRootIfMissing": false, "defaultModelSelection": null })).await;
+    assert_eq!(r["exit"]["_tag"], "Success", "{r}");
+    let r = call(&mut ws, "2", "orchestration.launchThread", json!({ "commandId": "c2", "creationSource": "web", "threadId": "t1", "projectId": "p1",
+        "title": "Fix the tests", "modelSelection": { "instanceId": "claudeAgent", "model": "claude-haiku-5-5" },
+        "runtimeMode": "approval-required", "interactionMode": "default", "workspaceStrategy": { "type": "root" },
+        "initialMessage": { "messageId": "m1", "text": "hi", "attachments": [] } })).await;
+    assert_eq!(r["exit"]["_tag"], "Success", "{r}");
+
+    let ended = || received.lock().unwrap().iter().any(|(t, _, b)| t == ACTIVITY && b["aps"]["event"] == "end");
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    while !ended() && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let got = received.lock().unwrap().clone();
+    let (_, headers, body) = got.iter().rev().find(|(t, _, _)| t == ACTIVITY).expect("an activity push");
+    assert_eq!(headers["apns-push-type"], "liveactivity");
+    assert_eq!(headers["apns-topic"], "com.crayen.domovoi.push-type.liveactivity");
+    assert_eq!(headers["apns-priority"], "10", "the end is shown at once");
+    let state = &body["aps"]["content-state"];
+    assert_eq!((body["aps"]["event"].as_str(), state["status"].as_str(), state["detail"].as_str()), (Some("end"), Some("failed"), Some("Failed")), "{body}");
+    assert!(state["startedAtMs"].as_f64().is_some() && state["endedAtMs"].as_f64().is_some(), "{state}");
+    assert!(body["aps"]["dismissal-date"].as_i64().is_some());
+}
+
 const EXPIRED: &str = "dd44dd44dd44dd44dd44dd44dd44dd44dd44dd44dd44dd44dd44dd44dd44dd44";
 const MISFILED: &str = "ee55ee55ee55ee55ee55ee55ee55ee55ee55ee55ee55ee55ee55ee55ee55ee55";
 

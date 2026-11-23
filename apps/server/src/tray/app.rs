@@ -127,7 +127,7 @@ impl TrayApp {
             menu,
         };
         let advanced = Submenu::with_id("advanced", "Advanced", true);
-        let version = item("version", &format!("Version {}", env!("CARGO_PKG_VERSION")), false);
+        let version = item("version", &format!("Version {} ({})", env!("CARGO_PKG_VERSION"), env!("DOMOVOI_BUILD_COMMIT")), false);
         let quit = item("quit", "Quit Domovoi Server", true);
         let e = |e: tray_icon::menu::Error| e.to_string();
         advanced.append_items(&[&version, &items.endpoint, &items.copy_endpoint, &PredefinedMenuItem::separator(), &items.open_logs, &items.open_data]).map_err(e)?;

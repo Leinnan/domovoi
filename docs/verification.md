@@ -34,8 +34,35 @@ with every WebSocket message checked against t3code's Effect schemas.
 `conformance/run.sh` separately checks the `effect-rpc` crate against Effect's own
 `RpcClient`.
 
+## macOS Keychain access after an update
+
+Use a throwaway macOS account and an iroh-paired test server. Build two different
+releases with `just mac-package` and the same `DEVELOPMENT_TEAM`. Save the first
+bundle before packaging the second. Check that build B satisfies build A's
+designated requirement:
+
+```sh
+requirement=$(codesign -dr - ./Signed-A.app 2>&1 | sed -n 's/^designated => //p')
+test -n "$requirement" && codesign --verify --deep --strict -R "=$requirement" ./Signed-B.app
+```
+
+1. In an older ad-hoc release, pair over iroh, select the server, and save a draft.
+   Record the paired device in the server's Remote Access device list.
+2. Replace the old app with signed build A. If Keychain prompts, first try
+   **Deny** on one item and confirm the app shows **Keychain Access Needed**.
+   Click **Retry** and select **Always Allow** for each item macOS asks about.
+   Confirm the selected server and draft are restored and the same device reconnects.
+3. Quit build A and replace it with signed build B. Confirm it restores the same
+   state and reconnects without a Keychain prompt or a new paired device.
+4. In a fresh test account, pair with build A, save a draft, and repeat the same
+   update to build B. Confirm zero Keychain prompts during the update.
+
 ## Automated checks
 
+- `just lfs-check`, the first step of `just check` and of the packaging recipes:
+  Git LFS is installed, no LFS file in the checkout is still a pointer file, and
+  `git lfs fsck --pointers` finds no file a `.gitattributes` rule puts in LFS
+  committed as a plain blob (or the other way round).
 - `cargo test --workspace`: unit tests plus `apps/server/tests/golden_replay.rs`, which
   starts the `domovoi-server` binary in a throwaway home, pairs over HTTP, opens the
   authenticated WebSocket, replays all 70 client requests recorded from the TypeScript
@@ -85,6 +112,8 @@ with every WebSocket message checked against t3code's Effect schemas.
     whose app is open, and forgets a token APNs reports gone. A refused provider
     token is signed again and the push retried; a token unknown to production
     is delivered through the sandbox; a long non-ASCII thread id and title fit.
+    A registered Live Activity gets `liveactivity` pushes on its own token and
+    ends with its turn (priority 10, with start and end times).
   - `crates/domovoi-remote/tests/loopback.rs` also: requests fail fast while the
     server is away and the bridge reconnects once it is back; a dropped bridge
     frees its port; a stream that sends nothing is closed.
@@ -1339,10 +1368,17 @@ What the live runs found:
   reset more than a day past) and, once the reset has passed and the thread
   is not snoozed, sends "Continue where you left off."
   (`usageLimitContinuationOfRunId`), then clears it. It looks every 30 s.
-- Not done: reading limits before a turn reports them (Claude `get_usage`,
-  Codex `account/rateLimits/read`), reset credits
-  (`provider.consumeResetCredit` still answers `noCredit`), and the
-  system notice t3code shows in the timeline when a limit is hit.
+- Limits are read before a turn reports them, and kept fresh:
+  - Claude: `get_usage` when a session starts and after each turn. With no session, the probe asks a Claude Code of its own, started with no prompt, settings, MCP servers or saved session; it costs nothing.
+  - Codex: `account/rateLimits/read` when the app-server starts, and from the model-discovery app-server.
+  - Antigravity: `RetrieveUserQuotaSummary` from a running agent's own language server. Its HTTP port is named in `<acp>/log/acp-server-<time>-<pid>.log`, so it works with a keychain sign-in. `acp_token.json` is still read for older runtimes.
+  - Every minute while a client watches the provider list, accounts whose limits are older than 5 minutes are read again.
+  - Limits are kept in `userdata/provider-usage-limits.json` across restarts, and cleared on sign-out.
+  - Claude stream events below a warning threshold carry their use only in `unifiedWindows`, and are read from there.
+  - The clients show a window past its reset as open, at 0%.
+- Not done: reset credits (`provider.consumeResetCredit` still answers
+  `noCredit`), and the system notice t3code shows in the timeline when a
+  limit is hit.
 - Verified: unit tests for both providers' messages as they send them;
   `provider_turns.rs` `a_usage_limited_thread_resumes_when_the_limit_resets`
   (a scripted Claude turned away; the windows on the provider; a wrong run
@@ -1370,7 +1406,11 @@ What the live runs found:
   comes back after. Domovoi's MCP tools go as an HTTP server when the agent
   takes one, else through `domovoi-server acp-mcp-bridge` (stdio); the first
   prompt of a session carries the instructions about them. No steering
-  (ACP has none): a message sent while a turn runs waits for it.
+  (ACP has none): a message sent while a turn runs waits for it. A
+  rollback restores the checkpoint and ends the agent's session: ACP can't
+  truncate one, so the next turn starts a new session (t3code's
+  `rollbackThread`). Sessions report the capabilities t3code's ACP adapter
+  has (`provider-session.updated`).
 - Instances are probed on `refreshProviders` (`initialize` and `session/new`
   in a scratch folder, for the agent's name, version and models), kept 15
   minutes; an instance removed from settings leaves the list.
@@ -1406,6 +1446,92 @@ What the live runs found:
   cargo test -p domovoi-server --test provider_turns live::a_registry_agent`
   finds the 46 agents of the real registry, installs `pi-acp` through npm,
   and its instance starts and is ready.
+
+## Antigravity
+
+- `antigravity/` and the Antigravity flavour of `adapters/acp.rs`: Google's
+  `agy` CLI (1.5 or newer) over ACP, as t3code's `antigravity` driver. A
+  built-in `antigravity` instance (when `agy` is found) and instances that
+  settings add. Each instance has its own profile,
+  `<userdata>/providers/antigravity/<sha256(instance id)>` as `GEMINI_HOME`:
+  its hooks, MCP servers and conversations are its own, and the user's
+  global skills are linked in. The Google sign-in is not: agy 1.5 keeps it
+  in the user's keychain (`ChainedAuth: authenticated via keyring` in its
+  log), found through `HOME` (a fresh profile with a scratch `HOME` needs a
+  sign-in; with the real one it has the user's), so it is the machine's
+  `agy` sign-in, shared with the terminal and the IDE. Only the built-in
+  instance signs in with Google; added instances use the API key or Vertex
+  methods. The agent starts as `agy acp --gemini-dir <profile>
+  --app-data-dir antigravity-acp`, without the server's Google credentials,
+  with a temp folder of its own per launch. The native CLI reads no
+  `BROWSER`: it opens its sign-in link with `open` / `xdg-open` from its
+  PATH (seen with a recording `open`), so each launch has its own first on
+  PATH, which hands Google links to the server (through a file: the CLI
+  discards that child's stderr) and passes anything else to the real one.
+  `authenticate` with the instance's method at every launch; a sign-in link
+  in a thread's launch means "sign in first". Sessions resume (never load).
+  The model is the account's (from the session's model select; an older id
+  of a listed family, like the default `gemini-3.8-flash-high`, is taken
+  too); the thinking level is a model option, applied with
+  `session/set_config_option`. The session mode stays `default` and
+  approvals are answered from the thread's runtime mode; native questions
+  (`interaction_…`) are question forms; the agent reads the thread's folder
+  and the attachments through `fs/read_text_file`. Tool payloads are
+  bounded, edits placed at their only match in the file (else marked as
+  snippets), reads the client served shown done. A turn's real outcome
+  comes from the agent's session log (a quota, an API error it reports as a
+  reply), a usage limit failing the turn with its reset. A stop waits 15
+  seconds for the agent before it is killed.
+- Sign-in (`provider.auth.*`): a throwaway agent in a scratch folder; the
+  Google link it opens is checked (`/o/oauth2/auth` with PKCE and a
+  `localhost` `/auth/callback` redirect, as agy 1.5.14 sends it, or t3code's
+  `/o/oauth2/v2/auth` form) and shown to the client that started it; a
+  pasted redirect is checked against the flow and delivered to the agent's
+  loopback listener; then `session/new` checks access, and each model is
+  selected once for its thinking levels. The API key and Vertex methods
+  connect the same way; the key goes to `<userdata>/secrets` and settings
+  keep `••••••`. Domovoi signs nothing out: `provider.auth.logout` and
+  `/logout` in a thread say to use `/logout` in `agy` itself (signing the
+  shared account out would sign out the terminal and IDE too), and
+  `canLogout` is false. The account's plan (`authenticate`'s
+  `_meta.antigravity.tier`, e.g. "Google AI Pro") is its label. The account
+  (signed in or not, models, commands) is kept in the profile across
+  restarts; the probe never starts the agent.
+- Limits, where the profile holds the sign-in (`acp_token.json`; with the
+  keychain it doesn't, and limits say so): the saved refresh token, Google's token and user info,
+  then Cloud Code's quota summary (Gemini and shared Claude & GPT, 5-hour
+  and weekly), read in the background. Usage history: the conversation
+  databases of the user's Antigravity apps and of the profiles. Skills:
+  `SKILL.md` folders of `~/.gemini/config/skills`,
+  `~/.gemini/antigravity-cli/skills` and a project's `.gemini/skills`,
+  `.agents/skills`, `.agent/skills`. Text generation: a fresh agent in an
+  empty folder that may use no tool. Subagent batches (`invoke_subagent`)
+  are subagents of the turn; `orchestration.getNativeChildWork` reads their
+  children from the parent session's log.
+- Managed install (`provider.install.*`): Google's release channel names
+  the release for this platform; it is downloaded, its SHA-512 checked,
+  unpacked (one regular file), started once to prove it, then made active
+  (`active.json`). Not removed while an agent runs from it.
+- The native apps (Settings > Providers on Mac, iOS and Android) sign in,
+  install, update and remove the runtime, edit an instance's sign-in method,
+  key, project, location and binary path, and add or remove API-key and
+  Vertex instances. The core follows `provider.auth.subscribe` and
+  `provider.install.subscribe` while the page is open, sends
+  `provider.auth.*` / `provider.install.*`, and edits instances with a
+  `server.updateSettings` `providerInstanceMutation` that keeps the
+  instance's other settings and sends a key only when one is typed (the
+  server shows a saved key as `••••••`). A sign-in link opens in the
+  device's browser; from another device the redirect URL is pasted back.
+  `client_replay.rs` `a_provider_signs_in_installs_and_is_edited_from_settings`.
+- Verified: unit tests in each module, and `provider_turns.rs`
+  `an_antigravity_agent_runs_turns`, `an_antigravity_instance_signs_in_and_out`,
+  `antigravity_turns_show_edits_reads_and_limits`,
+  `antigravity_reports_limits_skills_titles_and_batches` and
+  `antigravity_is_installed_from_googles_release_channel` against a
+  scripted `agy` (and stand-ins for Google's APIs and release channel);
+  their frames decode with t3code's schemas. The usage reader read this
+  machine's real Antigravity history (71 calls of Gemini 3.1 Pro and Flash
+  Lite).
 
 ## Clients: scheduled tasks, limits
 

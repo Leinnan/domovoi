@@ -5,6 +5,8 @@ import SwiftUI
 struct SidebarPane: View {
     @ObservedObject var core: Core
     @State private var search = ""
+    /// The footer's width: a narrow sidebar shows Group By as its icon alone.
+    @State private var footerWidth: CGFloat = 0
     @State private var renaming: ThreadRowView?
     @State private var renameText = ""
     @State private var newProjectName = ""
@@ -54,12 +56,9 @@ struct SidebarPane: View {
                     Section {
                         if section.expanded {
                             ForEach(section.rows, id: \.id) { thread in
-                                ThreadRow(thread: thread, showsProject: true).equatable()
+                                ThreadRow(thread: thread, showsProject: true, core: core).equatable()
                                     .tag(thread.id)
                                     .contextMenu { threadMenu(thread) }
-                            }
-                            if section.kind == "inbox", section.rows.isEmpty, search.isEmpty {
-                                Text("All caught up").font(.caption).foregroundStyle(.secondary)
                             }
                             if section.hiddenCount > 0 {
                                 Button("Show \(section.hiddenCount) more") { core.update(.showAllInSection(section: section.kind)) }
@@ -76,7 +75,7 @@ struct SidebarPane: View {
                 Section {
                     if project.expanded {
                         ForEach(project.threads, id: \.id) { thread in
-                            ThreadRow(thread: thread).equatable()
+                            ThreadRow(thread: thread, core: core).equatable()
                                 .tag(thread.id)
                                 .contextMenu { threadMenu(thread) }
                         }
@@ -94,12 +93,14 @@ struct SidebarPane: View {
                 }
             }
             if !byStatus, !sidebar.snoozed.isEmpty, search.isEmpty {
-                Section("Snoozed") {
+                Section {
                     ForEach(sidebar.snoozed, id: \.id) { thread in
-                        ThreadRow(thread: thread).equatable()
+                        ThreadRow(thread: thread, core: core).equatable()
                             .tag(thread.id)
                             .contextMenu { threadMenu(thread) }
                     }
+                } header: {
+                    Label { Text("Snoozed") } icon: { SectionGlyph(kind: "snoozed") }
                 }
             }
             // Settled threads show under their project ("Earlier sessions").
@@ -110,9 +111,16 @@ struct SidebarPane: View {
         // mid-slide when the next one comes.
         .transaction { $0.disablesAnimations = true }
         .overlay {
-            if !search.isEmpty, sidebar.searchResults.isEmpty, sidebar.projects.allSatisfy({ $0.threads.isEmpty && $0.earlier.isEmpty }),
-               sidebar.sections.allSatisfy({ $0.count == 0 }) {
+            if !search.isEmpty, sidebar.searchResults.isEmpty, nothingListed {
                 ContentUnavailableView.search(text: search)
+            } else if sidebar.unreadOnly, search.isEmpty, nothingListed {
+                ContentUnavailableView {
+                    Label("All caught up", systemImage: "checkmark.circle")
+                } description: {
+                    Text("No thread has news you haven't seen.")
+                } actions: {
+                    Button("Show All Threads") { core.update(.setUnreadOnly(on: false)) }
+                }
             }
         }
         .searchable(text: $search, placement: .sidebar, prompt: "Search threads")
@@ -157,6 +165,10 @@ struct SidebarPane: View {
     /// Grouped by what each thread needs (Inbox, Running, …), not by project.
     private var byStatus: Bool { sidebar.grouping == "status" }
 
+    private var nothingListed: Bool {
+        sidebar.sections.allSatisfy { $0.count == 0 } && sidebar.projects.allSatisfy { $0.threads.isEmpty && $0.earlier.isEmpty }
+    }
+
     private var footer: some View {
         HStack(spacing: Space.m) {
             Menu {
@@ -172,30 +184,38 @@ struct SidebarPane: View {
             .menuStyle(.borderlessButton)
             .fixedSize()
             Menu {
+                Toggle("Unread Only", isOn: Binding(get: { sidebar.unreadOnly }, set: { core.update(.setUnreadOnly(on: $0)) }))
+                Divider()
                 Picker("Group By", selection: Binding(get: { sidebar.grouping }, set: { core.update(.setSidebarGrouping(grouping: $0)) })) {
                     Text("Status").tag("status")
                     Text("Project").tag("project")
                 }
                 .pickerStyle(.inline)
             } label: {
-                Label("Group By", systemImage: "line.3.horizontal.decrease.circle")
+                // Its title only where there's room beside a "needs you" badge.
+                let compact = footerWidth > 0 && footerWidth < (sidebar.threadsNeedingAttention > 0 ? 320 : 230)
+                // Filled while only unread threads are listed.
+                Label(sidebar.unreadOnly ? "Unread" : "Group By", systemImage: sidebar.unreadOnly ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
+                    .labelStyle(GroupByLabelStyle(compact: compact))
             }
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
             .fixedSize()
-            .help("Group threads by status or by project")
+            .help(sidebar.unreadOnly ? "Only unread threads are listed; group threads by status or by project" : "Show only unread threads, or group them by status or by project")
             Spacer()
             if sidebar.threadsNeedingAttention > 0 {
+                let count = sidebar.threadsNeedingAttention
                 Button(action: nextNeedingYou) {
-                    Label("\(sidebar.threadsNeedingAttention) \(sidebar.threadsNeedingAttention == 1 ? "needs" : "need") you", systemImage: "hand.raised.fill")
-                        .font(TypeRole.meta.weight(.semibold))
-                        .foregroundStyle(Tint.caution)
-                        .padding(.horizontal, Space.s)
-                        .padding(.vertical, Space.xxs)
-                        .background(Tint.caution.opacity(0.14), in: Capsule())
+                    // On one line: "1 needs you" where it fits, the hand and
+                    // the count in a narrow sidebar (never wrapped letter by letter).
+                    ViewThatFits(in: .horizontal) {
+                        attentionBadge(Label("\(count) \(count == 1 ? "needs" : "need") you", systemImage: "hand.raised.fill"))
+                        attentionBadge(Label("\(count)", systemImage: "hand.raised.fill"))
+                    }
                 }
                 .buttonStyle(.plain)
                 .help("Go to the next thread waiting for you")
+                .accessibilityLabel("\(count) \(count == 1 ? "thread needs" : "threads need") you")
             }
             SettingsLink { Image(systemName: "gearshape") }
                 .buttonStyle(.borderless)
@@ -204,7 +224,19 @@ struct SidebarPane: View {
         }
         .padding(.horizontal, Space.m)
         .padding(.vertical, Space.s + Space.xxs)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { footerWidth = $0 }
         .background(.bar)
+    }
+
+    private func attentionBadge(_ label: some View) -> some View {
+        label
+            .font(TypeRole.meta.weight(.semibold))
+            .foregroundStyle(Tint.caution)
+            .lineLimit(1)
+            .fixedSize()
+            .padding(.horizontal, Space.s)
+            .padding(.vertical, Space.xxs)
+            .background(Tint.caution.opacity(0.14), in: Capsule())
     }
 
     /// The next thread waiting for an answer, after the open one.
@@ -228,7 +260,7 @@ struct SidebarPane: View {
         Divider()
         Button(thread.pinned ? "Unpin" : "Pin") { core.update(.pinThread(threadId: thread.id, pinned: !thread.pinned)) }
         if byStatus {
-            Button(thread.settled ? "Move to Inbox" : "Hibernate") { core.update(.settleThread(threadId: thread.id, settled: !thread.settled)) }
+            Button(thread.settled ? "Move to Inbox" : "Set Aside") { core.update(.settleThread(threadId: thread.id, settled: !thread.settled)) }
         } else {
             Button(thread.settled ? "Unsettle" : "Settle") { core.update(.settleThread(threadId: thread.id, settled: !thread.settled)) }
         }
@@ -266,7 +298,7 @@ struct SidebarPane: View {
         .buttonStyle(.plain)
         if shown {
             ForEach(project.earlier, id: \.id) { thread in
-                ThreadRow(thread: thread).equatable()
+                ThreadRow(thread: thread, core: core).equatable()
                     .tag(thread.id)
                     .contextMenu { threadMenu(thread) }
             }
@@ -304,6 +336,7 @@ struct ProjectHeader: View {
     @State private var title = ""
     @State private var removing = false
     @State private var hovering = false
+    @State private var pickingIcon = false
 
     var body: some View {
         HStack(spacing: Space.tight) {
@@ -315,14 +348,7 @@ struct ProjectHeader: View {
             .buttonStyle(.plain)
             .help(project.expanded ? "Collapse" : "Expand")
             .accessibilityLabel(project.expanded ? "Collapse \(project.title)" : "Expand \(project.title)")
-            if project.isScratch {
-                Image(systemName: "bubble.left.and.text.bubble.right").foregroundStyle(.secondary)
-            } else {
-                Text(project.monogram)
-                    .font(.system(size: 9, weight: .bold))
-                    .frame(width: 18, height: 18)
-                    .background(Color.accentColor.opacity(0.25), in: RoundedRectangle(cornerRadius: Space.xs))
-            }
+            ProjectIconTile(icon: project.icon, size: 16, core: core)
             Text(project.title).lineLimit(1).help(project.workspaceRoot).layoutPriority(1)
             Spacer()
             Button { core.update(.newThread(projectId: project.id)) } label: { Image(systemName: "square.and.pencil") }
@@ -336,6 +362,7 @@ struct ProjectHeader: View {
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
         .contextMenu {
+            Button("Change Icon…") { pickingIcon = true }
             Button("New Thread") { core.update(.newThread(projectId: project.id)) }
             Button("Rename…") {
                 title = project.title
@@ -347,6 +374,7 @@ struct ProjectHeader: View {
             Divider()
             Button("Remove from Domovoi…", role: .destructive) { removing = true }
         }
+        .popover(isPresented: $pickingIcon) { ProjectIconPicker(project: project, core: core) }
         .confirmationDialog("Remove “\(project.title)” from Domovoi?", isPresented: $removing, titleVisibility: .visible) {
             Button("Remove Project", role: .destructive) { core.update(.removeProject(projectId: project.id)) }
         } message: {
@@ -371,13 +399,11 @@ struct SectionHeader: View {
                 Image(systemName: section.expanded ? "chevron.down" : "chevron.right")
                     .font(.caption2.weight(.bold))
                     .frame(width: 10)
+                SectionGlyph(kind: section.kind, count: section.count)
                 Text(section.title)
-                if section.kind == "running", section.count > 0 {
-                    ProgressView().controlSize(.mini)
-                }
                 Spacer()
                 if section.count > 0 {
-                    Text("\(section.count)").monospacedDigit().foregroundStyle(.tertiary)
+                    CountCapsule(count: section.count)
                 }
             }
             .contentShape(Rectangle())
@@ -390,58 +416,44 @@ struct SectionHeader: View {
 
 struct ThreadRow: View, Equatable {
     let thread: ThreadRowView
-    /// Under a status section the project is not in a header, so the row names it.
     var showsProject = false
+    let core: Core
 
-    /// "project · model", the project left out when a header already names it.
-    private var subtitle: String {
-        [showsProject ? thread.projectTitle : "", thread.modelLabel].filter { !$0.isEmpty }.joined(separator: " · ")
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.thread == rhs.thread && lhs.showsProject == rhs.showsProject
     }
 
     var body: some View {
-        HStack(spacing: Space.s) {
-            StatusIcon(status: thread.status, unread: thread.unread)
-            VStack(alignment: .leading, spacing: Space.xxs / 2) {
-                Text(thread.title.isEmpty ? "New thread" : thread.title)
-                    .lineLimit(1)
-                    .fontWeight(thread.unread ? .semibold : .regular)
-                // Always two lines: rows of one height, so the list never
-                // keeps a stale height (a gap) when a row's second line comes
-                // or goes.
-                HStack(spacing: Space.xs) {
-                    Text(subtitle.isEmpty ? " " : subtitle).lineLimit(1)
-                    if let branch = thread.branch, thread.inWorktree {
-                        Label(branch, systemImage: "arrow.triangle.branch").lineLimit(1)
-                    }
-                }
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-            }
-            .layoutPriority(1)
-            Spacer(minLength: Space.xs)
-            if thread.relation == "fork" {
-                Image(systemName: "arrow.triangle.branch").font(.caption2).foregroundStyle(.secondary).help("A fork of another thread")
-                    .accessibilityLabel("Fork")
-            }
-            if !thread.source.isEmpty {
-                Text(thread.source).font(.caption2).foregroundStyle(Tint.agent(thread.source)).lineLimit(1).fixedSize()
-            }
-            if thread.pinned { Image(systemName: "pin.fill").font(.caption2).foregroundStyle(.secondary) }
-            // Short and always whole: the title gives way first.
+        HStack(alignment: .top, spacing: Space.s) {
+            Circle().fill(thread.unread ? Color.accentColor : .clear).frame(width: 7, height: 7).padding(.top, 7)
+                .accessibilityHidden(true)
             Group {
-                if !thread.statusLabel.isEmpty {
-                    Text(thread.statusLabel).font(.caption2.weight(.medium)).foregroundStyle(thread.status == "failed" ? Tint.danger : thread.status == "approval" ? Tint.caution : .secondary).monospacedDigit()
-                } else {
-                    Text(thread.snoozedUntilMs > 0 ? SnoozeTimes.label(thread.snoozedUntilMs) : thread.age).font(.caption2).foregroundStyle(.tertiary).monospacedDigit()
-                }
+                if showsProject { ThreadAvatar(icon: thread.projectIcon, status: thread.status, size: 20, core: core) }
+                else { StatusIcon(status: thread.status).frame(width: 20, height: 20) }
             }
-            .lineLimit(1)
-            .fixedSize()
+            VStack(alignment: .leading, spacing: Space.xxs) {
+                HStack(alignment: .firstTextBaseline, spacing: Space.s) {
+                    Text(thread.title.isEmpty ? "New thread" : thread.title)
+                        .font(TypeRole.rowTitle).foregroundStyle(.primary).fontWeight(thread.unread ? .semibold : .regular).lineLimit(1)
+                    Spacer(minLength: 0)
+                    Text(thread.statusLabel.isEmpty ? (thread.snoozedUntilMs > 0 ? SnoozeTimes.label(thread.snoozedUntilMs) : thread.age) : thread.statusLabel)
+                        .font(.caption2).monospacedDigit()
+                        .foregroundStyle(thread.statusTint).fontWeight(thread.isPlanning ? .medium : nil)
+                        .lineLimit(1).fixedSize()
+                }
+                HStack(spacing: Space.xs) {
+                    Text(thread.subtitle(showsProject: showsProject).isEmpty ? " " : thread.subtitle(showsProject: showsProject)).lineLimit(1)
+                    Spacer(minLength: 0)
+                    ThreadRowBadges(thread: thread)
+                    if thread.relation == "fork" { Image(systemName: "arrow.triangle.branch") }
+                    if !thread.source.isEmpty { Text(thread.source).foregroundStyle(Tint.agent(thread.source)).fixedSize() }
+                    if thread.pinned { Image(systemName: "pin.fill") }
+                }.font(.caption2).foregroundStyle(.secondary)
+            }
         }
-        .frame(minHeight: 22)
-        // Never wider than the column: a row asking for more makes the list
-        // scroll sideways, cutting every title's start.
+        .padding(.vertical, Space.xxs)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .ignore).accessibilityLabel([thread.spokenLabel, thread.spokenBadges].filter { !$0.isEmpty }.joined(separator: ", "))
     }
 }
 
@@ -452,5 +464,18 @@ extension ConnectionView {
     var isOnThisMac: Bool {
         guard !remote, let host = URL(string: serverUrl)?.host else { return false }
         return ["127.0.0.1", "localhost", "::1", "[::1]"].contains(host)
+    }
+}
+
+/// Group By's label: its icon and title, or the icon alone.
+private struct GroupByLabelStyle: LabelStyle {
+    let compact: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        if compact {
+            configuration.icon
+        } else {
+            Label(configuration)
+        }
     }
 }

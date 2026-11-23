@@ -9,17 +9,18 @@ use crate::settings;
 use crate::sidebar::{is_pinned, is_settled, relation, sidebar};
 use crate::update::{self, composer_interaction_mode, composer_runtime_mode, current_effort, current_model, effort_descriptor, model_options, steerable_run};
 use crate::view::*;
-use crate::{diff, markdown};
+use crate::{diff, markdown, tools};
 use rustc_hash::{FxHashMap, FxHashSet};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 use domovoi_model::typed::{
     AuthClientDeviceType, BackgroundTaskKind, ChatAttachment, CheckpointFileSummary, CheckpointId, CheckpointStatus, ConversationMessage,
-    FileChangeItem, KeybindingWhenNode, PendingBackgroundTask, PlanArtifact, PlanStatus, PlanStepStatus, ProjectEntry,
+    FileChangeItem, KeybindingWhenNode, PendingBackgroundTask, PlanArtifact, PlanStatus, PlanStep, PlanStepStatus, ProjectEntry,
     ProjectEntryKind, ProviderThread, PullRequestListEntry, ResolvedKeybindingRule, Run, RunId, RunStatus, RuntimeRequestId,
-    RuntimeRequestKind, RuntimeRequestStatus, ScheduledTaskRunStatus, ScheduledTaskSchedule, ServerAuthSessionMethod, ShellStatus,
-    SubagentStatus, Thread, ThreadShell, Timestamp, TurnItem, TurnItemStatus, UsagePricingStatus, UserInputRequestItem,
+    RuntimeRequestKind, RuntimeRequestStatus, ScheduledTaskRunStatus, ScheduledTaskSchedule, ServerAuthSessionMethod,
+    ServerProviderUsageUnavailableReason, ServerProviderUsageWindowKind, ShellStatus, SubagentStatus, Thread, ThreadShell,
+    Timestamp, TurnItem, TurnItemStatus, UsagePricingStatus, UsageSourceStatus, UserInputRequestItem,
 };
 
 /// A count the server sends, as the views carry counts.
@@ -27,10 +28,50 @@ fn narrow(n: u64) -> u32 {
     n as u32
 }
 
-pub fn monogram(title: &str) -> String {
-    let words: Vec<&str> = title.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).collect();
-    let m: String = words.iter().take(2).filter_map(|w| w.chars().next()).collect::<String>().to_uppercase();
-    if m.is_empty() { "?".into() } else { m }
+pub const PROJECT_COLORS: [&str; 18] = ["gray", "red", "orange", "amber", "yellow", "lime", "green", "emerald", "teal", "cyan", "sky", "blue", "indigo", "violet", "purple", "fuchsia", "pink", "rose"];
+
+pub fn project_identity(title: &str) -> (String, &'static str) {
+    use unicode_normalization::UnicodeNormalization;
+    let normalized: String = title.nfkc().collect();
+    let name = normalized.trim();
+    static WORDS: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let words: Vec<&str> = WORDS.get_or_init(|| regex::Regex::new(r"[\p{L}\p{N}]+").expect("project word pattern")).find_iter(name).map(|m| m.as_str()).collect();
+    let text = if let Some(word) = words.first() {
+        let first = word.chars().next().expect("the project word pattern matches at least one character");
+        let second = word.chars().skip(1).find(|c| c.is_numeric())
+            .or_else(|| if words.len() > 1 { words.last()?.chars().next() } else { word.chars().last() }).unwrap_or(first);
+        format!("{first}{second}").to_uppercase().chars().take(2).collect()
+    } else { "PR".into() };
+    let seed = if name.is_empty() { "project".into() } else { name.to_lowercase() };
+    let index = seed.chars().fold(0, |index, c| (index * 31 + c as usize) % PROJECT_COLORS.len());
+    (text, PROJECT_COLORS[index])
+}
+
+pub fn monogram(title: &str) -> String { project_identity(title).0 }
+
+/// A Git LFS file's card: its object, whether the server has it, and what
+/// that means for the preview.
+fn lfs_view(preview: &crate::model::Preview, lfs: &domovoi_model::typed::ProjectFileLfs) -> crate::view::LfsView {
+    use domovoi_model::typed::LfsObjectState as State;
+    let (state_label, message) = match &lfs.state {
+        State::Cached if preview.image_url.is_none() && preview.text.is_empty() => ("Stored locally", Some("Binary file stored in Git LFS.")),
+        State::Cached => ("Stored locally", None),
+        State::Missing => ("Not downloaded", Some("This file is kept in Git LFS, and its object isn't on the server yet.")),
+        State::TooLarge => ("Too large to preview", Some("Its Git LFS object is over the 20 MB preview limit.")),
+        State::Mismatch => ("Doesn't match its pointer", Some("The server's copy of this Git LFS object differs from its pointer.")),
+        State::Unsupported => ("Uses Git LFS extensions", Some("The object is stored transformed by Git LFS extensions, so it can't be shown.")),
+        State::Other(state) => (state.as_ref(), None),
+    };
+    crate::view::LfsView {
+        oid: lfs.oid.clone(),
+        oid_short: lfs.oid.chars().take(10).collect(),
+        size_label: bytes_label(lfs.size as f64),
+        state: lfs.state.as_str().to_owned(),
+        state_label: state_label.to_owned(),
+        message: preview.fetch_error.clone().or(message.map(str::to_owned)),
+        can_fetch: lfs.state == State::Missing,
+        fetching: preview.fetching,
+    }
 }
 
 pub fn bytes_label(n: f64) -> String {
@@ -80,6 +121,8 @@ pub fn checkpoints(thread: &Thread) -> Vec<CheckpointView> {
                 additions: files.iter().fold(0u32, |sum, f| sum.saturating_add(f.additions as u32)),
                 deletions: files.iter().fold(0u32, |sum, f| sum.saturating_add(f.deletions as u32)),
                 can_revert: true,
+                files: files.iter().map(|f| ChangedFileView { path: f.path.clone(), insertions: narrow(f.additions), deletions: narrow(f.deletions) }).collect(),
+                diff_source: format!("turn:{n}"),
             }
         })
         .collect();
@@ -133,7 +176,7 @@ const OUTPUT_LINES: usize = 200;
 const OUTPUT_BYTES: usize = 16 * 1024;
 
 /// The end of `text` within the limits, and whether anything was cut.
-fn tail(text: &str) -> (String, bool) {
+pub(crate) fn tail(text: &str) -> (String, bool) {
     let mut start = text.len().saturating_sub(OUTPUT_BYTES);
     while !text.is_char_boundary(start) {
         start += 1;
@@ -170,7 +213,11 @@ fn questions(item: &UserInputRequestItem) -> Vec<QuestionView> {
             header: q.header.clone(),
             question: q.question.clone(),
             multi_select: q.multi_select == Some(true),
-            options: q.options.iter().map(|o| QuestionOptionView { label: o.label.clone(), description: o.description.clone() }).collect(),
+            allow_custom_answer: q.allow_custom_answer.unwrap_or(true),
+            required: q.required.unwrap_or(true),
+            options: q.options.iter().map(|o| QuestionOptionView {
+                label: o.label.clone(), value: o.value.clone().unwrap_or_else(|| o.label.clone()), description: o.description.clone(),
+            }).collect(),
         })
         .collect()
 }
@@ -200,40 +247,16 @@ fn file_change_diffs(change: &FileChangeItem) -> Vec<DiffFileView> {
 
 /// One answer as text: several choices joined with ", ". (The schema leaves
 /// an answer's shape open.)
-fn answer_text(a: &Value) -> String {
+fn answer_text(a: &Value, question: &domovoi_model::typed::UserInputQuestion) -> String {
+    let label = |value: &str| {
+        question.options.iter().find(|option| option.value.as_deref() == Some(value))
+            .map_or_else(|| value.to_owned(), |option| option.label.clone())
+    };
     match a {
-        Value::Array(items) => items.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(", "),
-        Value::String(s) => s.clone(),
+        Value::Array(items) => items.iter().filter_map(Value::as_str).map(label).collect::<Vec<_>>().join(", "),
+        Value::String(s) => label(s),
         _ => String::new(),
     }
-}
-
-/// A tool call's row: its name, and its input and output as text (each tool
-/// defines their shape), cut to their ends until the row is expanded.
-fn tool_row(v: &mut ItemView, name: Option<&str>, input: Option<&Value>, output: Option<&Value>, expanded: bool) {
-    v.kind = "tool".into();
-    v.title = name.unwrap_or("Tool").to_owned();
-    let input = match input {
-        Some(Value::String(text)) => text.clone(),
-        None | Some(Value::Null) => String::new(),
-        Some(other) => serde_json::to_string_pretty(other).unwrap_or_default(),
-    };
-    let output = match output {
-        Some(Value::String(text)) => Some(text.clone()),
-        None | Some(Value::Null) => None,
-        Some(other) => Some(other.to_string()),
-    };
-    if expanded {
-        v.text = input;
-        v.output = output.map(Into::into);
-    } else {
-        let (text, a) = tail(&input);
-        let (out, b) = output.as_deref().map(tail).map_or((None, false), |(o, c)| (Some(o), c));
-        v.text = text;
-        v.output = out.map(Into::into);
-        v.truncated = a || b;
-    }
-    v.collapsed = true;
 }
 
 /// A plan's row: its markdown.
@@ -243,6 +266,18 @@ fn plan_row(v: &mut ItemView, plan_id: &str, markdown: &str) {
     v.plan_id = plan_id.to_owned();
     v.text = markdown.to_owned();
     v.blocks = markdown::parse(&v.text).into();
+}
+
+fn todo_views(steps: &[PlanStep]) -> Arc<Vec<TodoView>> {
+    steps.iter().map(|step| TodoView {
+        text: step.text.clone(),
+        status: match &step.status {
+            PlanStepStatus::Completed => "completed".into(),
+            PlanStepStatus::Running => "in_progress".into(),
+            PlanStepStatus::Other(status) if &**status == "in_progress" => "in_progress".into(),
+            PlanStepStatus::Pending | PlanStepStatus::Other(_) => "pending".into(),
+        },
+    }).collect::<Vec<_>>().into()
 }
 
 /// The row of an item that is neither conversation nor a step with a look
@@ -256,9 +291,10 @@ fn notice_row(v: &mut ItemView, item: &TurnItem, text: &str) {
 /// The row of one turn item. `message` is the message the item shows, when
 /// the thread holds it; `checkpoint` the view of the checkpoint a checkpoint
 /// item stands for.
-fn item_view(item: &TurnItem, message: Option<&ConversationMessage>, checkpoint: Option<&CheckpointView>, expanded: bool, prefixes: &mut FxHashMap<String, markdown::Prefix>) -> ItemView {
+fn item_view(item: &TurnItem, message: Option<&ConversationMessage>, checkpoint: Option<&CheckpointView>, expanded: bool, cwd: &str, prefixes: &mut FxHashMap<String, markdown::Prefix>) -> ItemView {
     let mut v = ItemView { id: item.id().as_str().to_owned(), status: item.status().as_str().to_owned(), ..Default::default() };
     let completed = *item.status() == TurnItemStatus::Completed;
+    let ctx = tools::Ctx { cwd, expanded, duration_ms: step_duration(item) };
     match item {
         TurnItem::UserMessage(i) => {
             v.kind = "user".into();
@@ -292,39 +328,29 @@ fn item_view(item: &TurnItem, message: Option<&ConversationMessage>, checkpoint:
             v.collapsed = true;
         }
         TurnItem::CommandExecution(i) => {
-            v.kind = "command".into();
-            v.title = i.input.clone();
-            if let Some(out) = &i.output {
-                let (shown, cut) = if expanded { (out.clone(), false) } else { tail(out) };
-                v.output = Some(shown.into());
-                v.truncated = cut;
-            }
-            v.exit_code = i.exit_code;
-            v.collapsed = completed;
+            tools::command(&mut v, i, ctx);
+            v.collapsed = true;
         }
         TurnItem::FileChange(i) => {
-            v.kind = "file_change".into();
-            v.title = file_change_path(i);
-            v.diff = file_change_diff(i).map(Arc::new);
+            let path = file_change_path(i);
+            let diff = file_change_diff(i);
+            let created = i.changes.as_ref().and_then(|c| c.first()).is_some_and(|c| matches!(c.operation.as_str(), "add" | "create" | "added"));
+            let failed = *item.status() == TurnItemStatus::Failed;
+            let error = i.error.as_deref().filter(|_| failed);
+            tools::file_change_look(&mut v, &path, diff.as_ref(), created, error, *item.status() == TurnItemStatus::Running, ctx);
+            v.diff = diff.map(Arc::new);
             v.collapsed = completed;
+            if let Some(changes) = i.changes.as_ref().filter(|changes| !changes.is_empty()) {
+                v.artifact_paths.extend(changes.iter().filter(|c| !matches!(c.operation.as_str(), "delete" | "remove"))
+                    .map(|c| &c.path).filter(|path| crate::artifacts::artifact_kind_for_path(path).is_some()).cloned());
+            } else if crate::artifacts::artifact_kind_for_path(&i.file_name).is_some() {
+                v.artifact_paths.push(i.file_name.clone());
+            }
         }
         TurnItem::TodoList(i) => {
             v.kind = "todo".into();
             v.title = i.explanation.as_deref().filter(|e| !e.trim().is_empty()).unwrap_or("To-dos").to_owned();
-            v.todos = i
-                .steps
-                .iter()
-                .map(|step| TodoView {
-                    text: step.text.clone(),
-                    status: match &step.status {
-                        PlanStepStatus::Completed => "completed".into(),
-                        PlanStepStatus::Running => "in_progress".into(),
-                        PlanStepStatus::Other(status) if &**status == "in_progress" => "in_progress".into(),
-                        PlanStepStatus::Pending | PlanStepStatus::Other(_) => "pending".into(),
-                    },
-                })
-                .collect::<Vec<_>>()
-                .into();
+            v.todos = todo_views(&i.steps);
         }
         TurnItem::Subagent(i) => {
             v.kind = "subagent".into();
@@ -352,8 +378,44 @@ fn item_view(item: &TurnItem, message: Option<&ConversationMessage>, checkpoint:
                 .collect::<Vec<_>>()
                 .into();
         }
-        TurnItem::DynamicTool(i) => tool_row(&mut v, i.tool_name.as_deref().or(i.title.as_deref()), i.input.as_ref(), i.output.as_ref(), expanded),
-        TurnItem::WebSearch(i) => tool_row(&mut v, i.title.as_deref(), None, None, expanded),
+        TurnItem::DynamicTool(i)
+            if matches!(
+                i.tool_name.as_deref(),
+                Some("Artifact" | "mcp__t3__t3_artifact_create" | "mcp__t3__t3_artifact_update" | "t3_artifact_create" | "t3_artifact_update")
+            ) && !matches!(
+                i.input.as_ref().and_then(|v| v.get("action")).and_then(Value::as_str),
+                Some("list" | "delete" | "read")
+            ) =>
+        {
+            v.kind = "artifact".into();
+            v.collapsed = false;
+            v.streaming = *item.status() == TurnItemStatus::Running
+                || i.input.as_ref().and_then(|v| v.get("_streaming")).and_then(Value::as_bool) == Some(true);
+            let meta = dynamic_tool_artifact_meta(i);
+            v.title = meta.title.clone();
+            v.artifact_title = meta.title;
+            v.artifact_kind = meta.kind;
+            v.artifact_hosted_url = meta.hosted_url;
+        }
+        TurnItem::DynamicTool(i) if matches!(i.tool_name.as_deref(), Some("ArtifactComments" | "ArtifactData")) => {
+            tools::dynamic(&mut v, i, ctx);
+            let action = i.input.as_ref().and_then(|v| v.get("action").or_else(|| v.get("db_op"))).and_then(Value::as_str).unwrap_or("update");
+            let label = if i.tool_name.as_deref() == Some("ArtifactComments") { "Artifact comments" } else { "Artifact data" };
+            v.title = format!("{label} · {action}");
+            v.collapsed = true;
+        }
+        TurnItem::DynamicTool(i) => {
+            tools::dynamic(&mut v, i, ctx);
+            v.collapsed = true;
+        }
+        TurnItem::WebSearch(i) => {
+            tools::web_search(&mut v, i, ctx);
+            v.collapsed = true;
+        }
+        TurnItem::FileSearch(i) => {
+            tools::file_search(&mut v, i, ctx);
+            v.collapsed = true;
+        }
         TurnItem::UserInputRequest(i) => {
             v.kind = "question".into();
             v.title = i.questions.iter().map(|q| q.question.as_str()).collect::<Vec<_>>().join("\n");
@@ -363,7 +425,10 @@ fn item_view(item: &TurnItem, message: Option<&ConversationMessage>, checkpoint:
             v.title = i.prompt.as_deref().unwrap_or("Approval requested").to_owned();
             v.text = i.request_kind.as_str().to_owned();
         }
-        TurnItem::ProposedPlan(i) => plan_row(&mut v, i.plan_id.as_str(), &i.markdown),
+        TurnItem::ProposedPlan(i) => {
+            v.streaming = i.streaming;
+            plan_row(&mut v, i.plan_id.as_str(), &i.markdown);
+        }
         TurnItem::Checkpoint(i) => {
             v.kind = "checkpoint".into();
             v.checkpoint = checkpoint.cloned();
@@ -385,36 +450,82 @@ fn item_view(item: &TurnItem, message: Option<&ConversationMessage>, checkpoint:
             let field = |key: &str| unknown.record().get(key);
             let text = |key: &str| field(key).and_then(Value::as_str);
             match unknown.item_type() {
-                "mcp_tool_call" => tool_row(&mut v, text("toolName").or(item.title()), field("input"), field("output"), expanded),
+                "mcp_tool_call" => {
+                    tools::mcp_call(&mut v, text("toolName").or(item.title()).unwrap_or("tool"), field("input"), field("output"), item.status(), ctx);
+                    v.collapsed = true;
+                }
                 "plan" => plan_row(&mut v, text("planId").unwrap_or_default(), text("markdown").or(text("text")).unwrap_or_default()),
                 _ => notice_row(&mut v, item, text("text").unwrap_or_default()),
             }
         }
+        // A context divider: what compacting freed, and its summary to read.
+        TurnItem::Compaction(i) => {
+            v.kind = "notice".into();
+            v.title = match (i.before_token_count, i.after_token_count) {
+                (Some(before), Some(after)) if before > 0 => format!("Context compacted · {} → {} tokens", token_label(before), token_label(after)),
+                (Some(before), _) if before > 0 => format!("Context compacted · was {} tokens", token_label(before)),
+                _ if completed => "Context compacted".into(),
+                _ => "Compacting context…".into(),
+            };
+            v.text = i.summary.clone().unwrap_or_default();
+            v.collapsed = true;
+        }
+        TurnItem::Handoff(i) => {
+            v.kind = "notice".into();
+            v.title = match i.to_model.as_deref().filter(|m| !m.is_empty()) {
+                Some(model) => format!("Continued with {model}"),
+                None => format!("Continued with {}", i.to_provider_instance_id.as_str()),
+            };
+            v.text = i.summary.clone().unwrap_or_default();
+            v.collapsed = true;
+        }
+        TurnItem::SecretRequest(i) => {
+            v.kind = "notice".into();
+            v.title = format!("The agent asks for a secret: {}", i.label);
+            v.text = i.reason.clone();
+        }
+        TurnItem::LinkRequest(i) => {
+            v.kind = "notice".into();
+            v.title = format!("The agent asks to link {}", i.label.as_deref().filter(|l| !l.is_empty()).or(i.url.as_deref()).unwrap_or("another machine"));
+            v.text = i.reason.clone();
+        }
         TurnItem::Notification(_)
-        | TurnItem::FileSearch(_)
         | TurnItem::RunInterruptRequest(_)
         | TurnItem::RunInterruptResult(_)
         | TurnItem::SystemNotice(_)
-        | TurnItem::Compaction(_)
-        | TurnItem::Handoff(_)
         | TurnItem::Fork(_)
-        | TurnItem::ThreadCreated(_)
-        | TurnItem::SecretRequest(_)
-        | TurnItem::LinkRequest(_) => notice_row(&mut v, item, ""),
+        | TurnItem::ThreadCreated(_) => notice_row(&mut v, item, ""),
     }
     v
 }
 
+/// How long a finished step took (0: unknown, or still under way).
+fn step_duration(item: &TurnItem) -> i64 {
+    match (item.started_at(), item.completed_at()) {
+        (Some(start), Some(end)) => (crate::app::millis_from_iso(end.as_str()) - crate::app::millis_from_iso(start.as_str())).max(0),
+        _ => 0,
+    }
+}
+
+/// Thinking has a disclosure only when there is something to read.
+fn has_readable_content(item: &TurnItem) -> bool {
+    !matches!(item, TurnItem::Reasoning(i) if i.text.trim().is_empty())
+}
+
 /// A row of the open thread built again from its item, when the item's text
 /// grew and nothing else changed (`Changes::row`): `old` is the row as last
-/// built. `None` when the item is gone.
+/// built. `None` when the item is gone or no longer visible.
 pub(crate) fn regrown_row(model: &Model, item_id: &str, old: &ItemView) -> Option<ItemView> {
-    let thread = model.thread.as_ref()?;
+    let thread = model.held_thread(model.selected_thread.as_deref()?)?;
     let item = thread.turn_items.get(item_id)?;
+    if !has_readable_content(item) {
+        return None;
+    }
     let message = item.message_id().and_then(|id| thread.messages.get(id));
     let mut prefixes = model.markdown_prefixes.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     // The rows whose text grows (a reply, thinking, a command) show no checkpoint.
-    let mut row = item_view(item, message, None, model.expanded.contains(item_id), &mut prefixes);
+    let cwd = model.selected_thread.as_deref().and_then(|tid| model.thread_cwd(tid)).unwrap_or_default();
+    let mut row = item_view(item, message, None, model.expanded.contains(item_id), &cwd, &mut prefixes);
     carry_context(old, &mut row);
     Some(row)
 }
@@ -447,44 +558,140 @@ fn group_steps(items: &mut [ItemView]) {
             continue;
         }
         let start = i;
-        let (mut commands, mut edits, mut tools) = (0usize, 0usize, 0usize);
         while i < items.len() && is_step(&items[i].kind) {
-            match items[i].kind.as_str() {
-                "command" => commands += 1,
-                "file_change" => edits += 1,
-                "tool" => tools += 1,
-                _ => {}
-            }
             i += 1;
         }
         if i - start < 2 {
             continue;
         }
-        // "Ran 2 commands · edited 1 file · used 3 tools", or of thinking alone "Thought it over".
-        let mut summary = String::new();
-        for (count, did, one, many) in [(commands, "ran", "command", "commands"), (edits, "edited", "file", "files"), (tools, "used", "tool", "tools")] {
-            if count > 0 {
-                if !summary.is_empty() {
-                    summary.push_str(" · ");
-                }
-                summary.push_str(did);
-                summary.push(' ');
-                summary.push_str(&count.to_string());
-                summary.push(' ');
-                summary.push_str(if count == 1 { one } else { many });
-            }
-        }
-        if summary.is_empty() {
-            summary.push_str("thought it over");
-        }
-        if let Some(first) = summary.get_mut(..1) {
-            first.make_ascii_uppercase();
-        }
+        let summary = group_summary(&items[start..i]);
         let group = items[start].id.clone();
         for row in &mut items[start..i] {
             row.group.clone_from(&group);
         }
         items[start].group_summary = summary;
+    }
+}
+
+/// What a group of steps did, most telling first: "Edited 2 files (+40 −12),
+/// ran 5 commands, read 14 files and 3 other steps · 1 failed"; while one of
+/// them runs, that one ("Reading present.rs…"); of thinking alone "Thought it over".
+fn group_summary(rows: &[ItemView]) -> String {
+    if let Some(live) = rows.iter().rev().find(|r| r.status == "running" && !r.verb.is_empty()) {
+        let line = if live.title.is_empty() { live.verb.clone() } else { format!("{} {}", live.verb, live.title) };
+        return format!("{}…", domovoi_model::typed::first_line_clipped(&line, 120).unwrap_or(line));
+    }
+    let distinct = |wanted: &dyn Fn(&ItemView) -> bool| -> usize {
+        let mut seen: Vec<&str> = rows.iter().filter(|r| wanted(r)).map(|r| r.title.as_str()).collect();
+        seen.sort_unstable();
+        seen.dedup();
+        seen.len()
+    };
+    let count = |wanted: &dyn Fn(&ItemView) -> bool| rows.iter().filter(|r| wanted(r)).count();
+    let edits = distinct(&|r| r.kind == "file_change");
+    let (added, removed) = rows.iter().filter_map(|r| r.diff.as_deref()).fold((0, 0), |(a, d), diff| (a + diff.additions, d + diff.deletions));
+    let edited = match (edits, added + removed) {
+        (0, _) => String::new(),
+        (n, 0) => format!("edited {}", plural(n, "file", "files")),
+        (n, _) => format!("edited {} (+{added} −{removed})", plural(n, "file", "files")),
+    };
+    let searches = count(&|r| r.icon == "search");
+    let searched = match searches {
+        1 => rows.iter().find(|r| r.icon == "search").map(|r| format!("searched for {}", domovoi_model::typed::clip_chars(&r.title, 40))).unwrap_or_default(),
+        n => counted(n, "searched", "time", "times"),
+    };
+    let parts: [(usize, String); 9] = [
+        (edits, edited),
+        (count(&|r| r.icon == "command"), counted(count(&|r| r.icon == "command"), "ran", "command", "commands")),
+        (count(&|r| r.icon == "read"), counted(distinct(&|r| r.icon == "read"), "read", "file", "files")),
+        (count(&|r| r.icon == "image"), counted(distinct(&|r| r.icon == "image"), "viewed", "image", "images")),
+        (searches, searched),
+        (count(&|r| r.icon == "list"), counted(count(&|r| r.icon == "list"), "listed", "folder", "folders")),
+        (count(&|r| r.icon == "web"), counted(count(&|r| r.icon == "web"), "searched the web", "time", "times")),
+        (count(&|r| r.icon == "fetch"), counted(count(&|r| r.icon == "fetch"), "fetched", "page", "pages")),
+        (count(&|r| r.kind != "reasoning" && !matches!(r.icon.as_str(), "command" | "read" | "image" | "search" | "list" | "web" | "fetch" | "edit")), String::new()),
+    ];
+    let mut shown: Vec<&str> = vec![];
+    let mut others = 0;
+    for (n, text) in &parts {
+        if *n == 0 {
+            continue;
+        }
+        if shown.len() < 3 && !text.is_empty() {
+            shown.push(text);
+        } else {
+            others += n;
+        }
+    }
+    let mut summary = match (shown.len(), others) {
+        (0, 0) => "thought it over".to_owned(),
+        (0, n) => counted(n, "used", "tool", "tools"),
+        (_, 0) => sentence(&shown),
+        (_, n) => format!("{} and {}", shown.join(", "), plural(n, "other step", "other steps")),
+    };
+    let failed = rows.iter().filter(|r| r.badge_tone == "failed" || r.status == "failed").count();
+    if failed > 0 {
+        summary.push_str(&format!(" · {failed} failed"));
+    }
+    if let Some(first) = summary.get_mut(..1) {
+        first.make_ascii_uppercase();
+    }
+    summary
+}
+
+fn plural(n: usize, one: &str, many: &str) -> String {
+    format!("{n} {}", if n == 1 { one } else { many })
+}
+
+fn counted(n: usize, did: &str, one: &str, many: &str) -> String {
+    format!("{did} {}", plural(n, one, many))
+}
+
+/// "a, b and c".
+fn sentence(parts: &[&str]) -> String {
+    match parts {
+        [] => String::new(),
+        [one] => (*one).to_owned(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    }
+}
+
+/// The images a step looked at or made, whose URLs have come.
+fn step_images(model: &Model, item: &TurnItem, cwd: &str) -> Vec<ImageView> {
+    let id = item.id().as_str();
+    tools::image_sources(item, cwd)
+        .into_iter()
+        .filter_map(|source| {
+            let url = model.asset_urls.get(&source.key(id)).filter(|u| !u.is_empty() && !u.contains("/api/assets/none/"))?;
+            Some(ImageView { name: source.name(), url: format!("{}{url}", model.server_url) })
+        })
+        .collect()
+}
+
+/// The most images a folded group shows.
+const GROUP_IMAGES: usize = 6;
+
+/// A group's first row carries the images its steps viewed, so a folded
+/// group still shows them.
+fn gather_group_images(items: &mut [ItemView]) {
+    let mut i = 0;
+    while i < items.len() {
+        if items[i].group.is_empty() || items[i].group_summary.is_empty() {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        let group = items[start].group.clone();
+        let mut gathered: Vec<ImageView> = vec![];
+        while i < items.len() && items[i].group == group {
+            for image in &items[i].images {
+                if gathered.len() < GROUP_IMAGES && !gathered.iter().any(|g| g.url == image.url) {
+                    gathered.push(image.clone());
+                }
+            }
+            i += 1;
+        }
+        items[start].group_images = gathered;
     }
 }
 
@@ -517,7 +724,26 @@ fn queued_runs(thread: &Thread) -> Vec<&Run> {
     queued
 }
 
-fn thread_page(model: &Model) -> Option<ThreadPageView> {
+fn working_activity<'a>(
+    run_id: &RunId,
+    items: impl DoubleEndedIterator<Item = (Option<&'a RunId>, &'a ItemView)> + Clone,
+) -> Option<WorkingActivityView> {
+    let mut current = items.rev().filter_map(|(id, row)| (id == Some(run_id)).then_some(row));
+    let live_step = |row: &ItemView| is_step(&row.kind) && row.status == "running";
+    let kind = current.clone().find(|row| live_step(row) || row.kind == "assistant" && row.streaming).map(|row| row.kind.clone());
+    let step_item_id = current.clone().find(|row| live_step(row))
+        .or_else(|| current.find(|row| is_step(&row.kind)))
+        .map(|row| row.id.clone());
+    (kind.is_some() || step_item_id.is_some()).then_some(WorkingActivityView { kind, step_item_id })
+}
+
+fn thread_page(model: &Model) -> Option<(ThreadPageView, Vec<crate::artifacts::CollectedArtifact>)> {
+    let (mut page, collected) = thread_page_body(model)?;
+    page.usage = session_usage(model, &page);
+    Some((page, collected))
+}
+
+fn thread_page_body(model: &Model) -> Option<(ThreadPageView, Vec<crate::artifacts::CollectedArtifact>)> {
     let tid = model.selected_thread.as_deref()?;
     let shell = model.thread_shell(tid);
     let status = shell.map_or(ShellStatus::Idle, shell_status);
@@ -540,12 +766,15 @@ fn thread_page(model: &Model) -> Option<ThreadPageView> {
         cwd: model.thread_cwd(tid).unwrap_or_default(),
         model_label,
         provider_instance_id: shell.map(|shell| shell.provider_instance_id.as_str().to_owned()).unwrap_or_default(),
+        model_instance_id: shell.map(|shell| shell.model_selection.instance_id.as_str().to_owned()).unwrap_or_default(),
+        model: shell.map(|shell| shell.model_selection.model.clone()).unwrap_or_default(),
         runtime_mode: composer_runtime_mode(model),
         interaction_mode: composer_interaction_mode(model),
         status: status.as_str().into(),
         working: launching.is_some() || matches!(status, ShellStatus::Working | ShellStatus::Approval),
         // Nothing to wait for while it is being started: its message is shown.
-        loading: launching.is_none() && (model.thread.is_none() || model.thread_loading),
+        // Records held for another thread are never shown as this one's.
+        loading: launching.is_none() && (model.held_thread(tid).is_none() || model.thread_loading),
         pinned: shell.is_some_and(is_pinned),
         settled: shell.is_some_and(is_settled),
         archived: shell.is_some_and(|shell| shell.archived_at.is_some()),
@@ -569,7 +798,7 @@ fn thread_page(model: &Model) -> Option<ThreadPageView> {
         .iter()
         .filter(|o| o.draft_key == tid && !o.text.is_empty())
         // Already in the thread (its echo came before the answer).
-        .filter(|o| !o.message_id.as_deref().is_some_and(|m| model.thread.as_ref().is_some_and(|t| t.messages.contains(m))))
+        .filter(|o| !o.message_id.as_deref().is_some_and(|m| model.held_thread(tid).is_some_and(|t| t.messages.contains(m))))
         .map(|o| PendingSendView {
             // Unique per row: the shells key rows by it.
             id: match &o.route {
@@ -583,31 +812,49 @@ fn thread_page(model: &Model) -> Option<ThreadPageView> {
     if let Some(l) = launching {
         let state = if model.connection == Connection::Connected { "sending" } else { "waiting" };
         page.pending_sends.insert(0, PendingSendView { id: l.message_id.clone(), text: l.text.clone(), state: state.into() });
+        if model.connection == Connection::Connected && status != ShellStatus::Approval {
+            page.working_activity = Some(WorkingActivityView { kind: Some("starting".into()), step_item_id: None });
+        }
     }
     page.parent = shell.and_then(|shell| Some((shell, shell.lineage.parent_thread_id.as_ref()?))).map(|(shell, parent)| ThreadLinkView {
         thread_id: parent.as_str().to_owned(),
         title: model.thread_shell(parent.as_str()).map(|t| t.title.clone()).filter(|t| !t.is_empty()).unwrap_or_else(|| "Earlier thread".into()),
         relation: relation(shell).to_owned(),
     });
-    let Some(thread) = &model.thread else { return Some(page) };
+    let Some(thread) = model.held_thread(tid) else { return Some((page, Vec::new())) };
     let cps = checkpoints(thread);
     let checkpoint_views: FxHashMap<&str, &CheckpointView> = cps.iter().map(|c| (c.id.as_str(), c)).collect();
     let find = model.find.result.as_ref();
     let counts: HashMap<&str, u32> = find.and_then(|found| found.navigation.as_ref()).into_iter().flatten().map(|n| (n.entry_id.as_str(), narrow(n.count))).collect();
     let active_entry = find.and_then(|found| found.active_match.as_ref()).map(|active| active.entry_id.as_str());
     let mut active_item = None;
-    let visible = shown_items(thread);
+    let visible: Vec<_> = shown_items(thread).into_iter().filter(|item| has_readable_content(item)).collect();
     let runs_with = |wanted: fn(&TurnItem) -> bool| -> FxHashSet<&RunId> { visible.iter().filter(|i| wanted(i)).filter_map(|i| i.run_id()).collect() };
     // A run that failed and changed nothing gets no "No file changes" card.
     let failed_runs = runs_with(|i| matches!(i, TurnItem::Error(_)));
     // A turn whose to-dos came as a list doesn't show the tool call too.
     let todo_runs = runs_with(|i| matches!(i, TurnItem::TodoList(_)));
+    // A question asked as a tool call is shown by its question's card.
+    let question_runs = runs_with(|i| matches!(i, TurnItem::UserInputRequest(_)));
+    let message_question_calls: FxHashSet<_> = visible.iter().filter_map(|item| {
+        let TurnItem::UserInputRequest(question) = &***item else { return None };
+        question.response_mode.as_ref()?;
+        Some((question.run_id.as_ref()?, question.native_item_ref.as_ref()?.native_id.as_deref()?))
+    }).collect();
     let in_runs = |item: &TurnItem, runs: &FxHashSet<&RunId>| item.run_id().is_some_and(|r| runs.contains(r));
     let shown: Vec<&Arc<TurnItem>> = visible
         .into_iter()
         .filter(|item| match &***item {
             TurnItem::Checkpoint(c) => !(c.files.is_empty() && in_runs(item, &failed_runs)),
-            TurnItem::DynamicTool(tool) => !(tool.tool_name.as_deref() == Some("TodoWrite") && in_runs(item, &todo_runs)),
+            TurnItem::DynamicTool(tool) => match tool.tool_name.as_deref() {
+                Some("TodoWrite") => !in_runs(item, &todo_runs),
+                Some("AskUserQuestion") => !in_runs(item, &question_runs),
+                Some("ask_question") => !tool.run_id.as_ref().zip(tool.native_item_ref.as_ref().and_then(|native| native.native_id.as_deref()))
+                    .is_some_and(|call| message_question_calls.contains(&call)),
+                // The plan it proposed is its own row.
+                Some("ExitPlanMode") => false,
+                _ => true,
+            },
             _ => true,
         })
         .collect();
@@ -632,7 +879,7 @@ fn thread_page(model: &Model) -> Option<ThreadPageView> {
             let mut row = match cache.get(id) {
                 Some(built) if built.is_of(item, message, checkpoint, expanded) => built.row.clone(),
                 _ => {
-                    let row = item_view(item, message.map(|m| &**m), checkpoint, expanded, &mut prefixes);
+                    let row = item_view(item, message.map(|m| &**m), checkpoint, expanded, &page.cwd, &mut prefixes);
                     cache.insert(id.clone(), BuiltRow { item: Arc::clone(*item), message: message.cloned(), expanded, row: row.clone() });
                     row
                 }
@@ -640,6 +887,15 @@ fn thread_page(model: &Model) -> Option<ThreadPageView> {
             // A message's images, once their URLs came (they are no part of the row as kept).
             if let (TurnItem::UserMessage(_), Some(message)) = (&***item, message) {
                 row.images = images(model, message);
+            } else {
+                row.images = step_images(model, item, &page.cwd);
+                if row.icon == "image" && row.images.is_empty() && row.badge.is_empty()
+                    && tools::image_sources(item, &page.cwd).iter().any(|source| {
+                        model.asset_urls.get(&source.key(id.as_str())).is_some_and(|url| url.starts_with("/api/assets/none/"))
+                    })
+                {
+                    row.badge = "Image no longer available".into();
+                }
             }
             let entry = item.message_id().map_or(id.as_str(), |m| m.as_str());
             row.find_matches = counts.get(entry).copied().unwrap_or(0);
@@ -654,6 +910,7 @@ fn thread_page(model: &Model) -> Option<ThreadPageView> {
     drop(cache);
     drop(prefixes);
     group_steps(&mut page.items);
+    gather_group_images(&mut page.items);
     // Turn times: on each finished turn's last row; and since when the
     // current one has been working.
     let ms = |at: Option<&Timestamp>| at.map_or(0, |at| crate::app::millis_from_iso(at.as_str()));
@@ -669,35 +926,66 @@ fn thread_page(model: &Model) -> Option<ThreadPageView> {
             page.items[idx].run_started_ms = started;
             page.items[idx].run_duration_ms = (completed - started).max(0);
         }
+        // A finished turn's last reply can start a fork from there.
+        if run.status == RunStatus::Completed
+            && let Some(reply) = (0..=idx).rev().take_while(|&i| shown[i].run_id() == run_id).find(|&i| page.items[i].kind == "assistant")
+        {
+            page.items[reply].can_fork_here = true;
+        }
     }
-    if page.working {
-        let under_way = thread.runs.iter().filter(|r| matches!(r.status, RunStatus::Running | RunStatus::Preparing | RunStatus::Starting));
-        page.working_since_ms = under_way.map(|r| ms(r.started_at.as_ref())).max().unwrap_or(0);
+    if page.working && status != ShellStatus::Approval {
+        let run = match shell.and_then(|shell| shell.active_run_id.as_ref()) {
+            Some(id) => thread.runs.get(id),
+            None => thread.runs.iter().rev().filter(|run| run.status == RunStatus::Waiting).max_by_key(|run| run.ordinal),
+        };
+        if let Some(run) = run.filter(|run| matches!(run.status, RunStatus::Preparing | RunStatus::Starting | RunStatus::Running | RunStatus::Waiting)) {
+            page.working_since_ms = ms(run.started_at.as_ref());
+            page.working_activity = if matches!(run.status, RunStatus::Preparing | RunStatus::Starting) {
+                Some(WorkingActivityView { kind: Some("starting".into()), step_item_id: None })
+            } else {
+                working_activity(&run.id, shown.iter().map(|item| item.run_id()).zip(&page.items))
+            };
+        }
     }
     for (row, item) in page.items.iter_mut().zip(&shown) {
         match &***item {
             // A question's row shows the answers given (on the request, not the item).
             TurnItem::UserInputRequest(question) => {
                 if let Some(answers) = thread.runtime_requests.get(&question.request_id).and_then(|r| r.answers.as_ref()) {
-                    row.text = answers.values().map(answer_text).filter(|a| !a.is_empty()).collect::<Vec<_>>().join(" · ");
+                    row.text = question.questions.iter().filter_map(|question| answers.get(&question.id).map(|answer| answer_text(answer, question)))
+                        .filter(|answer| !answer.is_empty()).collect::<Vec<_>>().join(" · ");
                 }
             }
             // A subagent that can be stopped, and what it is doing.
             TurnItem::Subagent(of) => {
                 if let Some(sub) = thread.subagents.get(&of.subagent_id) {
                     let live = matches!(sub.status, SubagentStatus::Running | SubagentStatus::Pending | SubagentStatus::Waiting);
+                    let stoppable = !matches!(sub.driver.as_str(), "antigravity" | "acp");
                     row.status = sub.status.as_str().to_owned();
                     row.progress = if live { sub.progress.clone().unwrap_or_default() } else { String::new() };
-                    row.can_stop = live && sub.native_task_ref.as_ref().is_some_and(|task| task.native_id.is_some());
+                    row.can_stop = live && stoppable && sub.native_task_ref.as_ref().is_some_and(|task| task.native_id.is_some());
                     if let Some(r) = sub.result.as_deref().filter(|r| !r.trim().is_empty()) {
                         row.output = Some(tail(r).0.into());
                     }
                 }
             }
-            // A plan that can be carried out.
+            // A plan that can be carried out, or one a later plan replaced.
             TurnItem::ProposedPlan(_) | TurnItem::Other(_) if !row.plan_id.is_empty() => {
-                let active = matches!(thread.plans.get(row.plan_id.as_str()), Some(PlanArtifact::ProposedPlan(plan)) if plan.status == PlanStatus::Active);
-                row.can_implement = active && !page.working && !row.streaming;
+                let status = match thread.plans.get(row.plan_id.as_str()) {
+                    Some(PlanArtifact::ProposedPlan(plan)) => Some(&plan.status),
+                    _ => None,
+                };
+                row.can_implement = status == Some(&PlanStatus::Active) && !page.working && !row.streaming;
+                row.superseded = status == Some(&PlanStatus::Superseded);
+            }
+            // A to-do list says how far along it is when folded.
+            TurnItem::TodoList(_) | TurnItem::DynamicTool(_) if row.kind == "todo" && !row.todos.is_empty() => {
+                let done = row.todos.iter().filter(|t| t.status == "completed").count();
+                let current = row.todos.iter().find(|t| t.status == "in_progress").or_else(|| row.todos.iter().find(|t| t.status != "completed"));
+                row.progress = match current {
+                    Some(step) => format!("{done}/{} · {}", row.todos.len(), step.text),
+                    None => format!("{done}/{} done", row.todos.len()),
+                };
             }
             _ => {}
         }
@@ -742,7 +1030,9 @@ fn thread_page(model: &Model) -> Option<ThreadPageView> {
                 _ => (None, vec![]),
             };
             let asked = if r.kind == RuntimeRequestKind::UserInput { "The agent has a question" } else { "Approval required" };
-            RequestView { id: r.id.as_str().to_owned(), kind: r.kind.as_str().to_owned(), prompt: prompt.unwrap_or(asked).to_owned(), detail: None, questions: asks, files }
+            let for_thread = r.native_request_ref.as_ref().is_some_and(|native| matches!(native.driver.as_str(), "claudeAgent" | "antigravity"));
+            let session_label = if for_thread { "Allow for Thread" } else { "Allow for Session" }.to_owned();
+            RequestView { id: r.id.as_str().to_owned(), kind: r.kind.as_str().to_owned(), prompt: prompt.unwrap_or(asked).to_owned(), detail: None, questions: asks, files, session_label }
         })
         .collect();
     let finished = thread.runs.iter().any(|r| match r.status {
@@ -752,8 +1042,28 @@ fn thread_page(model: &Model) -> Option<ThreadPageView> {
     });
     page.can_fork = finished;
     page.can_merge_back = finished && !page.working && page.parent.as_ref().is_some_and(|p| p.relation == "fork" && model.thread_shell(&p.thread_id).is_some());
+    page.waiting_children = model
+        .threads
+        .iter()
+        .filter(|t| t.lineage.parent_thread_id.as_ref().is_some_and(|p| p.as_str() == tid) && t.deleted_at.is_none() && t.archived_at.is_none())
+        .filter(|t| shell_status(t) == ShellStatus::Approval)
+        .map(|t| ThreadLinkView {
+            thread_id: t.id.as_str().to_owned(),
+            title: if t.title.is_empty() { "Subagent".into() } else { t.title.clone() },
+            relation: relation(t).to_owned(),
+        })
+        .collect();
+    let active_run = shell.and_then(|shell| shell.active_run_id.as_ref()).or_else(|| {
+        thread.runs.iter().filter(|r| matches!(r.status, RunStatus::Preparing | RunStatus::Starting | RunStatus::Running | RunStatus::Waiting))
+            .max_by_key(|r| r.ordinal).map(|r| &r.id)
+    });
+    (page.plan, page.tasks) = work_progress(thread, &shown, &page.items, page.working, active_run);
     page.context = context_usage(thread);
+    if let Some(context) = page.context.as_mut() {
+        context.can_compact = !page.working && provider_has_command(model, &page.provider_instance_id, "compact");
+    }
     page.background = background_label(thread);
+    page.background_tasks = background_tasks(thread);
     let queued = queued_runs(thread);
     let steerable = shell.is_some_and(|shell| steerable_run(model, shell).is_some());
     let count = queued.len();
@@ -775,12 +1085,306 @@ fn thread_page(model: &Model) -> Option<ThreadPageView> {
             active_item_id: active_item,
         });
     }
-    Some(page)
+    let collected = collect_and_stamp_artifacts(thread, &mut page.items, &page.cwd);
+    page.artifact_count = collected.len() as u32;
+    Some((page, collected))
+}
+
+struct ToolArtifactMeta {
+    explicit_id: Option<String>,
+    title: String,
+    kind: String,
+    language: String,
+    content: Option<String>,
+    path: Option<String>,
+    hosted_url: Option<String>,
+    summary: String,
+}
+
+fn dynamic_tool_artifact_meta(i: &domovoi_model::typed::DynamicToolItem) -> ToolArtifactMeta {
+    let input = i.input.as_ref();
+    let output_val = i.output.as_ref();
+    let parsed_output = output_val
+        .and_then(Value::as_str)
+        .and_then(|s| serde_json::from_str::<Value>(s).ok());
+    let out_obj = output_val.filter(|v| v.is_object()).or(parsed_output.as_ref());
+    let str_in = |k: &str| input.and_then(|v| v.get(k)).and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()).map(str::to_owned);
+    let str_out = |k: &str| out_obj.and_then(|v| v.get(k)).and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()).map(str::to_owned);
+
+    let output_text = output_val.and_then(Value::as_str).unwrap_or_default();
+    let hosted_url = str_out("url")
+        .or_else(|| str_out("hostedUrl"))
+        .or_else(|| crate::artifacts::extract_claude_url(output_text))
+        .or_else(|| str_in("url"));
+    let content = input.and_then(|v| v.get("content")).and_then(Value::as_str).map(str::to_owned);
+    let path = str_out("sourcePath").or_else(|| str_in("path"));
+    let explicit_id = str_out("artifactId")
+        .or_else(|| str_out("id"))
+        .or_else(|| str_in("id"))
+        .or_else(|| hosted_url.as_deref().and_then(|u| u.rsplit('/').next()).filter(|s| !s.is_empty()).map(|s| format!("claude:{s}")));
+    let raw_kind = str_out("kind")
+        .or_else(|| str_in("kind"))
+        .or_else(|| str_in("type"))
+        .or_else(|| path.as_deref().and_then(crate::artifacts::artifact_kind_for_path).map(str::to_owned))
+        .unwrap_or_else(|| if content.as_deref().is_some_and(|c| !c.is_empty()) { "html".into() } else if hosted_url.is_some() { "hosted".into() } else { "html".into() });
+    let kind = crate::artifacts::normalize_kind(&raw_kind).to_owned();
+    let language = str_out("language").or_else(|| str_in("language")).unwrap_or_else(|| kind.clone());
+    let title = str_out("title")
+        .or_else(|| str_in("title"))
+        .unwrap_or_else(|| crate::artifacts::extract_title(&kind, content.as_deref().unwrap_or_default(), path.as_deref()));
+    let summary = str_in("summary").or_else(|| str_in("description")).unwrap_or_default();
+
+    ToolArtifactMeta { explicit_id, title, kind, language, content, path, hosted_url, summary }
+}
+
+/// Collects all artifacts from the thread (explicit MCP/Claude tools, inline
+/// HTML/SVG/React/Mermaid blocks, and previewable workspace files), grouping
+/// versions and stamping artifact metadata onto `items` and their blocks.
+fn collect_and_stamp_artifacts(thread: &Thread, items: &mut [ItemView], cwd: &str) -> Vec<crate::artifacts::CollectedArtifact> {
+    let raw_by_id: FxHashMap<&str, &TurnItem> = thread.turn_items.iter().map(|i| (i.id().as_str(), i)).collect();
+    let mut collector = crate::artifacts::Collector::default();
+
+    for row in items.iter_mut() {
+        let raw = raw_by_id.get(row.id.as_str()).copied();
+        if row.kind == "artifact"
+            && let Some(TurnItem::DynamicTool(tool)) = raw
+        {
+            let meta = dynamic_tool_artifact_meta(tool);
+            let normalized_path = meta
+                .path
+                .as_deref()
+                .and_then(|p| crate::artifacts::workspace_artifact_path(cwd, p));
+            let (id, version) = collector.push(crate::artifacts::EntryInput {
+                explicit_id: meta.explicit_id,
+                item_id: row.id.clone(),
+                title: meta.title.clone(),
+                kind: meta.kind.clone(),
+                language: meta.language,
+                source: meta.content,
+                path: normalized_path,
+                hosted_url: meta.hosted_url.clone(),
+                summary: meta.summary,
+                streaming: row.streaming,
+            });
+            row.artifact_id = Some(id);
+            row.artifact_title = meta.title;
+            row.artifact_kind = meta.kind;
+            row.artifact_version = version;
+            row.artifact_hosted_url = meta.hosted_url;
+            continue;
+        }
+
+        if row.kind == "assistant" && !row.streaming {
+            let mut block_stamps: Vec<(usize, String, String, String, u32)> = Vec::new();
+            let mut linked_paths: Vec<String> = Vec::new();
+            for (idx, block) in row.blocks.iter().enumerate() {
+                let block_kind = if block.kind == "html_document" {
+                    Some("html")
+                } else if block.kind == "svg_document" {
+                    Some("svg")
+                } else if block.kind == "code" && block.fence_closed {
+                    crate::artifacts::artifact_kind_for_language(&block.language)
+                } else {
+                    None
+                };
+                if let Some(kind) = block_kind {
+                    let title = crate::artifacts::extract_title(kind, &block.text, None);
+                    let lang = if block.language.is_empty() { kind.to_owned() } else { block.language.clone() };
+                    let (id, version) = collector.push(crate::artifacts::EntryInput {
+                        explicit_id: None,
+                        item_id: format!("{}:{idx}", row.id),
+                        title: title.clone(),
+                        kind: kind.to_owned(),
+                        language: lang,
+                        source: Some(block.text.clone()),
+                        path: None,
+                        hosted_url: None,
+                        summary: String::new(),
+                        streaming: false,
+                    });
+                    block_stamps.push((idx, id, title, kind.to_owned(), version));
+                }
+                for run in block.runs.iter().chain(block.cell_runs.iter().flatten()) {
+                    if let Some(link) = &run.workspace_link {
+                        linked_paths.push(link.clone());
+                    }
+                }
+            }
+            if !block_stamps.is_empty() {
+                let blocks = Arc::make_mut(&mut row.blocks);
+                for (idx, id, title, kind, version) in block_stamps {
+                    if let Some(b) = blocks.get_mut(idx) {
+                        b.artifact_id = Some(id);
+                        b.artifact_title = title;
+                        b.artifact_kind = kind;
+                        b.artifact_version = version;
+                    }
+                }
+            }
+            for candidate in linked_paths {
+                if let Some(path) = crate::artifacts::workspace_artifact_path(cwd, &candidate)
+                    && let Some(kind) = crate::artifacts::artifact_kind_for_path(&path)
+                {
+                    let title = crate::artifacts::extract_title(kind, "", Some(&path));
+                    collector.push(crate::artifacts::EntryInput {
+                        explicit_id: None,
+                        item_id: row.id.clone(),
+                        title,
+                        kind: kind.to_owned(),
+                        language: crate::highlight::language_for_path(&path),
+                        source: None,
+                        path: Some(path),
+                        hosted_url: None,
+                        summary: String::new(),
+                        streaming: false,
+                    });
+                }
+            }
+        }
+
+        if !row.artifact_paths.is_empty() && !row.streaming {
+            let mut first_stamp: Option<(String, String, String, u32)> = None;
+            for candidate in &row.artifact_paths {
+                if let Some(path) = crate::artifacts::workspace_artifact_path(cwd, candidate)
+                    && let Some(kind) = crate::artifacts::artifact_kind_for_path(&path)
+                {
+                    let title = crate::artifacts::extract_title(kind, "", Some(&path));
+                    let (id, version) = collector.push(crate::artifacts::EntryInput {
+                        explicit_id: None,
+                        item_id: row.id.clone(),
+                        title: title.clone(),
+                        kind: kind.to_owned(),
+                        language: crate::highlight::language_for_path(&path),
+                        source: None,
+                        path: Some(path),
+                        hosted_url: None,
+                        summary: String::new(),
+                        streaming: false,
+                    });
+                    if first_stamp.is_none() {
+                        first_stamp = Some((id, title, kind.to_owned(), version));
+                    }
+                }
+            }
+            if let Some((id, title, kind, version)) = first_stamp {
+                row.artifact_id = Some(id);
+                row.artifact_title = title;
+                row.artifact_kind = kind;
+                row.artifact_version = version;
+            }
+        }
+    }
+
+    collector.finish()
+}
+
+/// Collects the active thread's artifacts for update-time actions (`OpenArtifact`,
+/// `SelectArtifactVersion`, `AskAboutArtifact`).
+pub fn collect_artifacts_for_model(model: &Model) -> Vec<crate::artifacts::CollectedArtifact> {
+    thread_page(model).map(|(_, collected)| collected).unwrap_or_default()
+}
+
+/// Select from both collections. Older Claude runs can have a plan artifact
+/// whose node points at the tool row that replaced the plan row.
+fn work_progress(
+    thread: &Thread, shown: &[&Arc<TurnItem>], rows: &[ItemView], working: bool, active_run: Option<&RunId>,
+) -> (Option<PlanProgressView>, Option<TaskProgressView>) {
+    let run = |id: Option<&RunId>| id.and_then(|id| thread.runs.get(id));
+    let rank = |id: Option<&RunId>, ordinal: u64| (run(id).map_or(0, |r| r.ordinal), ordinal);
+    let plan_nodes: FxHashSet<_> = thread.plans.iter().map(|plan| match plan {
+        PlanArtifact::ProposedPlan(p) => &p.node_id,
+        PlanArtifact::TodoList(t) => &t.node_id,
+    }).collect();
+    let mut by_node = FxHashMap::default();
+    if !plan_nodes.is_empty() {
+        by_node.extend(shown.iter().zip(rows).filter_map(|(item, row)| {
+            let node = item.node_id().filter(|node| plan_nodes.contains(node))?;
+            Some((node, (*item, row)))
+        }));
+    }
+    let row_rank = |item: &TurnItem| rank(item.run_id(), item.ordinal());
+    let plan_row = shown.iter().zip(rows).rev().find(|(_, row)| row.kind == "plan" && !row.text.trim().is_empty());
+    let task_row = shown.iter().zip(rows).rev().find(|(item, row)| {
+        row.kind == "todo" && !matches!(&****item, TurnItem::DynamicTool(t) if t.status == TurnItemStatus::Failed)
+    });
+    let artifact_rank = |id: Option<&RunId>, node: &domovoi_model::typed::NodeId| {
+        rank(id, by_node.get(node).map_or(0, |(item, _)| item.ordinal()))
+    };
+    let is_rolled_back = |id| run(id).is_some_and(|run| run.status == RunStatus::RolledBack);
+    let stored_plan = thread.plans.iter().filter_map(|plan| match plan {
+        PlanArtifact::ProposedPlan(p) if !p.markdown.trim().is_empty() && !is_rolled_back(p.run_id.as_ref()) => Some(p),
+        _ => None,
+    }).max_by_key(|p| artifact_rank(p.run_id.as_ref(), &p.node_id));
+    let plan = if let Some(p) = stored_plan.filter(|p| plan_row.is_none_or(|(item, row)| {
+        row.plan_id == p.id.as_str() || artifact_rank(p.run_id.as_ref(), &p.node_id) >= row_rank(item)
+    })) {
+        let row = plan_row.map(|(_, row)| row).filter(|row| row.plan_id == p.id.as_str());
+        let streaming = row.is_some_and(|r| r.streaming);
+        Some(PlanProgressView {
+            plan_id: p.id.as_str().to_owned(),
+            label: plan_label(Some(&p.status), streaming).to_owned(),
+            can_implement: p.status == PlanStatus::Active && !streaming && !working,
+            blocks: row.filter(|r| r.text == p.markdown).map(|r| r.blocks.clone()).unwrap_or_else(|| markdown::parse(&p.markdown).into()),
+        })
+    } else {
+        plan_row.map(|(_, row)| {
+            let status = match thread.plans.get(row.plan_id.as_str()) {
+                Some(PlanArtifact::ProposedPlan(p)) => Some(&p.status),
+                _ => None,
+            };
+            PlanProgressView {
+                plan_id: row.plan_id.clone(), label: plan_label(status, row.streaming).to_owned(),
+                blocks: row.blocks.clone(), can_implement: row.can_implement,
+            }
+        })
+    };
+
+    let stored_tasks = thread.plans.iter().filter_map(|plan| match plan {
+        PlanArtifact::TodoList(t) if !is_rolled_back(t.run_id.as_ref()) => Some(t),
+        _ => None,
+    }).max_by_key(|t| artifact_rank(t.run_id.as_ref(), &t.node_id));
+    let checklist = if let Some(t) = stored_tasks.filter(|t| task_row.is_none_or(|(item, _)| {
+        artifact_rank(t.run_id.as_ref(), &t.node_id) >= row_rank(item)
+    })) {
+        Some((t.run_id.as_ref(), t.explanation.clone(), by_node.get(&t.node_id)
+            .filter(|(_, row)| row.kind == "todo").map(|(_, row)| row.todos.clone()).unwrap_or_else(|| todo_views(&t.steps))))
+    } else {
+        task_row.map(|(item, row)| {
+            let explanation = match &***item {
+                TurnItem::TodoList(t) => t.explanation.clone(),
+                _ => None,
+            };
+            (item.run_id(), explanation, row.todos.clone())
+        })
+    };
+    let tasks = checklist.filter(|(_, _, todos)| !todos.is_empty()).map(|(run_id, explanation, todos)| {
+        let done = todos.iter().filter(|t| t.status == "completed").count() as u32;
+        let current = todos.iter().find(|t| t.status == "in_progress").or_else(|| todos.iter().find(|t| t.status != "completed"));
+        let total = todos.len() as u32;
+        let current = current.map(|step| step.text.clone()).unwrap_or_default();
+        let previous_run = working && (active_run.is_none() || active_run != run_id);
+        let label = if previous_run { format!("Tasks {done}/{total} · Previous run") }
+            else if current.is_empty() { format!("Tasks {done}/{total}") }
+            else { format!("Tasks {done}/{total} · {current}") };
+        TaskProgressView { done, total, current, label, previous_run, explanation, todos }
+    });
+    (plan, tasks)
+}
+
+fn plan_label(status: Option<&PlanStatus>, streaming: bool) -> &'static str {
+    match status {
+        Some(PlanStatus::Draft) => "Plan draft",
+        _ if streaming => "Plan draft",
+        Some(PlanStatus::Active) => "Plan ready",
+        Some(PlanStatus::Completed) => "Plan accepted",
+        Some(PlanStatus::Superseded) => "Plan superseded",
+        _ => "Plan",
+    }
 }
 
 /// The open thread's queued runs, in the order they run.
 pub fn queued_order(model: &Model) -> Option<Vec<String>> {
-    Some(queued_runs(model.thread.as_ref()?).iter().map(|r| r.id.as_str().to_owned()).collect())
+    Some(queued_runs(model.held_thread(model.selected_thread.as_deref()?)?).iter().map(|r| r.id.as_str().to_owned()).collect())
 }
 
 /// The background work the provider still does after its reply.
@@ -796,6 +1400,63 @@ fn background_label(thread: &Thread) -> String {
     }
 }
 
+fn background_tasks(thread: &Thread) -> Vec<BackgroundTaskView> {
+    let nonblank = |text: Option<&String>| text.map(|s| s.trim().to_owned()).filter(|s| !s.is_empty());
+    let mut seen_ids = FxHashSet::default();
+    let mut seen_children = FxHashSet::default();
+    let mut tasks = Vec::new();
+    for provider in thread.provider_threads.iter() {
+        for task in provider.pending_background_tasks.iter().flatten() {
+            let agent = if task.kind == Some(BackgroundTaskKind::Subagent) {
+                let by_child = task.child_thread_id.as_ref().and_then(|id| {
+                    thread.subagents.iter().find(|agent| agent.child_thread_id.as_ref() == Some(id))
+                });
+                by_child.or_else(|| {
+                    let native = task.native_item_id.as_ref().unwrap_or(&task.task_id);
+                    thread.subagents.iter().find(|agent| {
+                        agent.provider_thread_id.as_ref() == Some(&provider.id)
+                            && agent.native_task_ref.as_ref().and_then(|r| r.native_id.as_ref()) == Some(native)
+                    })
+                })
+            } else {
+                None
+            };
+            let status = match agent.map(|agent| &agent.status) {
+                Some(SubagentStatus::Completed | SubagentStatus::Failed | SubagentStatus::Cancelled | SubagentStatus::Interrupted) => continue,
+                Some(SubagentStatus::Idle | SubagentStatus::Pending) => "pending",
+                Some(SubagentStatus::Waiting) => "waiting",
+                _ => "running",
+            };
+            let child = task.child_thread_id.as_ref().or_else(|| agent.and_then(|agent| agent.child_thread_id.as_ref()));
+            // The provider may replace a launch tool ID with a task ID once it acknowledges it.
+            let id = if let Some(native) = &task.native_item_id {
+                format!("{}:item:{native}", provider.id.as_str())
+            } else {
+                format!("{}:task:{}", provider.id.as_str(), task.task_id)
+            };
+            if !seen_ids.insert(id.clone()) || child.is_some_and(|child| !seen_children.insert(child)) {
+                continue;
+            }
+            let (kind, fallback) = match task.kind {
+                Some(BackgroundTaskKind::Subagent) => ("subagent", "Background agent"),
+                Some(BackgroundTaskKind::Command) => ("command", "Background command"),
+                Some(BackgroundTaskKind::Monitor) => ("monitor", "Background monitor"),
+                _ => ("task", "Background task"),
+            };
+            let label = nonblank(agent.and_then(|agent| agent.title.as_ref()))
+                .or_else(|| nonblank(task.description.as_ref()))
+                .or_else(|| nonblank(task.command.as_ref()))
+                .unwrap_or_else(|| fallback.into());
+            tasks.push(BackgroundTaskView {
+                id, kind: kind.into(), label, status: status.into(),
+                progress: nonblank(agent.and_then(|agent| agent.progress.as_ref())),
+                child_thread_id: child.map(|id| id.as_str().to_owned()),
+            });
+        }
+    }
+    tasks
+}
+
 /// The context window of the thread's provider conversation, as last reported.
 fn context_usage(thread: &Thread) -> Option<ContextUsageView> {
     let reported = |t: &&ProviderThread| matches!(t.context_usage, Some(Some(_)));
@@ -809,7 +1470,195 @@ fn context_usage(thread: &Thread) -> Option<ContextUsageView> {
     let max = usage.max_tokens.unwrap_or(0);
     let percent = if max > 0 { ((used as f64 / max as f64) * 100.0).round().min(100.0) as u32 } else { 0 };
     let label = if max > 0 { format!("{} of {} tokens", token_label(used), token_label(max)) } else { format!("{} tokens", token_label(used)) };
-    Some(ContextUsageView { used_tokens: used, max_tokens: max, percent, label, high: percent >= 80 })
+    let remaining_label = if max > 0 {
+        if used >= max { "Full".into() } else { format!("{} left", token_label(max - used)) }
+    } else {
+        String::new()
+    };
+    let cache_hit_percent = match (usage.input_tokens, usage.cached_input_tokens) {
+        (Some(inp), Some(cached)) if inp > 0 && cached > 0 => ((cached.min(inp) as f64 / inp as f64) * 100.0).round().min(100.0) as u32,
+        _ => 0,
+    };
+    let cache_hit_label = if cache_hit_percent > 0 { format!("{cache_hit_percent}%") } else { String::new() };
+    let compact_at_percent = match (usage.auto_compact_threshold, max) {
+        (Some(at), max) if max > 0 && at > 0 => ((at as f64 / max as f64) * 100.0).round().min(100.0) as u32,
+        _ => 0,
+    };
+    let breakdown = [
+        ("Input", usage.input_tokens),
+        ("Cached", usage.cached_input_tokens),
+        ("Output", usage.output_tokens),
+        ("Reasoning", usage.reasoning_output_tokens),
+    ]
+    .into_iter()
+    .filter_map(|(label, n)| n.filter(|n| *n > 0).map(|n| StatLineView { label: label.into(), value: token_label(n) }))
+    .collect();
+    let cost = usage.cost.as_ref().and_then(|c| Some((c.amount.as_f64()?, c.currency.as_str()))).filter(|(amount, _)| *amount > 0.0).map(|(amount, currency)| money_label(amount, currency)).unwrap_or_default();
+    Some(ContextUsageView {
+        used_tokens: used,
+        max_tokens: max,
+        percent,
+        label,
+        remaining_label,
+        cache_hit_percent,
+        cache_hit_label,
+        high: percent >= 80,
+        critical: percent >= 90,
+        compact_at_percent,
+        breakdown,
+        cost,
+        can_compact: false,
+    })
+}
+
+/// The provider lists this slash command (`compact`, without its `/`).
+pub(crate) fn provider_has_command(model: &Model, instance_id: &str, name: &str) -> bool {
+    model
+        .providers
+        .iter()
+        .find(|p| p.instance_id.as_str() == instance_id)
+        .and_then(|p| p.slash_commands.as_ref())
+        .is_some_and(|commands| commands.iter().any(|c| c.name.trim_start_matches('/') == name))
+}
+
+/// `$1.24`, `€0.08`, `12.00 PLN`.
+pub(crate) fn money_label(amount: f64, currency: &str) -> String {
+    match currency.to_ascii_uppercase().as_str() {
+        "USD" | "" => format!("${amount:.2}"),
+        "EUR" => format!("€{amount:.2}"),
+        "GBP" => format!("£{amount:.2}"),
+        other => format!("{amount:.2} {other}"),
+    }
+}
+
+/// The usage windows of a provider's account in a stable semantic order:
+/// Session, Weekly (overall before model-scoped), Monthly, then other.
+fn limit_windows(now_ms: i64, limits: Option<&domovoi_model::typed::ServerProviderUsageLimits>) -> Vec<LimitWindowView> {
+    let mut ordered: Vec<_> = limits.into_iter().flat_map(|l| l.windows.iter()).collect();
+    fn window_sort_key(w: &domovoi_model::typed::ServerProviderUsageWindow) -> (u8, bool, &str) {
+        let kind_rank: u8 = match w.kind {
+            ServerProviderUsageWindowKind::Session => 0,
+            ServerProviderUsageWindowKind::Weekly => 1,
+            ServerProviderUsageWindowKind::Monthly => 2,
+            _ => 3,
+        };
+        let scoped = w.model_ids.as_ref().is_some_and(|m| !m.is_empty()) || w.label.contains('·');
+        (kind_rank, scoped, w.label.as_str())
+    }
+    ordered.sort_by(|a, b| window_sort_key(a).cmp(&window_sort_key(b)));
+    ordered
+        .into_iter()
+        .map(|w| {
+            // Past its reset the window is open again, whatever was last read of it.
+            let reset_passed = w.resets_at.as_ref().map(|r| crate::app::millis_from_iso(r.as_str())).is_some_and(|at| at > 0 && now_ms > 0 && at <= now_ms);
+            let used = if reset_passed { 0.0 } else { w.used_percent.as_f64().unwrap_or(0.0).clamp(0.0, 100.0) };
+            let percent = used.round() as u32;
+            let resets = w.resets_at.as_ref().filter(|_| !reset_passed).map(|r| crate::app::until_label(now_ms, r.as_str())).unwrap_or_default();
+            let elapsed = if reset_passed { None } else { elapsed_share(now_ms, w) };
+            LimitWindowView {
+                label: w.label.clone(),
+                percent,
+                resets,
+                high: percent >= 75,
+                elapsed_percent: elapsed.map_or(0, |e| (e * 100.0).round() as u32),
+                pace: elapsed.map(|e| pace_of(used, e)).unwrap_or_default().into(),
+                resets_at: w.resets_at.as_ref().filter(|_| !reset_passed).map(|r| r.as_str().to_owned()).unwrap_or_default(),
+            }
+        })
+        .collect()
+}
+
+/// How far through its period a window is, 0–1 (t3code's `elapsedShare`):
+/// known only with both its length and when it refills.
+fn elapsed_share(now_ms: i64, w: &domovoi_model::typed::ServerProviderUsageWindow) -> Option<f64> {
+    let length = w.window_duration_mins.filter(|m| *m > 0)? as f64 * 60_000.0;
+    let resets = crate::app::millis_from_iso(w.resets_at.as_ref()?.as_str());
+    if resets == 0 || now_ms == 0 {
+        return None;
+    }
+    Some(((length - (resets - now_ms) as f64) / length).clamp(0.0, 1.0))
+}
+
+/// Used against time gone, within 5 points of each other `on` (t3code's `paceOfShares`).
+fn pace_of(used_percent: f64, elapsed: f64) -> &'static str {
+    let gap = used_percent - elapsed * 100.0;
+    if gap > 5.0 {
+        "ahead"
+    } else if gap < -5.0 {
+        "under"
+    } else {
+        "on"
+    }
+}
+
+/// Why a provider's limits can't be shown (t3code's `limitsNotice`); empty when they can.
+fn limits_notice(limits: &domovoi_model::typed::ServerProviderUsageLimits) -> String {
+    use domovoi_model::typed::ServerProviderUsageUnavailableReason as Reason;
+    let message = |fallback: &str| limits.unavailable.as_ref().and_then(|u| u.message.clone()).filter(|m| !m.is_empty()).unwrap_or_else(|| fallback.to_owned());
+    match limits.unavailable.as_ref().map(|u| &u.reason) {
+        Some(Reason::Unsupported) => message("This account has no subscription limits."),
+        Some(Reason::ProbeFailed) => message("Could not read limits."),
+        _ if limits.windows.is_empty() => "No limits reported.".into(),
+        _ => String::new(),
+    }
+}
+
+/// A provider's account windows, when it reports any (or where to see them,
+/// or a failed probe to tell the user about).
+fn limits_of(now_ms: i64, p: &domovoi_model::typed::ServerProvider) -> Option<ProviderLimitsView> {
+    let limits = p.usage_limits.as_ref()?;
+    let windows = limit_windows(now_ms, Some(limits));
+    let external = limits.external_usage.as_ref();
+    let probe_failed = limits.unavailable.as_ref().is_some_and(|u| u.reason == ServerProviderUsageUnavailableReason::ProbeFailed);
+    (!windows.is_empty() || external.is_some() || probe_failed).then(|| ProviderLimitsView {
+        instance_id: p.instance_id.as_str().to_owned(),
+        provider: provider_name(p),
+        notice: if windows.is_empty() { limits_notice(limits) } else { String::new() },
+        windows,
+        external_label: external.map(|e| e.label.clone()).unwrap_or_default(),
+        external_url: external.map(|e| e.url.clone()).unwrap_or_default(),
+        checked: age_label(now_ms, limits.checked_at.as_str()),
+    })
+}
+
+fn provider_name(p: &domovoi_model::typed::ServerProvider) -> String {
+    p.display_name.clone().filter(|n| !n.is_empty()).unwrap_or_else(|| p.instance_id.as_str().to_owned())
+}
+
+/// Every provider's account windows (the ones that report any).
+fn provider_limits(model: &Model) -> Vec<ProviderLimitsView> {
+    model.providers.iter().filter_map(|p| limits_of(model.shown_ms, p)).collect()
+}
+
+/// The open thread's context window and the limits of the provider it runs
+/// on, for the meter in its header; `None` when neither is known.
+fn session_usage(model: &Model, page: &ThreadPageView) -> Option<SessionUsageView> {
+    let provider = model.providers.iter().find(|p| !page.provider_instance_id.is_empty() && p.instance_id.as_str() == page.provider_instance_id);
+    let reported = provider.and_then(|p| p.usage_limits.as_ref());
+    let mut limits = provider.and_then(|p| limits_of(model.shown_ms, p));
+    let limits_notice = reported.map(limits_notice).unwrap_or_default();
+    if limits.is_none() && !limits_notice.is_empty() && reported.is_some_and(|l| l.unavailable.is_some()) {
+        // Unreadable: say so under the provider's name.
+        limits = provider.map(|p| ProviderLimitsView {
+            instance_id: p.instance_id.as_str().to_owned(),
+            provider: provider_name(p),
+            checked: reported.map(|l| age_label(model.shown_ms, l.checked_at.as_str())).unwrap_or_default(),
+            notice: limits_notice.clone(),
+            ..Default::default()
+        });
+    }
+    if page.context.is_none() && limits.as_ref().is_none_or(|l| l.windows.is_empty()) {
+        return None;
+    }
+    let limits_notice = if limits.is_some() { limits_notice } else { String::new() };
+    let fullest = limits.as_ref().and_then(|l| l.windows.iter().max_by_key(|w| w.percent).cloned());
+    let limit_alert = match fullest.as_ref().map(|w| w.percent) {
+        Some(90..) => "danger",
+        Some(75..) => "caution",
+        _ => "",
+    };
+    let limits_checked = reported.filter(|_| limits.is_some()).map(|l| age_label(model.shown_ms, l.checked_at.as_str())).unwrap_or_default();
+    Some(SessionUsageView { context: page.context.clone(), limits, fullest, limit_alert: limit_alert.into(), limits_notice, limits_checked })
 }
 
 /// `950`, `48k`, `1.2M`.
@@ -834,22 +1683,68 @@ fn runtime_modes() -> Vec<ChoiceView> {
 /// The most commands the `/` list shows.
 const SLASH_LIMIT: usize = 8;
 
-/// The provider's commands matching a draft that is `/` and one word: names
-/// starting with the word first, then ones containing it.
+/// The commands matching a draft that is `/` and one word, the app's own
+/// first and then the provider's (its `/clear` is the app's): names starting
+/// with the word first, then ones containing it.
 fn slash_commands(model: &Model, instance_id: &str, draft: &str) -> Vec<SlashCommandView> {
     let Some(query) = draft.strip_prefix('/').filter(|q| !q.contains(char::is_whitespace)) else { return vec![] };
     let query = query.to_lowercase();
     let provider = model.providers.iter().find(|p| p.instance_id.as_str() == instance_id);
-    let all: Vec<SlashCommandView> = provider
+    let in_thread = model.selected_thread.is_some();
+    let plan_mode = provider.is_none_or(|p| p.show_interaction_mode_toggle != Some(false));
+    let builtins = crate::update::BUILTIN_COMMANDS
+        .iter()
+        .filter(|(name, _, _)| match *name {
+            "fork" | "clear" => in_thread,
+            "plan" => plan_mode,
+            _ => true,
+        })
+        .map(|(name, hint, description)| SlashCommandView { name: (*name).into(), description: (*description).into(), kind: "builtin".into(), hint: (*hint).into() });
+    let taken = |name: &str| crate::update::BUILTIN_COMMANDS.iter().any(|(n, _, _)| *n == name);
+    let provided = provider
         .and_then(|p| p.slash_commands.as_ref())
         .into_iter()
         .flatten()
-        .map(|c| SlashCommandView { name: c.name.clone(), description: c.description.clone().unwrap_or_default() })
-        .collect();
+        .filter(|c| !taken(c.name.trim_start_matches('/')))
+        .map(|c| SlashCommandView {
+            name: c.name.trim_start_matches('/').to_owned(),
+            description: c.description.clone().unwrap_or_default(),
+            kind: "command".into(),
+            hint: c.input.as_ref().map(|i| i.hint.clone()).unwrap_or_default(),
+        });
+    let all: Vec<SlashCommandView> = builtins.chain(provided).collect();
     if all.iter().any(|c| c.name.to_lowercase() == query) {
         return vec![]; // typed in full
     }
     let (mut starts, contains): (Vec<_>, Vec<_>) = all.into_iter().filter(|c| c.name.to_lowercase().contains(&query)).partition(|c| c.name.to_lowercase().starts_with(&query));
+    starts.extend(contains);
+    starts.truncate(SLASH_LIMIT);
+    starts
+}
+
+/// The provider's skills matching a `$word` being typed at the draft's end
+/// (the ones a user may invoke and that are on).
+fn skills(model: &Model, instance_id: &str, draft: &str) -> Vec<SlashCommandView> {
+    let Some((_, query)) = crate::update::skill_query(draft) else { return vec![] };
+    let query = query.to_lowercase();
+    let provider = model.providers.iter().find(|p| p.instance_id.as_str() == instance_id);
+    let all: Vec<SlashCommandView> = provider
+        .and_then(|p| p.skills.as_ref())
+        .into_iter()
+        .flatten()
+        .filter(|s| s.enabled && s.user_invocable != Some(false))
+        .filter(|s| query.is_empty() || s.name.to_lowercase().contains(&query) || s.display_name.as_deref().is_some_and(|d| d.to_lowercase().contains(&query)))
+        .map(|s| SlashCommandView {
+            name: s.name.clone(),
+            description: s.short_description.clone().or_else(|| s.description.clone()).unwrap_or_default(),
+            kind: "skill".into(),
+            hint: s.scope.clone().unwrap_or_default(),
+        })
+        .collect();
+    if all.iter().any(|s| s.name.to_lowercase() == query) {
+        return vec![]; // typed in full
+    }
+    let (mut starts, contains): (Vec<_>, Vec<_>) = all.into_iter().partition(|s| s.name.to_lowercase().starts_with(&query));
     starts.extend(contains);
     starts.truncate(SLASH_LIMIT);
     starts
@@ -905,7 +1800,9 @@ fn model_picker(model: &Model, selected: Option<&ModelOption>) -> (Vec<ModelRowV
     let query = model.composer.model_query.trim();
     let settings = model.settings.as_ref();
     let favorites = update::model_favorites(settings);
-    let is_selected = |o: &ModelOption| selected.is_some_and(|s| s.instance_id == o.instance_id && s.model == o.model);
+    // The selected model's row, also when it was selected by an alias.
+    let chosen_slug = selected.and_then(|s| update::model_record(model, &s.instance_id, &s.model).map(|(m, _)| (s.instance_id.clone(), m.slug.clone())));
+    let is_selected = |o: &ModelOption| selected.is_some_and(|s| s.instance_id == o.instance_id && s.model == o.model) || chosen_slug.as_ref().is_some_and(|(i, slug)| *i == o.instance_id && *slug == o.model);
     // Every model as a row, with its provider's name (for search).
     let mut rows: Vec<(ModelRowView, String)> = vec![];
     let mut hidden_by: HashMap<String, Vec<String>> = HashMap::new();
@@ -917,6 +1814,7 @@ fn model_picker(model: &Model, selected: Option<&ModelOption>) -> (Vec<ModelRowV
             detail: upstream_provider(p.map_or("", |p| p.driver.as_str()), &o.model),
             favorite: favorites.iter().any(|(i, s)| *i == o.instance_id && *s == o.model),
             hidden: hidden.contains(&o.model),
+            chosen: is_selected(&o),
             option: o,
         };
         rows.push((row, p.and_then(|p| p.display_name.clone()).unwrap_or_default()));
@@ -968,18 +1866,49 @@ fn model_picker(model: &Model, selected: Option<&ModelOption>) -> (Vec<ModelRowV
         }
         let provider = p.and_then(|p| p.display_name.clone()).unwrap_or_default();
         let status = p.map(|p| p.status.as_str().to_owned()).unwrap_or_default();
-        groups.push(ModelGroupView { instance_id: instance, provider, status, models, hidden_count });
+        let message = p.filter(|p| p.status != domovoi_model::typed::ServerProviderState::Ready).and_then(|p| p.message.clone()).unwrap_or_default();
+        groups.push(ModelGroupView { instance_id: instance, provider, status, message, models, hidden_count });
+    }
+    // A provider that lists no models (signed out) still shows, with why.
+    if query.is_empty() {
+        for p in model.providers.iter().filter(|p| p.enabled && p.models.is_empty() && p.status != domovoi_model::typed::ServerProviderState::Ready) {
+            let message = p.message.clone().unwrap_or_default();
+            if message.is_empty() || groups.iter().any(|g| g.instance_id == p.instance_id.as_str()) {
+                continue;
+            }
+            groups.push(ModelGroupView {
+                instance_id: p.instance_id.as_str().to_owned(),
+                provider: p.display_name.clone().unwrap_or_default(),
+                status: p.status.as_str().to_owned(),
+                message,
+                models: vec![],
+                hidden_count: 0,
+            });
+        }
     }
     (favorite_models, groups, count)
 }
 
 pub(crate) fn composer(model: &Model) -> ComposerView {
+    use domovoi_model::typed::{OptionValue, ProviderOptionDescriptor};
     let selected = current_model(model);
     let (favorite_models, groups, model_count) = model_picker(model, selected.as_ref());
     let efforts = selected
         .as_ref()
         .and_then(|m| effort_descriptor(model, m))
-        .map(|d| d.options().iter().map(|o| ChoiceView { value: o.id.clone(), label: o.label.clone() }).collect())
+        .map(|d| {
+            // A thinking level not seen for this model: "Default" leaves it to the provider.
+            let default = selected.as_ref().is_some_and(|m| crate::update::effort_default_allowed(model, m));
+            default.then(|| ChoiceView { value: String::new(), label: "Default".into() }).into_iter().chain(d.options().iter().map(|o| ChoiceView { value: o.id.clone(), label: o.label.clone() })).collect()
+        })
+        .unwrap_or_default();
+    let effort_label = selected
+        .as_ref()
+        .and_then(|m| effort_descriptor(model, m))
+        .map(|d| match d.id() {
+            Some("effort" | "reasoningEffort") => "Effort".to_owned(),
+            _ => d.label().filter(|l| !l.trim().is_empty()).unwrap_or("Thinking").to_owned(),
+        })
         .unwrap_or_default();
     let blocked = selected.as_ref().map(|m| crate::update::provider_blocked(model, &m.instance_id)).unwrap_or_default();
     let draft = model.draft();
@@ -987,7 +1916,68 @@ pub(crate) fn composer(model: &Model) -> ComposerView {
     let working = model.selected_thread.as_deref().and_then(|t| model.thread_shell(t)).is_some_and(|t| matches!(shell_status(t), ShellStatus::Working | ShellStatus::Approval));
     let has_content = !draft.trim().is_empty() || !model.composer.attachments.is_empty();
     let slash = selected.as_ref().map(|m| slash_commands(model, &m.instance_id, &draft)).unwrap_or_default();
+    let limits = selected
+        .as_ref()
+        .and_then(|m| model.providers.iter().find(|p| p.instance_id.as_str() == m.instance_id))
+        .map(|p| limit_windows(model.shown_ms, p.usage_limits.as_ref()))
+        .unwrap_or_default();
+    let limits_chip = limits
+        .iter()
+        .max_by_key(|w| w.percent)
+        .filter(|w| w.high)
+        .map(|w| if w.resets.is_empty() { format!("{} {}%", w.label, w.percent) } else { format!("{} {}% · resets {}", w.label, w.percent, w.resets) })
+        .unwrap_or_default();
+    let traits = selected
+        .as_ref()
+        .map(|m| {
+            crate::update::trait_descriptors(model, m)
+                .into_iter()
+                .filter_map(|d| {
+                    let chosen = crate::update::chosen_trait(model, m, d);
+                    match d {
+                        ProviderOptionDescriptor::Boolean(b) => Some(TraitView {
+                            id: b.id.clone(),
+                            label: b.label.clone(),
+                            description: b.description.clone().unwrap_or_default(),
+                            kind: "switch".into(),
+                            on: match chosen {
+                                Some(OptionValue::Switch(on)) => on,
+                                _ => b.current_value.unwrap_or(false),
+                            },
+                            ..Default::default()
+                        }),
+                        ProviderOptionDescriptor::Select(sel) => Some(TraitView {
+                            id: sel.id.clone(),
+                            label: sel.label.clone(),
+                            description: sel.description.clone().unwrap_or_default(),
+                            kind: "choice".into(),
+                            value: match chosen {
+                                Some(OptionValue::Choice(v)) => v,
+                                _ => sel.current_value.clone().or_else(|| sel.options.iter().find(|o| o.is_default == Some(true)).or(sel.options.first()).map(|o| o.id.clone())).unwrap_or_default(),
+                            },
+                            choices: sel.options.iter().map(|o| ChoiceView { value: o.id.clone(), label: o.label.clone() }).collect(),
+                            ..Default::default()
+                        }),
+                        ProviderOptionDescriptor::Other(_) => None,
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let skill_list = selected.as_ref().map(|m| skills(model, &m.instance_id, &draft)).unwrap_or_default();
+    // Stop was asked 8 s ago or more and the turn goes on.
+    let stop_asked = model.composer.stop_asked_ms;
     ComposerView {
+        limits,
+        limits_chip,
+        skills: skill_list,
+        traits,
+        stash: model.composer.stash.iter().map(|s| s.lines().find(|l| !l.trim().is_empty()).unwrap_or_default().chars().take(80).collect()).collect(),
+        can_force_stop: working
+            && !model.composer.stop_asked_run.is_empty()
+            && model.now_ms - stop_asked >= 8_000
+            && model.selected_thread.as_deref().and_then(|t| model.thread_shell(t)).and_then(|t| t.active_run_id.as_ref()).is_some_and(|r| r.as_str() == model.composer.stop_asked_run),
+        model_picker_requested: model.composer.model_picker_requested,
         draft,
         draft_revision: model.composer.draft_revision,
         placeholder: if is_new { "Ask anything, @ to mention files".into() } else if working { "Queue a follow-up…".into() } else { "Reply…".into() },
@@ -1002,7 +1992,8 @@ pub(crate) fn composer(model: &Model) -> ComposerView {
         model_query: model.composer.model_query.clone(),
         model_count,
         show_hidden_models: model.composer.show_hidden_models,
-        selected_effort: selected.as_ref().and_then(|m| current_effort(model, m)),
+        selected_effort: selected.as_ref().and_then(|m| current_effort(model, m).or_else(|| crate::update::effort_default_allowed(model, m).then(String::new))),
+        effort_label,
         selected_model: selected.clone(),
         efforts,
         runtime_modes: runtime_modes(),
@@ -1083,7 +2074,7 @@ fn file_tree(model: &Model, dir: &str, depth: u32, out: &mut Vec<FileEntryView>)
     }
 }
 
-fn panel(model: &Model) -> PanelView {
+fn panel(model: &Model, collected_artifacts: &[crate::artifacts::CollectedArtifact]) -> PanelView {
     let p = &model.panel;
     let files = match &p.diff.files_override {
         Some(f) => f.clone(),
@@ -1115,7 +2106,22 @@ fn panel(model: &Model) -> PanelView {
             loading: p.files.loading.contains(""),
             query: p.files.query.clone(),
             results: p.files.results.iter().map(entry_view).collect(),
-            preview: p.files.preview.as_ref().map(|pv| FilePreviewView { path: pv.path.clone(), spans: pv.spans.clone(), text: pv.text.clone(), truncated: pv.truncated, error: pv.error.clone(), loading: pv.loading }),
+            artifact_preview: p.files.artifact_preview.as_ref().filter(|read| read.current(model)).map(|read| {
+                let pv = &read.preview;
+                FilePreviewView { path: pv.path.clone(), spans: vec![], text: pv.text.clone(), image_url: None, truncated: pv.truncated, error: pv.error.clone(), loading: pv.loading, editable: false, size_label: None, lfs: None }
+            }),
+            preview: p.files.preview.as_ref().map(|pv| FilePreviewView {
+                path: pv.path.clone(),
+                spans: pv.spans.clone(),
+                text: pv.text.clone(),
+                image_url: pv.image_url.as_ref().map(|url| format!("{}{url}", model.server_url)),
+                truncated: pv.truncated,
+                error: pv.error.clone(),
+                loading: pv.loading,
+                editable: !pv.loading && !pv.truncated && pv.error.is_none() && pv.image_url.is_none() && pv.lfs.is_none(),
+                size_label: (!pv.loading && pv.error.is_none()).then(|| bytes_label(pv.byte_length as f64)),
+                lfs: pv.lfs.as_ref().map(|lfs| lfs_view(pv, lfs)),
+            }),
         },
         git: GitPanelView {
             loading: local.is_none(),
@@ -1140,17 +2146,140 @@ fn panel(model: &Model) -> PanelView {
                 ..Default::default()
             }),
             branches: model.composer.branches.clone(),
+            worktrees: model
+                .composer
+                .worktrees
+                .iter()
+                .filter(|(_, path)| model.projects.iter().all(|p| p.workspace_root != *path))
+                .map(|(branch, path)| WorktreeView {
+                    path: path.clone(),
+                    branch: branch.clone(),
+                    current: *path == p.git.cwd,
+                    threads: model.threads.iter().filter(|t| t.deleted_at.is_none() && t.worktree_path.as_deref() == Some(path.as_str())).map(|t| t.title.clone()).collect(),
+                })
+                .collect(),
+            scripts: model
+                .selected_thread
+                .as_deref()
+                .and_then(|t| model.thread_shell(t))
+                .map(|t| t.project_id.as_str().to_owned())
+                .or_else(|| model.selected_project.clone())
+                .and_then(|id| model.project(&id))
+                .map(|project| project.scripts.iter().map(|s| ScriptView { id: s.id.clone(), name: s.name.clone(), command: s.command.clone(), icon: s.icon.as_str().to_owned() }).collect())
+                .unwrap_or_default(),
             busy: p.git.busy,
             progress: p.git.progress.clone(),
             error: p.git.error.clone(),
             has_remote: local.is_some_and(|local| local.has_primary_remote),
         },
+        artifacts: artifacts_panel(model, collected_artifacts),
     }
+}
+
+fn artifacts_panel(model: &Model, collected: &[crate::artifacts::CollectedArtifact]) -> ArtifactsPanelView {
+    let items: Vec<ArtifactSummaryView> = collected.iter().map(crate::artifacts::CollectedArtifact::summary_view).collect();
+    let state = &model.panel.artifacts;
+    let tid = model.selected_thread.as_deref().unwrap_or_default();
+    let mode = if state.mode == "code" { "code" } else { "preview" }.to_owned();
+
+    let active = state.active_id.as_deref().filter(|_| state.thread_id.as_deref() == Some(tid)).and_then(|active_id| {
+        if let Some(art) = collected.iter().find(|a| a.id == active_id) {
+            let ver = state
+                .active_version
+                .and_then(|n| art.versions.iter().find(|v| v.version == n))
+                .or_else(|| art.latest())?;
+            let file_read = state.file_read.as_ref().filter(|r| r.current(model) && ver.path.as_deref() == Some(r.preview.path.as_str()));
+            let (source, spans, loading_file, truncated, file_error) = match &ver.source {
+                Some(src) => (
+                    src.clone(),
+                    crate::highlight::highlight(src, &art.language),
+                    false,
+                    false,
+                    None,
+                ),
+                None => match file_read {
+                    Some(read) => (
+                        read.preview.text.clone(),
+                        read.preview.spans.clone(),
+                        read.preview.loading,
+                        read.preview.truncated,
+                        read.preview.error.clone(),
+                    ),
+                    None => (String::new(), vec![], ver.path.is_some(), false, None),
+                },
+            };
+            let url_state = state.preview_url.as_ref().filter(|u| u.matches(tid, &art.id, ver.version));
+            let preview_url = url_state
+                .and_then(|u| u.url.as_deref())
+                .map(|rel| format!("{}{rel}", model.server_url));
+            let loading_url = url_state.is_some_and(|u| u.loading) && matches!(art.kind.as_str(), "react");
+            let error = file_error.or_else(|| {
+                if art.kind == "react" {
+                    url_state.and_then(|u| u.error.clone())
+                } else {
+                    None
+                }
+            });
+            Some(ActiveArtifactView {
+                id: art.id.clone(),
+                title: art.title.clone(),
+                kind: art.kind.clone(),
+                language: art.language.clone(),
+                version: ver.version,
+                versions: art.version_views(),
+                mode: mode.clone(),
+                source,
+                spans,
+                preview_url,
+                hosted_url: ver.hosted_url.clone().or_else(|| art.hosted_url.clone()),
+                path: ver.path.clone().or_else(|| art.path.clone()),
+                item_id: ver.item_id.clone(),
+                loading: loading_file || loading_url,
+                truncated,
+                streaming: art.streaming,
+                error,
+            })
+        } else if let Some(path) = active_id.strip_prefix("file:") {
+            // Workspace artifact opened directly (e.g. from Files pane) not yet listed in transcript.
+            let kind = crate::artifacts::artifact_kind_for_path(path).unwrap_or("html");
+            let file_read = state.file_read.as_ref().filter(|r| r.current(model) && r.preview.path == path);
+            let url_state = state.preview_url.as_ref().filter(|u| u.matches(tid, active_id, 1));
+            let preview_url = url_state
+                .and_then(|u| u.url.as_deref())
+                .map(|rel| format!("{}{rel}", model.server_url));
+            Some(ActiveArtifactView {
+                id: active_id.to_owned(),
+                title: crate::artifacts::extract_title(kind, "", Some(path)),
+                kind: kind.to_owned(),
+                language: crate::highlight::language_for_path(path),
+                version: 1,
+                versions: vec![ArtifactVersionView { version: 1, summary: String::new(), item_id: String::new() }],
+                mode: mode.clone(),
+                source: file_read.map(|r| r.preview.text.clone()).unwrap_or_default(),
+                spans: file_read.map(|r| r.preview.spans.clone()).unwrap_or_default(),
+                preview_url,
+                hosted_url: None,
+                path: Some(path.to_owned()),
+                item_id: String::new(),
+                loading: file_read.is_none_or(|r| r.preview.loading),
+                truncated: file_read.is_some_and(|r| r.preview.truncated),
+                streaming: false,
+                error: file_read.and_then(|r| r.preview.error.clone()),
+            })
+        } else {
+            None
+        }
+    });
+
+    ArtifactsPanelView { items, active }
 }
 
 /// Palette entries for the current query: actions, threads, projects.
 pub fn palette_items(model: &Model) -> Vec<PaletteItemView> {
     let Some(p) = &model.palette else { return vec![] };
+    if matches!(p.mode.as_str(), "files" | "content") {
+        return p.results.clone();
+    }
     let q = p.query.trim().to_lowercase();
     let hit = |t: &str| q.is_empty() || t.to_lowercase().contains(&q);
     let mut items = vec![];
@@ -1159,10 +2288,13 @@ pub fn palette_items(model: &Model) -> Vec<PaletteItemView> {
         ("new-thread", "New thread", "⌘N", true),
         ("toggle-panel", "Toggle side panel", "⌘J", true),
         ("diff", "Show diff", "", true),
+        ("artifacts", "Show artifacts", "⌘⇧A", thread_selected),
         ("terminal", "Show terminal", "", thread_selected),
         ("files", "Show files", "", true),
         ("git", "Show git", "", true),
         ("find", "Find in thread", "⌘F", thread_selected),
+        ("go-to-file", "Go to file…", "", model.active_cwd().is_some()),
+        ("search-project", "Search in project…", "", model.active_cwd().is_some()),
         ("pin", "Pin or unpin thread", "", thread_selected),
         ("settle", "Settle thread", "", thread_selected),
         ("pull-requests", "Pull requests", "", true),
@@ -1222,6 +2354,14 @@ fn setting_groups(model: &Model) -> Vec<SettingGroupView> {
                 field_text(model, "worktreesDirectory", "Worktrees folder", "Where new worktrees are created. Empty uses the server's default."),
                 field_choice(model, "branchNamingMode", "Branch names", "How branches for new worktrees are named.", &[("static", "Prefix and id"), ("semantic", "From the request"), ("custom", "Custom instructions")]),
                 field_text(model, "branchNamePrefix", "Branch prefix", "Prefix for generated branch names."),
+            ],
+        },
+        SettingGroupView {
+            title: "Threads".into(),
+            fields: vec![
+                field_bool(model, "autoResumeLimitedThreads", "Resume after usage limits", "A thread stopped by a usage limit continues on its own when the limit resets."),
+                field_bool(model, "snoozeLimitedThreads", "Snooze threads stopped by limits", "Hide a limited thread until its limit resets."),
+                field_text(model, "threadTitleInstructions", "Title instructions", "How the server should name new threads. Empty uses its default."),
             ],
         },
         SettingGroupView {
@@ -1324,8 +2464,15 @@ fn settings(model: &Model) -> SettingsView {
                 model_count: p.models.len() as u32,
                 enabled: p.enabled,
                 limits: limits_label(model.shown_ms, p.usage_limits.as_ref()),
+                can_authenticate: p.setup.as_ref().is_some_and(|s| s.can_authenticate),
+                can_install: p.setup.as_ref().is_some_and(|s| s.can_install),
+                signed_in: p.auth.status == domovoi_model::typed::ServerProviderAuthStatus::Authenticated,
+                sign_in: sign_in_view(pages.provider_auth.get(p.instance_id.as_str())),
+                install: install_view(pages.provider_install.get(p.instance_id.as_str())),
+                config: provider_config_view(model, p),
             })
             .collect(),
+        can_add_antigravity: model.providers.iter().any(|p| p.driver.as_str() == "antigravity"),
         keybindings: model.keybindings.iter().map(keybinding_view).collect(),
         scheduled_tasks: pages
             .scheduled
@@ -1369,6 +2516,14 @@ fn settings(model: &Model) -> SettingsView {
                 },
                 thread_mode: t.thread_mode.as_ref().map_or_else(|| if t.thread_id.is_some() { "continue".into() } else { "new_thread".into() }, |m| m.as_str().to_owned()),
                 thread_id: t.thread_id.as_ref().map(|id| id.as_str().to_owned()).unwrap_or_default(),
+                thread_title: t.thread_id.as_ref().and_then(|id| model.thread_shell(id.as_str())).map(|shell| shell.title.clone()).unwrap_or_default(),
+                run_state: pages.scheduled_latest_runs.iter().find(|r| r.task_id == t.id.as_str()).map(|r| match r.status.as_str() {
+                    "queued" => "Waiting in its thread".to_owned(),
+                    "running" => "Running".to_owned(),
+                    "waiting" => "Needs you".to_owned(),
+                    _ => String::new(),
+                }).unwrap_or_default(),
+                last_thread_id: pages.scheduled_latest_runs.iter().find(|r| r.task_id == t.id.as_str()).and_then(|r| r.thread_id.clone()).unwrap_or_default(),
                 workspace: if matches!(t.workspace_strategy, domovoi_model::typed::WorkspaceStrategy::Worktree { .. }) { "worktree".into() } else { "root".into() },
                 base_branch: match &t.workspace_strategy {
                     domovoi_model::typed::WorkspaceStrategy::Worktree { base_ref, .. } => base_ref.clone(),
@@ -1382,7 +2537,12 @@ fn settings(model: &Model) -> SettingsView {
                 webhook_url: t.webhook.as_ref().map(|w| w.url.clone().unwrap_or_else(|| w.path.clone())).unwrap_or_default(),
             })
             .collect(),
+        // Read through every thread: only while the scheduled tasks are open
+        // (their screen, or an editor from a thread, subscribes).
+        scheduled_thread_choices: if model.rpc.has(&crate::rpc::Route::ScheduledTasks) { scheduled_thread_choices(model) } else { vec![] },
         scheduled_time_zone: pages.scheduled_time_zone.clone(),
+        scheduled_runs_task: pages.scheduled_runs.as_ref().map(|(id, _)| id.clone()).unwrap_or_default(),
+        scheduled_runs: pages.scheduled_runs.iter().flat_map(|(_, runs)| runs).map(|r| scheduled_run_view(model, r)).collect(),
         webhook_deliveries_task: pages.webhook_deliveries.as_ref().map(|(id, _)| id.clone()).unwrap_or_default(),
         webhook_deliveries: pages
             .webhook_deliveries
@@ -1433,6 +2593,7 @@ fn settings(model: &Model) -> SettingsView {
         },
         access: access_rows,
         remote: remote_view,
+        project_icon_files: crate::project_icons::files_view(model),
         projects: model
             .projects
             .iter()
@@ -1440,10 +2601,84 @@ fn settings(model: &Model) -> SettingsView {
                 id: p.id.as_str().to_owned(),
                 title: p.title.clone(),
                 workspace_root: p.workspace_root.clone(),
+                icon: crate::project_icons::view(model, p, false),
+                automatic_icon: crate::project_icons::view(model, p, true),
                 thread_count: model.threads.iter().filter(|t| t.project_id == p.id && t.deleted_at.is_none()).count() as u32,
+                is_scratch: p.workspace_root.ends_with("/scratch"),
             })
             .collect(),
     }
+}
+
+/// A scheduled task's run as its history shows it.
+fn scheduled_run_view(model: &Model, r: &crate::model::ScheduledRun) -> ScheduledRunView {
+    let at = r.started_at.replace('T', " ").chars().take(16).collect::<String>();
+    let ago = age_label(model.shown_ms, &r.started_at);
+    let thread_id = r.thread_id.clone().unwrap_or_default();
+    ScheduledRunView {
+        started: if ago.is_empty() { at } else { format!("{ago} · {at}") },
+        trigger: match r.trigger.as_str() {
+            "manual" => "Run now",
+            "webhook" => "Webhook",
+            _ => "On schedule",
+        }
+        .into(),
+        status: match r.status.as_str() {
+            "queued" => "Waiting in its thread",
+            "running" => "Running",
+            "waiting" => "Needs you",
+            "skipped" => "Skipped",
+            "completed" => "Finished",
+            "stopped" => "Stopped",
+            "failed" => "Failed",
+            _ => "Sent",
+        }
+        .into(),
+        failed: r.status == "failed",
+        error: r.error.clone().unwrap_or_default(),
+        thread_title: model.thread_shell(&thread_id).map(|t| t.title.clone()).unwrap_or_default(),
+        thread_id,
+    }
+}
+
+/// The threads a scheduled task can post into: every live thread (snoozed and
+/// settled ones too), newest first, then the threads tasks are bound to that
+/// are no longer live, so an edit still names its thread.
+fn scheduled_thread_choices(model: &Model) -> Vec<ScheduledThreadChoiceView> {
+    let labels = crate::sidebar::Labels::new(model);
+    let mut live: Vec<&ThreadShell> = crate::sidebar::live_threads(model).collect();
+    live.sort_by(|a, b| b.updated_at.as_str().cmp(a.updated_at.as_str()));
+    let mut choices: Vec<ScheduledThreadChoiceView> = live
+        .iter()
+        .map(|t| {
+            let age = age_label(model.shown_ms, t.updated_at.as_str());
+            let status = crate::sidebar::status_label(model, t);
+            ScheduledThreadChoiceView {
+                id: t.id.as_str().to_owned(),
+                project_id: t.project_id.as_str().to_owned(),
+                title: t.title.clone(),
+                detail: [status, age].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" · "),
+                model_label: labels.model_label(t),
+                runtime_mode: t.runtime_mode.as_str().to_owned(),
+            }
+        })
+        .collect();
+    for task in &model.pages.scheduled {
+        let Some(id) = task.thread_id.as_ref().map(|id| id.as_str()) else { continue };
+        if choices.iter().any(|c| c.id == id) {
+            continue;
+        }
+        let shell = model.thread_shell(id);
+        choices.push(ScheduledThreadChoiceView {
+            id: id.to_owned(),
+            project_id: shell.map_or_else(|| task.project_id.as_str().to_owned(), |t| t.project_id.as_str().to_owned()),
+            title: shell.map_or_else(|| "A thread not on this device".into(), |t| t.title.clone()),
+            detail: if shell.is_some_and(|t| t.archived_at.is_some()) { "archived".into() } else { String::new() },
+            model_label: shell.map(|t| labels.model_label(t)).unwrap_or_default(),
+            runtime_mode: shell.map(|t| t.runtime_mode.as_str().to_owned()).unwrap_or_default(),
+        });
+    }
+    choices
 }
 
 fn keybinding_view(k: &ResolvedKeybindingRule) -> KeybindingView {
@@ -1566,33 +2801,371 @@ fn pull_requests(model: &Model) -> PullRequestsView {
     }
 }
 
+fn usage_provider_label(key: &str) -> String {
+    match key {
+        "claude" => "Claude".into(),
+        "codex" => "Codex".into(),
+        "pi" => "Pi".into(),
+        "antigravity" => "Antigravity".into(),
+        "cursor" => "Cursor".into(),
+        "grok" => "Grok".into(),
+        "opencode" => "OpenCode".into(),
+        "muse" => "Muse".into(),
+        other => other.to_owned(),
+    }
+}
+
+fn parse_ymd(s: &str) -> Option<(i32, u32, u32)> {
+    let mut parts = s.split('-');
+    let y = parts.next()?.parse::<i32>().ok()?;
+    let m = parts.next()?.parse::<u32>().ok()?;
+    let d = parts.next()?.parse::<u32>().ok()?;
+    if (1..=12).contains(&m) && (1..=31).contains(&d) { Some((y, m, d)) } else { None }
+}
+
+fn days_in_month(y: i32, m: u32) -> u32 {
+    match m {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 => if (y % 4 == 0 && y % 100 != 0) || y % 400 == 0 { 29 } else { 28 },
+        _ => 30,
+    }
+}
+
+fn enumerate_days(since: &str, until: &str) -> Vec<String> {
+    let (Some(mut cur), Some(end)) = (parse_ymd(since), parse_ymd(until)) else { return vec![] };
+    let mut out = vec![];
+    while cur <= end && out.len() < 400 {
+        out.push(format!("{:04}-{:02}-{:02}", cur.0, cur.1, cur.2));
+        cur.2 += 1;
+        if cur.2 > days_in_month(cur.0, cur.1) {
+            cur.2 = 1;
+            cur.1 += 1;
+            if cur.1 > 12 {
+                cur.1 = 1;
+                cur.0 += 1;
+            }
+        }
+    }
+    out
+}
+
+fn short_day_label(day: &str) -> (String, String) {
+    const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    let Some((y, m, d)) = parse_ymd(day) else { return (day.to_owned(), day.to_owned()) };
+    let mon = MONTHS.get((m - 1) as usize).copied().unwrap_or("");
+    (format!("{mon} {d}"), format!("{mon} {d}, {y}"))
+}
+
+/// Local hour `0..24` for an RFC 3339 `hourStart` string, shifted by `utc_offset_secs`.
+fn local_hour_of(hour_start: &str, utc_offset_secs: i32) -> Option<u32> {
+    let ms = crate::app::millis_from_iso(hour_start);
+    if ms == 0 {
+        return None;
+    }
+    let shifted = ms.saturating_add(i64::from(utc_offset_secs) * 1_000);
+    let secs = shifted.div_euclid(1_000);
+    Some((secs.div_euclid(3_600).rem_euclid(24)) as u32)
+}
+
+fn share_pct(part: u64, whole: u64) -> u32 {
+    if whole == 0 || part == 0 {
+        0
+    } else {
+        ((part as f64 / whole as f64) * 100.0).round().min(100.0) as u32
+    }
+}
+
 fn usage(model: &Model) -> UsageView {
     let summary = model.pages.usage.as_ref();
-    let mut total = 0u64;
-    let rows: Vec<UsageRowView> = summary
-        .into_iter()
-        .flat_map(|summary| &summary.buckets)
-        .map(|b| {
-            let t = &b.totals;
-            let sum = t.uncached_input_tokens + t.cached_input_tokens + t.cache_creation_tokens + t.output_tokens + t.reasoning_tokens;
-            total += sum;
-            UsageRowView {
-                day: b.day.clone(),
-                provider: b.provider.as_str().to_owned(),
-                model: b.model.clone(),
-                input: count_label((t.uncached_input_tokens + t.cache_creation_tokens) as i64),
-                cached: count_label(t.cached_input_tokens as i64),
-                output: count_label((t.output_tokens + t.reasoning_tokens) as i64),
-                total: count_label(sum as i64),
+    let priced = summary.is_some_and(|summary| summary.pricing.status != UsagePricingStatus::Unavailable);
+    let cost_of = |usd: f64| if priced { money_label(usd, "USD") } else { String::new() };
+    let days = if model.pages.usage_days == 0 { 7 } else { model.pages.usage_days };
+    let selected_provider = model.pages.usage_provider_filter.clone();
+
+    // First pass across every bucket: provider totals (unfiltered, so filter chips stay visible).
+    let mut provider_totals: Vec<(String, u64, f64)> = vec![];
+    let mut unfiltered_total = 0u64;
+    let mut has_hour_buckets = false;
+    for b in summary.into_iter().flat_map(|s| &s.buckets) {
+        let t = &b.totals;
+        let sum = t.uncached_input_tokens + t.cached_input_tokens + t.cache_creation_tokens + t.output_tokens + t.reasoning_tokens;
+        let usd = b.cost_usd.as_f64().unwrap_or(0.0);
+        unfiltered_total += sum;
+        if b.hour_start.as_ref().and_then(|h| h.as_deref()).is_some() {
+            has_hour_buckets = true;
+        }
+        let key = b.provider.as_str();
+        match provider_totals.iter_mut().find(|(k, _, _)| k == key) {
+            Some((_, tok, cost)) => {
+                *tok += sum;
+                *cost += usd;
             }
+            None => provider_totals.push((key.to_owned(), sum, usd)),
+        }
+    }
+    provider_totals.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    let providers: Vec<UsageProviderSummaryView> = provider_totals
+        .into_iter()
+        .map(|(key, tokens, usd)| UsageProviderSummaryView {
+            label: usage_provider_label(&key),
+            key,
+            tokens,
+            tokens_label: token_label(tokens),
+            share_percent: share_pct(tokens, unfiltered_total),
+            cost: cost_of(usd),
         })
         .collect();
+
+    let hourly = days == 1 && has_hour_buckets;
+
+    // Second pass: filtered totals, by-model, series accumulators, and rows.
+    let mut total_uncached = 0u64;
+    let mut total_cached = 0u64;
+    let mut total_cache_write = 0u64;
+    let mut total_output = 0u64;
+    let mut total_reasoning = 0u64;
+    let mut total = 0u64;
+    let mut total_usd = 0.0f64;
+    let mut total_turns = 0u64;
+    let mut active_day_set: FxHashSet<String> = FxHashSet::default();
+    let mut active_hour_set: FxHashSet<u32> = FxHashSet::default();
+    // (provider_key, model) -> ([uncached, cached, cache_write, output, reasoning, sum], sessions, usd)
+    let mut by_model_acc: Vec<((String, String), [u64; 6], u64, f64)> = vec![];
+    // slot_key -> (total_tokens, cost_usd, provider_key -> tokens)
+    let mut slot_totals: HashMap<String, (u64, f64, Vec<(String, u64)>)> = HashMap::new();
+    // Raw rows for sorting newest-first before converting to UsageRowView.
+    let mut raw_rows: Vec<(String, String, String, String, [u64; 6], u64, f64)> = vec![];
+
+    for b in summary.into_iter().flat_map(|s| &s.buckets) {
+        let pkey = b.provider.as_str();
+        if !selected_provider.is_empty() && pkey != selected_provider {
+            continue;
+        }
+        let t = &b.totals;
+        let sum = t.uncached_input_tokens + t.cached_input_tokens + t.cache_creation_tokens + t.output_tokens + t.reasoning_tokens;
+        let usd = b.cost_usd.as_f64().unwrap_or(0.0);
+        total_uncached += t.uncached_input_tokens;
+        total_cached += t.cached_input_tokens;
+        total_cache_write += t.cache_creation_tokens;
+        total_output += t.output_tokens;
+        total_reasoning += t.reasoning_tokens;
+        total += sum;
+        total_usd += usd;
+        total_turns += b.records;
+        if sum > 0 {
+            active_day_set.insert(b.day.clone());
+        }
+
+        let hour_label = b
+            .hour_start
+            .as_ref()
+            .and_then(|h| h.as_deref())
+            .and_then(|hs| local_hour_of(hs, model.utc_offset_secs))
+            .map(|h| {
+                if sum > 0 {
+                    active_hour_set.insert(h);
+                }
+                format!("{h:02}:00")
+            })
+            .unwrap_or_default();
+
+        let slot_key = if hourly && !hour_label.is_empty() { hour_label.clone() } else { b.day.clone() };
+        let entry = slot_totals.entry(slot_key).or_insert_with(|| (0, 0.0, vec![]));
+        entry.0 += sum;
+        entry.1 += usd;
+        match entry.2.iter_mut().find(|(k, _)| k == pkey) {
+            Some((_, tok)) => *tok += sum,
+            None => entry.2.push((pkey.to_owned(), sum)),
+        }
+
+        let counts = [t.uncached_input_tokens, t.cached_input_tokens, t.cache_creation_tokens, t.output_tokens, t.reasoning_tokens, sum];
+        let mkey = (pkey.to_owned(), b.model.clone());
+        match by_model_acc.iter_mut().find(|(k, _, _, _)| *k == mkey) {
+            Some((_, acc, sess, acc_usd)) => {
+                acc.iter_mut().zip(counts).for_each(|(a, n)| *a += n);
+                *sess += b.sessions;
+                *acc_usd += usd;
+            }
+            None => by_model_acc.push((mkey, counts, b.sessions, usd)),
+        }
+        raw_rows.push((b.day.clone(), hour_label, pkey.to_owned(), b.model.clone(), counts, b.sessions, usd));
+    }
+
+    // Newest day/hour first, then highest token volume within the same day/hour.
+    raw_rows.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| b.1.cmp(&a.1)).then_with(|| b.4[5].cmp(&a.4[5])));
+
+    let make_row = |day: String, hour_label: String, provider_key: String, model_name: String, c: [u64; 6], sessions: u64, usd: f64| -> UsageRowView {
+        let total_in = c[0] + c[1] + c[2];
+        UsageRowView {
+            day,
+            hour_label,
+            provider: usage_provider_label(&provider_key),
+            provider_key,
+            model: model_name,
+            input: token_label(c[0] + c[2]),
+            cached: token_label(c[1]),
+            cache_write: token_label(c[2]),
+            output: token_label(c[3] + c[4]),
+            reasoning: token_label(c[4]),
+            total: token_label(c[5]),
+            total_tokens: c[5],
+            share_percent: share_pct(c[5], total),
+            cache_hit_percent: share_pct(c[1], total_in),
+            sessions,
+            cost: cost_of(usd),
+        }
+    };
+
+    let rows: Vec<UsageRowView> = raw_rows.into_iter().map(|(d, h, p, m, c, s, u)| make_row(d, h, p, m, c, s, u)).collect();
+    by_model_acc.sort_by(|a, b| b.1[5].cmp(&a.1[5]));
+    let by_model: Vec<UsageRowView> = by_model_acc.into_iter().map(|((p, m), c, s, u)| make_row(String::new(), String::new(), p, m, c, s, u)).collect();
+
+    // Chronological, zero-filled time-series for charts.
+    let series: Vec<UsageSeriesPointView> = if let Some(summary) = summary {
+        if hourly {
+            (0..24u32)
+                .map(|h| {
+                    let key = format!("{h:02}:00");
+                    let detail_label = format!("{h:02}:00–{:02}:00", (h + 1) % 24);
+                    let (tok, usd, mut by_p) = slot_totals.remove(&key).unwrap_or_default();
+                    by_p.sort_by(|a, b| a.0.cmp(&b.0));
+                    UsageSeriesPointView {
+                        label: key.clone(),
+                        key,
+                        detail_label,
+                        total_tokens: tok,
+                        total_label: token_label(tok),
+                        cost: cost_of(usd),
+                        by_provider: by_p
+                            .into_iter()
+                            .filter(|(_, t)| *t > 0)
+                            .map(|(pk, t)| UsageProviderPointView { provider: usage_provider_label(&pk), provider_key: pk, tokens: t })
+                            .collect(),
+                    }
+                })
+                .collect()
+        } else {
+            enumerate_days(&summary.since_day, &summary.until_day)
+                .into_iter()
+                .map(|day| {
+                    let (label, detail_label) = short_day_label(&day);
+                    let (tok, usd, mut by_p) = slot_totals.remove(&day).unwrap_or_default();
+                    by_p.sort_by(|a, b| a.0.cmp(&b.0));
+                    UsageSeriesPointView {
+                        key: day,
+                        label,
+                        detail_label,
+                        total_tokens: tok,
+                        total_label: token_label(tok),
+                        cost: cost_of(usd),
+                        by_provider: by_p
+                            .into_iter()
+                            .filter(|(_, t)| *t > 0)
+                            .map(|(pk, t)| UsageProviderPointView { provider: usage_provider_label(&pk), provider_key: pk, tokens: t })
+                            .collect(),
+                    }
+                })
+                .collect()
+        }
+    } else {
+        vec![]
+    };
+
+    // Token mix slices.
+    let token_mix: Vec<UsageSliceView> = [
+        ("input", "Input", total_uncached),
+        ("cached", "Cache read", total_cached),
+        ("cache_write", "Cache write", total_cache_write),
+        ("output", "Output", total_output),
+        ("reasoning", "Reasoning", total_reasoning),
+    ]
+    .into_iter()
+    .filter(|(_, _, n)| *n > 0)
+    .map(|(kind, label, tokens)| UsageSliceView {
+        kind: kind.into(),
+        label: label.into(),
+        tokens,
+        tokens_label: token_label(tokens),
+        percent: share_pct(tokens, total),
+    })
+    .collect();
+
+    let total_input = total_uncached + total_cached + total_cache_write;
+    let cache_hit_percent = share_pct(total_cached, total_input);
+    let cache_hit_label = if total_input > 0 { format!("{cache_hit_percent}%") } else { String::new() };
+    let active_days = active_day_set.len() as u32;
+    let daily_avg_tokens = if total == 0 {
+        String::new()
+    } else if hourly {
+        format!("{}/hr", token_label(total / (active_hour_set.len() as u64).max(1)))
+    } else {
+        format!("{}/day", token_label(total / u64::from(active_days.max(1))))
+    };
+
+    // Distinct sessions from sources (deduped across days/models), filtered when a provider is picked.
+    let sessions: u64 = summary
+        .map(|s| {
+            let from_sources: u64 = s
+                .sources
+                .iter()
+                .filter(|src| selected_provider.is_empty() || src.fingerprint.provider.as_str() == selected_provider)
+                .map(|src| src.distinct_sessions)
+                .sum();
+            if from_sources > 0 { from_sources } else { rows.iter().map(|r| r.sessions).max().unwrap_or(0) }
+        })
+        .unwrap_or(0);
+
+    // Partial/failed source scan notices.
+    let mut source_notices: Vec<String> = vec![];
+    for src in summary.into_iter().flat_map(|s| &s.sources) {
+        if matches!(src.status, UsageSourceStatus::Partial | UsageSourceStatus::Failed) {
+            let msg = src
+                .message
+                .clone()
+                .filter(|m| !m.trim().is_empty())
+                .unwrap_or_else(|| format!("{} history could not be fully scanned.", usage_provider_label(src.fingerprint.provider.as_str())));
+            if !source_notices.contains(&msg) {
+                source_notices.push(msg);
+            }
+        }
+    }
+
+    let range_label = summary
+        .map(|s| {
+            if s.since_day == s.until_day {
+                short_day_label(&s.since_day).1
+            } else {
+                format!("{} – {}", short_day_label(&s.since_day).0, short_day_label(&s.until_day).1)
+            }
+        })
+        .unwrap_or_default();
+
     UsageView {
         loading: model.pages.usage_loading,
-        range_label: summary.map(|summary| format!("{} – {}", summary.since_day, summary.until_day)).unwrap_or_default(),
+        error: model.pages.usage_error.clone(),
+        range_label,
+        days,
+        hourly,
+        total_tokens: token_label(total),
+        total_tokens_exact: count_label(total as i64),
+        total_cost: if summary.is_some() { cost_of(total_usd) } else { String::new() },
+        cache_hit_percent,
+        cache_hit_label,
+        daily_avg_tokens,
+        active_days,
+        sessions,
+        turns: total_turns,
+        token_mix,
+        selected_provider,
+        providers,
+        series,
         rows,
-        total_tokens: count_label(total as i64),
-        notice: if summary.is_some_and(|summary| summary.pricing.status == UsagePricingStatus::Unavailable) { "Costs are not shown: this server has no price table.".into() } else { String::new() },
+        by_model,
+        limits: provider_limits(model),
+        limits_refreshing: model.pages.usage_limits_refreshing,
+        source_notices,
+        notice: String::new(),
     }
 }
 
@@ -1600,6 +3173,11 @@ pub fn view(model: &Model) -> ViewModel {
     let env = model.environment.as_ref();
     let reconnect = if model.connection == Connection::Reconnecting && !model.in_flight { model.retry_in } else { 0 };
     let remote = model.active_environment().is_some_and(crate::model::Environment::is_remote);
+    let sidebar = sidebar(model);
+    let (thread, collected_artifacts) = match thread_page(model) {
+        Some((page, collected)) => (Some(page), collected),
+        None => (None, Vec::new()),
+    };
     ViewModel {
         connection: ConnectionView {
             showing_saved: model.from_cache,
@@ -1633,6 +3211,7 @@ pub fn view(model: &Model) -> ViewModel {
                     remote: e.is_remote(),
                     active: model.active_env.as_deref() == Some(e.id.as_str()),
                     server_id: e.server_id.clone(),
+                    companion: crate::companion::resolve(Some(e)),
                 })
                 .collect(),
             active_environment_id: model.active_env.clone().unwrap_or_default(),
@@ -1651,6 +3230,13 @@ pub fn view(model: &Model) -> ViewModel {
             retry_gen: model.retry_gen,
             offline: model.offline,
             attempting: model.in_flight,
+            companion: crate::companion::resolve(model.active_environment()),
+            activity: ActivityView {
+                working: crate::sidebar::live_threads(model).filter(|thread| shell_status(thread) == ShellStatus::Working).count() as u32,
+                attention: sidebar.threads_needing_attention,
+                beat: model.companion_beat.0.clone(),
+                beat_seq: model.companion_beat.1,
+            },
         },
         toast: model.toast.as_ref().map(|t| ToastView {
             id: t.id,
@@ -1659,25 +3245,106 @@ pub fn view(model: &Model) -> ViewModel {
             action_label: t.action_label.clone(),
             queued: model.toast_queue.len() as u32,
         }),
-        sidebar: sidebar(model),
+        sidebar,
         route: if model.selected_thread.is_some() && model.route == "thread" { "thread".into() } else if model.route.is_empty() { "empty".into() } else { model.route.clone() },
-        thread: thread_page(model),
+        thread,
         composer: composer(model),
-        panel: panel(model),
-        palette: model.palette.as_ref().map(|p| PaletteView { query: p.query.clone(), items: palette_items(model), highlighted: p.highlighted as u32 }),
+        panel: panel(model, &collected_artifacts),
+        palette: model.palette.as_ref().map(|p| PaletteView {
+            query: p.query.clone(),
+            items: palette_items(model),
+            highlighted: p.highlighted as u32,
+            mode: if p.mode.is_empty() { "commands".into() } else { p.mode.clone() },
+            placeholder: match p.mode.as_str() {
+                "files" => "Go to file…".into(),
+                "content" => "Search in project…".into(),
+                _ => "Type a command or search threads…".into(),
+            },
+            searching: p.searching,
+        }),
         settings: settings(model),
         pull_requests: pull_requests(model),
         usage: usage(model),
         agent_sessions: agent_sessions(model),
         folder_browser: folder_browser(model),
+        diagrams: crate::diagrams::view(model),
     }
 }
 
-/// The agent a scan found sessions of, as named to the user.
+fn sign_in_view(state: Option<&domovoi_model::typed::ProviderAuthState>) -> ProviderSignInView {
+    let Some(a) = state else { return ProviderSignInView { phase: "idle".into(), ..Default::default() } };
+    let interaction = a.interaction.as_ref().filter(|i| i.kind == "browser");
+    ProviderSignInView {
+        phase: a.phase.clone(),
+        message: a.message.clone().unwrap_or_default(),
+        url: interaction.and_then(|i| i.url.clone()).or_else(|| a.authorization_url.clone()).filter(|_| a.phase == "waiting").unwrap_or_default(),
+        takes_redirect: a.phase == "waiting" && interaction.and_then(|i| i.accepts_callback).unwrap_or(false),
+        busy: a.busy(),
+    }
+}
+
+fn install_view(state: Option<&domovoi_model::typed::ProviderInstallState>) -> ProviderInstallView {
+    let Some(i) = state else { return ProviderInstallView { phase: "idle".into(), ..Default::default() } };
+    let mb = |b: u64| format!("{:.0} MB", b as f64 / 1_048_576.0);
+    let progress = i.total_bytes.filter(|t| *t > 0).map_or(0, |t| (i.downloaded_bytes.min(t) * 1000 / t) as u32);
+    let progress_label = match (i.phase.as_str(), i.total_bytes) {
+        ("downloading", Some(t)) => format!("{} of {}", mb(i.downloaded_bytes), mb(t)),
+        ("downloading", None) => mb(i.downloaded_bytes),
+        _ => String::new(),
+    };
+    let (installed, offered) = (i.installed_version.clone().unwrap_or_default(), i.version.clone().unwrap_or_default());
+    ProviderInstallView {
+        phase: i.phase.clone(),
+        message: i.message.clone().unwrap_or_default(),
+        busy: i.busy(),
+        progress,
+        progress_label,
+        update_available: !i.busy() && !installed.is_empty() && !offered.is_empty() && installed != offered,
+        installed_version: installed,
+        offered_version: offered,
+        can_remove: i.can_remove,
+    }
+}
+
+/// An Antigravity instance's settings for its editor (the only driver with one).
+fn provider_config_view(model: &Model, p: &domovoi_model::typed::ServerProvider) -> ProviderConfigView {
+    if p.driver.as_str() != "antigravity" {
+        return ProviderConfigView::default();
+    }
+    let id = p.instance_id.as_str();
+    let configured = model.settings.as_ref().and_then(|s| s.provider_instances.as_ref()).and_then(|i| i.get(&p.instance_id));
+    let c = configured.and_then(|c| c.config.clone()).unwrap_or(Value::Null);
+    let text = |k: &str| c[k].as_str().unwrap_or_default().to_owned();
+    let built_in = id == "antigravity";
+    // The machine has one Google sign-in for agy: added instances use a key or Vertex.
+    let methods: &[(&str, &str)] = if built_in {
+        &[("oauth-personal", "Google account"), ("oauth-business", "Gemini Enterprise"), ("gemini-api-key", "Gemini API key"), ("agent-platform", "Agent Platform (Vertex AI)")]
+    } else {
+        &[("gemini-api-key", "Gemini API key"), ("agent-platform", "Agent Platform (Vertex AI)")]
+    };
+    let method = c["authMethod"].as_str().map_or_else(|| if built_in { "oauth-personal" } else { "gemini-api-key" }.to_owned(), str::to_owned);
+    ProviderConfigView {
+        editable: true,
+        built_in,
+        display_name: configured.and_then(|c| c.display_name.clone()).unwrap_or_default(),
+        auth_method: method,
+        auth_methods: methods.iter().map(|(v, l)| ChoiceView { value: (*v).into(), label: (*l).into() }).collect(),
+        has_api_key: c["apiKey"].as_str().is_some_and(|k| !k.is_empty()),
+        gcp_project: text("gcpProject"),
+        gcp_location: text("gcpLocation"),
+        binary_path: text("binaryPath"),
+    }
+}
+
+/// The agent a scan found sessions of, as named to the user. Sessions are
+/// imported only from Claude Code, Codex and Pi, and a Claude instance can
+/// have any id, so anything else unknown stays Claude Code.
 pub fn source_label(source: &str) -> &'static str {
     match source {
         s if s.starts_with("codex") => "Codex",
         s if s.starts_with("pi") => "Pi",
+        s if s.starts_with("antigravity") => "Antigravity",
+        s if s.starts_with("opencode") => "OpenCode",
         _ => "Claude Code",
     }
 }
@@ -1740,8 +3407,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn project_identity_matches_web() {
+        assert_eq!(project_identity("my cool app"), ("MA".into(), "green"));
+        assert_eq!(project_identity("api-v2"), ("AV".into(), "rose"));
+        assert_eq!(project_identity("api2"), ("A2".into(), "sky"));
+        assert_eq!(project_identity("Project"), ("PT".into(), "fuchsia"));
+        assert_eq!(project_identity(""), ("PR".into(), "fuchsia"));
+        assert_eq!(monogram("🚀"), "PR");
+        assert_eq!(monogram("東京 工具"), "東工");
+        assert_eq!(monogram("  ＡＰＩ２  "), "A2");
+        assert_eq!(monogram("ß"), "SS");
+        assert_eq!(monogram("\u{05b0}"), "PR");
+    }
+
+    #[test]
     fn labels() {
-        assert_eq!(monogram("my cool app"), "MC");
+        assert_eq!(monogram("my cool app"), "MA");
         assert_eq!(bytes_label(1536.0), "1.5 KB");
         assert_eq!(count_label(1234567), "1,234,567");
         let every_two_hours: ScheduledTaskSchedule = serde_json::from_value(serde_json::json!({ "type": "interval", "everyMs": 7_200_000 })).unwrap();

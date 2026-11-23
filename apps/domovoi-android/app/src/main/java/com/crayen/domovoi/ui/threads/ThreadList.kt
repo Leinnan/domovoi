@@ -41,6 +41,10 @@ import androidx.compose.material.icons.outlined.MarkChatUnread
 import androidx.compose.material.icons.outlined.PanTool
 import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.MergeType
+import androidx.compose.material3.Surface
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.material.icons.outlined.WbSunny
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material3.AlertDialog
@@ -103,6 +107,7 @@ import com.crayen.domovoi.app.ThreadRowView
 import com.crayen.domovoi.core.Core
 import com.crayen.domovoi.ui.common.ConnectionBanner
 import com.crayen.domovoi.ui.common.EmptyState
+import com.crayen.domovoi.ui.common.ProjectIconTile
 import com.crayen.domovoi.ui.common.SectionHeader
 import com.crayen.domovoi.ui.common.SnoozeTimes
 import com.crayen.domovoi.ui.common.SourceBadge
@@ -114,7 +119,7 @@ import com.crayen.domovoi.ui.nav.Screen
 import com.crayen.domovoi.ui.theme.LocalTints
 import com.crayen.domovoi.ui.theme.Space
 
-/** The thread list, grouped by status (Inbox, Running, Hibernating,
+/** The thread list, grouped by status (Inbox, Running, Inactive,
  * Archived) or by project, with search (`ThreadListView`). */
 @Composable
 fun ThreadListPane(core: Core, nav: Navigator, snackbars: SnackbarHostState, selectedId: String?) {
@@ -154,7 +159,10 @@ fun ThreadListPane(core: Core, nav: Navigator, snackbars: SnackbarHostState, sel
         topBar = {
             TopAppBar(
                 title = { ServerMenu(core, nav) },
-                actions = { AddProjectMenu(addActions) },
+                actions = {
+                    IconButton(onClick = { core.update(Event.OpenPalette) }) { Icon(Icons.Outlined.Search, "Command palette") }
+                    AddProjectMenu(addActions)
+                },
                 scrollBehavior = scroll,
             )
         },
@@ -194,6 +202,7 @@ fun ThreadListPane(core: Core, nav: Navigator, snackbars: SnackbarHostState, sel
                     item(key = "$section/${thread.id}") {
                         ThreadRow(
                             thread = thread,
+                            core = core,
                             showsProject = byStatus,
                             selected = thread.id == selectedId,
                             onOpen = { nav.show(Screen.Thread(thread.id)) },
@@ -233,7 +242,7 @@ fun ThreadListPane(core: Core, nav: Navigator, snackbars: SnackbarHostState, sel
                 }
                 for (project in if (byStatus) emptyList() else sidebar.projects) {
                     item("p/${project.id}") {
-                        SectionHeader(project.title, trailing = {
+                        SectionHeader(project.title, leading = { ProjectIconTile(project.icon, core, size = 20.dp) }, trailing = {
                             IconButton(onClick = { newThread(project.id) }) { Icon(Icons.Outlined.Edit, "New thread in ${project.title}", modifier = Modifier.size(20.dp)) }
                         })
                     }
@@ -413,6 +422,7 @@ private fun SearchField(value: String, onChange: (String) -> Unit) {
 @Composable
 private fun ThreadRow(
     thread: ThreadRowView,
+    core: Core,
     showsProject: Boolean,
     selected: Boolean,
     onOpen: () -> Unit,
@@ -457,7 +467,14 @@ private fun ThreadRow(
     ) {
         ListItem(
             colors = ListItemDefaults.colors(containerColor = if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surface),
-            leadingContent = { StatusIcon(thread.status, thread.unread) },
+            leadingContent = {
+                if (showsProject) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Space.xs)) {
+                        ProjectIconTile(thread.projectIcon, core, size = 24.dp)
+                        StatusIcon(thread.status, thread.unread)
+                    }
+                } else StatusIcon(thread.status, thread.unread)
+            },
             headlineContent = {
                 Text(
                     thread.title, maxLines = 2, overflow = TextOverflow.Ellipsis,
@@ -480,7 +497,10 @@ private fun ThreadRow(
             },
             trailingContent = {
                 Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(Space.xs)) {
-                    Text(
+                    // A plan waits for you, or a run in plan mode ("Planning 6m"): its status as a plan-coloured badge.
+                    if (thread.planReady) Pill(thread.statusLabel.ifEmpty { "Plan ready" }, LocalTints.current.plan)
+                    else if (thread.planMode && thread.status == "working") Pill(thread.statusLabel.ifEmpty { "Planning" }, LocalTints.current.plan)
+                    else Text(
                         when {
                             thread.statusLabel.isNotEmpty() -> thread.statusLabel
                             thread.snoozedUntilMs > 0 -> SnoozeTimes.label(thread.snoozedUntilMs)
@@ -494,6 +514,7 @@ private fun ThreadRow(
                         if (thread.relation == "fork") Icon(Icons.AutoMirrored.Outlined.CallSplit, "Fork", modifier = Modifier.size(12.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
                         SourceBadge(thread.source)
                         if (thread.pinned) Icon(Icons.Filled.PushPin, "Pinned", modifier = Modifier.size(12.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        if (thread.pullRequest.isNotEmpty()) PullRequestBadge(thread.pullRequest, thread.pullRequestState)
                     }
                 }
             },
@@ -503,6 +524,33 @@ private fun ThreadRow(
                 onLongClickLabel = "More actions",
             ),
         )
+    }
+}
+
+/** A small tinted label on a row. */
+@Composable
+private fun Pill(text: String, tint: Color) {
+    Surface(color = tint.copy(alpha = 0.14f), shape = CircleShape) {
+        Text(text, style = MaterialTheme.typography.labelSmall, color = tint, fontWeight = FontWeight.Medium, maxLines = 1, modifier = Modifier.padding(horizontal = Space.s, vertical = 1.dp))
+    }
+}
+
+/** The thread's pull request ("#12"), coloured by its state. */
+@Composable
+private fun PullRequestBadge(number: String, state: String) {
+    val tints = LocalTints.current
+    val tint = when (state) {
+        "open" -> tints.success
+        "merged" -> tints.plan
+        "closed" -> MaterialTheme.colorScheme.error
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    val label = when (state) { "draft" -> "Draft pull request"; "" -> "Pull request"; else -> "${state.replaceFirstChar { it.uppercase() }} pull request" }
+    Surface(color = tint.copy(alpha = 0.14f), shape = CircleShape, modifier = Modifier.semantics { contentDescription = "$label $number" }) {
+        Row(Modifier.padding(horizontal = Space.xs + 1.dp, vertical = 1.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+            Icon(Icons.Outlined.MergeType, null, tint = tint, modifier = Modifier.size(11.dp))
+            Text(number, style = MaterialTheme.typography.labelSmall, color = tint)
+        }
     }
 }
 
@@ -543,9 +591,8 @@ private fun ThreadActionsSheet(thread: ThreadRowView, byStatus: Boolean, onDismi
         action(if (thread.pinned) "Unpin" else "Pin", Icons.Outlined.PushPin, RowAction.Pin)
         if (!thread.unread) action("Mark as unread", Icons.Outlined.MarkChatUnread, RowAction.Unread)
         if (thread.snoozedUntilMs > 0) action("Wake now", Icons.Outlined.WbSunny, RowAction.Wake) else action("Snooze…", Icons.Outlined.Bedtime, RowAction.Snooze)
-        // Grouped by status, a settled thread hibernates.
         val settle = when {
-            byStatus -> if (thread.settled) "Move to Inbox" else "Hibernate"
+            byStatus -> if (thread.settled) "Move to Inbox" else "Set Aside"
             else -> if (thread.settled) "Unsettle" else "Settle"
         }
         action(settle, Icons.Outlined.Inventory2, RowAction.Settle)

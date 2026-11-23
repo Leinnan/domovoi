@@ -3,9 +3,10 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 /// Keys the composer can take over from the field: the mention list's
-/// navigation, ⇧⇥ for plan mode, Escape.
+/// navigation, ⇧⇥ for plan mode, Escape, and ↑ on the first line or ↓ on
+/// the last (earlier messages).
 enum ComposerKey {
-    case up, down, tab, backtab, returnKey, escape
+    case up, down, tab, backtab, returnKey, escape, upAtStart, downAtEnd
 }
 
 /// The message field: an `NSTextView` that grows with its text, sends on
@@ -181,14 +182,38 @@ struct ComposerTextView: NSViewRepresentable {
             case #selector(NSResponder.insertBacktab(_:)):
                 return parent.handleKey(.backtab)
             case #selector(NSResponder.moveUp(_:)):
-                return parent.handleKey(.up)
+                if parent.handleKey(.up) { return true }
+                return caretLine(textView).first && parent.handleKey(.upAtStart)
             case #selector(NSResponder.moveDown(_:)):
-                return parent.handleKey(.down)
+                if parent.handleKey(.down) { return true }
+                return caretLine(textView).last && parent.handleKey(.downAtEnd)
             case #selector(NSResponder.cancelOperation(_:)):
                 return parent.handleKey(.escape)
             default:
                 return false
             }
+        }
+
+        /// Whether the caret (no selection) is on the field's first or last
+        /// line as laid out, wrapped lines counted.
+        private func caretLine(_ textView: NSTextView) -> (first: Bool, last: Bool) {
+            let selection = textView.selectedRange()
+            guard selection.length == 0, !textView.hasMarkedText(), let layout = textView.layoutManager else { return (false, false) }
+            let string = textView.string as NSString
+            guard string.length > 0, layout.numberOfGlyphs > 0 else { return (true, true) }
+            let lastGlyph = layout.numberOfGlyphs - 1
+            let caret: NSRect
+            if selection.location >= string.length, string.character(at: string.length - 1) == 10 {
+                // After a final new line: the empty line under the text.
+                caret = layout.extraLineFragmentRect
+            } else {
+                let glyph = min(layout.glyphIndexForCharacter(at: min(selection.location, string.length - 1)), lastGlyph)
+                caret = layout.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
+            }
+            let top = layout.lineFragmentRect(forGlyphAt: 0, effectiveRange: nil)
+            let extra = layout.extraLineFragmentRect
+            let bottom = extra.height > 0 ? extra : layout.lineFragmentRect(forGlyphAt: lastGlyph, effectiveRange: nil)
+            return (caret.minY <= top.minY + 0.5, caret.minY >= bottom.minY - 0.5)
         }
     }
 }
@@ -208,9 +233,23 @@ final class FieldTextView: NSTextView {
     override func paste(_ sender: Any?) {
         let board = NSPasteboard.general
         // Copied text pastes as text even when an image rides along (rich
-        // text from a browser); only an image on its own attaches.
-        if board.string(forType: .string) == nil, coordinator?.parent.takeImages(board) == true { return }
+        // text from a browser); an image on its own attaches, and so do
+        // image files copied in Finder (which add their names as text).
+        if board.string(forType: .string) == nil || ImagePasteboard.hasImageFiles(board),
+           coordinator?.parent.takeImages(board) == true { return }
         super.paste(sender)
+    }
+
+    /// A plain-text view enables Paste only for text: ⌘V with just an
+    /// image on the pasteboard would never reach `paste(_:)`.
+    override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
+        if item.action == #selector(paste(_:)), ImagePasteboard.hasImages(.general) { return true }
+        return super.validateUserInterfaceItem(item)
+    }
+
+    override func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        if item.action == #selector(paste(_:)), ImagePasteboard.hasImages(.general) { return true }
+        return super.validateMenuItem(item)
     }
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
@@ -255,7 +294,12 @@ enum ImagePasteboard {
     private static let dataTypes: [NSPasteboard.PasteboardType] = [.png, .tiff, NSPasteboard.PasteboardType(UTType.jpeg.identifier)]
 
     static func hasImages(_ board: NSPasteboard) -> Bool {
-        board.canReadObject(forClasses: [NSURL.self], options: imageFiles) || board.availableType(from: dataTypes) != nil
+        hasImageFiles(board) || board.availableType(from: dataTypes) != nil
+    }
+
+    /// Image files (copied in Finder), not image data.
+    static func hasImageFiles(_ board: NSPasteboard) -> Bool {
+        board.canReadObject(forClasses: [NSURL.self], options: imageFiles)
     }
 
     /// Each image as its data and a name.

@@ -396,13 +396,16 @@ fn replay(walk: &mut Walk, name: &str) {
             "server.updateSettings" => Some(Route::Settings),
             "vcs.listRefs" => Some(Route::ListRefs(text(&payload["cwd"]))),
             "assets.createUrl" => Some(Route::AssetUrl(text(&payload["resource"]["attachmentId"]))),
-            "projects.readFile" => Some(Route::ReadFile(text(&payload["relativePath"]))),
             "projects.mutate" => Some(Route::ProjectCreated),
             _ => None,
         };
         let kind = frame.values.first().map(|value| value["type"].as_str().or(value["kind"].as_str()).or(value["_tag"].as_str()).unwrap_or("item").to_owned()).unwrap_or_default();
         let done = match (&route, frame.kind.as_str()) {
             (Some(route), "Chunk") => walk.chunk(|open| open == route, &frame.values),
+            (None, "Exit") if tag == "projects.readFile" => walk.exit(
+                |open| matches!(open, Route::ReadFile { path, .. } if Some(path.as_str()) == payload["relativePath"].as_str()),
+                frame.value.clone().unwrap_or_default(),
+            ),
             (None, "Exit") if tag == "filesystem.browse" => walk.exit(|open| matches!(open, Route::Browse(_)), frame.value.clone().unwrap_or_default()),
             (Some(route), "Exit") => {
                 // A call the web client made and this one did not: made now.
@@ -441,10 +444,10 @@ fn listed(view: &ViewModel) -> (Vec<String>, Vec<String>) {
 fn walk_lists(walk: &mut Walk) {
     // Grouped by status: the collapsed sections opened, Running closed and
     // opened again, all of each shown.
-    for section in ["hibernating", "archived", "running", "running"] {
+    for section in ["inactive", "archived", "running", "running"] {
         walk.go("toggle a section", Event::ToggleSection { section: section.into() });
     }
-    for section in ["inbox", "hibernating", "archived"] {
+    for section in ["inbox", "inactive", "archived"] {
         walk.go("all of a section", Event::ShowAllInSection { section: section.into() });
     }
     walk.go("grouped by project", Event::SetSidebarGrouping { grouping: "project".into() });
@@ -786,19 +789,19 @@ fn walk_thread(walk: &mut Walk, thread: &str, snapshot: Option<Value>) {
         walk.step("thread shown");
     }
     walk.go("panel", Event::ShowPanel { tab: "diff".into() });
-    if walk.exit(|route| matches!(route, Route::Diff(_)), sample("review.getDiffPreview")) {
+    if walk.exit(|route| matches!(route, Route::Diff { .. }), sample("review.getDiffPreview")) {
         walk.step("diff");
     }
     walk.go("branch diff", Event::SelectDiffSource { source: "branch".into() });
-    walk.exit(|route| matches!(route, Route::Diff(_)), sample("review.getDiffPreview"));
+    walk.exit(|route| matches!(route, Route::Diff { .. }), sample("review.getDiffPreview"));
     walk.step("branch diff shown");
     // The thread's own diff, where it has checkpoints to diff.
     walk.go("thread diff", Event::SelectDiffSource { source: "thread".into() });
-    let of_thread = walk.request(|route| *route == Route::Diff("thread".into())).is_some();
-    walk.exit(|route| matches!(route, Route::Diff(_)), sample(if of_thread { "orchestration.getFullThreadDiff" } else { "review.getDiffPreview" }));
+    let of_thread = walk.request(|route| matches!(route, Route::Diff { source, .. } if source == "thread")).is_some();
+    walk.exit(|route| matches!(route, Route::Diff { .. }), sample(if of_thread { "orchestration.getFullThreadDiff" } else { "review.getDiffPreview" }));
     walk.step("thread diff shown");
     walk.ev(Event::SelectDiffSource { source: "working".into() });
-    walk.exit(|route| matches!(route, Route::Diff(_)), json!({ "cwd": "/work", "generatedAt": "2026-11-17T00:00:00.000Z", "sources": [] }));
+    walk.exit(|route| matches!(route, Route::Diff { .. }), json!({ "cwd": "/work", "generatedAt": "2026-11-17T00:00:00.000Z", "sources": [] }));
     walk.step("no changes");
 
     walk.go("files", Event::ShowPanel { tab: "files".into() });
@@ -819,7 +822,7 @@ fn walk_thread(walk: &mut Walk, thread: &str, snapshot: Option<Value>) {
         walk.step("files found");
         let file = walk.view().panel.files.results.iter().find(|entry| !entry.directory).map(|entry| entry.path.clone()).unwrap_or_else(|| "README.md".into());
         walk.go("file opened", Event::OpenFile { path: file.clone() });
-        walk.exit(|route| matches!(route, Route::ReadFile(_)), json!({ "relativePath": file, "contents": "fn main() {}\n", "byteLength": 13, "truncated": false, "exists": true }));
+        walk.exit(|route| matches!(route, Route::ReadFile { .. }), json!({ "relativePath": file, "contents": "fn main() {}\n", "byteLength": 13, "truncated": false, "exists": true }));
         walk.step("file shown");
     }
 

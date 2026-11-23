@@ -43,6 +43,8 @@ pub struct Environment {
     /// notifications name.
     #[serde(default)]
     pub server_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub companion: Option<crate::companion::CompanionLook>,
 }
 
 /// Retries back off 2, 4, 8, 16 then 30 s, each spread by up to ±25 % so
@@ -76,6 +78,9 @@ pub struct Model {
     /// when the view was last built whole. A quiet tick moves `now_ms` only,
     /// so it changes nothing shown.
     pub shown_ms: i64,
+    /// The device's IANA time zone (empty means UTC) and current UTC offset.
+    pub time_zone: String,
+    pub utc_offset_secs: i32,
     pub focused: bool,
     /// `desktop` | `mobile`
     pub surface: String,
@@ -168,6 +173,9 @@ pub struct Model {
     /// What the server sent that this app could not read, and so left out,
     /// by what it was: the user is told at the first of each.
     pub unreadable: HashMap<&'static str, u32>,
+    /// What a thread's stream sent for another thread (or into another
+    /// thread's records), and so left out. Always 0 unless something is wrong.
+    pub misrouted: u32,
 
     // Navigation
     pub route: String,
@@ -186,6 +194,10 @@ pub struct Model {
     /// Signed URLs (relative to the server) of attachments, by id; ones
     /// asked for are in `asset_urls` as empty until the answer comes.
     pub asset_urls: HashMap<String, String>,
+    pub asset_url_expiries: HashMap<String, i64>,
+    pub project_icons: crate::project_icons::State,
+    /// Mermaid diagrams the server draws, by the shells' keys.
+    pub diagrams: crate::diagrams::State,
     /// How this device lays out the thread list (saved on the device).
     pub sidebar_layout: crate::sidebar::SidebarLayout,
     /// The thread list shows only unread threads (and ones waiting on you).
@@ -227,6 +239,7 @@ pub struct Model {
 
     /// Last status notified per thread, so each transition notifies once.
     pub notified: HashMap<String, ShellStatus>,
+    pub companion_beat: (String, u64),
 }
 
 /// A transcript row as it was last built, with what it was built from.
@@ -274,8 +287,11 @@ impl Model {
     /// another is opened. One with gaps in its events, or not from a stream,
     /// is not kept: it would be shown as it should not be.
     pub fn keep_open_thread(&mut self) {
-        let (Some(id), Some(thread)) = (self.selected_thread.clone(), self.thread.take()) else { return };
-        if self.thread_sequence == 0 || self.thread_gaps > 0 {
+        let Some(thread) = self.thread.take() else { return };
+        // Kept under its own id, and only if it is the one selected: a thread
+        // held under another's selection is not that thread.
+        let id = thread.record.id.as_str().to_owned();
+        if self.selected_thread.as_deref() != Some(id.as_str()) || self.thread_sequence == 0 || self.thread_gaps > 0 {
             return;
         }
         let rows: Vec<(TurnItemId, BuiltRow)> = self.item_cache.get_mut().unwrap_or_else(std::sync::PoisonError::into_inner).drain().collect();
@@ -291,6 +307,36 @@ impl Model {
         if items > RECENT_TURN_ITEMS {
             self.recent_threads.clear();
         }
+    }
+
+    /// Makes `id` (or none) the open thread. This is the one way the
+    /// selection changes: everything held for the thread left goes with it
+    /// (kept among the recent ones when it can be), so nothing of it is shown
+    /// as, or resumed into, the next one. One opened lately comes back as it
+    /// was, with the sequence to resume its stream after.
+    pub fn open_thread(&mut self, id: Option<String>) {
+        self.keep_open_thread();
+        let (thread, sequence) = match id.as_deref().and_then(|id| self.take_recent_thread(id)) {
+            Some((thread, sequence)) => (Some(thread), sequence),
+            None => (None, 0),
+        };
+        if thread.is_none() {
+            // Rows built for the thread left are of no use to this one.
+            self.item_cache.get_mut().unwrap_or_else(std::sync::PoisonError::into_inner).clear();
+        }
+        self.selected_thread = id;
+        self.thread = thread;
+        self.thread_sequence = sequence;
+        self.thread_gaps = 0;
+        self.find = Default::default();
+        self.panel.diff = Default::default();
+        self.composer.steer_next = false;
+        self.composer.recall = None;
+    }
+
+    /// The open thread, if what is held is `id`'s own.
+    pub fn held_thread(&self, id: &str) -> Option<&domovoi_model::typed::Thread> {
+        self.thread.as_ref().filter(|thread| thread.record.id.as_str() == id && self.selected_thread.as_deref() == Some(id))
     }
 
     /// The thread `id` as it was left, with its rows back in the cache.
@@ -428,6 +474,20 @@ pub struct Composer {
     /// connection sends them again on reconnect (the server answers a
     /// repeated `commandId` from its receipt, so nothing runs twice).
     pub outbox: Vec<Outgoing>,
+    /// Drafts put aside to send later, newest first (kept on the device).
+    pub stash: Vec<String>,
+    /// How far back `RecallPrompt` has gone in the open thread's own
+    /// messages (1: the latest), and the draft from before it started.
+    pub recall: Option<(usize, String)>,
+    /// When Stop was asked of the turn under way (Unix ms; 0: not asked), to
+    /// offer a force stop when it doesn't end.
+    pub stop_asked_ms: i64,
+    /// The run Stop was asked of (a later turn isn't offered a force stop).
+    pub stop_asked_run: String,
+    /// The workspace's worktrees, from its branches: (branch, path).
+    pub worktrees: Vec<(String, String)>,
+    /// Bumped by `/model` for the shell to open its model picker.
+    pub model_picker_requested: u32,
 }
 
 /// A send waiting for the server's answer.
@@ -469,6 +529,38 @@ pub struct Panel {
     pub terminal_summaries: Vec<TerminalSummary>,
     pub files: FilesState,
     pub git: GitState,
+    pub artifacts: ArtifactsState,
+}
+
+#[derive(Default)]
+pub struct ArtifactsState {
+    pub thread_id: Option<String>,
+    pub active_id: Option<String>,
+    pub active_version: Option<u32>,
+    /// `preview` | `code`
+    pub mode: String,
+    pub dark: bool,
+    /// Workspace file content read for the active file-backed artifact.
+    pub file_read: Option<ArtifactRead>,
+    /// Signed server preview URL (`artifact-bundle`, `artifact-react`, `mermaid-diagram-svg`).
+    pub preview_url: Option<ArtifactPreviewUrl>,
+}
+
+pub struct ArtifactPreviewUrl {
+    pub request: String,
+    pub thread: String,
+    pub artifact_id: String,
+    pub version: u32,
+    pub dark: bool,
+    pub url: Option<String>,
+    pub loading: bool,
+    pub error: Option<String>,
+}
+
+impl ArtifactPreviewUrl {
+    pub fn matches(&self, thread_id: &str, artifact_id: &str, version: u32) -> bool {
+        self.thread == thread_id && self.artifact_id == artifact_id && self.version == version
+    }
 }
 
 #[derive(Default)]
@@ -504,17 +596,42 @@ pub struct FilesState {
     pub revision: u32,
     pub results: Vec<ProjectEntry>,
     pub preview: Option<Preview>,
+    pub artifact_preview: Option<ArtifactRead>,
+}
+
+pub struct ArtifactRead {
+    pub request: String,
+    pub thread: String,
+    pub root: String,
+    pub preview: Preview,
+}
+
+impl ArtifactRead {
+    pub fn current(&self, model: &Model) -> bool {
+        model.selected_thread.as_deref() == Some(self.thread.as_str())
+            && model.active_cwd().as_deref() == Some(self.root.as_str())
+    }
 }
 
 #[derive(Default)]
 pub struct Preview {
     pub path: String,
+    pub request: String,
     pub text: String,
+    pub image_url: Option<String>,
     /// Its highlighting, worked out once when it arrives.
     pub spans: Vec<crate::view::CodeSpan>,
     pub truncated: bool,
     pub error: Option<String>,
     pub loading: bool,
+    /// The file's size (a Git LFS file's: its object's).
+    pub byte_length: u64,
+    /// The file is kept in Git LFS: its object, and whether the server has it.
+    pub lfs: Option<domovoi_model::typed::ProjectFileLfs>,
+    /// `projects.fetchLfsObject` is under way for it.
+    pub fetching: bool,
+    /// Why fetching its Git LFS object failed.
+    pub fetch_error: Option<String>,
 }
 
 #[derive(Default)]
@@ -532,6 +649,14 @@ pub struct GitState {
 pub struct Palette {
     pub query: String,
     pub highlighted: usize,
+    /// `commands` (empty too), `files` (go to file) or `content` (search
+    /// the project's files).
+    pub mode: String,
+    /// Names the search asked last; an older answer is dropped.
+    pub revision: u32,
+    pub searching: bool,
+    /// What the last search found, as the palette lists it.
+    pub results: Vec<crate::view::PaletteItemView>,
 }
 
 /// A webhook delivery as the task's log lists it (`ScheduledTaskWebhookDeliverySummary`).
@@ -547,12 +672,31 @@ pub struct WebhookDelivery {
     pub error: Option<String>,
 }
 
+/// A scheduled task's run as `scheduledTasks.listRuns` answers it.
+#[derive(Deserialize, Clone, Debug, PartialEq, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ScheduledRun {
+    pub task_id: String,
+    pub started_at: String,
+    pub trigger: String,
+    pub thread_id: Option<String>,
+    pub status: String,
+    pub error: Option<String>,
+}
+
 #[derive(Default)]
 pub struct Pages {
+    /// Each provider instance's sign-in and managed install, as last reported.
+    pub provider_auth: std::collections::BTreeMap<String, domovoi_model::typed::ProviderAuthState>,
+    pub provider_install: std::collections::BTreeMap<String, domovoi_model::typed::ProviderInstallState>,
     pub scheduled: Vec<ScheduledTask>,
     pub scheduled_time_zone: String,
     /// The deliveries of the webhook task last opened: its id and its log.
     pub webhook_deliveries: Option<(String, Vec<WebhookDelivery>)>,
+    /// Every scheduled task's latest run (a server without run history sends none).
+    pub scheduled_latest_runs: Vec<ScheduledRun>,
+    /// The task whose runs are open, and its runs.
+    pub scheduled_runs: Option<(String, Vec<ScheduledRun>)>,
     pub access: Option<AuthAccessSnapshot>,
     pub database: Option<DatabaseStorageStatus>,
     pub cleanup: Option<StorageCleanupReport>,
@@ -569,8 +713,12 @@ pub struct Pages {
     pub pr_detail: Option<PullRequestSummary>,
     pub pr_checks: Option<PullRequestChecks>,
     pub usage_loading: bool,
+    pub usage_error: Option<String>,
     pub usage: Option<UsageSummary>,
     pub usage_days: u32,
+    /// Provider key (`"claude"`, `"codex"`, …) or empty for all providers.
+    pub usage_provider_filter: String,
+    pub usage_limits_refreshing: bool,
     /// `GET /api/domovoi/remote`; `None` on a server without remote access.
     pub remote: Option<RemoteAccessStatus>,
     /// The last minted pairing link.
@@ -715,6 +863,8 @@ impl Model {
             offline: self.offline,
             now_ms: self.now_ms,
             shown_ms: self.shown_ms,
+            time_zone: self.time_zone.clone(),
+            utc_offset_secs: self.utc_offset_secs,
             // Kept: a view's mark must never match a later model's by chance.
             changes: std::mem::take(&mut self.changes),
             focused: self.focused,
@@ -727,6 +877,7 @@ impl Model {
             tunnel: std::mem::take(&mut self.tunnel),
             push_token: self.push_token.take(),
             toast_counter: self.toast_counter,
+            companion_beat: (String::new(), self.companion_beat.1),
             // Counters keep counting, so no stale reply can match a new attempt.
             attempt: self.attempt,
             tunnel_gen: self.tunnel_gen,
@@ -741,6 +892,8 @@ impl Model {
     /// Requests died with the socket: everything waiting on one stops
     /// waiting, so its screen can offer to try again.
     pub fn socket_lost_flags(&mut self) {
+        crate::project_icons::disconnected(self);
+        crate::diagrams::disconnected(self);
         if self.sessions.scanning {
             self.sessions.scanning = false;
             if !self.sessions.scanned {
@@ -759,7 +912,13 @@ impl Model {
             self.browser.error = Some("The connection dropped. Pull to try again.".into());
         }
         self.pages.prs_loading = false;
-        self.pages.usage_loading = false;
+        if self.pages.usage_loading {
+            self.pages.usage_loading = false;
+            if self.pages.usage.is_none() {
+                self.pages.usage_error = Some("The connection dropped while loading usage.".into());
+            }
+        }
+        self.pages.usage_limits_refreshing = false;
         self.pages.storage_busy = false;
         self.pages.remote_busy = false;
         self.panel.git.busy = false;

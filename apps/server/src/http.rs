@@ -60,6 +60,13 @@ pub fn router(state: SharedState) -> Router {
         .route("/mcp", post(mcp_post).get(|| async { StatusCode::METHOD_NOT_ALLOWED }).delete(|| async { StatusCode::METHOD_NOT_ALLOWED }))
         .route("/api/observability/v1/traces", post(|| async { StatusCode::NO_CONTENT }))
         .route("/api/assets/attachment/{token}", get(attachment_asset))
+        .route(&format!("{}/{{token}}", crate::file_images::ROUTE_PREFIX), get(project_image))
+        .route(&format!("{}/{{token}}", crate::diagrams::ROUTE_PREFIX), get(diagram_image))
+        .route(&format!("{}/{{token}}", crate::diagrams::ROUTE_PREFIX_SVG), get(diagram_svg))
+        .route(&format!("{}/{{token}}/{{*path}}", crate::artifacts::ROUTE_PREFIX_BUNDLE), get(artifact_bundle))
+        .route(&format!("{}/{{token}}", crate::artifacts::ROUTE_PREFIX_REACT), get(artifact_react))
+        .route(&format!("{}/{{file}}", crate::artifacts::ROUTE_PREFIX_RUNTIME), get(artifact_runtime))
+        .route(&format!("{}/{{token}}", crate::tool_images::ROUTE_PREFIX), get(tool_image))
         .route("/api/assets/{*rest}", get(|| async { StatusCode::NOT_FOUND }))
         // PROVIDER_SEND_TURN_MAX_FILE_BYTES (50 MiB); axum's default cap is 2 MiB.
         .route(
@@ -230,6 +237,125 @@ async fn attachment_asset(State(state): State<SharedState>, axum::extract::Path(
         }
         Err(_) => (StatusCode::NOT_FOUND, "Not Found").into_response(),
     }
+}
+
+async fn project_image(State(state): State<SharedState>, axum::extract::Path(token): axum::extract::Path<String>) -> Response {
+    let Some((mime, bytes)) = crate::file_images::read(&state.paths.userdata, &token).await else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    (
+        [
+            (axum::http::header::CONTENT_TYPE, mime),
+            (axum::http::header::CONTENT_DISPOSITION, "inline"),
+            (axum::http::header::CACHE_CONTROL, "private, no-store"),
+            (axum::http::header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+        ],
+        bytes,
+    ).into_response()
+}
+
+async fn tool_image(State(state): State<SharedState>, axum::extract::Path(token): axum::extract::Path<String>) -> Response {
+    let Some((mime, bytes)) = crate::tool_images::read(&state.paths.userdata, &state.store, &token) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    (
+        [
+            (axum::http::header::CONTENT_TYPE, mime),
+            (axum::http::header::CONTENT_DISPOSITION, "inline"),
+            (axum::http::header::CACHE_CONTROL, "private, max-age=86400"),
+            (axum::http::header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+        ],
+        bytes,
+    ).into_response()
+}
+
+async fn diagram_image(State(state): State<SharedState>, axum::extract::Path(token): axum::extract::Path<String>) -> Response {
+    let Some(png) = crate::diagrams::read(&state.paths.userdata, &token) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    (
+        [
+            (axum::http::header::CONTENT_TYPE, "image/png"),
+            (axum::http::header::CONTENT_DISPOSITION, "inline"),
+            (axum::http::header::CACHE_CONTROL, "private, max-age=300"),
+            (axum::http::header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+        ],
+        png,
+    ).into_response()
+}
+
+async fn diagram_svg(State(state): State<SharedState>, axum::extract::Path(token): axum::extract::Path<String>) -> Response {
+    let Some(svg) = crate::diagrams::read_svg(&state.paths.userdata, &token) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    (
+        [
+            (axum::http::header::CONTENT_TYPE, "image/svg+xml; charset=utf-8"),
+            (axum::http::header::CONTENT_DISPOSITION, "inline"),
+            (axum::http::header::CACHE_CONTROL, "private, max-age=300"),
+            (axum::http::header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+            (
+                axum::http::header::CONTENT_SECURITY_POLICY,
+                "default-src 'none'; style-src 'unsafe-inline'; sandbox",
+            ),
+        ],
+        svg,
+    )
+        .into_response()
+}
+
+async fn artifact_bundle(
+    State(state): State<SharedState>,
+    axum::extract::Path((token, path)): axum::extract::Path<(String, String)>,
+) -> Response {
+    let Some((mime, bytes)) = crate::artifacts::read_bundle(&state.paths.userdata, &token, &path) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    (
+        [
+            (axum::http::header::CONTENT_TYPE, mime),
+            (axum::http::header::CONTENT_DISPOSITION, "inline"),
+            (axum::http::header::CACHE_CONTROL, "private, no-store"),
+            (axum::http::header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+            (
+                axum::http::header::CONTENT_SECURITY_POLICY,
+                "default-src 'self' data: blob:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; media-src 'self' data: blob:; connect-src 'self'; frame-src 'none'; worker-src 'none'; form-action 'none'; base-uri 'self'",
+            ),
+        ],
+        bytes,
+    )
+        .into_response()
+}
+
+async fn artifact_react(State(state): State<SharedState>, axum::extract::Path(token): axum::extract::Path<String>) -> Response {
+    let Some(html) = crate::artifacts::read_react_preview(&state.paths.userdata, &token) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    (
+        [
+            (axum::http::header::CONTENT_TYPE, "text/html; charset=utf-8"),
+            (axum::http::header::CONTENT_DISPOSITION, "inline"),
+            (axum::http::header::CACHE_CONTROL, "private, max-age=300"),
+            (axum::http::header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+        ],
+        html,
+    )
+        .into_response()
+}
+
+async fn artifact_runtime(axum::extract::Path(file): axum::extract::Path<String>) -> Response {
+    let Some((mime, bytes)) = crate::artifacts::read_runtime_asset(&file) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    (
+        [
+            (axum::http::header::CONTENT_TYPE, mime),
+            (axum::http::header::CACHE_CONTROL, "public, max-age=31536000, immutable"),
+            (axum::http::header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+        ],
+        bytes,
+    )
+        .into_response()
 }
 
 async fn attachment_upload(

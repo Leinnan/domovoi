@@ -127,9 +127,8 @@ struct PlanCard: View {
         } label: {
             HStack(spacing: Space.m) {
                 Image(systemName: "list.bullet.clipboard")
-                    .font(.title3)
                     .foregroundStyle(on ? Tint.plan : .secondary)
-                    .frame(width: 28)
+                    .iconColumn(Size.listIcon)
                 VStack(alignment: .leading, spacing: Space.xxs) {
                     Text("Plan first").font(.body.weight(.medium))
                     Text("The agent proposes a plan and waits for your go-ahead before changing anything.")
@@ -139,8 +138,8 @@ struct PlanCard: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: Space.s)
+                // A switch, so its empty circle shows too.
                 Image(systemName: on ? "checkmark.circle.fill" : "circle")
-                    .font(.title3)
                     .foregroundStyle(on ? Tint.plan : Color.secondary)
             }
             .padding(Space.m)
@@ -161,7 +160,7 @@ struct EffortPicker: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Space.s) {
-            OptionHeader("Effort", "gauge.with.dots.needle.67percent")
+            OptionHeader(composer.effortLabel.isEmpty ? "Effort" : composer.effortLabel, "gauge.with.dots.needle.67percent")
             HStack(spacing: Space.xs) {
                 ForEach(Array(composer.efforts.enumerated()), id: \.element.value) { index, effort in
                     let filled = index <= effortIndex
@@ -182,6 +181,7 @@ struct EffortPicker: View {
                         }
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, Space.xs)
+                        .tapTarget()
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
@@ -190,7 +190,9 @@ struct EffortPicker: View {
                 }
             }
             .animation(.snappy, value: effortIndex)
-            Text("More effort thinks longer: better on hard problems, slower and costlier.")
+            Text(composer.effortLabel == "Effort" || composer.effortLabel.isEmpty
+                 ? "More effort thinks longer: better on hard problems, slower and costlier."
+                 : "A higher level thinks longer: better on hard problems, slower and costlier.")
                 .font(TypeRole.meta)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -218,7 +220,7 @@ struct PermissionCards: View {
                     HStack(spacing: Space.m) {
                         Image(systemName: ModeInfo.permissionIcon(mode.value))
                             .foregroundStyle(tint ?? (chosen ? Color.accentColor : .secondary))
-                            .frame(width: 28)
+                            .iconColumn(Size.listIcon)
                         VStack(alignment: .leading, spacing: Space.xxs) {
                             Text(mode.label).font(.body.weight(chosen ? .semibold : .regular))
                             let detail = ModeInfo.permissionDetail(mode.value)
@@ -231,7 +233,7 @@ struct PermissionCards: View {
                             }
                         }
                         Spacer(minLength: Space.s)
-                        if chosen { Image(systemName: "checkmark").foregroundStyle(.tint).fontWeight(.semibold) }
+                        if chosen { Image(systemName: "checkmark.circle.fill").foregroundStyle(.tint) }
                     }
                     .padding(Space.m)
                     .contentShape(Rectangle())
@@ -288,6 +290,15 @@ struct ModelList: View {
             ForEach(composer.modelGroups, id: \.instanceId) { group in
                 ModelSection(title: group.provider, icon: nil, status: group.status, rows: group.models,
                              selected: composer.selectedModel, update: update, select: select) {
+                    // A provider that isn't ready says why (it may list no models at all).
+                    if !group.message.isEmpty {
+                        Text(group.message)
+                            .font(TypeRole.meta)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(.horizontal, Space.m)
+                            .padding(.vertical, Space.s)
+                    }
                     if group.hiddenCount > 0 && !searching {
                         Button(composer.showHiddenModels ? "Hide Hidden Models" : "Show \(group.hiddenCount) Hidden") {
                             update(.setShowHiddenModels(show: !composer.showHiddenModels))
@@ -356,28 +367,24 @@ private struct ModelSection<Footer: View>: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
                 if let icon {
-                    Label(title, systemImage: icon).font(.footnote.weight(.semibold))
+                    Label(title, systemImage: icon).font(TypeRole.sectionHeader)
                 } else {
-                    Text(title).font(.footnote.weight(.semibold))
+                    Text(title).font(TypeRole.sectionHeader)
                 }
                 if status != "ready" {
                     Text(status.capitalized)
-                        .font(.caption2.weight(.medium))
-                        .padding(.horizontal, Space.s)
-                        .padding(.vertical, Space.xxs)
-                        .background(Tint.caution.opacity(0.15), in: Capsule())
                         .foregroundStyle(Tint.caution)
+                        .badgeCapsule(tint: Tint.caution)
                 }
             }
             .padding(.horizontal, Space.m)
             .padding(.vertical, Space.s)
             // The chosen model stays in view, however far down it is.
-            let chosenAt = rows.firstIndex { $0.option.instanceId == selected?.instanceId && $0.option.model == selected?.model } ?? 0
+            let chosenAt = rows.firstIndex { $0.chosen } ?? 0
             let cap = max(Self.limit, chosenAt + 1)
             let shown = showsAll || rows.count <= cap ? rows[...] : rows.prefix(cap)
             ForEach(shown, id: \.option) { row in
-                ModelRow(row: row, chosen: row.option.instanceId == selected?.instanceId && row.option.model == selected?.model,
-                         update: update, select: select)
+                ModelRow(row: row, chosen: row.chosen, update: update, select: select)
                 if row.option != shown.last?.option { Divider().padding(.leading, Space.m) }
             }
             if shown.count < rows.count {
@@ -421,11 +428,11 @@ private struct ModelRow: View {
                     VStack(alignment: .leading, spacing: Space.xxs) {
                         Text(row.name).fontWeight(chosen ? .semibold : .regular)
                         if !row.detail.isEmpty {
-                            Text(row.detail).font(.caption).foregroundStyle(.secondary)
+                            Text(row.detail).font(TypeRole.meta).foregroundStyle(.secondary)
                         }
                     }
                     Spacer(minLength: Space.s)
-                    if chosen { Image(systemName: "checkmark").foregroundStyle(.tint).fontWeight(.semibold) }
+                    if chosen { Image(systemName: "checkmark.circle.fill").foregroundStyle(.tint) }
                 }
                 .contentShape(Rectangle())
             }
@@ -434,6 +441,8 @@ private struct ModelRow: View {
             Button { favorite(!row.favorite) } label: {
                 Image(systemName: row.favorite ? "star.fill" : "star")
                     .foregroundStyle(row.favorite ? AnyShapeStyle(Tint.favorite) : AnyShapeStyle(.secondary))
+                    // Tall enough to tap, reaching into the row's padding rather than making it taller.
+                    .tapTarget(inPadding: Self.verticalInset, width: true)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -442,7 +451,7 @@ private struct ModelRow: View {
             .opacity(showsStar ? 1 : 0)
         }
         .padding(.horizontal, Space.m)
-        .padding(.vertical, Platform.isPhone ? Space.m : Space.s)
+        .padding(.vertical, Self.verticalInset)
         .opacity(row.hidden ? 0.5 : 1)
         .hoverHighlight(Radius.chip)
         #if os(macOS)
@@ -456,6 +465,9 @@ private struct ModelRow: View {
         }
     }
 
+    /// A row's top and bottom padding: roomier under a finger.
+    static var verticalInset: CGFloat { Platform.isPhone ? Space.m : Space.s }
+
     /// On a Mac the empty star shows under the pointer; touch screens always show it.
     private var showsStar: Bool {
         #if os(macOS)
@@ -464,4 +476,86 @@ private struct ModelRow: View {
         true
         #endif
     }
+}
+
+/// The model's other options (fast mode, context window, agent…): a switch
+/// sends `true` or `false`, a list the choice's id.
+struct TraitControls: View {
+    let traits: [TraitView]
+    let set: (_ id: String, _ value: String) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Space.s) {
+            OptionHeader("Model Options", "slider.horizontal.3")
+            // One card, like the model sections beside it.
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(Array(traits.enumerated()), id: \.element.id) { index, item in
+                    if index > 0 { Divider().padding(.leading, Space.m) }
+                    control(item)
+                        .padding(.horizontal, Space.m)
+                        .padding(.vertical, Platform.isPhone ? Space.m : Space.s)
+                }
+            }
+            .cardSurface()
+        }
+    }
+
+    @ViewBuilder
+    private func control(_ item: TraitView) -> some View {
+        if item.kind == "switch" {
+            Toggle(isOn: Binding(get: { item.on }, set: { set(item.id, $0 ? "true" : "false") })) { label(item) }
+        } else {
+            HStack(alignment: .firstTextBaseline) {
+                label(item)
+                Spacer(minLength: Space.s)
+                Picker(item.label, selection: Binding(get: { item.value }, set: { set(item.id, $0) })) {
+                    ForEach(item.choices, id: \.value) { Text($0.label).tag($0.value) }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .fixedSize()
+            }
+        }
+    }
+
+    private func label(_ item: TraitView) -> some View {
+        VStack(alignment: .leading, spacing: Space.xxs) {
+            Text(item.label)
+            if !item.description.isEmpty {
+                Text(item.description)
+                    .font(TypeRole.meta)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+}
+
+/// Drafts put aside: stash the one being written, take one back, or drop it.
+struct StashMenuItems: View {
+    let stash: [String]
+    let hasDraft: Bool
+    /// Stashes the draft as typed (the composer syncs it first).
+    let stashDraft: () -> Void
+    let update: (Event) -> Void
+
+    var body: some View {
+        Button(action: stashDraft) { Label("Stash Draft", systemImage: "tray.and.arrow.down") }
+            .disabled(!hasDraft)
+        if !stash.isEmpty {
+            Menu {
+                ForEach(Array(stash.enumerated()), id: \.offset) { index, entry in
+                    Menu(entry.isEmpty ? "Untitled draft" : entry) {
+                        Button { update(.restoreStash(index: UInt32(index))) } label: { Label("Restore", systemImage: "tray.and.arrow.up") }
+                        Button(role: .destructive) { update(.dropStash(index: UInt32(index))) } label: { Label("Delete", systemImage: "trash") }
+                    }
+                }
+            } label: { Label("Stash (\(stash.count))", systemImage: "tray.full") }
+        }
+    }
+}
+
+extension SlashCommandView {
+    /// The app's own commands (`/model`, `/plan`…) are marked apart from the provider's.
+    var isBuiltin: Bool { kind == "builtin" }
 }

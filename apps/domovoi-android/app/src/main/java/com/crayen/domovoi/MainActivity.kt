@@ -7,6 +7,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
 import com.crayen.domovoi.app.Event
 import com.crayen.domovoi.core.Notifier
@@ -19,6 +20,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.crayen.domovoi.ui.AppRoot
+import com.crayen.domovoi.ui.common.LocalCore
 import com.crayen.domovoi.ui.theme.DomovoiTheme
 
 class MainActivity : ComponentActivity() {
@@ -33,14 +35,16 @@ class MainActivity : ComponentActivity() {
         if (savedInstanceState == null) handle(intent)
         setContent {
             DomovoiTheme {
-                AppRoot(
-                    core = core,
-                    pendingLink = pendingLink.value,
-                    onConfirmLink = { link ->
-                        pendingLink.value = null
-                        if (link != null) core.update(Event.ConnectRemote(link))
-                    },
-                )
+                CompositionLocalProvider(LocalCore provides core) {
+                    AppRoot(
+                        core = core,
+                        pendingLink = pendingLink.value,
+                        onConfirmLink = { link ->
+                            pendingLink.value = null
+                            if (link != null) core.update(Event.ConnectRemote(link))
+                        },
+                    )
+                }
             }
         }
     }

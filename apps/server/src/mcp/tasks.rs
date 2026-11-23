@@ -11,7 +11,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use std::time::Duration;
 use domovoi_model::typed::{
-    Actor, ConversationMessage, CreationSource, InitialMessage, InteractionMode, LinkedThread, ModelSelection, Run, RunStatus, RuntimeMode, ScheduledTask,
+    Actor, ConversationMessage, CreationSource, InitialMessage, InteractionMode, LinkedThread, ModelSelection, Run, RunStatus, RuntimeMode, ScheduledTask, ScheduledTaskSchedule,
     ScheduledTaskThreadMode, ThreadLaunchInput, WorkspaceStrategy,
 };
 
@@ -43,18 +43,20 @@ pub fn tools() -> Vec<Value> {
                 "clientRequestId": s("Repeat the same id to retry without creating them twice.") }), &["threads"], false),
         tool("t3_workflow_stop", "Stop one of your subagents (by `subagentId`, from its item) without stopping your turn.",
             json!({ "subagentId": s("The subagent."), "runId": s("Its run; default: your running one.") }), &["subagentId"], false),
-        tool("schedule_task", "Schedule a prompt to run later, repeatedly or on webhook requests in this project: in a new thread each time, or in this one (`bindToCurrentThread`; `freshSession` gives each run a new agent session). Give `scheduledTaskId` to change a task. Only schedules: it does not run the prompt now.",
+        tool("schedule_task", "Schedule a prompt to run later, repeatedly or on webhook requests in this project: in a new thread each time, in this one (`bindToCurrentThread`), or in another thread of this project (`threadId`); `freshSession` gives each run in that thread a new agent session. Give `scheduledTaskId` to change a task: what you leave out (prompt, schedule, its thread) stays as it is. Only schedules: it does not run the prompt now.",
             json!({
-                "prompt": s("What the agent is asked each time."), "schedule": schedule, "title": s("A name for the task."),
-                "enabled": b("Default true."), "bindToCurrentThread": b("Run in this thread rather than a new one each time."),
-                "freshSession": b("With bindToCurrentThread: each run starts a new agent session."),
+                "prompt": s("What the agent is asked each time (needed for a new task)."), "schedule": schedule, "title": s("A name for the task."),
+                "enabled": b("Default true, or as it was for a changed task."),
+                "bindToCurrentThread": b("true: run in this thread rather than a new one each time; false (on a change): back to a new thread each time."),
+                "threadId": s("Run in this thread of the project (from t3_thread_list) rather than a new one each time."),
+                "freshSession": b("With a thread: each run starts a new agent session."),
                 "scheduledTaskId": s("Change this task instead of making one."),
                 "name": s("Same as title."), "thisThread": b("Same as bindToCurrentThread."),
                 "clientRequestId": s("Repeat the same id to retry without making it twice."),
-            }), &["prompt", "schedule"], false),
-        tool("list_scheduled_tasks", "This project's scheduled tasks: schedule, whether enabled, the next and last run.", json!({}), &[], true),
+            }), &[], false),
+        tool("list_scheduled_tasks", "This project's scheduled tasks: schedule, whether enabled, the thread runs go to (threadMode, boundThreadId), the next and last run.", json!({}), &[], true),
         tool("delete_scheduled_task", "Delete one of this project's scheduled tasks.", json!({ "scheduledTaskId": s("The task.") }), &["scheduledTaskId"], false),
-        tool("run_scheduled_task_now", "Run one of this project's scheduled tasks now (not a webhook task).", json!({ "taskId": s("The task.") }), &["taskId"], false),
+        tool("run_scheduled_task_now", "Run one of this project's scheduled tasks now (not a webhook task); answers the thread the run went to.", json!({ "taskId": s("The task.") }), &["taskId"], false),
         tool("t3_project_info", "This thread's project: title, root folder, this thread's worktree and branch, and the project's scripts.", json!({}), &[], true),
     ]
 }
@@ -66,7 +68,7 @@ pub async fn call(c: &Call<'_>, name: &str) -> Option<Result<Value, String>> {
         "task_status" | "task_cancel" => task(c, name == "task_cancel").await,
         "create_threads" => create_threads(c).await,
         "t3_workflow_stop" => workflow_stop(c).await,
-        "schedule_task" => schedule(c),
+        "schedule_task" => schedule(c).await,
         "list_scheduled_tasks" => list_tasks(c),
         "delete_scheduled_task" => delete_task(c),
         "run_scheduled_task_now" => run_now(c).await,
@@ -252,7 +254,7 @@ async fn workflow_stop(c: &Call<'_>) -> Result<Value, String> {
 fn task_view(t: &ScheduledTask) -> Value {
     let v = serde_json::to_value(t).unwrap_or(Value::Null);
     json!({ "scheduledTaskId": v["id"], "title": v["title"], "prompt": v["prompt"], "enabled": v["enabled"], "projectId": v["projectId"],
-        "boundThreadId": v["threadId"], "freshSession": v["threadMode"] == "fresh_session", "schedule": v["schedule"], "nextRunAt": v["nextRunAt"],
+        "boundThreadId": v["threadId"], "threadMode": v["threadMode"], "freshSession": v["threadMode"] == "fresh_session", "schedule": v["schedule"], "nextRunAt": v["nextRunAt"],
         "lastRunStatus": v["lastRunStatus"], "lastRunError": v["lastRunError"], "webhookUrl": v["webhook"]["url"], "webhookPath": v["webhook"]["path"] })
 }
 
@@ -265,27 +267,84 @@ fn project_task(c: &Call<'_>, id: &str) -> Result<ScheduledTask, String> {
     Ok(task)
 }
 
-fn schedule(c: &Call<'_>) -> Result<Value, String> {
-    let prompt = c.required("prompt")?;
+/// `true`, `false`, or not given: a flag whose absence means something of its own.
+fn tri(c: &Call<'_>, keys: &[&str]) -> Option<bool> {
+    keys.iter().find_map(|k| c.args[*k].as_bool())
+}
+
+/// Where an agent's task works (t3code `scheduledTaskWorkspaceStrategy`): a
+/// task in a thread uses that thread's folder; one starting new threads gets
+/// a worktree of the default branch each run, so runs do not share the
+/// project's checkout (the project folder when it is no repository).
+async fn agent_task_workspace(c: &Call<'_>, bound: bool) -> Option<WorkspaceStrategy> {
+    if bound {
+        return Some(WorkspaceStrategy::Root { branch: None });
+    }
+    let root = c.store().get_project(&c.caller.project_id).ok().flatten()?.workspace_root;
+    let base = crate::vcs::default_branch_for(&root).await;
+    Some(match base {
+        Some(base_ref) => WorkspaceStrategy::Worktree { start_from_origin: Some(base_ref.contains('/')), base_ref, branch: None },
+        None => WorkspaceStrategy::Root { branch: None },
+    })
+}
+
+async fn schedule(c: &Call<'_>) -> Result<Value, String> {
+    let existing = c.str("scheduledTaskId").map(|id| project_task(c, &id)).transpose()?;
+    // A change leaves out what stays: the prompt and schedule are needed only by a new task.
+    let prompt = match (&existing, c.str("prompt")) {
+        (_, Some(prompt)) => prompt,
+        (Some(e), None) => e.prompt.clone(),
+        (None, None) => return Err("prompt is required.".into()),
+    };
     // OpenCode sends objects as JSON text.
-    let schedule = match &c.args["schedule"] {
-        Value::String(text) => serde_json::from_str::<Value>(text).map_err(|_| "schedule is not JSON.")?,
-        other => other.clone(),
+    let schedule = match (&c.args["schedule"], &existing) {
+        (Value::Null, Some(e)) => serde_json::to_value(&e.schedule).unwrap_or(Value::Null),
+        (Value::String(text), _) => serde_json::from_str::<Value>(text).map_err(|_| "schedule is not JSON.")?,
+        (other, _) => other.clone(),
     };
     let schedule = UpsertSchedule::deserialize(&schedule).map_err(|_| "Could not save schedule task: that schedule is not one of interval, fixed_time, once or webhook.")?;
-    let existing = c.str("scheduledTaskId").map(|id| project_task(c, &id)).transpose()?;
-    let bind = c.flag("bindToCurrentThread") || c.flag("thisThread");
-    let fresh = c.flag("freshSession");
-    if fresh && !bind {
+    if let UpsertSchedule::Other(ScheduledTaskSchedule::Interval(every)) = &schedule {
+        if every.every_ms < 60_000 {
+            return Err("A task runs at most once a minute: everyMs must be at least 60000.".into());
+        }
+    }
+    let bind = tri(c, &["bindToCurrentThread", "thisThread"]);
+    let fresh = tri(c, &["freshSession"]);
+    // Another thread of this project, by id.
+    let named = c.str("threadId");
+    if named.is_some() && bind == Some(false) {
+        return Err("threadId binds the task to that thread; leave out bindToCurrentThread: false.".into());
+    }
+    let bound_before = existing.as_ref().and_then(|e| e.thread_id.as_ref()).map(|t| t.as_str().to_owned());
+    let thread_id = match (&named, bind) {
+        (Some(thread), _) => Some(thread.clone()),
+        (None, Some(true)) => Some(c.caller.thread_id.clone()),
+        (None, Some(false)) => None,
+        // Not said: a new task gets a new thread each time, a changed one keeps its thread.
+        (None, None) => bound_before.clone(),
+    };
+    let was_mode = existing.as_ref().map(|e| e.thread_mode.clone().unwrap_or(if e.thread_id.is_some() { ScheduledTaskThreadMode::Continue } else { ScheduledTaskThreadMode::NewThread }));
+    if existing.is_none() && fresh == Some(true) && thread_id.is_none() {
         return Err("freshSession needs bindToCurrentThread.".into());
     }
+    // The server keeps a bound thread unless the task goes back to new
+    // threads, so this pair would leave runs in the old thread.
+    if bind == Some(false) && fresh == Some(true) && bound_before.is_some() {
+        return Err("To move this task to a new thread with fresh sessions, first unbind it with bindToCurrentThread: false, then set freshSession: true in a second call.".into());
+    }
+    let mode = match was_mode {
+        // A change that says nothing about where it runs keeps it.
+        Some(was) if fresh.is_none() && bind.is_none() && named.is_none() => was,
+        was if fresh.unwrap_or(bind != Some(false) && was == Some(ScheduledTaskThreadMode::FreshSession)) => ScheduledTaskThreadMode::FreshSession,
+        was if thread_id.is_none() && (bind == Some(false) || was.as_ref().is_none_or(|w| *w == ScheduledTaskThreadMode::NewThread)) => ScheduledTaskThreadMode::NewThread,
+        _ => ScheduledTaskThreadMode::Continue,
+    };
     let title = c.str("title").or_else(|| c.str("name")).or_else(|| existing.as_ref().map(|t| t.title.clone())).unwrap_or_else(|| prompt.chars().take(60).collect());
-    let mode = if !bind {
-        ScheduledTaskThreadMode::NewThread
-    } else if fresh {
-        ScheduledTaskThreadMode::FreshSession
-    } else {
-        ScheduledTaskThreadMode::Continue
+    // A new task, or one whose binding flips, gets the folder that goes with
+    // where it runs; any other change keeps its own.
+    let workspace_strategy = match &existing {
+        Some(e) if e.thread_id.is_none() == thread_id.is_none() => Some(e.workspace_strategy.clone()),
+        _ => agent_task_workspace(c, thread_id.is_some()).await,
     };
     // The task's runtime and interaction mode are those of the thread that
     // schedules it; a changed task keeps its own.
@@ -296,17 +355,17 @@ fn schedule(c: &Call<'_>) -> Result<Value, String> {
         require_existing: existing.as_ref().map(|_| true),
         title: Some(title),
         prompt: Some(prompt),
-        enabled: Some(c.args["enabled"].as_bool().unwrap_or(true)),
+        enabled: Some(c.args["enabled"].as_bool().unwrap_or_else(|| existing.as_ref().is_none_or(|e| e.enabled))),
         schedule,
         project_id: Some(c.caller.project_id.clone()),
-        thread_id: bind.then(|| c.caller.thread_id.clone()),
+        thread_id,
         thread_mode: Some(mode),
-        workspace_strategy: existing.as_ref().map(|e| e.workspace_strategy.clone()),
+        workspace_strategy,
         model_selection: existing.as_ref().map_or_else(|| t.model_selection.clone(), |e| e.model_selection.clone()),
         runtime_mode: Some(existing.as_ref().map_or_else(|| t.runtime_mode.clone(), |e| e.runtime_mode.clone())),
         interaction_mode: Some(existing.as_ref().map_or_else(|| t.interaction_mode.clone(), |e| e.interaction_mode.clone())),
-        created_by: Some(Actor::Agent),
-        creation_source: Some(CreationSource::Mcp),
+        created_by: Some(existing.as_ref().map_or(Actor::Agent, |e| e.created_by.clone())),
+        creation_source: Some(existing.as_ref().map_or(CreationSource::Mcp, |e| e.creation_source.clone())),
     };
     let task = crate::scheduled_tasks::upsert(c.store(), input, &jiff::Zoned::now()).map_err(|e| e.message)?;
     crate::scheduled_tasks::service(c.state).notify_changed();
@@ -331,9 +390,11 @@ fn delete_task(c: &Call<'_>) -> Result<Value, String> {
 async fn run_now(c: &Call<'_>) -> Result<Value, String> {
     let id = c.str("taskId").or_else(|| c.str("scheduledTaskId")).ok_or("taskId is required.")?;
     project_task(c, &id)?;
-    let ran = crate::scheduled_tasks::service(c.state).run_now(&id).await.map_err(|e| e.message)?;
+    let (ran, thread) = crate::scheduled_tasks::service(c.state).run_now_into(&id).await.map_err(|e| e.message)?;
     let v = task_view(&ran);
-    Ok(json!({ "taskId": id, "threadId": v["boundThreadId"], "lastRunStatus": v["lastRunStatus"], "lastRunError": v["lastRunError"], "runCount": ran.run_count, "nextRunAt": v["nextRunAt"] }))
+    // The thread the run went to: for a new-thread task, the one it started.
+    let thread = thread.map_or_else(|| v["boundThreadId"].clone(), Value::from);
+    Ok(json!({ "taskId": id, "threadId": thread, "lastRunStatus": v["lastRunStatus"], "lastRunError": v["lastRunError"], "runCount": ran.run_count, "nextRunAt": v["nextRunAt"] }))
 }
 
 async fn project_info(c: &Call<'_>) -> Result<Value, String> {

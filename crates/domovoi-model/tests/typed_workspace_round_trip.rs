@@ -544,3 +544,22 @@ fn a_null_for_an_optional_field_reads_as_absent() {
     let typed: ProjectShell = serde_json::from_value(project).unwrap();
     assert!(matches!(&typed.repository_identity, Some(Some(identity)) if identity.root_path.is_none() && identity.owner.as_deref() == Some("pingdotgg")));
 }
+
+/// Domovoi's own Git LFS fields: absent from t3code's answers, kept when
+/// sent, and a state this build does not know is kept as it was sent.
+#[test]
+fn read_file_lfs_fields_round_trip() {
+    use domovoi_model::typed::{LfsObjectState, ProjectFetchLfsObjectResult, ProjectFileLfs};
+    let plain: ProjectReadFileResult = serde_json::from_value(recorded_result("projects.readFile").clone()).unwrap();
+    assert_eq!(plain.lfs, None);
+    assert!(serde_json::to_value(&plain).unwrap().get("lfs").is_none());
+    let sent = json!({
+        "relativePath": "a.png", "contents": "", "byteLength": 5, "truncated": false, "exists": true,
+        "lfs": { "oid": "ab", "size": 5, "state": "too-large" },
+    });
+    let read: ProjectReadFileResult = serde_json::from_value(sent.clone()).unwrap();
+    assert_eq!(read.lfs, Some(ProjectFileLfs { oid: "ab".into(), size: 5, state: LfsObjectState::TooLarge }));
+    assert_eq!(serde_json::to_value(&read).unwrap(), sent);
+    let later: ProjectFetchLfsObjectResult = serde_json::from_value(json!({ "relativePath": "a.png", "state": "evicted" })).unwrap();
+    assert_eq!(later.state, LfsObjectState::Other("evicted".into()));
+}

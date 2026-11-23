@@ -29,12 +29,12 @@ struct ConnectionBanner: View {
 
     var body: some View {
         if let kind {
-            HStack(alignment: .center, spacing: Space.m) {
-                icon(kind).foregroundStyle(color(kind))
+            HStack(alignment: .center, spacing: Space.s) {
+                icon(kind).foregroundStyle(color(kind)).iconColumn(Size.rowIcon)
                 VStack(alignment: .leading, spacing: Space.xxs) {
                     headline(kind).font(.footnote.weight(.semibold))
                     if let detail = detail(kind) {
-                        Text(detail).font(.caption).lineLimit(4).foregroundStyle(.secondary)
+                        Text(detail).font(TypeRole.meta).lineLimit(4).foregroundStyle(.secondary)
                     }
                 }
                 Spacer(minLength: 0)
@@ -53,8 +53,9 @@ struct ConnectionBanner: View {
             }
             .padding(.horizontal, Space.l)
             .padding(.vertical, Space.m)
-            .glassPanel(in: RoundedRectangle(cornerRadius: Radius.card + 4, style: .continuous), tint: color(kind))
-            .padding(.horizontal, Space.m)
+            .glassPanel(tint: color(kind))
+            // The composer panel's own side inset: their edges line up.
+            .padding(.horizontal, Space.s)
             .accessibilityElement(children: .combine)
             .transition(reduceMotion ? .opacity : .move(edge: .top).combined(with: .opacity))
         }

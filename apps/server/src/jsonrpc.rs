@@ -34,6 +34,24 @@ pub enum RpcError {
 
 type Pending = Arc<Mutex<HashMap<i64, oneshot::Sender<Result<Value, Value>>>>>;
 
+/// A callback on one line of the child's output.
+pub type LineHook = Box<dyn Fn(&str) + Send + Sync>;
+
+/// How [`RpcClient::spawn_opts`] starts the child.
+#[derive(Default)]
+pub struct SpawnOptions {
+    /// Variables set for the child, over those it inherits.
+    pub env: Vec<(String, String)>,
+    /// Inherited variables the child must not see.
+    pub remove_env: Vec<String>,
+    /// JSON-RPC 2.0 framing (`"jsonrpc": "2.0"` on every message).
+    pub jsonrpc2: bool,
+    /// Each line the child writes to stderr (else stderr is dropped).
+    pub stderr: Option<LineHook>,
+    /// Sees each stdout line first; `false` drops it (a line that is not the protocol's).
+    pub stdout_line: Option<Box<dyn Fn(&str) -> bool + Send + Sync>>,
+}
+
 pub struct RpcClient {
     stdin: Mutex<ChildStdin>,
     /// JSON-RPC 2.0 framing (`"jsonrpc": "2.0"` on every message), as ACP agents speak it.
@@ -42,11 +60,15 @@ pub struct RpcClient {
     pending: Pending,
     #[cfg_attr(not(test), allow(dead_code))]
     child: Mutex<Child>,
+    /// The diagnostics log, for what this side answers and notifies.
+    log: Arc<dyn Fn(&str, &Value) + Send + Sync>,
 }
 
 impl RpcClient {
     /// Spawns `program args...` and starts reading its stdout. Every received
-    /// and sent message is passed to `log` (direction, message) for diagnostics.
+    /// message, and every answer and notification sent, is passed to `log`
+    /// (direction, message) for diagnostics. Requests sent are not: they
+    /// carry prompts and sign-in details.
     pub fn spawn(
         program: &str,
         args: &[&str],
@@ -66,8 +88,27 @@ impl RpcClient {
         jsonrpc2: bool,
         log: impl Fn(&str, &Value) + Send + Sync + 'static,
     ) -> Result<(Arc<Self>, mpsc::UnboundedReceiver<Incoming>), RpcError> {
+        Self::spawn_opts(program, args, cwd, SpawnOptions { env: env.to_vec(), jsonrpc2, ..SpawnOptions::default() }, log)
+    }
+
+    /// [`RpcClient::spawn_with`] with everything [`SpawnOptions`] can say.
+    pub fn spawn_opts(
+        program: &str,
+        args: &[&str],
+        cwd: Option<&str>,
+        options: SpawnOptions,
+        log: impl Fn(&str, &Value) + Send + Sync + 'static,
+    ) -> Result<(Arc<Self>, mpsc::UnboundedReceiver<Incoming>), RpcError> {
+        let SpawnOptions { env, remove_env, jsonrpc2, stderr, stdout_line } = options;
         let mut cmd = crate::process::command(program);
-        cmd.args(args).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).kill_on_drop(true);
+        cmd.args(args).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(if stderr.is_some() { Stdio::piped() } else { Stdio::null() }).kill_on_drop(true);
+        // Inherited names compare as the platform does (Windows ignores case).
+        for (name, _) in std::env::vars_os() {
+            let shown = name.to_string_lossy().to_uppercase();
+            if remove_env.iter().any(|r| r.eq_ignore_ascii_case(&shown)) {
+                cmd.env_remove(&name);
+            }
+        }
         cmd.envs(env.iter().map(|(k, v)| (k, v)));
         if let Some(c) = cwd {
             cmd.current_dir(c);
@@ -75,15 +116,26 @@ impl RpcClient {
         let mut child = cmd.spawn()?;
         let stdin = child.stdin.take().expect("piped stdin");
         let stdout = child.stdout.take().expect("piped stdout");
+        if let (Some(on_line), Some(err)) = (stderr, child.stderr.take()) {
+            tokio::spawn(async move {
+                let mut lines = BufReader::new(err).lines();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    on_line(&line);
+                }
+            });
+        }
         #[expect(clippy::disallowed_methods, reason = "the reader also delivers the answers callers wait for: made to wait for room here, it could never read the answer that frees them")]
         let (tx, rx) = mpsc::unbounded_channel();
         let pending: Pending = Arc::default();
-        let client = Arc::new(RpcClient { stdin: Mutex::new(stdin), jsonrpc2, next_id: AtomicI64::new(1), pending: pending.clone(), child: Mutex::new(child) });
-        let log = Arc::new(log);
+        let log: Arc<dyn Fn(&str, &Value) + Send + Sync> = Arc::new(log);
+        let client = Arc::new(RpcClient { stdin: Mutex::new(stdin), jsonrpc2, next_id: AtomicI64::new(1), pending: pending.clone(), child: Mutex::new(child), log: log.clone() });
         let log_in = log;
         tokio::spawn(async move {
             let mut lines = BufReader::new(stdout).lines();
             while let Ok(Some(line)) = lines.next_line().await {
+                if stdout_line.as_ref().is_some_and(|keep| !keep(&line)) {
+                    continue;
+                }
                 let Ok(msg) = serde_json::from_str::<Value>(&line) else { continue };
                 log_in("incoming", &msg);
                 let id = msg.get("id").cloned();
@@ -112,7 +164,6 @@ impl RpcClient {
             pending.lock().await.clear();
             let _ = tx.send(Incoming::Closed);
         });
-        let _ = log; // outgoing logging happens in `send`
         Ok((client, rx))
     }
 
@@ -146,17 +197,23 @@ impl RpcClient {
         if let Some(p) = params {
             msg["params"] = p;
         }
-        self.send(&msg).await
+        self.send_logged(&msg).await
     }
 
     pub async fn respond(&self, id: Value, result: Value) -> Result<(), RpcError> {
-        self.send(&json!({ "id": id, "result": result })).await
+        self.send_logged(&json!({ "id": id, "result": result })).await
+    }
+
+    /// [`Self::send`], logged as outgoing.
+    async fn send_logged(&self, msg: &Value) -> Result<(), RpcError> {
+        (self.log)("outgoing", msg);
+        self.send(msg).await
     }
 
     /// Refuses a server request (one this client can't answer), so the peer
     /// doesn't wait on it for ever.
     pub async fn respond_error(&self, id: Value, code: i64, message: &str) -> Result<(), RpcError> {
-        self.send(&json!({ "id": id, "error": { "code": code, "message": message } })).await
+        self.send_logged(&json!({ "id": id, "error": { "code": code, "message": message } })).await
     }
 
     pub async fn kill(&self) {

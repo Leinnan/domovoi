@@ -123,7 +123,18 @@ private struct OpenDiffKey: EnvironmentKey {
     static let defaultValue: @MainActor () -> Void = {}
 }
 
+private struct CoreKey: EnvironmentKey {
+    static let defaultValue: Core? = nil
+}
+
 extension EnvironmentValues {
+    /// The core, for views deep in rows that hold no reference to it
+    /// (`DiagramPreview` asks it for the server's drawing).
+    var core: Core? {
+        get { self[CoreKey.self] }
+        set { self[CoreKey.self] = newValue }
+    }
+
     /// Shows the diff after a checkpoint's "View diff" (iOS pushes a screen;
     /// macOS shows the side panel, which the core already opened).
     var openDiff: @MainActor () -> Void {

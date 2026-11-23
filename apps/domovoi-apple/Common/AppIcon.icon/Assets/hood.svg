@@ -1,3 +1,1 @@
-version https://git-lfs.github.com/spec/v1
-oid sha256:5d91d6457fdda42ef9e1101c79e17d30f5888617645760ec60ad7f289e38cb27
-size 259
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024"><defs><linearGradient id="hoodGrad" x1="512" y1="204" x2="512" y2="742" gradientUnits="userSpaceOnUse"><stop offset="0%" stop-color="#FFF8EB"/><stop offset="52%" stop-color="#F9E9CC"/><stop offset="100%" stop-color="#E5CEA6"/></linearGradient></defs><path d="M 512 204 C 554 204, 636 254, 718 352 C 792 440, 844 552, 858 666 C 864 708, 832 742, 792 738 C 758 734, 738 710, 730 672 C 714 596, 682 518, 634 452 C 590 392, 544 358, 512 358 C 480 358, 434 392, 390 452 C 342 518, 310 596, 294 672 C 286 710, 266 734, 232 738 C 192 742, 160 708, 166 666 C 180 552, 232 440, 306 352 C 388 254, 470 204, 512 204 Z" fill="url(#hoodGrad)"/></svg>

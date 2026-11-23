@@ -35,6 +35,7 @@ pub fn init(dir: Option<&Path>) -> Guard {
         Some((writer, guard)) => {
             let file = tracing_subscriber::fmt::layer().with_ansi(false).with_writer(writer).with_filter(filter());
             let _ = tracing_subscriber::registry().with(stderr).with(file).try_init();
+            log_panics();
             Guard(Some(guard))
         }
         None => {
@@ -42,6 +43,20 @@ pub fn init(dir: Option<&Path>) -> Guard {
             Guard(None)
         }
     }
+}
+
+/// Panics into the log file too. tokio keeps a panicking task from taking
+/// the server down, but the panic's text goes to stderr only, which the
+/// packaged server has nowhere: the file is where it can be found later.
+fn log_panics() {
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let message = info.payload().downcast_ref::<&str>().copied().or_else(|| info.payload().downcast_ref::<String>().map(String::as_str)).unwrap_or("(no message)");
+        let location = info.location().map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column())).unwrap_or_default();
+        let thread = std::thread::current();
+        tracing::error!(target: "panic", thread = thread.name().unwrap_or("unnamed"), %location, "panicked: {message}");
+        previous(info);
+    }));
 }
 
 /// Provider protocol logs (`claude-<session>.ndjson`, `codex-app-server.ndjson`):

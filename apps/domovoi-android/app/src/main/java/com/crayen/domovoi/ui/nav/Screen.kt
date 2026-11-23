@@ -6,6 +6,7 @@ sealed interface Screen {
     data class Thread(val id: String) : Screen
     data object NewThread : Screen
     data object Diff : Screen
+    data object Artifacts : Screen
     data object Terminal : Screen
     data object Files : Screen
     data object Git : Screen

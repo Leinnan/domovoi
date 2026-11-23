@@ -71,6 +71,7 @@ pub fn codex_config(thread_id: &str) -> Option<Value> {
     Some(json!({ format!("mcp_servers.{SERVER_NAME}"): { "url": url, "http_headers": { "Authorization": format!("Bearer {token}") }, "tool_timeout_sec": 1800 } }))
 }
 
+mod artifacts;
 pub mod bridge;
 mod tasks;
 mod threads;
@@ -106,6 +107,7 @@ pub fn tools() -> Vec<Value> {
     let mut all = threads::tools();
     all.extend(tasks::tools());
     all.extend(worktree::tools());
+    all.extend(artifacts::tools());
     all
 }
 
@@ -228,6 +230,9 @@ async fn call_tool(state: &Arc<AppState>, caller: &Caller, name: &str, args: &Va
         return answer;
     }
     if let Some(answer) = worktree::call(&call, name).await {
+        return answer;
+    }
+    if let Some(answer) = artifacts::call(&call, name).await {
         return answer;
     }
     Err(format!("Unknown tool {name}."))

@@ -9,6 +9,8 @@ use crate::claude_cli::{ClaudeCli, CliEvent, LaunchOptions};
 use crate::orchestration::commands::Answers;
 use serde_json::{Value, json};
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use tokio::io::AsyncReadExt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use domovoi_model::typed::{
@@ -34,6 +36,13 @@ pub struct ClaudeSession {
     /// The CLI echoes user messages (`--replay-user-messages`): output before
     /// a turn's echo is the previous turn's.
     echoes: AtomicBool,
+    plans_directory: PathBuf,
+    plan_file: std::sync::Mutex<Option<PathBuf>>,
+    tasks: std::sync::Mutex<Vec<PlanStep>>,
+    /// What the thread's "Allow for Thread" answers allowed (earlier sessions'
+    /// and this one's): requests these cover are allowed without asking,
+    /// plan mode included, since Claude asks again for some anyway.
+    granted: std::sync::Mutex<Vec<String>>,
 }
 
 /// The answer to a request Claude makes while no turn is open (nobody can see it).
@@ -42,7 +51,12 @@ const IDLE_DENY: &str = "The user wasn't in the conversation to answer this. Ask
 /// The CLI's permission mode: plan mode (look and propose, change nothing)
 /// when the thread plans first, else the runtime mode's.
 pub fn mode_for(input: &TurnInput) -> &'static str {
-    if input.interaction_mode == "plan" { "plan" } else { permission_mode(&input.runtime_mode) }
+    thread_mode(&input.interaction_mode, &input.runtime_mode)
+}
+
+/// [`mode_for`] from the thread's two modes.
+pub fn thread_mode(interaction_mode: &str, runtime_mode: &str) -> &'static str {
+    if interaction_mode == "plan" { "plan" } else { permission_mode(runtime_mode) }
 }
 
 pub fn permission_mode(runtime_mode: &str) -> &'static str {
@@ -93,6 +107,107 @@ pub fn claude_token_usage(usage: &Value, max_tokens: Option<u64>) -> Option<Wind
         output_tokens: output,
         reasoning_output_tokens: 0,
     })
+}
+
+const PLAN_NOT_CAPTURED: &str = "The client could not capture the proposed plan. Submit it again with the full plan text, or share it in your reply.";
+const MAX_PLAN_BYTES: u64 = 256 * 1024;
+
+async fn plans_directory(cwd: &Path) -> PathBuf {
+    let config = std::env::var_os("CLAUDE_CONFIG_DIR").filter(|path| !path.is_empty())
+        .map(|path| cwd.join(path))
+        .unwrap_or_else(|| crate::util::home_dir().join(".claude"));
+    let configured = async {
+        let settings = tokio::fs::read(config.join("settings.json")).await.ok()?;
+        let settings = serde_json::from_slice::<Value>(&settings).ok()?;
+        Some(cwd.join(settings["plansDirectory"].as_str().filter(|s| !s.is_empty())?))
+    }.await;
+    configured.unwrap_or_else(|| config.join("plans"))
+}
+
+/// Read only a confirmed plan write under Claude's plan directory.
+async fn plan_snapshot(directory: &Path, path: &Path) -> Option<(PathBuf, String)> {
+    if !path.is_absolute() || path.extension().and_then(|s| s.to_str()) != Some("md") {
+        return None;
+    }
+    let directory = tokio::fs::canonicalize(directory).await.ok()?;
+    let path = tokio::fs::canonicalize(path).await.ok()?;
+    if !path.starts_with(&directory) || !tokio::fs::metadata(&path).await.ok()?.is_file() {
+        return None;
+    }
+    let mut options = tokio::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    let file = options.open(&path).await.ok()?;
+    if !file.metadata().await.ok()?.is_file() {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    file.take(MAX_PLAN_BYTES + 1).read_to_end(&mut bytes).await.ok()?;
+    if bytes.len() as u64 > MAX_PLAN_BYTES {
+        return None;
+    }
+    let markdown = String::from_utf8(bytes).ok()?;
+    let markdown = markdown.trim();
+    (!markdown.is_empty()).then(|| (path, markdown.to_owned()))
+}
+
+fn plan_step(id: &str, text: &str, status: PlanStepStatus) -> PlanStep {
+    PlanStep { id: id.to_owned(), text: text.to_owned(), status, duration_anchor_at: None, duration_ms: None }
+}
+
+fn checklist_status(s: &str) -> Option<PlanStepStatus> {
+    match s {
+        "completed" => Some(PlanStepStatus::Completed),
+        "in_progress" => Some(PlanStepStatus::Running),
+        "pending" => Some(PlanStepStatus::Pending),
+        _ => None,
+    }
+}
+
+/// Apply a successful Claude task result to its session's checklist.
+fn apply_task_tool(tasks: &mut Vec<PlanStep>, name: &str, input: &Value, result: &Value, output: &str) -> Option<()> {
+    let text = |value: &Value| value.as_str().map(str::trim).filter(|s| !s.is_empty()).map(str::to_owned);
+    let id = |value: &Value| text(value).or_else(|| value.as_u64().map(|n| n.to_string()));
+    match name {
+        "TaskList" => {
+            let list = result["tasks"].as_array()?;
+            let steps = list.iter().map(|task| {
+                Some(plan_step(&id(&task["id"])?, &text(&task["subject"])?, checklist_status(task["status"].as_str()?)?))
+            }).collect::<Option<Vec<_>>>()?;
+            *tasks = steps;
+        }
+        "TaskCreate" => {
+            let receipt = output.strip_prefix("Task #").and_then(|s| s.split_once(" created successfully: "));
+            let id = id(&result["task"]["id"]).or_else(|| receipt.map(|(id, _)| id.to_owned()))?;
+            let subject = text(&result["task"]["subject"]).or_else(|| text(&input["subject"]))
+                .or_else(|| receipt.map(|(_, subject)| subject.trim().to_owned()).filter(|s| !s.is_empty()))?;
+            if tasks.iter().any(|step| step.id == id) {
+                return None;
+            }
+            tasks.push(plan_step(&id, &subject, PlanStepStatus::Pending));
+        }
+        "TaskUpdate" => {
+            if result["success"] == false || (!result.is_object() && !output.starts_with("Updated task #")) {
+                return None;
+            }
+            let id = id(&input["taskId"]).or_else(|| id(&result["taskId"]))?;
+            let index = tasks.iter().position(|step| step.id == id)?;
+            if input["status"] == "deleted" {
+                tasks.remove(index);
+            } else {
+                let step = &mut tasks[index];
+                if let Some(subject) = text(&input["subject"]) {
+                    step.text = subject;
+                }
+                if let Some(status) = input["status"].as_str().and_then(checklist_status) {
+                    step.status = status;
+                }
+            }
+        }
+        _ => return None,
+    }
+    Some(())
 }
 
 const PLAN_CAPTURED: &str = "The client captured your proposed plan. Stop here and wait for the user's feedback or implementation request in a later turn.";
@@ -172,6 +287,10 @@ fn request_kind(tool: &str) -> ProviderRequestKind {
 impl ClaudeSession {
     pub async fn start(input: &TurnInput, session_id: &str, resume: bool, resume_at: Option<String>, log_dir: std::path::PathBuf) -> Result<Arc<Self>, String> {
         let mode = mode_for(input).to_owned();
+        // What "Allow for Thread" allowed in this thread's earlier sessions.
+        let granted = crate::thread_permissions::store()
+            .map(|store| crate::thread_permissions::rules(store, &input.thread_id, crate::thread_permissions::CLAUDE))
+            .unwrap_or_default();
         let opts = LaunchOptions {
             binary: input.claude_binary.clone(),
             cwd: input.cwd.clone(),
@@ -185,10 +304,15 @@ impl ClaudeSession {
             fork_from: input.fork.as_ref().filter(|_| !resume).map(|(src, _)| src.clone()),
             mcp_config: crate::mcp::claude_config(&input.thread_id),
             append_system_prompt: crate::mcp::enabled().then(crate::agent_instructions::system_prompt),
-            allowed_tools: if crate::mcp::enabled() {
-                crate::mcp::read_only_tools().iter().map(|t| format!("mcp__{}__{t}", crate::mcp::SERVER_NAME)).collect()
-            } else {
-                vec![]
+            enable_artifacts: input.claude_artifacts,
+            allowed_tools: {
+                let mut tools: Vec<String> = if crate::mcp::enabled() {
+                    crate::mcp::read_only_tools().iter().map(|t| format!("mcp__{}__{t}", crate::mcp::SERVER_NAME)).collect()
+                } else {
+                    vec![]
+                };
+                tools.extend(granted.iter().cloned());
+                tools
             },
         };
         let log_path = log_dir.join(format!("claude-{session_id}.ndjson"));
@@ -196,9 +320,13 @@ impl ClaudeSession {
         let (cli, events) = ClaudeCli::spawn(&opts, log).map_err(|e| format!("could not start claude: {e}"))?;
         let initialized = cli.initialize().await.map_err(|e| format!("claude initialize failed: {e}"))?;
         crate::skills::remember_descriptions(&initialized);
+        // The account's limits now, before a turn reports any.
+        crate::claude_limits::read_from(cli.clone(), input.model_selection.instance_id.as_str());
         Ok(Arc::new(ClaudeSession {
             cli, events: Mutex::new(events), session_id: session_id.to_owned(), cwd: input.cwd.clone(), permission_mode: Mutex::new(mode),
+            plans_directory: plans_directory(Path::new(&input.cwd)).await, plan_file: Default::default(), tasks: Default::default(),
             reported_window: Default::default(), idle: Default::default(), broken: AtomicBool::new(false), echoes: AtomicBool::new(false),
+            granted: std::sync::Mutex::new(granted),
         }))
     }
 
@@ -225,6 +353,11 @@ impl ClaudeSession {
                             break;
                         }
                         Some(CliEvent::PermissionRequest { request_id, request }) => me.decline_idle(&request_id, &request).await,
+                        // A turn Claude started by itself after its run ended: what it
+                        // says is in Claude's own transcript, not the thread's.
+                        Some(CliEvent::Message(msg)) if msg["type"] == "system" && msg["subtype"] == "init" => {
+                            tracing::warn!(session = %me.session_id, "Claude started a turn of its own after its run ended; the thread does not record it");
+                        }
                         Some(CliEvent::Message(_)) => {}
                     },
                 }
@@ -248,10 +381,10 @@ impl ClaudeSession {
         }
     }
 
-    /// The thread's runtime mode changed. If Claude refuses the new mode,
-    /// the next turn starts a fresh process in it.
-    pub async fn set_runtime_mode(&self, runtime_mode: &str) {
-        if !self.set_mode(permission_mode(runtime_mode)).await {
+    /// The thread's runtime or interaction mode changed (even mid-run).
+    /// If Claude refuses the new mode, the next turn starts a fresh process in it.
+    pub async fn set_thread_mode(&self, interaction_mode: &str, runtime_mode: &str) {
+        if !self.set_mode(thread_mode(interaction_mode, runtime_mode)).await {
             self.broken.store(true, Ordering::SeqCst);
         }
     }
@@ -285,10 +418,10 @@ impl ClaudeSession {
     /// Runs one turn. Returns the turn and whether the process is still usable.
     pub async fn run_turn(&self, mut turn: Turn, input: TurnInput, mut controls: mpsc::UnboundedReceiver<Control>) -> (Turn, bool) {
         let model = input.model_selection.model.clone();
-        if !self.set_mode(mode_for(&input)).await {
-            // Still in the old mode: the next turn starts a fresh process.
-            self.broken.store(true, Ordering::SeqCst);
-        }
+        // The mode is already the turn's: `Host::claude_session` launched or
+        // prepared the process in it, in the thread's effect lane. Setting it
+        // again from `input` here (in the spawned turn) could undo a mode
+        // change the lane applied since; only that change moves it now.
         turn.session(ProviderSessionStatus::Ready, &input.cwd, &model, None);
         turn.thread_status(ProviderThreadStatus::Active, Some(&self.session_id));
         self.stop_idle_drain().await;
@@ -331,10 +464,16 @@ impl ClaudeSession {
         let mut message_blocks: HashMap<String, Vec<(u64, String)>> = HashMap::new();
         // t3code request id -> (CLI request id, original request)
         let mut pending: HashMap<String, (String, Value)> = HashMap::new();
+        let plan_key = format!("claude-plan:{}", turn.run.id);
+        let mut plan_submitted = false;
+        let tasks_key = format!("claude-checklist:{}", turn.run.id);
         let mut tool_inputs: HashMap<String, (String, Value)> = HashMap::new();
+        // Streaming artifact tool calls (`Artifact`, `mcp__t3__t3_artifact_*`): tool_use id -> (name, partial json)
+        let mut streaming_artifact_tools: HashMap<String, (String, String)> = HashMap::new();
         let mut last_assistant_uuid: Option<String> = None;
         // Streamed blocks already completed by an `assistant` message.
         let mut finalized: std::collections::HashSet<String> = Default::default();
+        let mut assistant_snapshots: std::collections::HashSet<String> = Default::default();
         // The user asked to stop: the turn ending in an error is that stop.
         let mut interrupt_requested = false;
         // Steers sent this run that Claude has queued as commands of their own
@@ -351,18 +490,24 @@ impl ClaudeSession {
         let mut subs = super::subagents::Subagents::default();
         // Claude's task id (for `stop_task`) by the tool use that started it.
         let mut task_ids: HashMap<String, String> = HashMap::new();
-        // Subagents Claude runs in the background (tool use id -> description):
-        // its reply ends Claude's turn but not the run, which stays open until
-        // each reports back (`task_notification`); Claude then carries on by itself.
-        let mut background: std::collections::BTreeMap<String, String> = Default::default();
-        // Claude has replied and only background agents are working.
+        // What Claude runs in the background (tool use id -> description and
+        // kind): subagents, and commands it put in the background. Its reply
+        // ends Claude's turn but not the run, which stays open until each
+        // reports back (`task_notification`); Claude then carries on by itself,
+        // in a turn of its own for each report it had not yet acted on.
+        let mut background: std::collections::BTreeMap<String, (String, BackgroundTaskKind)> = Default::default();
+        // Claude has replied and only background work is left, or a report
+        // came in during its last turn: the turn Claude starts for it is this run's.
         let mut awaiting_background = false;
+        // A background task reported since Claude's turn started (`system
+        // init`): Claude may start another turn to act on it once this one ends.
+        let mut reported_this_turn = false;
         // The last agent reported while Claude was between turns: Claude wakes
         // itself to act on it; if it doesn't by then, the run ends (t3code
         // CLAUDE_WAKE_TURN_START_DEADLINE).
         let mut wake_deadline: Option<tokio::time::Instant> = None;
-        let pending_tasks = |background: &std::collections::BTreeMap<String, String>, task_ids: &HashMap<String, String>, subs: &super::subagents::Subagents| -> Vec<PendingBackgroundTask> {
-            background.iter().map(|(tool, description)| PendingBackgroundTask {
+        let pending_tasks = |background: &std::collections::BTreeMap<String, (String, BackgroundTaskKind)>, task_ids: &HashMap<String, String>, subs: &super::subagents::Subagents| -> Vec<PendingBackgroundTask> {
+            background.iter().map(|(tool, (description, kind))| PendingBackgroundTask {
                 command: None,
                 item_id: None,
                 source_thread_id: None,
@@ -371,7 +516,7 @@ impl ClaudeSession {
                 parent_task_id: None,
                 native_item_id: Some(tool.clone()),
                 awaited: Some(true),
-                kind: Some(BackgroundTaskKind::Subagent),
+                kind: Some(kind.clone()),
                 provider_instance_id: None,
                 child_thread_id: subs.child_of(tool).map(ThreadId::from),
             }).collect()
@@ -400,7 +545,24 @@ impl ClaudeSession {
                                 }
                                 turn.resolve_request(&request_id, &decision, given);
                             } else {
-                                let _ = self.cli.answer_permission(&cli_id, &req, decision_allows(&decision), None).await;
+                                let _ = if matches!(decision.as_str(), "acceptForSession" | "acceptAlways") {
+                                    // Kept for this session's later requests and the thread's later sessions.
+                                    let rules = crate::thread_permissions::claude_rules(&crate::claude_cli::session_permission_updates(&req));
+                                    if let Some(store) = crate::thread_permissions::store() {
+                                        crate::thread_permissions::remember(store, &input.thread_id, crate::thread_permissions::CLAUDE, &rules);
+                                    }
+                                    {
+                                        let mut granted = crate::util::locked(&self.granted);
+                                        for rule in rules {
+                                            if !granted.contains(&rule) {
+                                                granted.push(rule);
+                                            }
+                                        }
+                                    }
+                                    self.cli.answer_permission_for_session(&cli_id, &req).await
+                                } else {
+                                    self.cli.answer_permission(&cli_id, &req, decision_allows(&decision), None).await
+                                };
                                 turn.resolve_request(&request_id, &decision, None);
                             }
                         }
@@ -465,10 +627,39 @@ impl ClaudeSession {
                         // Leaving plan mode: the plan becomes a proposal the user can
                         // implement; Claude stops here (t3code ClaudeAdapterV2).
                         if tool == "ExitPlanMode" {
-                            if let Some(markdown) = request["input"]["plan"].as_str().map(str::trim).filter(|p| !p.is_empty()) {
-                                turn.plan(&item, Plan::Proposed { markdown: markdown.to_owned() }, true);
+                            let tool_input = &request["input"];
+                            let mut markdown = tool_input["plan"].as_str().map(str::trim).filter(|p| !p.is_empty()).map(str::to_owned);
+                            if markdown.is_none()
+                                && let Some(path) = tool_input["planFilePath"].as_str().map(Path::new)
+                            {
+                                let observed = crate::util::locked(&self.plan_file).clone();
+                                if let Some(observed) = observed
+                                    && tokio::fs::canonicalize(path).await.ok().as_ref() == Some(&observed)
+                                {
+                                    markdown = plan_snapshot(&self.plans_directory, &observed).await.map(|(_, markdown)| markdown);
+                                }
                             }
-                            let _ = self.cli.answer_permission(&request_id, &request, false, Some(PLAN_CAPTURED)).await;
+                            let answer = if let Some(markdown) = markdown {
+                                turn.plan(&plan_key, Plan::Proposed { markdown }, true);
+                                plan_submitted = true;
+                                PLAN_CAPTURED
+                            } else {
+                                turn.item(&format!("plan-handoff:{item}"), Work::Notice {
+                                    message: "Claude tried to submit a plan, but its text could not be captured.".into(),
+                                }, TurnItemStatus::Completed);
+                                PLAN_NOT_CAPTURED
+                            };
+                            let _ = self.cli.answer_permission(&request_id, &request, false, Some(answer)).await;
+                            continue;
+                        }
+                        // The user already allowed this for the thread: Claude asks
+                        // again in some modes (plan mode ignores allow rules).
+                        let granted = crate::thread_permissions::allows(&crate::util::locked(&self.granted), &request);
+                        if granted {
+                            tracing::info!(session = %self.session_id, %tool, "allowed by the thread's kept rules");
+                            if self.cli.answer_permission(&request_id, &request, true, None).await.is_err() {
+                                self.broken.store(true, Ordering::SeqCst);
+                            }
                             continue;
                         }
                         let prompt = request["description"].as_str().map(str::to_owned)
@@ -486,9 +677,10 @@ impl ClaudeSession {
                     Some(CliEvent::Message(msg)) if stale(&msg, echoed) => {}
                     Some(CliEvent::Message(msg)) => match msg["type"].as_str().unwrap_or_default() {
                         "system" if msg["subtype"] == "init" => {
-                            // Claude woke itself (a background agent reported back).
+                            // Claude woke itself (a background task reported back).
                             awaiting_background = false;
                             wake_deadline = None;
+                            reported_this_turn = false;
                             crate::providers::remember_claude_commands(&msg);
                             if crate::skills::remember_claude(&msg, &input.cwd) {
                                 crate::providers::CLAUDE_COMMANDS_CHANGED.notify_one();
@@ -497,8 +689,28 @@ impl ClaudeSession {
                         "system" if msg["subtype"] == "task_started" => {
                             if let (Some(task), Some(tool)) = (msg["task_id"].as_str(), msg["tool_use_id"].as_str()) {
                                 task_ids.insert(tool.to_owned(), task.to_owned());
+                                // Put in the background by Claude (a command as well as an
+                                // agent): the run waits for it like for a background agent.
+                                if msg["is_backgrounded"] == true && !background.contains_key(tool) {
+                                    let description = msg["description"].as_str().unwrap_or_default().to_owned();
+                                    background.insert(tool.to_owned(), (description, background_kind(msg["task_type"].as_str())));
+                                }
                                 if background.contains_key(tool) {
                                     turn.background_tasks(pending_tasks(&background, &task_ids, &subs));
+                                }
+                            }
+                        }
+                        // Every task Claude still runs in the background: one that
+                        // ended without its report is not waited for.
+                        "system" if msg["subtype"] == "background_tasks_changed" => {
+                            let running: std::collections::HashSet<&str> = msg["tasks"].as_array().into_iter().flatten().filter_map(|t| t["task_id"].as_str()).collect();
+                            let before = background.len();
+                            background.retain(|tool, _| task_ids.get(tool).is_none_or(|task| running.contains(task.as_str())));
+                            if background.len() != before {
+                                turn.background_tasks(pending_tasks(&background, &task_ids, &subs));
+                                reported_this_turn = true;
+                                if awaiting_background && background.is_empty() && wake_deadline.is_none() {
+                                    wake_deadline = Some(tokio::time::Instant::now() + WAKE_DEADLINE);
                                 }
                             }
                         }
@@ -516,6 +728,7 @@ impl ClaudeSession {
                                 let status = task_status(msg["status"].as_str());
                                 subs.finish(&turn, &tool, status, msg["summary"].as_str());
                                 if background.remove(&tool).is_some() {
+                                    reported_this_turn = true;
                                     turn.background_tasks(pending_tasks(&background, &task_ids, &subs));
                                     if awaiting_background && background.is_empty() {
                                         wake_deadline = Some(tokio::time::Instant::now() + WAKE_DEADLINE);
@@ -555,7 +768,22 @@ impl ClaudeSession {
                                     let entry = message_blocks.entry(current_message.clone()).or_default();
                                     entry.push((idx, id.clone()));
                                     entry.sort();
-                                    blocks.insert(id, (kind, String::new()));
+                                    let text = if kind == "thinking" { block["thinking"].as_str().unwrap_or_default().to_owned() } else { String::new() };
+                                    if kind == "thinking" && !text.trim().is_empty() {
+                                        turn.item_streaming(&id, Work::Reasoning { text: text.clone(), streaming: true }, text.len());
+                                    }
+                                    if kind == "tool_use"
+                                        && let Some(tool_name) = block["name"].as_str()
+                                        && is_artifact_tool(tool_name)
+                                    {
+                                        streaming_artifact_tools.insert(id.clone(), (tool_name.to_owned(), String::new()));
+                                        turn.item_streaming(
+                                            &id,
+                                            Work::Tool { name: tool_name.to_owned(), input: json!({ "_streaming": true }), output: None, viewed_image_path: None },
+                                            0,
+                                        );
+                                    }
+                                    blocks.insert(id, (kind, text));
                                 }
                                 "content_block_delta" => {
                                     let idx = e["index"].as_u64().unwrap_or(0);
@@ -568,18 +796,45 @@ impl ClaudeSession {
                                             }
                                             Some("thinking_delta") if kind == "thinking" => {
                                                 text.push_str(d["thinking"].as_str().unwrap_or_default());
-                                                let t = text.clone();
-                                                let len = t.len();
-                                                turn.item_streaming(&id, Work::Reasoning { text: t, streaming: true }, len);
+                                                if !text.trim().is_empty() {
+                                                    turn.item_streaming(&id, Work::Reasoning { text: text.clone(), streaming: true }, text.len());
+                                                }
+                                            }
+                                            Some("input_json_delta") if kind == "tool_use" => {
+                                                if let Some((tool_name, partial)) = streaming_artifact_tools.get_mut(&id) {
+                                                    partial.push_str(d["partial_json"].as_str().unwrap_or_default());
+                                                    let preview_input = partial_artifact_input(partial);
+                                                    turn.item_streaming(
+                                                        &id,
+                                                        Work::Tool { name: tool_name.clone(), input: preview_input, output: None, viewed_image_path: None },
+                                                        partial.len(),
+                                                    );
+                                                }
                                             }
                                             _ => {}
                                         }
+                                    }
+                                }
+                                "content_block_stop" => {
+                                    let idx = e["index"].as_u64().unwrap_or(0);
+                                    if let Some(id) = index_ids.get(&idx)
+                                        && let Some((kind, text)) = blocks.get(id)
+                                        && kind == "thinking" && !text.trim().is_empty()
+                                    {
+                                        // Keep the buffer for the later assistant snapshot: an
+                                        // empty snapshot must not erase what the stream delivered.
+                                        turn.item(id, Work::Reasoning { text: text.clone(), streaming: false }, TurnItemStatus::Completed);
                                     }
                                 }
                                 _ => {}
                             }
                         }
                         "assistant" => {
+                            if let Some(uuid) = msg["uuid"].as_str()
+                                && !assistant_snapshots.insert(uuid.to_owned())
+                            {
+                                continue;
+                            }
                             if msg["parent_tool_use_id"].is_null() {
                                 if let Some(u) = msg["uuid"].as_str() {
                                     last_assistant_uuid = Some(u.to_owned());
@@ -599,7 +854,7 @@ impl ClaudeSession {
                                             let id = block["id"].as_str().unwrap_or_default().to_owned();
                                             let name = block["name"].as_str().unwrap_or("tool").to_owned();
                                             tool_inputs.insert(id.clone(), (name.clone(), block["input"].clone()));
-                                            subs.tool(&turn, &owner, &id, &name, &block["input"], None, "running");
+                                            subs.record_work(&turn, &owner, &id, tool_work(&name, &block["input"], None, &Value::Null), TurnItemStatus::Running);
                                         }
                                         _ => {}
                                     }
@@ -622,8 +877,15 @@ impl ClaudeSession {
                                     "thinking" => {
                                         let id = streamed("thinking", &finalized).unwrap_or_else(|| format!("{mid}:{idx}"));
                                         finalized.insert(id.clone());
-                                        let text = block["thinking"].as_str().unwrap_or_default().to_owned();
-                                        turn.item(&id, Work::Reasoning { text, streaming: false }, TurnItemStatus::Completed);
+                                        let snapshot = block["thinking"].as_str().unwrap_or_default();
+                                        let text = if snapshot.trim().is_empty() {
+                                            blocks.get(&id).map(|(_, text)| text.as_str()).unwrap_or_default()
+                                        } else {
+                                            snapshot
+                                        }.to_owned();
+                                        if !text.trim().is_empty() {
+                                            turn.item(&id, Work::Reasoning { text, streaming: false }, TurnItemStatus::Completed);
+                                        }
                                     }
                                     "tool_use" => {
                                         let id = block["id"].as_str().unwrap_or_default().to_owned();
@@ -634,10 +896,10 @@ impl ClaudeSession {
                                             subs.start(&mut turn, &id, i["prompt"].as_str().unwrap_or_default(), i["description"].as_str(), i["model"].as_str());
                                             continue;
                                         }
-                                        if name == "TodoWrite" && msg["parent_tool_use_id"].is_null() {
-                                            turn.plan(&format!("todo:{id}"), Plan::Todo { steps: todo_steps(&block["input"]), explanation: None }, true);
+                                        if name == "ExitPlanMode" && msg["parent_tool_use_id"].is_null() {
+                                            continue;
                                         }
-                                        record_tool(&mut turn, &id, &name, &block["input"], None, TurnItemStatus::Running);
+                                        record_tool(&mut turn, &id, &name, &block["input"], None, &Value::Null, TurnItemStatus::Running);
                                     }
                                     _ => {}
                                 }
@@ -653,11 +915,28 @@ impl ClaudeSession {
                                     Value::Array(parts) => parts.iter().filter_map(|p| p["text"].as_str()).collect::<Vec<_>>().join("\n"),
                                     _ => String::new(),
                                 };
-                                let failed = block["is_error"] == true;
+                                let structured = &msg["tool_use_result"];
+                                let no_matches = name == "Bash" && structured["returnCodeInterpretation"].as_str().is_some_and(|s| s.eq_ignore_ascii_case("no matches found"));
+                                let failed = block["is_error"] == true && !no_matches;
+                                let status = if name == "Bash" && structured["interrupted"] == true {
+                                    TurnItemStatus::Interrupted
+                                } else if failed {
+                                    TurnItemStatus::Failed
+                                } else {
+                                    TurnItemStatus::Completed
+                                };
+                                let image_marker = serde_json::json!({ "type": "image" });
+                                let structured = if name == "Read" && !failed && structured["type"] != "image"
+                                    && block["content"].as_array().is_some_and(|parts| parts.iter().any(|part| part["type"] == "image"))
+                                {
+                                    &image_marker
+                                } else {
+                                    structured
+                                };
                                 // Started in the background: the result is only a receipt
                                 // (internal, not for the user); the agent reports later.
                                 if subs.knows(&id) && !failed && is_background_launch(&output) {
-                                    background.insert(id.clone(), tool_input["description"].as_str().unwrap_or_default().to_owned());
+                                    background.insert(id.clone(), (tool_input["description"].as_str().unwrap_or_default().to_owned(), BackgroundTaskKind::Subagent));
                                     subs.progress(&turn, &id, "Running in the background");
                                     turn.background_tasks(pending_tasks(&background, &task_ids, &subs));
                                     continue;
@@ -667,19 +946,46 @@ impl ClaudeSession {
                                     continue;
                                 }
                                 if let Some(owner) = msg["parent_tool_use_id"].as_str().filter(|p| subs.knows(p)) {
-                                    subs.tool(&turn, owner, &id, &name, &tool_input, Some(&output), if failed { "failed" } else { "completed" });
+                                    subs.record_work(&turn, owner, &id, tool_work(&name, &tool_input, Some((&output, failed)), structured), status);
                                     continue;
                                 }
-                                record_tool(&mut turn, &id, &name, &tool_input, Some((&output, failed)), if failed { TurnItemStatus::Failed } else { TurnItemStatus::Completed });
+                                if msg["parent_tool_use_id"].is_null() {
+                                    if name == "ExitPlanMode" {
+                                        continue;
+                                    }
+                                    if !failed {
+                                        if name == "TodoWrite" && tool_input["todos"].is_array() {
+                                            turn.plan(&tasks_key, Plan::Todo { steps: todo_steps(&tool_input), explanation: None }, true);
+                                        }
+                                        if matches!(name.as_str(), "TaskCreate" | "TaskUpdate" | "TaskList") {
+                                            let mut tasks = crate::util::locked(&self.tasks);
+                                            if apply_task_tool(&mut tasks, &name, &tool_input, &msg["tool_use_result"], &output).is_some() {
+                                                turn.plan(&tasks_key, Plan::Todo { steps: tasks.clone(), explanation: None }, true);
+                                            }
+                                        }
+                                        if !plan_submitted
+                                            && matches!(name.as_str(), "Write" | "Edit" | "MultiEdit")
+                                            && *self.permission_mode.lock().await == "plan"
+                                            && let Some(path) = tool_input["file_path"].as_str().map(Path::new)
+                                            && let Some((path, markdown)) = plan_snapshot(&self.plans_directory, path).await
+                                        {
+                                            *crate::util::locked(&self.plan_file) = Some(path);
+                                            turn.plan(&plan_key, Plan::Proposed { markdown }, false);
+                                        }
+                                        if name == "Artifact" {
+                                            capture_claude_artifact(&input.thread_id, &id, &tool_input, &output);
+                                        }
+                                    }
+                                }
+                                streaming_artifact_tools.remove(&id);
+                                record_tool(&mut turn, &id, &name, &tool_input, Some((&output, failed)), structured, status);
                             }
                         }
                         // The bookkeeping result Claude sends for a task notice ends no turn.
                         "result" if awaiting_background && msg["subtype"] == "success" && msg["num_turns"] == 0 => {}
                         "rate_limit_event" => {
                             let info = &msg["rate_limit_info"];
-                            if let Some(w) = crate::usage_limits::claude_window(info) {
-                                crate::usage_limits::merge(input.model_selection.instance_id.as_str(), vec![w]);
-                            }
+                            crate::usage_limits::merge(input.model_selection.instance_id.as_str(), crate::usage_limits::claude_windows(info));
                             let kind = info["rateLimitType"].as_str().unwrap_or("unknown").to_owned();
                             if crate::usage_limits::claude_blocked(info) {
                                 rejected_limits.insert(kind, crate::usage_limits::claude_reset_at(info));
@@ -725,10 +1031,23 @@ impl ClaudeSession {
                             if let Some(cursor) = &last_assistant_uuid {
                                 turn.set_turn_cursor(cursor);
                             }
-                            // Claude replied but background agents still work: the run
-                            // waits for them (and for what Claude does once they report).
+                            // Claude replied but background work goes on: the run
+                            // waits for it (and for what Claude does once it reports).
                             if status == "completed" && !background.is_empty() {
                                 awaiting_background = true;
+                                // Only commands left: one may never end (a dev server
+                                // Claude started), so the run waits a while, not forever.
+                                if background.values().all(|(_, kind)| *kind == BackgroundTaskKind::Command) {
+                                    wake_deadline = Some(tokio::time::Instant::now() + COMMAND_WAIT);
+                                }
+                                continue;
+                            }
+                            // Nothing runs, but a task reported while Claude worked:
+                            // Claude starts a turn of its own for that report, right
+                            // after this one. It is this run's, if it comes soon.
+                            if status == "completed" && reported_this_turn {
+                                awaiting_background = true;
+                                wake_deadline = Some(tokio::time::Instant::now() + REPORT_WAKE_GRACE);
                                 continue;
                             }
                             if !background.is_empty() {
@@ -742,6 +1061,8 @@ impl ClaudeSession {
                             }
                             subs.end(&turn, status == "completed");
                             turn.complete(TurnEnd::named(status), err.as_deref());
+                            // What the turn used of the account's limits, all of them.
+                            crate::claude_limits::read_from(self.cli.clone(), input.model_selection.instance_id.as_str());
                             return (turn, true);
                         }
                         _ => {}
@@ -752,8 +1073,126 @@ impl ClaudeSession {
     }
 }
 
+/// Whether `name` is an artifact-publishing tool whose streaming JSON should
+/// update the transcript live while Claude generates it.
+fn is_artifact_tool(name: &str) -> bool {
+    matches!(name, "Artifact" | "mcp__t3__t3_artifact_create" | "mcp__t3__t3_artifact_update")
+}
+
+/// Extracts best-effort title/kind/id/content hints from a partial JSON tool
+/// argument buffer while an artifact is streaming.
+fn partial_artifact_input(partial: &str) -> Value {
+    if let Ok(full) = serde_json::from_str::<Value>(partial) {
+        return full;
+    }
+    let mut map = serde_json::Map::new();
+    map.insert("_streaming".into(), Value::Bool(true));
+    for key in ["id", "title", "kind", "language", "path", "action"] {
+        if let Some(val) = extract_partial_json_string(partial, key) {
+            map.insert(key.into(), Value::String(val));
+        }
+    }
+    Value::Object(map)
+}
+
+fn extract_partial_json_string(src: &str, key: &str) -> Option<String> {
+    let needle = format!("\"{key}\"");
+    let start = src.find(&needle)?;
+    let rest = src[start + needle.len()..].trim_start();
+    let rest = rest.strip_prefix(':')?.trim_start();
+    let rest = rest.strip_prefix('"')?;
+    let mut out = String::new();
+    let mut chars = rest.chars();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            if let Some(esc) = chars.next() {
+                match esc {
+                    'n' => out.push('\n'),
+                    't' => out.push('\t'),
+                    '"' => out.push('"'),
+                    '\\' => out.push('\\'),
+                    other => out.push(other),
+                }
+            }
+        } else if c == '"' {
+            return (!out.is_empty()).then_some(out);
+        } else {
+            out.push(c);
+        }
+    }
+    None
+}
+
+/// Mirrors a completed Claude Code native `Artifact` publish/update call into
+/// Domovoi's durable artifact store so it gets version history and instant
+/// local preview alongside its hosted `claude.ai` link.
+fn capture_claude_artifact(thread_id: &str, turn_item_id: &str, tool_input: &Value, output: &str) {
+    let action = tool_input["action"].as_str().unwrap_or("publish");
+    if !matches!(action, "publish" | "create" | "update") {
+        return;
+    }
+    let Some(state) = crate::state::STATE.get() else { return };
+    let Ok(Some(thread)) = state.store.app_thread(thread_id) else { return };
+    let hosted_url = extract_claude_artifact_url(output)
+        .or_else(|| tool_input["url"].as_str().map(str::to_owned));
+    let content = tool_input["content"].as_str().unwrap_or_default();
+    if content.is_empty() && hosted_url.is_none() {
+        return;
+    }
+    let title = tool_input["title"]
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("Claude Code Artifact");
+    let kind = if !content.is_empty() {
+        tool_input["kind"].as_str().or(tool_input["type"].as_str()).unwrap_or("html")
+    } else {
+        "hosted"
+    };
+    let artifact_id = tool_input["id"]
+        .as_str()
+        .or_else(|| hosted_url.as_deref().and_then(|u| u.rsplit('/').next()).filter(|s| !s.is_empty()));
+    let _ = crate::artifacts::upsert(
+        &state.store,
+        crate::artifacts::UpsertInput {
+            id: artifact_id,
+            thread_id,
+            project_id: thread.project_id.as_str(),
+            title,
+            kind,
+            language: tool_input["language"].as_str(),
+            source_path: tool_input["path"].as_str(),
+            hosted_url: hosted_url.as_deref(),
+            run_id: None,
+            turn_item_id: Some(turn_item_id),
+            summary: tool_input["description"].as_str(),
+            content,
+        },
+    );
+}
+
+fn extract_claude_artifact_url(text: &str) -> Option<String> {
+    for token in text.split_whitespace() {
+        let cleaned = token.trim_matches(|c: char| matches!(c, '"' | '\'' | '(' | ')' | '[' | ']' | '<' | '>' | ',' | '.'));
+        if cleaned.starts_with("https://claude.ai/") || cleaned.starts_with("https://www.claude.ai/") {
+            return Some(cleaned.to_owned());
+        }
+    }
+    None
+}
+
 /// How long Claude has to wake itself after its last background agent reports.
 const WAKE_DEADLINE: std::time::Duration = std::time::Duration::from_secs(120);
+/// How long a run stays open, once Claude's turn ended, for commands Claude
+/// left running in the background (a build, a test run) to report. Agents
+/// always report and are waited for; a command may run for good (a server),
+/// and the thread is not left working for it.
+const COMMAND_WAIT: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+/// How long a run waits, after Claude's turn ended with nothing left in the
+/// background, for the turn Claude starts by itself for a report that came
+/// in during it (it starts within milliseconds when it does; when Claude
+/// already acted on the report, none comes).
+const REPORT_WAKE_GRACE: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// A subagent's status from Claude's `task_notification` status.
 pub fn task_status(status: Option<&str>) -> &'static str {
@@ -761,6 +1200,15 @@ pub fn task_status(status: Option<&str>) -> &'static str {
         Some("stopped" | "killed") => "cancelled",
         Some("failed") => "failed",
         _ => "completed",
+    }
+}
+
+/// What a task Claude put in the background is, by its `task_type`.
+fn background_kind(task_type: Option<&str>) -> BackgroundTaskKind {
+    match task_type {
+        Some("local_bash") => BackgroundTaskKind::Command,
+        Some("local_agent" | "remote_agent") => BackgroundTaskKind::Subagent,
+        _ => BackgroundTaskKind::BackgroundTask,
     }
 }
 
@@ -786,28 +1234,94 @@ fn edit_texts(tool: &str, input: &Value) -> Option<(String, String)> {
 }
 
 /// Maps a Claude tool call onto a t3code turn item.
-fn record_tool(turn: &mut Turn, id: &str, name: &str, input: &Value, result: Option<(&str, bool)>, status: TurnItemStatus) {
-    let work = match name {
+fn record_tool(turn: &mut Turn, id: &str, name: &str, input: &Value, result: Option<(&str, bool)>, structured: &Value, status: TurnItemStatus) {
+    turn.item(id, tool_work(name, input, result, structured), status);
+}
+
+/// What a Claude tool call shows: `result` is its text and whether it
+/// failed, `structured` Claude's `tool_use_result` (what the text leaves out:
+/// an image's size, the tools a search loaded). An image's bytes are never
+/// kept: the file it came from is named instead.
+pub fn tool_work(name: &str, input: &Value, result: Option<(&str, bool)>, structured: &Value) -> Work {
+    let failed = result.is_some_and(|(_, failed)| failed);
+    match name {
         "Bash" => Work::Command {
             input: input["command"].as_str().unwrap_or_default().to_owned(),
-            output: result.map(|(out, _)| out.to_owned()),
-            exit_code: result.map(|(_, failed)| i64::from(failed)),
+            output: result.map(|(out, _)| {
+                structured["returnCodeInterpretation"].as_str().filter(|_| out.trim().is_empty()).unwrap_or(out).to_owned()
+            }),
+            exit_code: result.map(|(out, failed)| {
+                out.lines().next().and_then(|line| line.strip_prefix("Exit code ")).and_then(|code| code.trim().parse().ok()).unwrap_or(i64::from(failed))
+            }),
         },
         "Edit" | "Write" | "MultiEdit" | "NotebookEdit" => {
             let path = input["file_path"].as_str().or(input["notebook_path"].as_str()).unwrap_or("file");
             let file_name = std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or(path.to_owned());
             let operation = if name == "Write" { "add" } else { "update" };
             let changes = vec![FileChangeDetail { operation: operation.into(), path: path.to_owned(), old_path: None, file_type: None, mime_type: None }];
-            Work::FileChange { file_name, changes, texts: edit_texts(name, input), patch: None }
+            let error = result.filter(|_| failed).map(|(out, _)| out.trim().to_owned()).filter(|e| !e.is_empty());
+            Work::FileChange { file_name, changes, texts: edit_texts(name, input), patch: None, error }
+        }
+        "Read" if structured["type"] == "image" => {
+            let dims = &structured["file"]["dimensions"];
+            let size = dims["originalWidth"].as_u64().zip(dims["originalHeight"].as_u64());
+            let output = size.map_or_else(|| "Image".to_owned(), |(w, h)| format!("Image · {w}×{h}"));
+            let path = input["file_path"].as_str().map(str::to_owned);
+            Work::Tool { name: name.to_owned(), input: input.clone(), output: Some(Value::String(output)), viewed_image_path: path }
+        }
+        "WebSearch" if !failed => {
+            let patterns = input["query"].as_str().or_else(|| structured["query"].as_str()).into_iter().map(str::to_owned).collect();
+            let results = structured["results"].as_array().map(|groups| {
+                groups.iter().flat_map(|entry| {
+                    entry["content"].as_array().map_or(std::slice::from_ref(entry), Vec::as_slice)
+                }).filter_map(|entry| {
+                    let url = entry["url"].as_str()?.trim();
+                    (!url.is_empty()).then(|| domovoi_model::typed::WebSearchResult {
+                        title: entry["title"].as_str().map(str::to_owned),
+                        url: Some(url.to_owned()),
+                        snippet: entry["snippet"].as_str().map(str::to_owned),
+                    })
+                }).collect()
+            });
+            Work::WebSearch { patterns, results }
+        }
+        "ToolSearch" if structured["matches"].is_array() && result.is_some_and(|(out, _)| out.trim().is_empty()) => {
+            let matches: Vec<&str> = structured["matches"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
+            let output = if matches.is_empty() { "No matching tools".to_owned() } else { format!("Loaded {}", matches.join(", ")) };
+            Work::Tool { name: name.to_owned(), input: input.clone(), output: Some(Value::String(output)), viewed_image_path: None }
         }
         _ => Work::Tool { name: name.to_owned(), input: input.clone(), output: result.map(|(out, _)| Value::String(out.to_owned())), viewed_image_path: None },
-    };
-    turn.item(id, work, status);
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{claude_token_usage, cli_answers, edit_texts, selected_window, user_input_questions};
+    use super::{claude_token_usage, cli_answers, edit_texts, selected_window, tool_work, user_input_questions};
+    use crate::adapters::turn::Work;
+
+    #[test]
+    fn tool_results_keep_what_their_text_leaves_out() {
+        let image = json!({ "type": "image", "file": { "base64": "iVBOR", "type": "image/png", "dimensions": { "originalWidth": 256, "originalHeight": 128 } } });
+        let Work::Tool { output, viewed_image_path, .. } = tool_work("Read", &json!({ "file_path": "/tmp/a.png" }), Some(("", false)), &image) else { panic!("a tool") };
+        assert_eq!((output, viewed_image_path.as_deref()), (Some(json!("Image · 256×128")), Some("/tmp/a.png")), "the file, never the base64");
+        let found = json!({ "matches": ["Monitor", "WebSearch"], "query": "select:Monitor,WebSearch" });
+        let Work::Tool { output, .. } = tool_work("ToolSearch", &json!({ "query": "select:Monitor,WebSearch" }), Some(("", false)), &found) else { panic!("a tool") };
+        assert_eq!(output, Some(json!("Loaded Monitor, WebSearch")));
+        let web = json!({ "results": [{ "content": [{ "title": "Rust", "url": "https://www.rust-lang.org/" }] }] });
+        let Work::WebSearch { patterns, results } = tool_work("WebSearch", &json!({ "query": "Rust" }), Some(("", false)), &web) else { panic!("a web search") };
+        assert_eq!(patterns, ["Rust"]);
+        let results = results.expect("results from Claude");
+        assert_eq!(results[0].title.as_deref(), Some("Rust"));
+        assert_eq!(results[0].url.as_deref(), Some("https://www.rust-lang.org/"));
+
+        let Work::Command { exit_code, .. } = tool_work("Bash", &json!({ "command": "cargo test" }), Some(("Exit code 101\nTests failed", true)), &serde_json::Value::Null) else { panic!("a command") };
+        assert_eq!(exit_code, Some(101));
+        let edit = json!({ "file_path": "/w/a.rs", "old_string": "x", "new_string": "y" });
+        let Work::FileChange { error, .. } = tool_work("Edit", &edit, Some(("String to replace not found in file.", true)), &serde_json::Value::Null) else { panic!("an edit") };
+        assert_eq!(error.as_deref(), Some("String to replace not found in file."));
+        let Work::FileChange { error, .. } = tool_work("Edit", &edit, Some(("The file has been updated.", false)), &serde_json::Value::Null) else { panic!("an edit") };
+        assert_eq!(error, None);
+    }
 
     #[test]
     fn usage_counts_everything_sent_against_the_selected_window() {

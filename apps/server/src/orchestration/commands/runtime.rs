@@ -2,10 +2,14 @@
 //! asked, a stop of the run or of one of its subagents, and going back to a
 //! checkpoint.
 
-use super::{DispatchResult, Effect, Orchestrator, Refusal, is_active, now};
-use domovoi_model::typed::command::{CheckpointRollback, RuntimeRequestRespond, SubagentStop};
+use super::{Answers, DispatchResult, Effect, Orchestrator, Refusal, is_active, now};
+use crate::orchestration::events::{Origin, enc};
+use crate::store::StoreError;
+use domovoi_model::typed::command::{CheckpointRollback, MessageDispatch, RuntimeRequestRespond, SubagentStop};
 use domovoi_model::typed::{
-    CheckpointRollbackRequest, CommandId, EventBody, RunStatus, RuntimeRequestId, RuntimeRequestStatus, SubagentStatus, ThreadChange, ThreadId,
+    Actor, CheckpointRollbackRequest, CommandId, CreationSource, EventBody, ExecutionNode, NodeStatus, ResponseCapability, RunStatus,
+    RuntimeRequest, RuntimeRequestId, RuntimeRequestKind, RuntimeRequestStatus, SubagentStatus, ThreadChange, ThreadId, TurnItem,
+    TurnItemStatus, UserInputAnswer, UserInputQuestion,
 };
 
 impl Orchestrator {
@@ -24,16 +28,52 @@ impl Orchestrator {
 
     /// `runtime-request.respond`, or `thread.user-input.dismiss` (no
     /// `response`): the provider gets the user's answer to what it asked.
-    pub(super) fn respond(&self, thread_id: &ThreadId, request_id: &RuntimeRequestId, response: Option<&RuntimeRequestRespond>) -> Result<DispatchResult, Refusal> {
+    pub(super) fn respond(&self, thread_id: &ThreadId, request_id: &RuntimeRequestId, response: Option<&RuntimeRequestRespond>, command_id: &CommandId) -> Result<DispatchResult, Refusal> {
         let outline = self.store.thread_outline(thread_id.as_str())?;
         let request = outline.runtime_requests.iter().find(|request| request.id == *request_id).ok_or(Refusal::UnknownRuntimeRequest)?;
         if request.status != RuntimeRequestStatus::Pending {
             return Err(Refusal::RequestNotPending);
         }
         // Answers accept a question; dismissing it (or no answers) declines.
-        let answers = response.and_then(|response| response.answers.clone());
+        let mut answers = response.and_then(|response| response.answers.clone());
         let fallback = if answers.is_some() { "accept" } else { "decline" };
         let decision = response.and_then(|response| response.decision.as_ref()).map_or(fallback, |decision| decision.as_str()).to_owned();
+        let by_message = matches!(request.response_capability, ResponseCapability::Message) && request.kind == RuntimeRequestKind::UserInput;
+        let open_code_form = request.kind == RuntimeRequestKind::UserInput
+            && request.native_request_ref.as_ref().is_some_and(|native| native.driver.as_str() == "opencode");
+        if by_message || open_code_form {
+            let origin = Self::origin(command_id, None);
+            let cancelled = matches!(decision.as_str(), "cancel" | "decline" | "stop");
+            if by_message && cancelled {
+                self.settle_message_question(thread_id, request, &origin, None)?;
+                return self.answer(None);
+            }
+            if !cancelled {
+                let Some(TurnItem::UserInputRequest(question)) = self.question_item(thread_id, request_id)? else {
+                    return Err(Refusal::UnknownRuntimeRequest);
+                };
+                let normalized = normalize_answers(&question.questions, answers.as_ref()).ok_or(Refusal::InvalidQuestionAnswer)?;
+                if by_message {
+                    let text = question.questions.iter().filter_map(|question| {
+                        let values = normalized.get(&question.id)?.as_array()?;
+                        let labels = values.iter().filter_map(serde_json::Value::as_str).map(|value| {
+                            question.options.iter().find(|option| option.value.as_deref() == Some(value)).map_or(value, |option| option.label.as_str())
+                        }).collect::<Vec<_>>();
+                        Some(format!("{}\n{}", question.question, labels.join(", ")))
+                    }).collect::<Vec<_>>().join("\n\n");
+                    if text.is_empty() {
+                        return Err(Refusal::InvalidQuestionAnswer);
+                    }
+                    self.settle_message_question(thread_id, request, &origin, Some(normalized))?;
+                    let mut reply = MessageDispatch::new(command_id.clone(), thread_id.clone(), format!("async-answer:{request_id}"), text, Actor::User, CreationSource::Server);
+                    if let Some(attachments) = response.and_then(|response| response.attachments_by_question_id.as_ref()) {
+                        reply.attachments.extend(attachments.values().flatten().cloned());
+                    }
+                    return self.message_dispatch_inner(&reply, true);
+                }
+                answers = Some(normalized);
+            }
+        }
         self.send_effect(Effect::RespondToRequest {
             thread_id: thread_id.as_str().to_owned(),
             request_id: request_id.as_str().to_owned(),
@@ -41,6 +81,52 @@ impl Orchestrator {
             answers,
         });
         self.answer(None)
+    }
+
+    fn question_item(&self, thread_id: &ThreadId, request_id: &RuntimeRequestId) -> Result<Option<TurnItem>, StoreError> {
+        let id = format!("turn-item:runtime-request:{}", enc(request_id.as_str()));
+        self.store.record(thread_id.as_str(), &id)
+    }
+
+    fn settle_message_question(&self, thread_id: &ThreadId, request: &RuntimeRequest, origin: &Origin, answers: Option<Answers>) -> Result<(), StoreError> {
+        let at = now();
+        let tid = thread_id.as_str();
+        let mut request = request.clone();
+        let answered = answers.is_some();
+        request.status = if answered { RuntimeRequestStatus::Resolved } else { RuntimeRequestStatus::Cancelled };
+        request.decision = Some(if answered { domovoi_model::typed::ApprovalDecision::Accept } else { domovoi_model::typed::ApprovalDecision::Cancel });
+        request.resolved_at = Some(at.clone());
+        request.answers = answers.clone();
+        if let Some(mut node) = self.store.record::<ExecutionNode>(tid, request.node_id.as_str())? {
+            node.status = if answered { NodeStatus::Completed } else { NodeStatus::Cancelled };
+            node.completed_at = Some(at.clone());
+            self.store.append_event(tid, EventBody::NodeUpdated(Box::new(node)), origin)?;
+        }
+        if let Some(TurnItem::UserInputRequest(mut item)) = self.question_item(thread_id, &request.id)? {
+            item.status = if answered { TurnItemStatus::Completed } else { TurnItemStatus::Cancelled };
+            item.completed_at = Some(at.clone());
+            item.updated_at = at;
+            item.question_answer = answers.map(|answers| UserInputAnswer {
+                request_id: request.id.as_str().into(),
+                question_text_by_id: Some(item.questions.iter().map(|q| (q.id.clone(), q.question.clone())).collect()),
+                answers,
+                attachments_by_question_id: Default::default(),
+            });
+            self.store.append_event(tid, EventBody::TurnItemUpdated(TurnItem::UserInputRequest(item)), origin)?;
+        }
+        self.store.append_event(tid, EventBody::RuntimeRequestUpdated(Box::new(request)), origin)?;
+        Ok(())
+    }
+
+    pub(super) fn close_message_questions(&self, thread_id: &ThreadId, requests: &[std::sync::Arc<RuntimeRequest>], origin: &Origin) -> Result<(), StoreError> {
+        for request in requests {
+            if request.kind == RuntimeRequestKind::UserInput && request.status == RuntimeRequestStatus::Pending
+                && matches!(request.response_capability, ResponseCapability::Message)
+            {
+                self.settle_message_question(thread_id, request, origin, None)?;
+            }
+        }
+        Ok(())
     }
 
     /// `thread.stop` and `run.interrupt`: stops the active run. With
@@ -79,6 +165,7 @@ impl Orchestrator {
         thread.rollback_failure = Some(None);
         // Not on a provider's behalf: the rollback is the user's.
         let origin = Self::origin(&c.command_id, None);
+        self.close_message_questions(&c.thread_id, &outline.runtime_requests, &origin)?;
         self.store.append_event(thread_id, EventBody::Thread { change: ThreadChange::MetadataUpdated, thread: Box::new(thread) }, &origin)?;
         let requested =
             CheckpointRollbackRequest { scope_id: c.scope_id.clone(), checkpoint_id: c.checkpoint_id.clone(), requested_at: now() };
@@ -91,4 +178,43 @@ impl Orchestrator {
         });
         self.answer(Some(sequence))
     }
+}
+
+/// Normalize both web (strings or arrays) and native (arrays) clients to
+/// arrays of option values or permitted custom text.
+fn normalize_answers(questions: &[UserInputQuestion], answers: Option<&Answers>) -> Option<Answers> {
+    use serde_json::Value;
+    let answers = answers?;
+    let mut normalized = Answers::new();
+    for question in questions {
+        let values = match answers.get(&question.id) {
+            Some(Value::String(value)) => vec![value.as_str()],
+            Some(Value::Array(values)) => values.iter().map(Value::as_str).collect::<Option<Vec<_>>>()?,
+            Some(_) => return None,
+            None => vec![],
+        };
+        let values = values.into_iter().filter(|value| !value.trim().is_empty()).collect::<Vec<_>>();
+        if values.is_empty() {
+            if question.required != Some(false) {
+                return None;
+            }
+            continue;
+        }
+        if values.len() > 1 && question.multi_select != Some(true) {
+            return None;
+        }
+        let mut canonical = Vec::new();
+        for value in values {
+            let value = match question.options.iter().find(|option| option.value.as_deref().unwrap_or(&option.label) == value) {
+                Some(option) => option.value.as_deref().unwrap_or(&option.label),
+                None if question.allow_custom_answer == Some(true) => value.trim(),
+                None => return None,
+            };
+            if !canonical.iter().any(|prior| prior == value) {
+                canonical.push(Value::String(value.into()));
+            }
+        }
+        normalized.insert(question.id.clone(), Value::Array(canonical));
+    }
+    Some(normalized)
 }

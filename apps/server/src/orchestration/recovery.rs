@@ -10,7 +10,7 @@ use super::events::{Kept, Origin, Outline};
 use crate::store::Store;
 use domovoi_model::typed::command::MessageDispatch;
 use domovoi_model::typed::{
-    Actor, ConversationMessage, CreationSource, ExecutionNode, NodeStatus, ProviderThread, ProviderThreadStatus, ProviderTurn, ProviderTurnStatus, Run,
+    Actor, ConversationMessage, CreationSource, ExecutionNode, NodeStatus, ProviderFailureClass, ProviderThread, ProviderThreadStatus, ProviderTurn, ProviderTurnStatus, Run,
     RunAttempt, RunAttemptStatus, RunStatus, RuntimeRequest, RuntimeRequestStatus, Timestamp, TurnItem, TurnItemStatus,
 };
 
@@ -51,6 +51,20 @@ pub fn interrupt_orphaned_runs(store: &Store) -> Recovered {
         }
     }
     out
+}
+
+/// A run whose turn task ended without settling it (it panicked) while the
+/// server goes on: settled as startup recovery would, then failed with
+/// `message`. Only a run still live is touched (one whose turn completed
+/// meanwhile is left to its own finalization); returns whether it was.
+pub fn settle_dead_run(store: &Store, tid: &str, run_id: &str, message: &str) -> bool {
+    let Ok(outline) = store.thread_outline(tid) else { return false };
+    let Some(run) = outline.runs.iter().find(|run| run.id.as_str() == run_id && LIVE.contains(&run.status.as_str())) else { return false };
+    let (Ok(items), Ok(messages)) = (store.records::<TurnItem>(tid), store.records::<ConversationMessage>(tid)) else { return false };
+    interrupt(store, tid, run, &outline, &items, &messages);
+    settle_thread(store, tid, &outline);
+    super::effects::fail_run(store, tid, run_id, message, ProviderFailureClass::ProviderError);
+    true
 }
 
 fn interrupt(store: &Store, tid: &str, run: &Run, outline: &Outline, items: &[std::sync::Arc<TurnItem>], messages: &[std::sync::Arc<ConversationMessage>]) {
@@ -107,7 +121,9 @@ fn interrupt(store: &Store, tid: &str, run: &Run, outline: &Outline, items: &[st
 fn settle_thread(store: &Store, tid: &str, outline: &Outline) {
     let ts = Timestamp::from(domovoi_contracts::iso_now());
     let o = Origin::default();
-    for request in outline.runtime_requests.iter().filter(|request| request.status == RuntimeRequestStatus::Pending) {
+    for request in outline.runtime_requests.iter().filter(|request| request.status == RuntimeRequestStatus::Pending
+        && !(request.kind == domovoi_model::typed::RuntimeRequestKind::UserInput
+            && matches!(request.response_capability, domovoi_model::typed::ResponseCapability::Message))) {
         let mut request = RuntimeRequest::clone(request);
         request.status = RuntimeRequestStatus::Cancelled;
         request.resolved_at = Some(ts.clone());
@@ -236,6 +252,32 @@ mod tests {
         assert_eq!(thread.runtime_requests.get("q-t1").unwrap().status, RuntimeRequestStatus::Cancelled);
         // The thread no longer reads as working.
         assert_eq!(domovoi_model::typed::shell_status(&thread.shell()).as_str(), "interrupted");
+    }
+
+    #[test]
+    fn a_dead_turns_run_is_failed_with_what_it_left_open() {
+        let store = Store::new(Db::open_in_memory().unwrap());
+        seed(&store, "t1", "running");
+        seed(&store, "fin", "waiting");
+        assert!(settle_dead_run(&store, "t1", "r-t1", "The server hit an internal error."));
+        let thread = store.load_thread("t1").unwrap().unwrap();
+        let run = thread.runs.get("r-t1").unwrap();
+        assert_eq!((&run.status, run.completed_at.is_some()), (&RunStatus::Failed, true));
+        assert_eq!(thread.attempts.get("a-t1").unwrap().status, RunAttemptStatus::Failed);
+        assert_eq!(*thread.turn_items.get("i-t1").unwrap().status(), TurnItemStatus::Interrupted);
+        assert!(!thread.messages.get("m-t1").unwrap().streaming);
+        assert_eq!(thread.runtime_requests.get("q-t1").unwrap().status, RuntimeRequestStatus::Cancelled);
+        let error = thread.turn_items.iter().find_map(|item| match item {
+            TurnItem::Error(e) => Some(e.failure.message.clone()),
+            _ => None,
+        });
+        assert_eq!(error.as_deref(), Some("The server hit an internal error."));
+        // Settled once; a turn that completed (finalization pending) is not touched.
+        let before = store.latest_sequence().unwrap();
+        assert!(!settle_dead_run(&store, "t1", "r-t1", "again"));
+        assert!(!settle_dead_run(&store, "fin", "r-fin", "late"));
+        assert!(!settle_dead_run(&store, "t1", "unknown", "x"));
+        assert_eq!(store.latest_sequence().unwrap(), before);
     }
 
     #[test]

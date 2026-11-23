@@ -72,6 +72,8 @@ pub enum Refusal {
     UnknownRuntimeRequest,
     #[error("The request is no longer pending.")]
     RequestNotPending,
+    #[error("Answer the required questions using their offered options or permitted custom text.")]
+    InvalidQuestionAnswer,
     #[error("The thread has no active run.")]
     NoActiveRun,
     #[error("Unknown checkpoint.")]

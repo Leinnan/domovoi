@@ -206,6 +206,12 @@ async fn run_effect<H: ProviderHost>(orch: &Orchestrator, host: &H, effect: Effe
                 state.terminals.close_thread(&thread_id);
             }
         }
+        Effect::DeleteThreadTasks { thread_id } => {
+            crate::scheduled_tasks::delete_for_thread(orch.store(), &thread_id);
+            // What the thread's answers allowed goes with it too.
+            crate::thread_permissions::forget(orch.store(), &thread_id);
+        }
+        Effect::MoveThreadTasks { thread_id, project_id } => crate::scheduled_tasks::move_thread_tasks(orch.store(), &thread_id, &project_id),
         Effect::Rollback { thread_id, checkpoint_id, restore_files, command_id } => {
             super::rollback::run(orch, host, &thread_id, &checkpoint_id, restore_files, &command_id).await;
         }

@@ -660,14 +660,61 @@ struct ArchivedShellSnapshot {
     threads: Vec<Arc<ThreadShell>>,
 }
 
-/// `orchestration.getNativeChildWork`: Domovoi runs no provider with native child work.
+/// `orchestration.getNativeChildWork`: the children of an Antigravity
+/// subagent batch, read-only (none for any other thread).
 #[derive(Serialize)]
 struct NativeChildWork {
-    children: [Nothing; 0],
+    children: Vec<crate::antigravity::child_work::Child>,
+}
+
+/// The children of the batch whose thread `child` is (t3code `NativeChildWorkQuery`):
+/// a provider-native Antigravity subagent of its parent, read from the
+/// parent session's log with its sibling batches of that session.
+fn native_child_work(state: &crate::state::AppState, child: &str) -> Vec<crate::antigravity::child_work::Child> {
+    use domovoi_model::typed::{ForkSource, ProviderThread, Run, Subagent, SubagentOrigin};
+    let store = &state.store;
+    let Ok(Some(thread)) = store.app_thread(child) else { return vec![] };
+    let (Some(parent), Some(ForkSource::Node { node_id })) = (thread.lineage.parent_thread_id.clone(), thread.forked_from.clone()) else { return vec![] };
+    let parent = parent.as_str().to_owned();
+    let Ok(subagents) = store.records::<Subagent>(&parent) else { return vec![] };
+    let Some(sub) = subagents.iter().find(|s| s.id == node_id && s.child_thread_id.as_ref().is_some_and(|c| c.as_str() == child)) else { return vec![] };
+    let native = |s: &Subagent| s.native_task_ref.as_ref().and_then(|r| r.native_id.clone());
+    if sub.driver.as_str() != crate::antigravity::DRIVER || sub.origin != SubagentOrigin::ProviderNative {
+        return vec![];
+    }
+    let (Some(run_id), Some(task)) = (sub.run_id.clone(), native(sub)) else { return vec![] };
+    let session_of = |run: &str| {
+        let run = store.record::<Run>(&parent, run).ok().flatten()?;
+        let pt = store.record::<ProviderThread>(&parent, run.provider_thread_id?.as_str()).ok().flatten()?;
+        (pt.provider_instance_id == sub.provider_instance_id).then_some(pt.native_thread_ref?.native_id).flatten()
+    };
+    let Some(root) = session_of(run_id.as_str()) else { return vec![] };
+    let batch = |s: &Subagent, task: String| crate::antigravity::child_work::Batch { native_task_id: task, title: s.title.clone(), prompt: s.prompt.clone() };
+    let siblings: Vec<_> = subagents
+        .iter()
+        .filter(|o| o.id != sub.id && o.driver.as_str() == crate::antigravity::DRIVER && o.origin == SubagentOrigin::ProviderNative && o.provider_instance_id == sub.provider_instance_id)
+        .filter_map(|o| {
+            let task = native(o)?;
+            (session_of(o.run_id.as_ref()?.as_str())? == root).then(|| batch(o, task))
+        })
+        .collect();
+    let home = crate::antigravity::profile(sub.provider_instance_id.as_str()).home;
+    crate::antigravity::child_work::read(&home, &root, &batch(sub, task), &siblings)
+}
+
+/// `orchestration.forgetThreadPermissions`' answer: how many allowed tools went.
+#[derive(Serialize)]
+struct Forgotten {
+    forgotten: usize,
 }
 
 pub fn register(r: Router<ConnCtx>) -> Router<ConnCtx> {
-    r.unary("orchestration.getThreadProjection", |ctx: Arc<ConnCtx>, input: ThreadOnly| async move {
+    // Domovoi's own: the tools "Allow for Thread" allowed in a thread are no
+    // longer given to its next sessions.
+    r.unary("orchestration.forgetThreadPermissions", |ctx: Arc<ConnCtx>, input: ThreadOnly| async move {
+        Ok::<_, Failure>(Forgotten { forgotten: crate::thread_permissions::forget(&ctx.state.store, &input.thread_id) })
+    })
+    .unary("orchestration.getThreadProjection", |ctx: Arc<ConnCtx>, input: ThreadOnly| async move {
         crate::orchestration::stream::snapshot(&ctx.state.store, &input.thread_id).map(|snapshot| snapshot.projection)
     })
     .unary("orchestration.getThreadTitles", |ctx: Arc<ConnCtx>, input: ThreadIds| async move { of_threads(&ctx.state, &input.thread_ids, |t| t.title) })
@@ -706,8 +753,10 @@ pub fn register(r: Router<ConnCtx>) -> Router<ConnCtx> {
     .unary("orchestration.getWorkflowScript", |_ctx: Arc<ConnCtx>, input: WorkflowScriptInput| async move {
         read_workflow_script(&input.script_path)
     })
-    .unary("orchestration.getNativeChildWork", |_ctx: Arc<ConnCtx>, _input: ThreadOnly| async move {
-        Ok::<_, Failure>(NativeChildWork { children: [] })
+    .unary("orchestration.getNativeChildWork", |ctx: Arc<ConnCtx>, input: ThreadOnly| async move {
+        let state = ctx.state.clone();
+        let children = tokio::task::spawn_blocking(move || native_child_work(&state, &input.thread_id)).await.unwrap_or_default();
+        Ok::<_, Failure>(NativeChildWork { children })
     })
     .stream("orchestration.subscribeCommandOutput", |ctx, input: CommandOutputInput| command_output(ctx, input))
     .stream("orchestration.subscribePromptSuggestion", |_ctx: Arc<ConnCtx>, _input: ThreadOnly| {
@@ -781,7 +830,7 @@ mod tests {
     fn answers_are_written_as_the_client_reads_them() {
         let stopped = ForceStopped { outcome: ForceStopOutcome::Released, shared_with_thread_ids: [] };
         assert_eq!(json!(stopped), json!({ "outcome": "released", "sharedWithThreadIds": [] }));
-        assert_eq!(json!(NativeChildWork { children: [] }), json!({ "children": [] }));
+        assert_eq!(json!(NativeChildWork { children: vec![] }), json!({ "children": [] }));
         assert_eq!(json!(None::<Nothing>), json!(null));
         let frame = OutputFrame { text: "a".into(), truncated: false, running: true };
         assert_eq!(json!(frame), json!({ "kind": "replace", "text": "a", "truncated": false, "running": true }));

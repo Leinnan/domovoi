@@ -77,16 +77,13 @@ struct ImportSessionsScreen: View {
         List {
             if let error = sessions.error {
                 Section {
-                    Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.red)
+                    ErrorRow(error)
                     Button("Try Again") { core.update(.scanAgentSessions) }
                 }
             }
             if sessions.scanning && !sessions.scanned {
                 Section {
-                    HStack(spacing: 10) {
-                        ProgressView()
-                        Text("Looking for Claude Code and Codex sessions…").foregroundStyle(.secondary)
-                    }
+                    LoadingRow("Looking for Claude Code and Codex sessions…")
                 }
             } else if sessions.scanned && sessions.candidates.isEmpty {
                 ContentUnavailableView("No sessions found", systemImage: "tray", description: Text("Claude Code and Codex sessions on the server show up here."))
@@ -135,16 +132,17 @@ struct ImportSessionsScreen: View {
         Button {
             if selected.contains(c.path) { selected.remove(c.path) } else { selected.insert(c.path) }
         } label: {
-            HStack(spacing: 12) {
+            HStack(spacing: Space.m) {
                 Image(systemName: selected.contains(c.path) ? "checkmark.circle.fill" : "circle")
                     .font(.title3)
                     .foregroundStyle(selected.contains(c.path) ? Color.accentColor : .secondary)
-                VStack(alignment: .leading, spacing: 2) {
+                    .iconColumn(Size.listIcon)
+                VStack(alignment: .leading, spacing: Space.xxs) {
                     Text(c.title).foregroundStyle(.primary)
-                    Text(c.path).font(.caption2).foregroundStyle(.secondary).lineLimit(1).truncationMode(.head)
-                    HStack(spacing: 6) {
+                    Text(c.path).font(TypeRole.metaSmall).foregroundStyle(.secondary).lineLimit(1).truncationMode(.head)
+                    HStack(spacing: Space.tight) {
                         SourceBadge(source: c.sources)
-                        Text(c.detail).font(.caption).foregroundStyle(.secondary)
+                        Text(c.detail).font(TypeRole.meta).foregroundStyle(.secondary)
                     }
                 }
                 Spacer(minLength: 0)
@@ -158,7 +156,7 @@ struct ImportSessionsScreen: View {
     }
 
     private var importBar: some View {
-        VStack(spacing: 6) {
+        VStack(spacing: Space.tight) {
             if sessions.importing {
                 ProgressView(value: Double(sessions.done), total: Double(max(sessions.total, 1))) {
                     Text("Importing \(min(sessions.done + 1, sessions.total)) of \(sessions.total)…").font(.footnote)
@@ -176,9 +174,7 @@ struct ImportSessionsScreen: View {
                 .disabled(selected.isEmpty)
             }
         }
-        .padding(.horizontal)
-        .padding(.vertical, 10)
-        .background(.bar)
+        .projectActionBar()
     }
 }
 
@@ -187,14 +183,11 @@ struct SourceBadge: View {
     let source: String
 
     var body: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: Space.xs) {
             ForEach(source.components(separatedBy: " · ").filter { !$0.isEmpty }, id: \.self) { name in
                 Text(name)
-                    .font(.caption2.weight(.medium))
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 1)
-                    .background(Tint.agent(name).opacity(0.18), in: Capsule())
                     .foregroundStyle(Tint.agent(name))
+                    .badgeCapsule(tint: Tint.agent(name))
             }
         }
     }
@@ -220,10 +213,10 @@ struct FolderBrowserScreen: View {
                     }
                 }
                 if let error = browser.error {
-                    Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.red)
+                    ErrorRow(error)
                 }
                 if browser.loading && browser.entries.isEmpty {
-                    ProgressView()
+                    LoadingRow("Loading folders…")
                 } else if !browser.loading && browser.entries.isEmpty && browser.error == nil {
                     Text("No folders inside").foregroundStyle(.secondary)
                 }
@@ -259,13 +252,20 @@ struct FolderBrowserScreen: View {
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
             .disabled(browser.path.isEmpty || browser.loading)
-            .padding(.horizontal)
-            .padding(.vertical, 10)
-            .background(.bar)
+            .projectActionBar()
         }
         .onAppear {
             if browser.path.isEmpty { core.update(.browseFolders(path: "")) }
         }
+    }
+}
+
+private extension View {
+    /// The bar under the import and folder screens holding their one action.
+    func projectActionBar() -> some View {
+        padding(.horizontal, Space.l)
+            .padding(.vertical, Space.s)
+            .background(.bar)
     }
 }
 

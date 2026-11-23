@@ -1,5 +1,5 @@
 //! Provider status probes (`ServerProvider` entries) for the Codex, Claude,
-//! OpenCode and Pi drivers. Probes only read version, login state and what
+//! OpenCode, Pi, ACP and Antigravity drivers. Probes only read version, login state and what
 //! the provider offers; they never open a session that is kept (t3code:
 //! "setup must not happen as a health-check side effect").
 
@@ -15,6 +15,8 @@ use domovoi_model::typed::{
     ServerProviderSlashCommandInput, ServerProviderState,
 };
 use tokio::sync::RwLock;
+
+pub(crate) mod codex;
 
 pub const CODEX: &str = "codex";
 pub const OPENCODE: &str = "opencode";
@@ -136,13 +138,13 @@ pub const CODEX_TOOL: Tool = Tool { program: "codex", label: "Codex", env: "DOMO
 
 /// The folders searched for a tool: PATH (already merged with the login
 /// shell's at startup), then where CLIs usually live.
-fn search_dirs() -> Vec<PathBuf> {
+pub(crate) fn search_dirs() -> Vec<PathBuf> {
     let path = std::env::var("PATH").unwrap_or_default();
     let known = crate::shell_env::well_known_dirs(&crate::util::home_dir()).join(":");
     std::env::split_paths(&crate::shell_env::merge(&[&path, &known])).collect()
 }
 
-fn is_executable(p: &Path) -> bool {
+pub(crate) fn is_executable(p: &Path) -> bool {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -206,7 +208,7 @@ fn first_version(s: &str) -> Option<String> {
 }
 
 /// A sign-in state, with the kind of account and its name when signed in.
-fn auth(status: ServerProviderAuthStatus, kind: Option<&str>, label: Option<&str>) -> ServerProviderAuth {
+pub(crate) fn auth(status: ServerProviderAuthStatus, kind: Option<&str>, label: Option<&str>) -> ServerProviderAuth {
     ServerProviderAuth {
         status,
         r#type: kind.map(str::to_owned),
@@ -226,7 +228,7 @@ fn signed_in(kind: &str, label: &str) -> ServerProviderAuth {
 
 /// A provider entry before anything is known of its CLI: not installed,
 /// sign-in unknown, no models, checked now.
-fn entry(instance_id: &str, driver: &str, display_name: &str) -> ServerProvider {
+pub(crate) fn entry(instance_id: &str, driver: &str, display_name: &str) -> ServerProvider {
     ServerProvider {
         instance_id: instance_id.into(),
         driver: driver.into(),
@@ -313,7 +315,18 @@ pub async fn probe_codex() -> ServerProvider {
         None if version.is_some() => signed_out(),
         None => unknown(),
     };
-    finish(base_entry(CODEX), version, auth, "Codex is not authenticated. Run `codex login` and try again.", "Codex CLI is not installed.")
+    if auth.status == ServerProviderAuthStatus::Unauthenticated {
+        // Signed out: another account may sign in.
+        crate::usage_limits::clear(CODEX);
+    }
+    let mut provider = finish(base_entry(CODEX), version, auth, "Codex is not authenticated. Run `codex login` and try again.", "Codex CLI is not installed.");
+    if provider.status == ServerProviderState::Ready {
+        match codex::discover(&exe).await {
+            Ok(models) => provider.models = models,
+            Err(error) => tracing::warn!(%error, "Could not discover Codex models; using bundled defaults"),
+        }
+    }
+    provider
 }
 
 /// What `claude auth status` prints.
@@ -338,6 +351,45 @@ fn text<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<Stri
     Ok(<Value as serde::Deserialize>::deserialize(deserializer)?.as_str().map(str::to_owned))
 }
 
+/// How old an account's limits can be before a probe (or the periodic refresh) reads them again.
+pub const LIMITS_FRESH: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+
+/// Reads again the limits of each signed-in account whose limits are older
+/// than [`LIMITS_FRESH`], in the background (the periodic refresh while a
+/// client watches the provider list).
+pub async fn refresh_stale_limits(providers: &[ServerProvider]) {
+    for p in providers.iter().filter(|p| p.enabled && p.auth.status == ServerProviderAuthStatus::Authenticated) {
+        let id = p.instance_id.as_str();
+        if !crate::usage_limits::stale(id, LIMITS_FRESH) {
+            continue;
+        }
+        if p.driver.as_str() == crate::antigravity::DRIVER {
+            crate::antigravity::limits::refresh(id);
+            continue;
+        }
+        match id {
+            CLAUDE => crate::claude_limits::refresh(),
+            CODEX => {
+                let live = match crate::adapters::HOST.get() {
+                    Some(h) => h.live_codex().await,
+                    None => None,
+                };
+                match live {
+                    Some(server) => {
+                        tokio::spawn(async move { server.read_limits().await });
+                    }
+                    None => {
+                        if let Ok(exe) = executable(CODEX_TOOL) {
+                            tokio::spawn(async move { codex::refresh_limits(&exe).await });
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 pub async fn probe_claude() -> ServerProvider {
     let unknown = || auth(ServerProviderAuthStatus::Unknown, None, None);
     let exe = match executable(CLAUDE_TOOL) {
@@ -355,9 +407,17 @@ pub async fn probe_claude() -> ServerProvider {
                 Some(other) => format!("Claude {other} subscription"),
                 None => "Claude".to_owned(),
             };
+            // The account's limits, read in the background when not fresh.
+            if crate::usage_limits::stale(CLAUDE, LIMITS_FRESH) {
+                crate::claude_limits::refresh();
+            }
             signed_in(s.auth_method.as_deref().unwrap_or("claude.ai"), &label)
         }
-        Some(_) => auth(ServerProviderAuthStatus::Unauthenticated, None, None),
+        Some(_) => {
+            // Signed out: another account may sign in.
+            crate::usage_limits::clear(CLAUDE);
+            auth(ServerProviderAuthStatus::Unauthenticated, None, None)
+        }
         None => unknown(),
     };
     finish(base_entry(CLAUDE), version, auth, "Claude Code is not authenticated. Run `claude auth login` and try again.", "Claude Code CLI is not installed.")
@@ -706,6 +766,10 @@ fn overlay(current: &mut [ServerProvider]) {
         if let Some(limits) = crate::usage_limits::get(p.instance_id.as_str()) {
             p.usage_limits = Some(limits);
         }
+        if p.driver.as_str() == crate::antigravity::DRIVER {
+            crate::antigravity::overlay(p);
+            continue;
+        }
         match p.instance_id.as_str() {
             CLAUDE => {
                 p.slash_commands = Some(claude_commands());
@@ -836,6 +900,17 @@ impl ProviderRegistry {
                 fresh.push(probe_acp(id, config, only == Some(id.as_str())).await);
             }
         }
+        // Antigravity: the built-in instance (when installed) and those settings add.
+        let antigravity = crate::antigravity::instances();
+        current.retain(|p| p.driver.as_str() != crate::antigravity::DRIVER || antigravity.contains(&p.instance_id.as_str().to_owned()));
+        for id in &antigravity {
+            if wanted(id) {
+                match crate::antigravity::probe(id).await {
+                    Some(p) => fresh.push(p),
+                    None => current.retain(|p| p.instance_id.as_str() != id),
+                }
+            }
+        }
         for f in fresh {
             match current.iter_mut().find(|c| c.instance_id == f.instance_id) {
                 Some(slot) => *slot = f,
@@ -847,6 +922,7 @@ impl ProviderRegistry {
             CLAUDE => 1,
             // After OpenCode, which recorded answers already list third.
             PI => 3,
+            _ if p.driver.as_str() == crate::antigravity::DRIVER => 4,
             _ => 2,
         });
         *self.statuses.write().await = current.clone();

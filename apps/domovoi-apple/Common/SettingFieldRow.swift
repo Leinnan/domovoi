@@ -58,7 +58,7 @@ struct SettingFieldRow: View {
     private var labelText: some View {
         VStack(alignment: .leading, spacing: Space.xxs) {
             Text(field.label)
-            if !field.help.isEmpty { Text(field.help).font(.caption).foregroundStyle(.secondary) }
+            if !field.help.isEmpty { Text(field.help).font(TypeRole.meta).foregroundStyle(.secondary) }
         }
     }
 }

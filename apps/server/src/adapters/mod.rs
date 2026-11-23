@@ -39,12 +39,17 @@ pub struct TurnInput {
     pub text: String,
     /// Images attached to the message: (MIME type, file on disk).
     pub images: Vec<(String, PathBuf)>,
+    /// Other files attached to the message (the text already names them):
+    /// (name, MIME type, file on disk). Pasted text is not among them.
+    pub files: Vec<(String, String, PathBuf)>,
     /// `default` | `plan` (plan first, change nothing).
     pub interaction_mode: String,
     pub cwd: String,
     pub runtime_mode: String,
     pub model_selection: ModelSelection,
     pub claude_binary: String,
+    /// Enable Claude Code's native hosted `Artifact` toolset (`CLAUDE_CODE_ARTIFACTS=1`).
+    pub claude_artifacts: bool,
     /// A native fork for the run's first turn: the source conversation (Claude
     /// session or Codex thread) and where in it (Claude message / Codex turn).
     pub fork: Option<(String, Option<String>)>,
@@ -69,6 +74,14 @@ pub struct Host {
     /// Threads whose Claude conversation was rewound: next turn starts a new CLI session.
     fresh_claude: Mutex<HashSet<String>>,
     active: ActiveTurns,
+}
+
+/// What a run shows when its turn's task died without settling it.
+const DEAD_TURN: &str = "The server hit an internal error during this turn, so it was stopped. Send a message to continue.";
+
+/// The text a panic was raised with.
+fn panic_message(panic: &(dyn std::any::Any + Send)) -> &str {
+    panic.downcast_ref::<&str>().copied().or_else(|| panic.downcast_ref::<String>().map(String::as_str)).unwrap_or("(no message)")
 }
 
 /// Provider turns running now, by thread: the run and its control channel.
@@ -155,6 +168,85 @@ impl Host {
         claude.is_some() || pi.is_some() || acp.is_some() || active.is_some()
     }
 
+    /// Runs a turn's task: once `turn` ends, the turn leaves the active ones
+    /// and its run is finalized. A turn that panics (a bug) would otherwise
+    /// leave its run running for good, its controls closed and its agent
+    /// waiting on an answer: it is failed, and its agent process goes.
+    fn spawn_turn(self: Arc<Self>, thread_id: String, run_id: String, turn: impl Future<Output = ()> + Send + 'static) {
+        use futures::FutureExt as _;
+        tokio::spawn(async move {
+            match std::panic::AssertUnwindSafe(turn).catch_unwind().await {
+                Ok(()) => {
+                    self.active.finish(&thread_id, &run_id);
+                    finalize_run(&self.orch, &thread_id, &run_id).await;
+                }
+                Err(panic) => {
+                    tracing::error!(%thread_id, %run_id, "the turn's task panicked: {}", panic_message(panic.as_ref()));
+                    self.active.finish(&thread_id, &run_id);
+                    crate::orchestration::recovery::settle_dead_run(self.orch.store(), &thread_id, &run_id, DEAD_TURN);
+                    self.drop_thread_process(&thread_id).await;
+                    finalize_run(&self.orch, &thread_id, &run_id).await;
+                }
+            }
+        });
+    }
+
+    /// Sends a control to the thread's live turn (of `run_id`, when given).
+    /// A turn whose task is gone without settling its run is settled here
+    /// instead (`TurnEnded`), so its run can't stay running.
+    async fn send_control(&self, thread_id: &str, run_id: Option<&str>, control: Control) -> Result<(), ProviderError> {
+        let dead_run = {
+            let active = self.active.lock();
+            let (active_run, tx) = active.get(thread_id).ok_or(ProviderError::NoActiveTurn)?;
+            if run_id.is_some_and(|r| r != active_run) {
+                return Err(ProviderError::TurnEnded);
+            }
+            match tx.send(control) {
+                Ok(()) => return Ok(()),
+                Err(_) => active_run.clone(),
+            }
+        };
+        // Also the moment between a turn ending and its task finishing it:
+        // a run that already settled is left to that.
+        if crate::orchestration::recovery::settle_dead_run(self.orch.store(), thread_id, &dead_run, DEAD_TURN) {
+            tracing::warn!(%thread_id, run_id = %dead_run, "the turn's task was gone with its run still live: settled it");
+            self.active.finish(thread_id, &dead_run);
+            self.drop_thread_process(thread_id).await;
+            finalize_run(&self.orch, thread_id, &dead_run).await;
+        }
+        Err(ProviderError::TurnEnded)
+    }
+
+    /// Ends the thread's own agent process (Claude, pi or ACP), if it has one;
+    /// the next turn starts a new one. The shared Codex and OpenCode servers stay.
+    async fn drop_thread_process(&self, thread_id: &str) {
+        let claude = self.claude.lock().await.remove(thread_id);
+        let pi = self.pi.lock().await.remove(thread_id);
+        let acp = self.acp.lock().await.remove(thread_id);
+        if let Some(s) = claude {
+            s.kill().await;
+        }
+        if let Some(s) = pi {
+            s.kill().await;
+        }
+        if let Some(s) = acp {
+            s.kill().await;
+        }
+    }
+
+    /// Stops every ACP agent of provider instance `instance` (its sign-in or
+    /// settings changed). Their next turns start new ones.
+    pub async fn stop_instance(&self, instance: &str) {
+        let stopped: Vec<_> = {
+            let mut sessions = self.acp.lock().await;
+            let ids: Vec<String> = sessions.iter().filter(|(_, s)| s.instance() == instance).map(|(id, _)| id.clone()).collect();
+            ids.iter().filter_map(|id| sessions.remove(id)).collect()
+        };
+        for s in stopped {
+            s.kill().await;
+        }
+    }
+
     /// (thread, run) of every provider turn running now.
     pub fn live_runs(&self) -> Vec<(String, String)> {
         self.active.lock().iter().map(|(t, (r, _))| (t.clone(), r.clone())).collect()
@@ -239,15 +331,18 @@ impl Host {
                 _ => None,
             });
         let images = attachment_files(&self.userdata, attachments);
+        let files = typed_file_attachments(&self.userdata, attachments);
         let cwd = self.thread_cwd(thread_id)?;
         Ok(TurnInput {
             text,
             images,
+            files,
             interaction_mode: thread.interaction_mode.as_str().to_owned(),
             cwd,
             runtime_mode: thread.runtime_mode.as_str().to_owned(),
             model_selection: run.model_selection.clone(),
             claude_binary: String::new(),
+            claude_artifacts: false,
             fork,
             thread_id: thread_id.to_owned(),
             title: Some(thread.title.clone()),
@@ -289,13 +384,16 @@ impl Host {
     async fn acp_session(&self, thread_id: &str, turn: &turn::Turn, input: &TurnInput) -> Result<Arc<acp::AcpSession>, String> {
         let existing = self.acp.lock().await.get(thread_id).cloned();
         if let Some(s) = existing {
-            if s.usable() && s.runtime_mode == input.runtime_mode && s.cwd == input.cwd {
+            // Antigravity answers approvals from the runtime mode each turn: a
+            // change of mode keeps its process. Changed sign-in settings don't.
+            let same_mode = s.runtime_mode == input.runtime_mode || crate::antigravity::is_instance(input.model_selection.instance_id.as_str());
+            if s.usable() && same_mode && s.cwd == input.cwd && s.current() {
                 return Ok(s);
             }
             self.acp.lock().await.remove(thread_id);
             s.kill().await;
         }
-        let s = acp::AcpSession::start(input, turn.native_thread_id(), self.log_dir.clone()).await?;
+        let s = acp::AcpSession::start(input, turn.native_thread_id(), self.log_dir.clone(), &crate::attachments::dir(&self.userdata)).await?;
         self.acp.lock().await.insert(thread_id.to_owned(), s.clone());
         Ok(s)
     }
@@ -364,6 +462,19 @@ pub fn file_attachments(userdata: &std::path::Path, attachments: &[ChatAttachmen
         .collect()
 }
 
+/// [`file_attachments`] with their MIME types, pasted text left out (its
+/// file stays for the agent to open, not to embed).
+pub fn typed_file_attachments(userdata: &std::path::Path, attachments: &[ChatAttachment]) -> Vec<(String, String, PathBuf)> {
+    attachments
+        .iter()
+        .filter_map(|attachment| match attachment {
+            ChatAttachment::File(file) if file.source.is_none() => Some(file),
+            _ => None,
+        })
+        .filter_map(|file| Some((file.name.clone(), file.mime_type.clone(), crate::attachments::stored_file(userdata, &file.id)?)))
+        .collect()
+}
+
 /// t3code's prompt for a message that is only attachments.
 const ATTACHMENT_ONLY_PROMPT: &str = "[User attached one or more files without additional text. Respond using the conversation context and the attached files.]";
 /// A text file up to this size goes in the prompt itself; larger files and
@@ -400,6 +511,12 @@ impl ProviderHost for Host {
         let driver = ProviderDriver::parse(&turn.driver);
         if driver == Some(ProviderDriver::ClaudeAgent) {
             input.claude_binary = crate::providers::executable(crate::providers::CLAUDE_TOOL)?.to_string_lossy().into_owned();
+            let env_enabled = std::env::var("CLAUDE_CODE_ARTIFACTS").is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true"));
+            let settings_enabled = match crate::state::STATE.get() {
+                Some(state) => state.settings.read().await.unknown_bool("claudeCodeArtifacts"),
+                None => false,
+            };
+            input.claude_artifacts = env_enabled || settings_enabled;
         }
         // Registered before the provider is ready, so an interrupt or answer
         // sent meanwhile waits in the channel. If starting fails, dropping
@@ -413,61 +530,62 @@ impl ProviderHost for Host {
             Some(ProviderDriver::Codex) => {
                 let server = self.codex().await?;
                 registration.hand_over();
-                tokio::spawn(async move {
+                this.spawn_turn(thread_id, run_id, async move {
                     server.run_turn(turn, input, rx).await;
-                    this.active.finish(&thread_id, &run_id);
-                    finalize_run(&this.orch, &thread_id, &run_id).await;
                 });
             }
             Some(ProviderDriver::ClaudeAgent) => {
                 let session = self.claude_session(&thread_id, &turn, &input).await?;
                 registration.hand_over();
-                tokio::spawn(async move {
+                let (host, tid) = (this.clone(), thread_id.clone());
+                this.spawn_turn(thread_id, run_id, async move {
                     let (_, usable) = session.run_turn(turn, input, rx).await;
                     if usable {
                         session.start_idle_drain();
                     } else {
-                        if let Some(s) = this.claude.lock().await.remove(&thread_id) {
+                        // Taken out first: the map's lock is not held while it dies.
+                        let gone = host.claude.lock().await.remove(&tid);
+                        if let Some(s) = gone {
                             s.kill().await;
                         }
                     }
-                    this.active.finish(&thread_id, &run_id);
-                    finalize_run(&this.orch, &thread_id, &run_id).await;
                 });
             }
             Some(ProviderDriver::OpenCode) => {
                 let server = self.opencode().await?;
                 registration.hand_over();
-                tokio::spawn(async move {
+                this.spawn_turn(thread_id, run_id, async move {
                     server.run_turn(turn, input, rx).await;
-                    this.active.finish(&thread_id, &run_id);
-                    finalize_run(&this.orch, &thread_id, &run_id).await;
                 });
             }
             Some(ProviderDriver::Pi) => {
                 let session = self.pi_session(&thread_id, &turn, &input).await?;
                 registration.hand_over();
-                tokio::spawn(async move {
+                let (host, tid) = (this.clone(), thread_id.clone());
+                this.spawn_turn(thread_id, run_id, async move {
                     let (_, usable) = session.run_turn(turn, input, rx).await;
                     if usable {
                         session.start_idle_drain();
-                    } else if let Some(s) = this.pi.lock().await.remove(&thread_id) {
-                        s.kill().await;
+                    } else {
+                        let gone = host.pi.lock().await.remove(&tid);
+                        if let Some(s) = gone {
+                            s.kill().await;
+                        }
                     }
-                    this.active.finish(&thread_id, &run_id);
-                    finalize_run(&this.orch, &thread_id, &run_id).await;
                 });
             }
-            Some(ProviderDriver::AcpRegistry) => {
+            Some(ProviderDriver::AcpRegistry | ProviderDriver::Antigravity) => {
                 let session = self.acp_session(&thread_id, &turn, &input).await?;
                 registration.hand_over();
-                tokio::spawn(async move {
+                let (host, tid) = (this.clone(), thread_id.clone());
+                this.spawn_turn(thread_id, run_id, async move {
                     let (_, usable) = session.run_turn(turn, input, rx).await;
-                    if !usable && let Some(s) = this.acp.lock().await.remove(&thread_id) {
-                        s.kill().await;
+                    if !usable {
+                        let gone = host.acp.lock().await.remove(&tid);
+                        if let Some(s) = gone {
+                            s.kill().await;
+                        }
                     }
-                    this.active.finish(&thread_id, &run_id);
-                    finalize_run(&this.orch, &thread_id, &run_id).await;
                 });
             }
             None => return Err(format!("Provider {} is not supported by domovoi-server yet.", turn.driver).into()),
@@ -476,9 +594,7 @@ impl ProviderHost for Host {
     }
 
     async fn respond(&self, thread_id: &str, request_id: &str, decision: &str, answers: Option<Answers>) -> Result<(), ProviderError> {
-        let active = self.active.lock();
-        let (_, tx) = active.get(thread_id).ok_or(ProviderError::NoActiveTurn)?;
-        tx.send(Control::Respond { request_id: request_id.into(), decision: decision.into(), answers }).map_err(|e| ProviderError::Failed(e.to_string()))
+        self.send_control(thread_id, None, Control::Respond { request_id: request_id.into(), decision: decision.into(), answers }).await
     }
 
     async fn steer(&self, thread_id: &str, run_id: &str, message_id: &str) -> Result<(), ProviderError> {
@@ -486,37 +602,30 @@ impl ProviderHost for Host {
         let text = with_attached_files(&message.text, &file_attachments(&self.userdata, &message.attachments));
         let images = attachment_files(&self.userdata, &message.attachments);
         let (reply, rx) = tokio::sync::oneshot::channel();
-        {
-            let active = self.active.lock();
-            let (active_run, tx) = active.get(thread_id).ok_or(ProviderError::NoActiveTurn)?;
-            if active_run != run_id {
-                return Err(ProviderError::TurnEnded);
-            }
-            tx.send(Control::Steer { text, images, reply }).map_err(|e| e.to_string())?;
-        }
+        self.send_control(thread_id, Some(run_id), Control::Steer { text, images, reply }).await?;
         rx.await.map_err(|_| "The turn ended before taking the message.".to_owned())?.map_err(ProviderError::from)
     }
 
     async fn stop_subagent(&self, thread_id: &str, native_id: &str) -> Result<(), ProviderError> {
         let (reply, rx) = tokio::sync::oneshot::channel();
-        {
-            let active = self.active.lock();
-            let (_, tx) = active.get(thread_id).ok_or(ProviderError::NoActiveTurn)?;
-            tx.send(Control::StopSubagent { native_id: native_id.into(), reply }).map_err(|e| e.to_string())?;
-        }
+        self.send_control(thread_id, None, Control::StopSubagent { native_id: native_id.into(), reply }).await?;
         rx.await.map_err(|_| "The turn ended first.".to_owned())?.map_err(ProviderError::from)
     }
 
     async fn interrupt(&self, thread_id: &str, _run_id: &str) -> Result<(), ProviderError> {
-        let active = self.active.lock();
-        let (_, tx) = active.get(thread_id).ok_or(ProviderError::NoActiveTurn)?;
-        tx.send(Control::Interrupt).map_err(|e| ProviderError::Failed(e.to_string()))
+        match self.send_control(thread_id, None, Control::Interrupt).await {
+            // The turn was already gone: its run is settled, which is what a stop wants.
+            Err(ProviderError::TurnEnded) => Ok(()),
+            sent => sent,
+        }
     }
 
+    /// The thread's runtime or interaction mode changed: its live Claude takes
+    /// the mode both make now (plan mode wins), even in the middle of a run.
     async fn runtime_mode_changed(&self, thread_id: &str) {
-        let mode = self.orch.store().app_thread(thread_id).ok().flatten().map(|thread| thread.runtime_mode.as_str().to_owned());
-        if let (Some(mode), Some(s)) = (mode, self.claude.lock().await.get(thread_id).cloned()) {
-            s.set_runtime_mode(&mode).await;
+        let Some(thread) = self.orch.store().app_thread(thread_id).ok().flatten() else { return };
+        if let Some(s) = self.claude.lock().await.get(thread_id).cloned() {
+            s.set_thread_mode(thread.interaction_mode.as_str(), thread.runtime_mode.as_str()).await;
         }
     }
 
@@ -594,6 +703,23 @@ impl ProviderHost for Host {
                 let o = crate::orchestration::events::Origin { driver: Some("pi".into()), provider_instance_id: Some(pt.provider_instance_id.as_str().to_owned()), command_id: None };
                 store.append_event(thread_id, pt.updated(), &o).map_err(|e| e.to_string())?;
             }
+            // ACP has no truncation: the checkpoint restores the files and the
+            // next turn opens a new agent session (t3code `makeAcpAdapterV2`
+            // `rollbackThread`), so the agent no longer remembers what was undone.
+            Some(driver @ ("acpRegistry" | "antigravity")) => {
+                if let Some(s) = self.acp.lock().await.remove(thread_id) {
+                    s.kill().await;
+                }
+                let Some(provider_thread) = provider_thread else { return Ok(()) };
+                let mut pt = ProviderThread::clone(provider_thread);
+                pt.native_thread_ref = None;
+                pt.native_conversation_head_ref = None;
+                pt.status = ProviderThreadStatus::Idle;
+                pt.last_run_ordinal = Some(after);
+                pt.updated_at = Timestamp::from(domovoi_contracts::iso_now());
+                let o = crate::orchestration::events::Origin { driver: Some(driver.into()), provider_instance_id: Some(pt.provider_instance_id.as_str().to_owned()), command_id: None };
+                store.append_event(thread_id, pt.updated(), &o).map_err(|e| e.to_string())?;
+            }
             _ => {}
         }
         Ok(())
@@ -660,6 +786,75 @@ mod tests {
         assert_eq!(turns.lock()["t1"].0, "r2", "the old run's end leaves the new run");
         turns.finish("t1", "r2");
         assert!(turns.lock().is_empty());
+    }
+
+    /// A host over an in-memory store whose thread `t1` has a run under way: (host, store, run).
+    async fn host_with_a_running_turn() -> (std::sync::Arc<super::Host>, crate::store::Store, String) {
+        use domovoi_model::typed::Run;
+        let store = crate::store::Store::new(crate::db::Db::open_in_memory().expect("db"));
+        let dir = std::env::temp_dir().join(format!("domovoi-dead-turn-{}", crate::util::new_uuid()));
+        store
+            .create_project(domovoi_contracts::shell::ProjectShell {
+                id: "p".into(), title: "p".into(), has_custom_title: false, workspace_root: dir.to_string_lossy().into(),
+                repository_identity: None, default_model_selection: None, default_thread_env_mode: None, auto_pull: false,
+                favicon_path: None, project_icon: None, scripts: vec![], pinned_at: None, archived_at: None,
+                created_at: "t".into(), updated_at: "t".into(),
+            }, None)
+            .expect("project");
+        let (orchestrator, _effects) = crate::orchestration::commands::Orchestrator::new(store.clone());
+        orchestrator.launch_thread(crate::test_records::launch("c1", "t1", "p", "antigravity", "hello")).await.expect("launch");
+        let run = store.records::<Run>("t1").expect("runs").first().expect("a run").id.as_str().to_owned();
+        let mut turn = super::turn::Turn::begin(store.clone(), "t1", &run).expect("the run");
+        turn.turn_started("pending:1");
+        let host = super::Host::new(std::sync::Arc::new(orchestrator), dir.join("userdata"), dir.join("logs"));
+        (host, store, run)
+    }
+
+    fn run_status(store: &crate::store::Store, run: &str) -> String {
+        store.record::<domovoi_model::typed::Run>("t1", run).expect("read").expect("the run").status.as_str().to_owned()
+    }
+
+    #[tokio::test]
+    async fn a_turn_whose_task_panics_fails_its_run_and_frees_the_thread() {
+        use crate::orchestration::effects::ProviderHost as _;
+        let (host, store, run) = host_with_a_running_turn().await;
+        assert_eq!(run_status(&store, &run), "running");
+        let (tx, rx) = mpsc::unbounded_channel();
+        host.active.register("t1", &run, tx).hand_over();
+        host.clone().spawn_turn("t1".into(), run.clone(), async move {
+            let _controls = rx;
+            panic!("a bug in the turn");
+        });
+        for _ in 0..200 {
+            if run_status(&store, &run) != "running" {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert_eq!(run_status(&store, &run), "failed");
+        for _ in 0..200 {
+            if host.active.lock().is_empty() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert!(host.active.lock().is_empty(), "the thread takes a new turn");
+        assert!(matches!(host.interrupt("t1", &run).await, Err(super::ProviderError::NoActiveTurn)));
+    }
+
+    #[tokio::test]
+    async fn a_stop_for_a_turn_whose_task_is_gone_settles_its_run() {
+        use crate::orchestration::effects::ProviderHost as _;
+        let (host, store, run) = host_with_a_running_turn().await;
+        // The task died without finishing the turn: its controls are closed.
+        host.active.register("t1", &run, mpsc::unbounded_channel().0).hand_over();
+        assert!(host.interrupt("t1", &run).await.is_ok(), "no `channel closed`");
+        assert_eq!(run_status(&store, &run), "failed");
+        assert!(host.active.lock().is_empty());
+        // A turn that settled on its own meanwhile is left as it is.
+        host.active.register("t1", &run, mpsc::unbounded_channel().0).hand_over();
+        assert!(host.interrupt("t1", &run).await.is_ok());
+        assert_eq!(run_status(&store, &run), "failed");
     }
 }
 

@@ -52,13 +52,13 @@ struct AddServerView: View {
         Form {
             if onboarding {
                 Section {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Image(systemName: "terminal.fill").font(.system(size: 40)).foregroundStyle(.tint)
+                    VStack(alignment: .leading, spacing: Space.s) {
+                        DomovoiMark(size: Size.heroIcon + 10)
                         Text("Domovoi").font(.largeTitle.bold())
                         Text("Your coding agents, from anywhere. Pair this device with domovoi-server on your Mac.")
                             .foregroundStyle(.secondary)
                     }
-                    .padding(.vertical, 8)
+                    .padding(.vertical, Space.s)
                 }
             }
             Section {
@@ -67,10 +67,11 @@ struct AddServerView: View {
                 }
                 .disabled(!canScan || busy)
                 if let scanProblem {
-                    VStack(alignment: .leading, spacing: 4) {
+                    VStack(alignment: .leading, spacing: Space.xs) {
                         Text(scanProblem).font(.footnote).foregroundStyle(.secondary)
                         if camera == .denied, let settings = URL(string: UIApplication.openSettingsURLString) {
-                            Link("Open Settings", destination: settings).font(.footnote)
+                            // Borderless: a tap on the notice above isn't a tap on the link.
+                            Link("Open Settings", destination: settings).font(.footnote).buttonStyle(.borderless)
                         }
                     }
                 }
@@ -119,14 +120,9 @@ struct AddServerView: View {
             if busy || connection.error != nil {
                 Section {
                     if busy {
-                        HStack {
-                            ProgressView()
-                            Text(connection.state == "pairing" ? "Pairing…" : "Connecting…").foregroundStyle(.secondary)
-                        }
+                        LoadingRow(connection.state == "pairing" ? "Pairing…" : "Connecting…")
                     }
-                    if let error = connection.error, !busy {
-                        Label(error, systemImage: "exclamationmark.triangle.fill").foregroundStyle(Tint.danger)
-                    }
+                    if let error = connection.error, !busy { ErrorRow(error) }
                 }
             }
             if !connection.environments.isEmpty {
@@ -189,11 +185,11 @@ struct EnvironmentRow: View {
 
     var body: some View {
         HStack {
-            Image(systemName: env.remote ? "globe" : "desktopcomputer").foregroundStyle(.secondary).frame(width: 24)
-            VStack(alignment: .leading) {
-                Text(env.label).foregroundStyle(.primary)
-                Text(env.detail).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            SettingsRow(title: env.label, subtitle: env.detail) {
+                Image(systemName: env.remote ? "globe" : "desktopcomputer").foregroundStyle(.secondary)
             }
+            .foregroundStyle(.primary)
+            .lineLimit(1)
             Spacer()
             if env.active { Image(systemName: "checkmark").foregroundStyle(.tint) }
         }
@@ -215,20 +211,14 @@ struct ScannerSheet: View {
                 .ignoresSafeArea(edges: .bottom)
                 .overlay(alignment: .top) {
                     Text("On your Mac: Domovoi → Settings → Access shows the code.")
-                        .font(.footnote)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 8)
-                        .background(.regularMaterial, in: Capsule())
+                        .scannerPill()
                         .padding(.top, Space.m)
                 }
                 .overlay(alignment: .bottom) {
                     if let notice {
                         Text(notice)
-                            .font(.callout)
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 10)
-                            .background(.regularMaterial, in: Capsule())
-                            .padding(.bottom, 32)
+                            .scannerPill()
+                            .padding(.bottom, Space.xxl)
                             .transition(.opacity)
                     }
                 }
@@ -245,6 +235,18 @@ struct ScannerSheet: View {
                     ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 }
         }
+    }
+}
+
+private extension View {
+    /// The hint and the notice over the camera: one pill for both.
+    func scannerPill() -> some View {
+        font(.footnote)
+            .multilineTextAlignment(.center)
+            .padding(.horizontal, Space.l)
+            .padding(.vertical, Space.s)
+            .glassPanel(in: Capsule())
+            .padding(.horizontal, Space.l)
     }
 }
 

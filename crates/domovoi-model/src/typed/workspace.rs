@@ -140,6 +140,35 @@ pub struct ProjectEntriesResult {
     pub truncated: bool,
 }
 
+/// Where a line matches a content search (`ProjectContentMatchRange`), in UTF-16 units.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectContentMatchRange {
+    pub start: u64,
+    pub end: u64,
+}
+
+/// A line of a file that matches a content search (`ProjectContentMatch`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectContentMatch {
+    pub path: String,
+    pub line_number: u64,
+    pub line_content: String,
+    pub match_ranges: Vec<ProjectContentMatchRange>,
+}
+
+/// The result of `projects.searchContents` (`ProjectSearchContentsResult`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectSearchContentsResult {
+    pub matches: Vec<ProjectContentMatch>,
+    pub truncated: bool,
+    /// Why a query asked for as a pattern was searched as text instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub regex_fallback_error: Option<String>,
+}
+
 /// The result of `projects.readFile` (`ProjectReadFileResult`).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -148,9 +177,53 @@ pub struct ProjectReadFileResult {
     pub contents: String,
     pub byte_length: u64,
     pub truncated: bool,
+    /// A signed relative URL when the caller requested an image preview.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_url: Option<String>,
     /// `false` only for a file the request allowed to be missing. Older servers omit it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exists: Option<bool>,
+    /// Domovoi's own, only with `previewImages`: the file is kept in Git LFS.
+    /// `contents` and `image_url` are then the object's, when the server has
+    /// it, and the pointer file's text otherwise; `byte_length` is the
+    /// object's size.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lfs: Option<ProjectFileLfs>,
+}
+
+string_enum! {
+    /// Whether the server has a Git LFS object, and can show it (Domovoi's own).
+    LfsObjectState {
+        /// In the repository's LFS cache (or checked out), matching its pointer.
+        Cached = "cached",
+        /// Not downloaded: `projects.fetchLfsObject` can fetch it.
+        Missing = "missing",
+        /// Stored, but beyond what a preview reads (20 MiB).
+        TooLarge = "too-large",
+        /// The cached object's size or SHA-256 differs from its pointer.
+        Mismatch = "mismatch",
+        /// The pointer names Git LFS extensions, so the object is stored transformed.
+        Unsupported = "unsupported",
+    }
+}
+
+/// A file kept in Git LFS (Domovoi's own): its object's id and size.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectFileLfs {
+    /// The object's SHA-256, in lowercase hex.
+    pub oid: String,
+    pub size: u64,
+    pub state: LfsObjectState,
+}
+
+/// The result of `projects.fetchLfsObject` (Domovoi's own): the object's
+/// state once git-lfs has fetched it into the repository's cache.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectFetchLfsObjectResult {
+    pub relative_path: String,
+    pub state: LfsObjectState,
 }
 
 /// A directory offered while a path is typed (`FilesystemBrowseEntry`).

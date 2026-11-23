@@ -24,12 +24,14 @@ struct ProviderNotice: View {
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                Button("Check Again") { core.update(.refreshProviders) }
+                Button { core.update(.refreshProviders) } label: {
+                    Text("Check Again").tapTarget(inPadding: Space.m)
+                }
                     .font(.footnote.weight(.medium))
                     .buttonStyle(.borderless)
             }
-            .padding(Space.s + Space.xxs)
-            .background(Tint.caution.opacity(0.12), in: RoundedRectangle(cornerRadius: Radius.chip + 2, style: .continuous))
+            .padding(Space.m)
+            .background(Tint.caution.opacity(0.12), in: RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
         }
     }
 }

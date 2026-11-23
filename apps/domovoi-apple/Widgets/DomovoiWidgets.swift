@@ -19,6 +19,7 @@ enum StatusLook {
         case "approval": return "hand.raised.fill"
         case "failed": return "exclamationmark.triangle.fill"
         case "completed": return "checkmark.circle.fill"
+        case "interrupted": return "stop.circle.fill"
         default: return "circle"
         }
     }
@@ -39,6 +40,7 @@ enum StatusLook {
         case "approval": return "Needs you"
         case "failed": return "Failed"
         case "completed": return "Done"
+        case "interrupted": return "Stopped"
         default: return "Idle"
         }
     }
@@ -46,114 +48,12 @@ enum StatusLook {
 
 /// `domovoi://thread?id=…&server=…`: the server too, so a tap after switching
 /// servers opens the thread where it lives.
-private func threadURL(_ id: String, server: String? = nil) -> URL? {
+func threadURL(_ id: String, server: String? = nil) -> URL? {
     var c = URLComponents()
     c.scheme = "domovoi"
     c.host = "thread"
     c.queryItems = [URLQueryItem(name: "id", value: id)] + (server.map { [URLQueryItem(name: "server", value: $0)] } ?? [])
     return c.url
-}
-
-// MARK: - Live Activity
-
-struct AgentLiveActivity: Widget {
-    var body: some WidgetConfiguration {
-        ActivityConfiguration(for: AgentActivityAttributes.self) { context in
-            LockScreenActivity(attributes: context.attributes, state: context.state)
-                .padding(16)
-                .activityBackgroundTint(nil)
-                .widgetURL(threadURL(context.attributes.threadId, server: context.attributes.serverId))
-        } dynamicIsland: { context in
-            let state = context.state
-            return DynamicIsland {
-                DynamicIslandExpandedRegion(.leading) {
-                    Image(systemName: StatusLook.icon(state.status)).foregroundStyle(StatusLook.color(state.status)).font(.title2)
-                }
-                DynamicIslandExpandedRegion(.trailing) {
-                    Elapsed(state: state).font(.callout.monospacedDigit()).foregroundStyle(.secondary)
-                }
-                DynamicIslandExpandedRegion(.center) {
-                    Text(context.attributes.title).font(.headline).lineLimit(1)
-                }
-                DynamicIslandExpandedRegion(.bottom) {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text(state.detail.isEmpty ? StatusLook.label(state.status) : state.detail)
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(2)
-                        if state.status == "approval" { ApprovalButtons(attributes: context.attributes) }
-                    }
-                }
-            } compactLeading: {
-                Image(systemName: StatusLook.icon(state.status)).foregroundStyle(StatusLook.color(state.status))
-            } compactTrailing: {
-                Elapsed(state: state).monospacedDigit().frame(maxWidth: 44)
-            } minimal: {
-                Image(systemName: StatusLook.icon(state.status)).foregroundStyle(StatusLook.color(state.status))
-            }
-            .widgetURL(threadURL(context.attributes.threadId, server: context.attributes.serverId))
-        }
-    }
-}
-
-/// Allow and Decline right on the Lock Screen and in the Dynamic Island:
-/// the app answers in the background (`RespondToApprovalIntent`).
-private struct ApprovalButtons: View {
-    let attributes: AgentActivityAttributes
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Button(intent: RespondToApprovalIntent(threadId: attributes.threadId, serverId: attributes.serverId, decision: "decline")) {
-                Text("Decline").frame(maxWidth: .infinity)
-            }
-            .tint(.secondary)
-            Button(intent: RespondToApprovalIntent(threadId: attributes.threadId, serverId: attributes.serverId, decision: "accept")) {
-                Text("Allow").fontWeight(.semibold).frame(maxWidth: .infinity)
-            }
-            .tint(.orange)
-        }
-        .buttonStyle(.borderedProminent)
-        .controlSize(.small)
-    }
-}
-
-/// Time since the turn started while it runs; the outcome once it's over.
-private struct Elapsed: View {
-    let state: AgentActivityAttributes.ContentState
-
-    var body: some View {
-        if ["working", "approval"].contains(state.status) {
-            Text(timerInterval: state.startedAt...Date.distantFuture, countsDown: false)
-        } else {
-            Text(StatusLook.label(state.status))
-        }
-    }
-}
-
-private struct LockScreenActivity: View {
-    let attributes: AgentActivityAttributes
-    let state: AgentActivityAttributes.ContentState
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            Image(systemName: StatusLook.icon(state.status))
-                .font(.title2)
-                .foregroundStyle(StatusLook.color(state.status))
-            VStack(alignment: .leading, spacing: 4) {
-                Text(attributes.title).font(.headline).lineLimit(1)
-                Text(state.detail.isEmpty ? StatusLook.label(state.status) : state.detail)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-                if !attributes.project.isEmpty {
-                    Text(attributes.project).font(.caption).foregroundStyle(.tertiary)
-                }
-                if state.status == "approval" { ApprovalButtons(attributes: attributes).padding(.top, 4) }
-            }
-            Spacer(minLength: 0)
-            Elapsed(state: state).font(.callout.monospacedDigit()).foregroundStyle(.secondary).multilineTextAlignment(.trailing).frame(maxWidth: 70)
-        }
-    }
 }
 
 // MARK: - Threads widget

@@ -110,7 +110,7 @@ pub(crate) fn store(op: StoreOperation) -> Cmd {
     Command::request_from_shell(op).then_send(|_| Event::Stored)
 }
 
-fn save_environments(model: &Model) -> Cmd {
+pub(crate) fn save_environments(model: &Model) -> Cmd {
     store(StoreOperation::Save { key: KEY_ENVIRONMENTS.into(), value: serde_json::to_string(&model.environments).expect("plain data serializes") })
 }
 
@@ -802,13 +802,12 @@ pub fn is_current_server(model: &Model, environment_id: &str) -> bool {
 /// Opens the thread a push named, switching to its server if needed.
 pub fn open_notification(model: &mut Model, environment_id: String, thread_id: String) -> Cmd {
     if is_current_server(model, &environment_id) || (environment_id.is_empty() && model.active_env.is_none()) {
-        if model.connection == Connection::Connected {
-            return crate::update::select_thread(model, thread_id);
-        }
-        // Still connecting to it: the thread opens once the socket does.
-        model.selected_thread = Some(thread_id);
-        model.route = "thread".into();
-        return render();
+        // Opened as any thread is, connected or not: still connecting, what
+        // it sends waits, and its stream starts once the socket opens
+        // (`subscribe_core`). Only the selection changed here once, and the
+        // thread open before stayed held under it: shown as this one, and
+        // its stream resumed into that thread's records.
+        return crate::update::select_thread(model, thread_id);
     }
     // Saved twice (by address and by link)? The remote entry works from anywhere.
     let mut matches: Vec<&Environment> = model.environments.iter().filter(|e| e.server_id == environment_id).collect();
@@ -819,7 +818,7 @@ pub fn open_notification(model: &mut Model, environment_id: String, thread_id: S
     };
     let cmd = select(model, env, None);
     // Subscribed once the socket opens (`subscribe_core`).
-    model.selected_thread = Some(thread_id);
+    model.open_thread(Some(thread_id));
     model.route = "thread".into();
     cmd
 }

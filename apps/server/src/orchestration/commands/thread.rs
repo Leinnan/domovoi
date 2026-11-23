@@ -56,7 +56,7 @@ impl Orchestrator {
         let thread_id = thread.id.clone();
         let origin = Self::origin(command_id, Some(&thread.provider_instance_id));
         let sequence = self.store.append_event(thread_id.as_str(), EventBody::Thread { change, thread: Box::new(thread) }, &origin)?.sequence;
-        if change == ThreadChange::RuntimeModeUpdated {
+        if matches!(change, ThreadChange::RuntimeModeUpdated | ThreadChange::InteractionModeUpdated) {
             self.send_effect(Effect::RuntimeModeChanged { thread_id: thread_id.as_str().to_owned() });
         }
         Ok(DispatchResult { sequence })
@@ -176,6 +176,10 @@ impl Orchestrator {
         let mut thread = self.thread(thread_id)?;
         let change =
             if selection.instance_id == thread.provider_instance_id { ThreadChange::ModelSelectionUpdated } else { ThreadChange::ProviderSwitched };
+        if change == ThreadChange::ProviderSwitched {
+            let outline = self.store.thread_outline(thread_id.as_str())?;
+            self.close_message_questions(thread_id, &outline.runtime_requests, &Self::origin(command_id, None))?;
+        }
         thread.provider_instance_id = selection.instance_id.clone();
         thread.model_selection = selection.clone();
         self.write_thread(command_id, change, thread, true)
@@ -195,7 +199,9 @@ impl Orchestrator {
         }
         thread.project_id = target.id.into();
         thread.worktree_path = None;
-        self.write_thread(&c.command_id, ThreadChange::MetadataUpdated, thread, true)
+        let written = self.write_thread(&c.command_id, ThreadChange::MetadataUpdated, thread, true)?;
+        self.send_effect(Effect::MoveThreadTasks { thread_id: c.thread_id.as_str().to_owned(), project_id: c.project_id.as_str().to_owned() });
+        Ok(written)
     }
 
     pub(super) fn auto_settle_set(&self, c: &ThreadAutoSettleSet) -> Result<DispatchResult, Refusal> {
@@ -235,6 +241,7 @@ impl Orchestrator {
             }
         }
         self.send_effect(Effect::CloseTerminals { thread_id: thread_id.to_owned() });
+        self.send_effect(Effect::DeleteThreadTasks { thread_id: thread_id.to_owned() });
         // Read again: cancelling its runs moved the thread's `updatedAt`.
         self.edit_thread(&c.thread_id, &c.command_id, ThreadChange::Deleted, true, |thread| thread.deleted_at = Some(now()))
     }

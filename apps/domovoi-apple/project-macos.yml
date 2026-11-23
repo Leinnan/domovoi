@@ -1,0 +1,7 @@
+include:
+  - project.yml
+
+name: DomovoiMacRelease
+packages:
+  Shared:
+    path: ./generated/SharedMac

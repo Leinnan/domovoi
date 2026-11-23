@@ -923,6 +923,7 @@ pub fn tool_work(name: &str, args: &Value, result: &Value, ended: bool, is_error
                 changes: vec![FileChangeDetail { operation: operation.into(), path: path.to_owned(), old_path: None, file_type: None, mime_type: None }],
                 texts,
                 patch,
+                error: None,
             }
         }
         _ => {

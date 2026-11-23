@@ -11,7 +11,7 @@
 //! after the core starts carries every section.
 
 use crate::view::{
-    AgentSessionsView, ComposerView, ConnectionView, FolderBrowserView, ItemView, PaletteView, PanelView, PullRequestsView,
+    AgentSessionsView, ComposerView, ConnectionView, DiagramView, FolderBrowserView, ItemView, PaletteView, PanelView, PullRequestsView,
     SettingsView, SidebarView, ThreadPageView, ToastView, UsageView, ViewModel,
 };
 use crate::{Effect, Event, Model, DomovoiApp};
@@ -37,6 +37,7 @@ pub struct ViewDelta {
     pub usage: Option<UsageView>,
     pub agent_sessions: Option<AgentSessionsView>,
     pub folder_browser: Option<FolderBrowserView>,
+    pub diagrams: Option<Vec<DiagramView>>,
 }
 
 /// The toast shown now (`None`: none).
@@ -92,6 +93,7 @@ impl ViewDelta {
             usage: changed(old.map(|v| &v.usage), &new.usage),
             agent_sessions: changed(old.map(|v| &v.agent_sessions), &new.agent_sessions),
             folder_browser: changed(old.map(|v| &v.folder_browser), &new.folder_browser),
+            diagrams: changed(old.map(|v| &v.diagrams), &new.diagrams),
         }
     }
 
@@ -100,7 +102,7 @@ impl ViewDelta {
         macro_rules! set {
             ($($field:ident),*) => { $( if let Some(v) = self.$field { view.$field = v; } )* };
         }
-        set!(connection, sidebar, route, composer, panel, settings, pull_requests, usage, agent_sessions, folder_browser);
+        set!(connection, sidebar, route, composer, panel, settings, pull_requests, usage, agent_sessions, folder_browser, diagrams);
         if let Some(c) = self.toast {
             view.toast = c.toast;
         }
@@ -194,10 +196,10 @@ fn thread_patch(old: Option<&ThreadPageView>, new: &ThreadPageView) -> ThreadPat
 macro_rules! page_header {
     ($m:ident) => {
         $m!(
-            id, title, project_id, project_title, branch, worktree_path, cwd, model_label, provider_instance_id,
+            id, title, project_id, project_title, branch, worktree_path, cwd, model_label, provider_instance_id, model_instance_id, model,
             runtime_mode, interaction_mode, status, working, loading, pinned, settled, archived, pending_requests,
-            pending_sends, working_since_ms, checkpoints, find, parent, can_merge_back, can_fork, context, queued,
-            queue_held, background, limit_resets, limit_plan
+            pending_sends, working_since_ms, working_activity, checkpoints, find, parent, can_merge_back, can_fork, context, usage, queued,
+            queue_held, background, background_tasks, limit_resets, limit_plan, plan, tasks, waiting_children, artifact_count
         )
     };
 }

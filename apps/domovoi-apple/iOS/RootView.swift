@@ -12,6 +12,7 @@ enum Screen: Hashable {
     case pullRequests
     case usage
     case settings
+    case companion(String)
     case importSessions
     case browseFolders
     case serverSettings
@@ -23,6 +24,7 @@ enum Screen: Hashable {
 
 struct RootView: View {
     @ObservedObject var core: Core
+    @StateObject private var companion = CompanionBrain()
 
     private var connection: ConnectionView { core.view.connection }
 
@@ -50,6 +52,8 @@ struct RootView: View {
         .overlay(alignment: .top) {
             if !showMain || connection.serverChanged { ToastCapsule(core: core) }
         }
+        .environmentObject(companion)
+        .modifier(CompanionWindow(brain: companion, connection: connection))
         .task { await IOSSnapshots.run(core) }
         .onChange(of: connection.state) { _, state in
             // Already allowed: register at once. The first ask comes when the
@@ -89,12 +93,26 @@ struct MainStack: View {
                     ThreadListView(core: core, open: open, expectProject: { awaitingProject = true })
                         .statusBars(core)
                         .navigationDestination(for: Screen.self) { screen in
-                            destination(screen).statusBars(core)
+                            // One view per screen: a path replaced in place
+                            // ([.thread(A)] -> [.thread(B)], from a notification
+                            // or the palette) builds B's afresh, with none of
+                            // A's state (as the iPad's detail does).
+                            destination(screen).statusBars(core).id(screen)
                         }
                 }
             }
         }
         .onReceive(IOSSnapshots.navigate) { screens in path = screens }
+        .sheet(isPresented: Binding(
+            get: { core.view.palette != nil },
+            // Only a palette still open: a quick ⌘K twice must not have the
+            // first sheet's dismissal close the second palette.
+            set: { if !$0, core.view.palette != nil { core.update(.closePalette) } }
+        )) {
+            PaletteScreen(core: core, run: runPalette)
+                // Full height: it opens with the keyboard up, which leaves half a sheet no room for results.
+                .presentationDetents([.large]).presentationDragIndicator(.visible)
+        }
         // A tapped notification shows its thread, even the one last open.
         .onReceive(core.openedThread) { id in
             if path != [.thread(id)] { path = [.thread(id)] }
@@ -142,6 +160,52 @@ struct MainStack: View {
             path = Array(path.prefix(through: i))
         } else {
             path.append(screen)
+        }
+    }
+
+    /// A palette item: the core runs what is its own; the screens it would
+    /// show on the Mac (panel tabs, pages) open here instead.
+    private func runPalette(_ item: PaletteItemView) {
+        let id = item.id
+        if id.hasPrefix("thread:") {
+            core.update(.runPaletteItem(id: id))
+            path = [.thread(String(id.dropFirst("thread:".count)))]
+            return
+        }
+        if id.hasPrefix("file:") || id.hasPrefix("match:") {
+            // The core opens it in the files panel: its screen here.
+            core.update(.runPaletteItem(id: id))
+            let rest = id.hasPrefix("file:") ? String(id.dropFirst("file:".count)) : String(id.dropFirst("match:".count))
+            FilesScreen.reveal = id.hasPrefix("file:") ? rest : rest.split(separator: ":", omittingEmptySubsequences: false).dropLast().joined(separator: ":")
+            open(.files)
+            return
+        }
+        if id.hasPrefix("project:") || id == "action:new-thread" {
+            core.update(.runPaletteItem(id: id))
+            path = [.newThread]
+            return
+        }
+        let screens: [String: Screen] = [
+            "action:diff": .diff, "action:terminal": .terminal, "action:files": .files, "action:git": .git,
+            "action:pull-requests": .pullRequests, "action:usage": .usage,
+        ]
+        if let screen = screens[id] {
+            core.update(.closePalette)
+            open(screen)
+        } else if id == "action:scratch" {
+            core.update(.closePalette)
+            // An existing "No project" project is used as is.
+            if let scratch = core.view.sidebar.projects.first(where: { $0.isScratch }) {
+                core.update(.newThread(projectId: scratch.id))
+                path = [.newThread]
+            } else {
+                awaitingProject = true
+                core.update(.openScratch)
+            }
+        } else {
+            // Find, pin, settle (on the open thread); go to file and search
+            // (the palette stays open in that mode).
+            core.update(.runPaletteItem(id: id))
         }
     }
 
@@ -193,11 +257,14 @@ struct MainStack: View {
         case .pullRequests: PullRequestsScreen(core: core)
         case .usage: UsageScreen(core: core)
         case .settings: SettingsScreen(core: core)
+        case .companion(let id):
+            CompanionEditor(core: core, environmentId: id)
+                .navigationTitle("Companion").navigationBarTitleDisplayMode(.inline)
         case .importSessions: ImportSessionsScreen(core: core)
         case .browseFolders: FolderBrowserScreen(core: core, open: open, expectProject: { awaitingProject = true })
         case .serverSettings: ServerSettingsScreen(core: core)
         case .providers: ProvidersScreen(core: core)
-        case .scheduledTasks: ScheduledTasksScreen(core: core)
+        case .scheduledTasks: ScheduledTasksScreen(core: core, open: open)
         case .maintenance: MaintenanceScreen(core: core)
         case .access: AccessScreen(core: core)
         }
@@ -241,10 +308,10 @@ struct ServerChangedView: View {
     }
 
     var body: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: Space.l) {
             Image(systemName: "exclamationmark.arrow.triangle.2.circlepath")
-                .font(.system(size: 44))
-                .foregroundStyle(.orange)
+                .font(.system(size: Size.heroIcon))
+                .foregroundStyle(Tint.caution)
                 .accessibilityHidden(true)
             Text("\(label) no longer accepts this device").font(.title3.bold()).multilineTextAlignment(.center)
             if let error = connection.error {
@@ -263,7 +330,7 @@ struct ServerChangedView: View {
             }
             .buttonStyle(.bordered)
         }
-        .padding(24)
+        .padding(Space.xl)
         .frame(maxWidth: 420)
         .navigationDestination(isPresented: $pairing) { AddServerView(core: core, onboarding: false) }
     }

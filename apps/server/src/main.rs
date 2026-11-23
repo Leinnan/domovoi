@@ -3,6 +3,8 @@
 mod acp_registry;
 mod adapters;
 mod agent_instructions;
+mod antigravity;
+mod artifacts;
 mod attachments;
 mod agent_sessions;
 mod agent_sync;
@@ -10,6 +12,7 @@ mod auth;
 mod autostart;
 mod checkpoint;
 mod claude_cli;
+mod claude_limits;
 mod cli;
 #[cfg(test)]
 mod command_differential;
@@ -17,12 +20,15 @@ mod config_failure;
 mod connections;
 mod control;
 mod db;
+mod diagrams;
 mod folder_access;
 mod gh;
 mod http;
+mod file_images;
 mod jsonrpc;
 mod keep_awake;
 mod keybindings;
+mod lfs;
 mod lifecycle;
 mod logging;
 mod managed;
@@ -32,6 +38,7 @@ mod orchestration;
 mod perf_tests;
 mod permissions;
 mod pi_rpc;
+mod project_icons;
 mod project_scripts;
 mod process;
 mod providers;
@@ -45,6 +52,7 @@ mod settings;
 mod shell_env;
 mod skills;
 mod scheduled_tasks;
+mod secrets;
 #[cfg(test)]
 mod sent_tests;
 mod state;
@@ -53,6 +61,8 @@ mod terminal;
 #[cfg(test)]
 mod test_records;
 mod text_gen;
+mod thread_permissions;
+mod tool_images;
 #[cfg(feature = "tray")]
 mod tray;
 mod usage;
@@ -170,6 +180,16 @@ enum Cmd {
     /// servers only as commands (started by the server, not by hand).
     #[command(hide = true)]
     AcpMcpBridge,
+    /// `BROWSER` for Antigravity's agent: hands the Google sign-in link to
+    /// the server instead of opening a browser (started by the agent).
+    #[command(hide = true, name = "antigravity-browser-url")]
+    AntigravityBrowserUrl {
+        url: String,
+        /// Append the link to this file instead of writing it to stderr
+        /// (the CLI discards the stderr of what it opens links with).
+        #[arg(long)]
+        to: Option<PathBuf>,
+    },
     /// Start the server with its status bar icon when you sign in: on, off
     /// or status. Uses this executable, home directory and port.
     Autostart {
@@ -281,6 +301,16 @@ fn run() -> Fallible {
     if matches!(args.command, Some(Cmd::AcpMcpBridge)) {
         return runtime()?.block_on(mcp::bridge::run()).map_err(Into::into);
     }
+    if let Some(Cmd::AntigravityBrowserUrl { url, to }) = &args.command {
+        use std::io::Write;
+        let line = antigravity::browser_url_line(url);
+        match to {
+            Some(file) => std::fs::OpenOptions::new().create(true).append(true).open(file)?.write_all(line.as_bytes())?,
+            // A closed pipe (the sign-in was cancelled) is no reason to fall back to a browser.
+            None => drop(std::io::stderr().write_all(line.as_bytes())),
+        }
+        return Ok(());
+    }
     let paths = state::Paths::new(args.home_dir.clone())?;
     match &args.command {
         Some(Cmd::Connect { link, bridge_port }) => {
@@ -299,7 +329,7 @@ fn run() -> Fallible {
             runtime()?.block_on(cli::remote(&base, &args.host, args.port, action))
         }
         // Run before the home directory is touched (above).
-        Some(Cmd::AcpMcpBridge) => Ok(()),
+        Some(Cmd::AcpMcpBridge | Cmd::AntigravityBrowserUrl { .. }) => Ok(()),
         Some(Cmd::Stop) => {
             let _log = logging::init(None);
             let base = base(&args, &paths)?;
@@ -332,6 +362,7 @@ fn run() -> Fallible {
             // Before logging and the runtime start threads (it sets PATH).
             let shell = shell_env::hydrate();
             let _log = logging::init(Some(&paths.logs));
+            tracing::info!(version = env!("CARGO_PKG_VERSION"), commit = env!("DOMOVOI_BUILD_COMMIT"), "domovoi-server starting");
             shell.log();
             let base = base(&args, &paths)?;
             let shutdown = tokio_util::sync::CancellationToken::new();
@@ -443,6 +474,7 @@ async fn serve(args: &Args, paths: state::Paths, base: Base, shutdown: tokio_uti
     let (orchestrator, effects) = orchestration::commands::Orchestrator::new(store.clone());
     let orchestrator = Arc::new(orchestrator);
     providers::init_claude_commands(&paths.userdata);
+    usage_limits::init(&paths.userdata);
     skills::init(&paths.userdata);
     let host = adapters::Host::new(orchestrator.clone(), paths.userdata.clone(), paths.logs.join("provider"));
     let _ = adapters::HOST.set(host.clone());
@@ -488,13 +520,23 @@ async fn serve(args: &Args, paths: state::Paths, base: Base, shutdown: tokio_uti
         });
     }
     {
-        // Background agents an older server recorded with their launch receipt as the result.
+        // Background agents an older server recorded with their launch receipt as the result,
+        // and Antigravity plan artifacts an older server recorded only as file changes.
         let store = state.store.clone();
         let logs = state.paths.logs.join("provider");
+        let userdata = state.paths.userdata.clone();
         tokio::task::spawn_blocking(move || {
             let fixed = adapters::repair::background_receipts(&store, &logs);
             if fixed > 0 {
                 tracing::info!("repaired {fixed} background agent result(s)");
+            }
+            let plans = adapters::repair::antigravity_plans(&store, &userdata);
+            if plans > 0 {
+                tracing::info!("repaired {plans} Antigravity plan(s)");
+            }
+            let subagents = adapters::repair::antigravity_subagents(&store, &userdata);
+            if subagents > 0 {
+                tracing::info!("repaired {subagents} Antigravity subagent(s)");
             }
         });
     }
@@ -540,6 +582,24 @@ async fn serve(args: &Args, paths: state::Paths, base: Base, shutdown: tokio_uti
                 providers::CLAUDE_COMMANDS_CHANGED.notified().await;
                 let all = state.providers.snapshot().await;
                 let _ = state.provider_updates.send(all);
+            }
+        });
+    }
+    {
+        // Accounts' usage limits stay fresh while a client watches them.
+        let state = state.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(60));
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            // The first tick is now: the boot-time probe reads them then.
+            tick.tick().await;
+            loop {
+                tick.tick().await;
+                if state.provider_updates.receiver_count() == 0 {
+                    continue;
+                }
+                let all = state.providers.snapshot().await;
+                providers::refresh_stale_limits(&all).await;
             }
         });
     }

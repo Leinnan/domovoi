@@ -14,10 +14,10 @@
 use super::turn::{Turn, TurnEnd, WindowUse, Work, approval_kind};
 use super::{Control, TurnInput};
 use serde_json::{Value, json};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
-use domovoi_model::typed::{FileChangeDetail, ModelCapabilities, ProviderSessionStatus, ProviderThreadStatus, ServerProviderModel, TurnItemStatus};
+use domovoi_model::typed::{FileChangeDetail, ModelCapabilities, ProviderSessionStatus, ProviderThreadStatus, QuestionOption, ServerProviderModel, TurnItemStatus, UserInputQuestion};
 use tokio::sync::{Mutex, mpsc};
 
 pub const OPENCODE_TOOL: crate::providers::Tool = crate::providers::Tool { program: "opencode", label: "OpenCode", env: "DOMOVOI_OPENCODE_BINARY" };
@@ -99,6 +99,64 @@ pub fn take_events(buf: &mut String) -> Vec<Value> {
     out
 }
 
+struct Form {
+    id: String,
+    questions: Vec<UserInputQuestion>,
+}
+
+impl Form {
+    fn read(id: &str, data: &Value) -> Option<Self> {
+        let fields = data["fields"].as_array().filter(|fields| !fields.is_empty())?;
+        let mut keys = HashSet::new();
+        let questions = fields.iter().enumerate().map(|(index, field)| {
+            let kind = field["type"].as_str()?;
+            let key = field["key"].as_str().filter(|key| !key.trim().is_empty())?;
+            if !matches!(kind, "string" | "multiselect") || !keys.insert(key) || field["hidden"] == true
+                || field["when"].as_array().is_some_and(|conditions| !conditions.is_empty())
+            {
+                return None;
+            }
+            let header = field["title"].as_str().filter(|text| !text.trim().is_empty())
+                .map_or_else(|| format!("Question {}", index + 1), str::to_owned);
+            let options = field["options"].as_array().into_iter().flatten().map(|option| {
+                let value = option["value"].as_str().filter(|value| !value.trim().is_empty())?;
+                let label = option["label"].as_str().filter(|label| !label.trim().is_empty()).unwrap_or(value);
+                Some(QuestionOption {
+                    label: label.into(), description: option["description"].as_str().filter(|description| !description.trim().is_empty()).unwrap_or(label).into(),
+                    value: Some(value.into()), preview: None,
+                })
+            }).collect::<Option<Vec<_>>>()?;
+            Some(UserInputQuestion {
+                id: key.into(),
+                question: field["description"].as_str().filter(|text| !text.trim().is_empty()).unwrap_or(&header).into(),
+                header,
+                multi_select: Some(kind == "multiselect"),
+                allow_custom_answer: Some(field["custom"] == true || options.is_empty()),
+                options,
+                initial_answer: None,
+                required: Some(field["required"] == true),
+            })
+        }).collect::<Option<Vec<_>>>()?;
+        Some(Self { id: id.into(), questions })
+    }
+
+    fn reply(&self, answers: &super::Answers) -> Value {
+        let answer = self.questions.iter().filter_map(|question| {
+            let values = answers.get(&question.id)?.as_array()?;
+            let value = if question.multi_select == Some(true) { Value::Array(values.clone()) } else { values.first()?.clone() };
+            Some((question.id.clone(), value))
+        }).collect::<super::Answers>();
+        json!({ "answer": answer })
+    }
+}
+
+fn session_of_event(event: &Value) -> Option<&str> {
+    if event["type"] == "form.created" {
+        return event["data"]["form"]["sessionID"].as_str().or_else(|| event["data"]["sessionID"].as_str());
+    }
+    event["data"]["sessionID"].as_str()
+}
+
 impl OpenCodeServer {
     pub async fn start() -> Result<Arc<Self>, String> {
         let exe = crate::providers::executable(OPENCODE_TOOL)?;
@@ -141,7 +199,7 @@ impl OpenCodeServer {
                     while let Ok(Some(chunk)) = res.chunk().await {
                         buf.push_str(&String::from_utf8_lossy(&chunk));
                         for ev in take_events(&mut buf) {
-                            let sid = ev["data"]["sessionID"].as_str().map(str::to_owned);
+                            let sid = session_of_event(&ev).map(str::to_owned);
                             let Some(sid) = sid else { continue };
                             let tx = self.routes.lock().await.get(&sid).cloned();
                             if let Some(tx) = tx {
@@ -179,6 +237,25 @@ impl OpenCodeServer {
             return Err(msg.unwrap_or_else(|| format!("OpenCode answered {status}: {}", text.chars().take(300).collect::<String>())));
         }
         Ok(serde_json::from_str(&text).unwrap_or(Value::Null))
+    }
+
+    /// Form routes return no content. HTTP conflicts and missing forms mean
+    /// the live request can already have settled in a different client.
+    async fn deliver_form(&self, method: reqwest::Method, path: &str, body: Option<Value>, message: Option<&str>) -> Result<bool, String> {
+        let mut url = reqwest::Url::parse(&format!("{}{path}", self.base)).map_err(|e| e.to_string())?;
+        if let Some(message) = message {
+            url.query_pairs_mut().append_pair("message", message);
+        }
+        let mut req = self.http.request(method, url).header("authorization", &self.auth).timeout(Duration::from_secs(10));
+        if let Some(body) = body {
+            req = req.json(&body);
+        }
+        let status = req.send().await.map_err(|e| e.to_string())?.status();
+        match status.as_u16() {
+            404 | 409 => Ok(false),
+            _ if status.is_success() => Ok(true),
+            _ => Err(format!("OpenCode answered {status}.")),
+        }
     }
 
     /// The models OpenCode can run now (its enabled, connected models) as
@@ -253,7 +330,13 @@ impl OpenCodeServer {
         self.routes.lock().await.insert(session.clone(), tx);
         turn.thread_status(ProviderThreadStatus::Active, Some(&session));
         let files: Vec<Value> = input.images.iter().map(|(_, p)| json!({ "uri": format!("file://{}", p.display()), "name": p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default() })).collect();
-        let mut prompt = json!({ "text": input.text });
+        let text = if input.text.trim_start().starts_with('/') {
+            input.text.clone()
+        } else {
+            let instructions = crate::agent_instructions::question_guidance("question", Some(&input.interaction_mode));
+            format!("<domovoi_instructions>\n{instructions}\n</domovoi_instructions>\n\n<user_request>\n{}\n</user_request>", input.text)
+        };
+        let mut prompt = json!({ "text": text });
         if !files.is_empty() {
             prompt["files"] = Value::Array(files);
         }
@@ -270,11 +353,35 @@ impl OpenCodeServer {
         let mut tools: HashMap<String, (String, Value)> = HashMap::new();
         // t3code request id -> OpenCode permission id.
         let mut asked: HashMap<String, String> = HashMap::new();
+        let mut forms: HashMap<String, Form> = HashMap::new();
+        let mut seen_forms = HashSet::new();
         loop {
             tokio::select! {
                 Some(c) = controls.recv() => match c {
-                    Control::Respond { request_id, decision, .. } => {
-                        if let Some(pid) = asked.remove(&request_id) {
+                    Control::Respond { request_id, decision, answers } => {
+                        if let Some(form) = forms.get(&request_id) {
+                            let path = format!("/api/session/{session}/form/{}", form.id);
+                            let answer = answers.as_ref().filter(|_| !matches!(decision.as_str(), "cancel" | "decline" | "stop"));
+                            let result = match answer {
+                                Some(answer) => self.deliver_form(reqwest::Method::POST, &format!("{path}/reply"), Some(form.reply(answer)), None).await,
+                                None => self.deliver_form(reqwest::Method::DELETE, &path, None, None).await,
+                            };
+                            match result {
+                                Ok(delivered) => {
+                                    forms.remove(&request_id);
+                                    if delivered && answer.is_some() {
+                                        turn.resolve_request(&request_id, &decision, answer);
+                                    } else {
+                                        turn.cancel_request(&request_id);
+                                    }
+                                }
+                                Err(error) => {
+                                    turn.item(&format!("question-error:{request_id}"), Work::Notice {
+                                        message: format!("Could not send the question response. Try again. {error}"),
+                                    }, TurnItemStatus::Completed);
+                                }
+                            }
+                        } else if let Some(pid) = asked.remove(&request_id) {
                             let d = match decision.as_str() { "acceptForSession" | "acceptAlways" => "always", d if super::turn::decision_allows(d) => "once", _ => "reject" };
                             let _ = self.call(reqwest::Method::POST, &format!("/api/session/{session}/permission/{pid}/reply"), Some(json!({ "decision": d }))).await;
                             turn.resolve_request(&request_id, &decision, None);
@@ -355,9 +462,32 @@ impl OpenCodeServer {
                             asked.insert(rid, pid);
                         }
                         "form.created" => {
-                            // Questions are not shown yet: cancel, so OpenCode doesn't wait for ever.
-                            if let Some(fid) = d["id"].as_str().or(d["form"]["id"].as_str()) {
-                                let _ = self.call(reqwest::Method::DELETE, &format!("/api/session/{session}/form/{fid}"), None).await;
+                            let form = &d["form"];
+                            let Some(id) = form["id"].as_str().or(d["id"].as_str()) else { continue };
+                            if !seen_forms.insert(id.to_owned()) { continue; }
+                            if let Some(form) = Form::read(id, form) {
+                                let request = turn.open_user_input(id, id, form.questions.clone());
+                                forms.insert(request, form);
+                            } else {
+                                let path = format!("/api/session/{session}/form/{id}");
+                                if let Err(error) = self.deliver_form(reqwest::Method::DELETE, &path, None,
+                                    Some("This form cannot be displayed. Ask the user in chat instead.")).await
+                                {
+                                    turn.complete(TurnEnd::Failed, Some(&format!("Could not cancel the unsupported form: {error}")));
+                                    let _ = self.call(reqwest::Method::POST, &format!("/api/session/{session}/interrupt"), None).await;
+                                    break;
+                                }
+                            }
+                        }
+                        "form.replied" | "form.cancelled" => {
+                            let Some(id) = d["id"].as_str() else { continue };
+                            if let Some(request) = forms.iter().find(|(_, form)| form.id == id).map(|(request, _)| request.clone()) {
+                                forms.remove(&request);
+                                if ty == "form.replied" {
+                                    turn.resolve_request(&request, "accept", d["answer"].as_object());
+                                } else {
+                                    turn.cancel_request(&request);
+                                }
                             }
                         }
                         "session.step.ended" => {
@@ -377,6 +507,9 @@ impl OpenCodeServer {
                             turn.item(&format!("compaction:{}", ev["id"].as_str().unwrap_or("")), Work::Compaction { before_token_count: None }, TurnItemStatus::Completed);
                         }
                         "session.execution.succeeded" => {
+                            for request in forms.keys() {
+                                turn.cancel_request(request);
+                            }
                             turn.complete(TurnEnd::Completed, None);
                             break;
                         }
@@ -420,7 +553,7 @@ fn record_tool(turn: &mut Turn, id: &str, name: &str, input: &Value, result: Opt
             let operation = if name == "write" { "add" } else { "update" };
             let changes = vec![FileChangeDetail { operation: operation.into(), path: path.to_owned(), old_path: None, file_type: None, mime_type: None }];
             let texts = input["oldString"].as_str().zip(input["newString"].as_str()).map(|(old, new)| (old.to_owned(), new.to_owned()));
-            Work::FileChange { file_name, changes, texts, patch: None }
+            Work::FileChange { file_name, changes, texts, patch: None, error: None }
         }
         _ => Work::Tool { name: name.to_owned(), input: input.clone(), output: result.map(|(out, _, _)| Value::String(out.to_owned())), viewed_image_path: None },
     };

@@ -1030,9 +1030,22 @@
       {
         "payload": {
           "cwd": "/w",
+          "previewImages": true,
           "relativePath": "src/main.rs"
         },
         "rpc": "projects.readFile"
+      }
+    ]
+  },
+  {
+    "step": "fetch the file's Git LFS object",
+    "sent": [
+      {
+        "payload": {
+          "cwd": "/w",
+          "relativePath": "src/main.rs"
+        },
+        "rpc": "projects.fetchLfsObject"
       }
     ]
   },
@@ -2242,6 +2255,131 @@
     ]
   },
   {
+    "step": "sign a provider in",
+    "sent": [
+      {
+        "payload": {
+          "instanceId": "antigravity"
+        },
+        "rpc": "provider.auth.start"
+      },
+      {
+        "payload": {
+          "instanceId": "antigravity"
+        },
+        "rpc": "provider.auth.subscribe"
+      }
+    ]
+  },
+  {
+    "step": "install a provider's runtime",
+    "sent": [
+      {
+        "payload": {
+          "instanceId": "antigravity"
+        },
+        "rpc": "provider.install.start"
+      },
+      {
+        "payload": {
+          "instanceId": "antigravity"
+        },
+        "rpc": "provider.install.subscribe"
+      }
+    ]
+  },
+  {
+    "step": "remove a provider's runtime",
+    "sent": [
+      {
+        "payload": {
+          "instanceId": "antigravity"
+        },
+        "rpc": "provider.install.remove"
+      }
+    ]
+  },
+  {
+    "step": "add a provider instance with a key",
+    "sent": [
+      {
+        "payload": {
+          "fresh": true
+        },
+        "rpc": "server.refreshProviders"
+      },
+      {
+        "payload": {
+          "patch": {},
+          "providerInstanceMutation": {
+            "instance": {
+              "config": {
+                "apiKey": "AIza-key",
+                "authMethod": "gemini-api-key",
+                "binaryPath": "",
+                "gcpLocation": "",
+                "gcpProject": ""
+              },
+              "displayName": "Work",
+              "driver": "antigravity",
+              "enabled": true
+            },
+            "instanceId": "antigravity-2",
+            "operation": "upsert"
+          }
+        },
+        "rpc": "server.updateSettings"
+      }
+    ]
+  },
+  {
+    "step": "change a provider instance, keeping its key",
+    "sent": [
+      {
+        "payload": {
+          "fresh": true
+        },
+        "rpc": "server.refreshProviders"
+      },
+      {
+        "payload": {
+          "patch": {},
+          "providerInstanceMutation": {
+            "instance": {
+              "config": {
+                "authMethod": "agent-platform",
+                "binaryPath": "/opt/agy",
+                "gcpLocation": "us-central1",
+                "gcpProject": "my-project"
+              },
+              "displayName": "Work",
+              "driver": "antigravity",
+              "enabled": false
+            },
+            "instanceId": "ag-work",
+            "operation": "upsert"
+          }
+        },
+        "rpc": "server.updateSettings"
+      }
+    ]
+  },
+  {
+    "step": "remove a provider instance",
+    "sent": [
+      {
+        "payload": {
+          "patch": {},
+          "providerInstanceMutation": {
+            "instanceId": "ag-work",
+            "operation": "remove"
+          }
+        },
+        "rpc": "server.updateSettings"
+      }
+    ]
+  },
+  {
     "step": "clean up storage",
     "sent": [
       {
@@ -2368,6 +2506,67 @@
     ]
   },
   {
+    "step": "a scheduled task continuing the thread its first run starts",
+    "sent": [
+      {
+        "payload": {
+          "creationSource": "web",
+          "enabled": true,
+          "interactionMode": "default",
+          "modelSelection": {
+            "instanceId": "codex",
+            "model": "gpt-6"
+          },
+          "projectId": "p1",
+          "prompt": "Run the tests",
+          "runtimeMode": "full-access",
+          "schedule": {
+            "everyMs": 3600000,
+            "type": "interval"
+          },
+          "threadMode": "continue",
+          "title": "Nightly",
+          "workspaceStrategy": {
+            "type": "root"
+          }
+        },
+        "rpc": "scheduledTasks.upsert"
+      }
+    ]
+  },
+  {
+    "step": "a scheduled task continuing a chosen thread",
+    "sent": [
+      {
+        "payload": {
+          "creationSource": "web",
+          "enabled": true,
+          "id": "task-1",
+          "interactionMode": "default",
+          "modelSelection": {
+            "instanceId": "codex",
+            "model": "gpt-6"
+          },
+          "projectId": "p1",
+          "prompt": "Run the tests",
+          "requireExisting": true,
+          "runtimeMode": "full-access",
+          "schedule": {
+            "everyMs": 3600000,
+            "type": "interval"
+          },
+          "threadId": "t1",
+          "threadMode": "continue",
+          "title": "Nightly",
+          "workspaceStrategy": {
+            "type": "root"
+          }
+        },
+        "rpc": "scheduledTasks.upsert"
+      }
+    ]
+  },
+  {
     "step": "a scheduled task changed to a webhook",
     "sent": [
       {
@@ -2418,6 +2617,42 @@
           "id": "task-1"
         },
         "rpc": "scheduledTasks.listWebhookDeliveries"
+      }
+    ]
+  },
+  {
+    "step": "a scheduled task's runs",
+    "sent": [
+      {
+        "payload": {
+          "id": "task-1"
+        },
+        "rpc": "scheduledTasks.listRuns"
+      }
+    ]
+  },
+  {
+    "step": "forget a thread's allowed tools",
+    "sent": [
+      {
+        "payload": {
+          "threadId": "t1"
+        },
+        "rpc": "orchestration.forgetThreadPermissions"
+      }
+    ]
+  },
+  {
+    "step": "a scheduled task's thread gets other permissions",
+    "sent": [
+      {
+        "payload": {
+          "commandId": "made-84",
+          "runtimeMode": "full-access",
+          "threadId": "t1",
+          "type": "thread.runtime-mode.set"
+        },
+        "rpc": "orchestration.dispatchCommand"
       }
     ]
   },
@@ -2517,7 +2752,7 @@
       },
       {
         "payload": {
-          "commandId": "made-84",
+          "commandId": "made-85",
           "opened": true,
           "threadId": "t1",
           "type": "thread.visit",
@@ -2597,7 +2832,7 @@
       },
       {
         "payload": {
-          "commandId": "made-85",
+          "commandId": "made-86",
           "settledAt": "2026-11-18T11:06:40.000Z",
           "threadId": "t1",
           "type": "thread.settle"

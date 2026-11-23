@@ -14,6 +14,7 @@ struct DomovoiIOSApp: App {
     var body: some Scene {
         WindowGroup {
             RootView(core: core)
+                .environment(\.core, core)
                 .modifier(SystemSurfacesSync(core: core))
                 .onOpenURL { url in
                     guard url.scheme == "domovoi" else { return }
@@ -55,6 +56,10 @@ struct DomovoiIOSApp: App {
         // A hardware keyboard on iPad: the Thread menu (hold ⌘ to see it).
         .commands {
             CommandMenu("Thread") {
+                // The palette sheet belongs to the app proper (MainStack).
+                Button("Command Palette") { core.update(.openPalette) }
+                    .keyboardShortcut("k")
+                    .disabled(!["connected", "reconnecting"].contains(core.view.connection.state))
                 Button("Find in Thread") {
                     if core.view.thread?.find != nil { FindFocus.shared.revision += 1 } else { core.update(.findInThread(query: "")) }
                 }

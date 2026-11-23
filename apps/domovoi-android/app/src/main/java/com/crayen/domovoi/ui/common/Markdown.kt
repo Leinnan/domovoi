@@ -41,13 +41,17 @@ import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.crayen.domovoi.app.CodeSpan
 import com.crayen.domovoi.app.MarkdownBlock
+import com.crayen.domovoi.app.MarkdownRun
 import com.crayen.domovoi.ui.theme.LocalTints
 import com.crayen.domovoi.ui.theme.Mono
 import com.crayen.domovoi.ui.theme.Space
@@ -103,101 +107,82 @@ fun highlighted(spans: List<CodeSpan>, fallback: String, maxLines: Int? = null):
     }
 }
 
-/**
- * Inline markdown (`**bold**`, `*italic*`, `` `code` ``, `~~strike~~`,
- * `[text](url)` and bare links) as styled text.
- */
-fun inlineMarkdown(text: String, codeBackground: Color, linkColor: Color): AnnotatedString = buildAnnotatedString {
-    var i = 0
-    val n = text.length
-    fun startsWith(token: String, at: Int) = text.startsWith(token, at)
-    while (i < n) {
-        val c = text[i]
-        when {
-            c == '\\' && i + 1 < n && text[i + 1] in "\\`*_~[]()#" -> { append(text[i + 1]); i += 2 }
-            c == '`' -> {
-                val ticks = text.drop(i).takeWhile { it == '`' }.length
-                val close = text.indexOf("`".repeat(ticks), i + ticks)
-                if (close < 0) { append(text.substring(i, i + ticks)); i += ticks }
-                else {
-                    withStyle(SpanStyle(fontFamily = Mono, background = codeBackground, fontSize = 0.92.em())) { append(text.substring(i + ticks, close).trim()) }
-                    i = close + ticks
-                }
-            }
-            startsWith("**", i) || startsWith("__", i) -> {
-                val token = text.substring(i, i + 2)
-                val close = text.indexOf(token, i + 2)
-                if (close < 0) { append(token); i += 2 }
-                else { withStyle(SpanStyle(fontWeight = FontWeight.SemiBold)) { append(inlineMarkdown(text.substring(i + 2, close), codeBackground, linkColor)) }; i = close + 2 }
-            }
-            startsWith("~~", i) -> {
-                val close = text.indexOf("~~", i + 2)
-                if (close < 0) { append("~~"); i += 2 }
-                else { withStyle(SpanStyle(textDecoration = TextDecoration.LineThrough)) { append(inlineMarkdown(text.substring(i + 2, close), codeBackground, linkColor)) }; i = close + 2 }
-            }
-            (c == '*' || c == '_') && i + 1 < n && !text[i + 1].isWhitespace() && (i == 0 || !text[i - 1].isLetterOrDigit()) -> {
-                val close = text.indexOf(c, i + 1)
-                if (close < 0 || text[close - 1].isWhitespace()) { append(c); i++ }
-                else { withStyle(SpanStyle(fontStyle = FontStyle.Italic)) { append(inlineMarkdown(text.substring(i + 1, close), codeBackground, linkColor)) }; i = close + 1 }
-            }
-            c == '[' -> {
-                val mid = text.indexOf("](", i)
-                val end = if (mid > 0) text.indexOf(')', mid) else -1
-                if (mid < 0 || end < 0 || text.substring(i, mid).contains('\n')) { append(c); i++ }
-                else {
-                    val label = text.substring(i + 1, mid)
-                    val url = text.substring(mid + 2, end)
-                    withLink(LinkAnnotation.Url(url, TextLinkStyles(SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline)))) {
-                        append(inlineMarkdown(label, codeBackground, linkColor))
+@Composable
+private fun styledMarkdown(
+    runs: List<MarkdownRun>,
+    fallback: String,
+    onWorkspaceArtifact: ((String) -> Unit)? = null,
+): AnnotatedString {
+    val colors = MaterialTheme.colorScheme
+    return remember(runs, fallback, colors, onWorkspaceArtifact) {
+        if (runs.isEmpty()) AnnotatedString(fallback) else buildAnnotatedString {
+            for (run in runs) {
+                withStyle(SpanStyle(
+                    fontWeight = if (run.bold) FontWeight.Bold else null,
+                    fontStyle = if (run.italic) FontStyle.Italic else null,
+                    textDecoration = if (run.strike) TextDecoration.LineThrough else null,
+                    fontFamily = if (run.code) Mono else null,
+                    background = if (run.code) colors.surfaceContainerHighest else Color.Unspecified,
+                )) {
+                    val link = run.link
+                    val wsLink = run.workspaceLink
+                    when {
+                        link != null -> withLink(LinkAnnotation.Url(link, TextLinkStyles(SpanStyle(
+                            color = colors.primary, textDecoration = TextDecoration.Underline,
+                        )))) { append(run.text) }
+                        wsLink != null && onWorkspaceArtifact != null -> withLink(LinkAnnotation.Clickable(
+                            tag = "artifact",
+                            styles = TextLinkStyles(SpanStyle(color = colors.primary, textDecoration = TextDecoration.Underline)),
+                            linkInteractionListener = { onWorkspaceArtifact(wsLink) },
+                        )) { append(run.text) }
+                        else -> append(run.text)
                     }
-                    i = end + 1
                 }
             }
-            startsWith("https://", i) || startsWith("http://", i) -> {
-                var end = i
-                while (end < n && !text[end].isWhitespace() && text[end] !in "<>\"") end++
-                while (end > i && text[end - 1] in ".,;:!?)") end--
-                val url = text.substring(i, end)
-                withLink(LinkAnnotation.Url(url, TextLinkStyles(SpanStyle(color = linkColor)))) { append(url) }
-                i = end
-            }
-            else -> { append(c); i++ }
         }
     }
 }
 
-private fun Double.em() = androidx.compose.ui.unit.TextUnit(this.toFloat(), androidx.compose.ui.unit.TextUnitType.Em)
-
-@Composable
-fun rememberInline(text: String): AnnotatedString {
-    val code = MaterialTheme.colorScheme.surfaceContainerHighest
-    val link = MaterialTheme.colorScheme.primary
-    return remember(text, code, link) { inlineMarkdown(text, code, link) }
-}
-
 /** The core's markdown blocks; a caret after the last while it streams. */
 @Composable
-fun MarkdownBlocks(blocks: List<MarkdownBlock>, modifier: Modifier = Modifier, streaming: Boolean = false) {
+fun MarkdownBlocks(
+    blocks: List<MarkdownBlock>,
+    modifier: Modifier = Modifier,
+    streaming: Boolean = false,
+    onOpenArtifact: ((artifactId: String, version: UInt?, codeMode: Boolean) -> Unit)? = null,
+    onOpenWorkspaceArtifact: ((path: String) -> Unit)? = null,
+) {
     Column(modifier, verticalArrangement = Arrangement.spacedBy(Space.s + Space.xxs)) {
         var i = 0
         while (i < blocks.size) {
             val block = blocks[i]
             if (block.kind == "table_row") {
                 val start = i
-                while (i < blocks.size && blocks[i].kind == "table_row") i++
-                MarkdownTable(blocks.subList(start, i))
+                i++
+                while (i < blocks.size && blocks[i].kind == "table_row" && !blocks[i].header) i++
+                MarkdownTable(blocks.subList(start, i), onOpenWorkspaceArtifact)
                 continue
             }
-            MarkdownBlockView(block, caret = streaming && i == blocks.lastIndex)
+            MarkdownBlockView(
+                block,
+                caret = streaming && i == blocks.lastIndex,
+                onOpenArtifact = onOpenArtifact,
+                onOpenWorkspaceArtifact = onOpenWorkspaceArtifact,
+            )
             i++
         }
     }
 }
 
 @Composable
-private fun MarkdownBlockView(block: MarkdownBlock, caret: Boolean) {
+private fun MarkdownBlockView(
+    block: MarkdownBlock,
+    caret: Boolean,
+    onOpenArtifact: ((artifactId: String, version: UInt?, codeMode: Boolean) -> Unit)? = null,
+    onOpenWorkspaceArtifact: ((path: String) -> Unit)? = null,
+) {
     val body = MaterialTheme.typography.bodyLarge
-    val text = rememberInline(block.text)
+    val text = styledMarkdown(block.runs, block.text, onOpenWorkspaceArtifact)
     val shown = if (caret) buildAnnotatedString {
         append(text)
         withStyle(SpanStyle(color = MaterialTheme.colorScheme.primary)) { append(" ▍") }
@@ -211,24 +196,48 @@ private fun MarkdownBlockView(block: MarkdownBlock, caret: Boolean) {
                 else -> MaterialTheme.typography.titleSmall
             },
             fontWeight = FontWeight.SemiBold,
-            modifier = Modifier.padding(top = Space.xs),
+            modifier = Modifier.widthIn(max = 680.dp).padding(top = Space.xs).semantics { heading() },
         )
-        "code" -> CodeBlock(block.text, block.language, block.spans)
-        "list_item" -> Row(Modifier.padding(start = Space.l * block.level.toInt()), horizontalArrangement = Arrangement.spacedBy(Space.s)) {
-            Text(if (block.ordered) "${block.number}." else "•", style = body, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text(shown, style = body)
+        "code", "html_source", "html_document", "svg_document" -> {
+            val artifactId = block.artifactId
+            when {
+                block.fenceClosed && block.language.equals("mermaid", ignoreCase = true) -> DiagramPreview(block.text)
+                !caret && artifactId != null && onOpenArtifact != null -> ArtifactCard(
+                    title = block.artifactTitle,
+                    kind = block.artifactKind.ifEmpty { "html" },
+                    version = block.artifactVersion.takeIf { it > 0u } ?: 1u,
+                    onOpen = { onOpenArtifact(artifactId, block.artifactVersion.takeIf { it > 0u }, false) },
+                    onViewCode = { onOpenArtifact(artifactId, block.artifactVersion.takeIf { it > 0u }, true) },
+                )
+                (block.kind == "html_document" && !caret) || (block.fenceClosed && block.language.equals("html", ignoreCase = true)) -> {
+                    Column {
+                        HtmlArtifactButton(block.text)
+                        CodeBlock(block.text, "html", block.spans)
+                    }
+                }
+                else -> CodeBlock(block.text, block.language, block.spans)
+            }
         }
-        "quote" -> Row(Modifier.height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(Space.s)) {
+        "list_item" -> Row(Modifier.padding(start = Space.l * (block.level + block.quoteDepth).toInt().coerceAtMost(6)), horizontalArrangement = Arrangement.spacedBy(Space.s)) {
+            val marker = when (block.taskChecked) {
+                true -> "☑"
+                false -> "☐"
+                null -> if (block.continuation) " " else if (block.ordered) "${block.number}." else "•"
+            }
+            Text(marker, style = body, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.widthIn(min = Space.l))
+            Text(shown, style = body, modifier = Modifier.widthIn(max = 680.dp))
+        }
+        "quote" -> Row(Modifier.widthIn(max = 680.dp).padding(start = Space.s * (block.quoteDepth.toInt() - 1).coerceIn(0, 5)).height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(Space.s)) {
             Box(Modifier.width(3.dp).fillMaxHeight().background(MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.small))
             Text(shown, style = body, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         "rule" -> HorizontalDivider(Modifier.padding(vertical = Space.xs))
-        else -> Text(shown, style = body)
+        else -> Text(shown, style = body, modifier = Modifier.widthIn(max = 680.dp))
     }
 }
 
 @Composable
-private fun MarkdownTable(rows: List<MarkdownBlock>) {
+private fun MarkdownTable(rows: List<MarkdownBlock>, onWorkspaceArtifact: ((String) -> Unit)? = null) {
     val border = MaterialTheme.colorScheme.outlineVariant
     Box(
         Modifier.horizontalScroll(rememberScrollState())
@@ -242,12 +251,17 @@ private fun MarkdownTable(rows: List<MarkdownBlock>) {
                     else -> Color.Transparent
                 }
                 Row(Modifier.background(bg)) {
-                    row.cells.forEach { cell ->
+                    row.cells.forEachIndexed { column, cell ->
                         Text(
-                            rememberInline(cell),
+                            styledMarkdown(row.cellRuns.getOrElse(column) { emptyList() }, cell, onWorkspaceArtifact),
                             style = MaterialTheme.typography.bodyMedium,
                             fontWeight = if (row.header) FontWeight.SemiBold else FontWeight.Normal,
-                            modifier = Modifier.widthIn(min = 64.dp, max = 260.dp).padding(horizontal = Space.s + Space.xxs, vertical = Space.xs + Space.xxs),
+                            textAlign = when (row.alignments.getOrNull(column)) {
+                                "right" -> TextAlign.End
+                                "center" -> TextAlign.Center
+                                else -> TextAlign.Start
+                            },
+                            modifier = Modifier.width(156.dp).padding(horizontal = Space.s + Space.xxs, vertical = Space.xs + Space.xxs),
                         )
                     }
                 }

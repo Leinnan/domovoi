@@ -2,6 +2,7 @@
 
 mod access;
 pub(crate) mod admin_failure;
+mod artifacts;
 mod connect;
 mod device;
 mod agent_sessions;
@@ -48,6 +49,7 @@ pub fn router() -> Router<ConnCtx> {
     let r = provider::register(r);
     let r = agent_sessions::register(r);
     let r = source_control::register(r);
+    let r = artifacts::register(r);
     vcs::register(r)
 }
 

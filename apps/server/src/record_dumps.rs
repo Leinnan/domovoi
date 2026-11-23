@@ -233,9 +233,9 @@ fn turn_under_way(store: &Store, thread_id: &str, ordinal: u64) -> Turn {
     turn.item("think-1", Work::Reasoning { text: "thinking".into(), streaming: true }, TurnItemStatus::Running);
     turn.item("cmd-1", Work::Command { input: "make".into(), output: None, exit_code: None }, TurnItemStatus::Running);
     let changes = vec![FileChangeDetail { operation: "update".into(), path: "src/a.rs".into(), old_path: None, file_type: None, mime_type: None }];
-    turn.item("edit-1", Work::FileChange { file_name: "a.rs".into(), changes, texts: Some(("a".into(), "b".into())), patch: None }, TurnItemStatus::Running);
+    turn.item("edit-1", Work::FileChange { file_name: "a.rs".into(), changes, texts: Some(("a".into(), "b".into())), patch: None, error: None }, TurnItemStatus::Running);
     turn.item("tool-1", Work::Tool { name: "lookup".into(), input: json!({ "deep": [1, 2.5, null] }), output: None, viewed_image_path: None }, TurnItemStatus::Running);
-    turn.item("search-1", Work::WebSearch { patterns: vec!["rust".into()] }, TurnItemStatus::Running);
+    turn.item("search-1", Work::WebSearch { patterns: vec!["rust".into()], results: None }, TurnItemStatus::Running);
     let step = PlanStep { id: "step-1".into(), text: "Look".into(), status: PlanStepStatus::Running, duration_anchor_at: None, duration_ms: None };
     turn.plan("todo-1", Plan::Todo { steps: vec![step], explanation: None }, false);
     turn.plan("plan-1", Plan::Proposed { markdown: "# Plan".into() }, false);

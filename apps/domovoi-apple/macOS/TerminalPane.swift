@@ -30,6 +30,11 @@ struct TerminalPane: View {
                         }
                     }
                 }
+                Button { core.update(.clearTerminal) } label: { Image(systemName: "eraser") }
+                    .buttonStyle(.borderless)
+                    .help("Clear the terminal and its scrollback")
+                    .accessibilityLabel("Clear terminal")
+                    .disabled(terminal.active == nil)
                 Button {
                     TerminalFocus.requested = true
                     core.update(.newTerminal)
@@ -139,9 +144,10 @@ struct TerminalScreen: View {
         if let text = NSPasteboard.general.string(forType: .string) { core.update(.terminalPaste(text: text)) }
     }
 
-    /// Clears the screen as ⌃L does (⌘K stays the Command Palette).
+    /// Clears the screen and its scrollback; the core then sends ⌃L for a
+    /// fresh prompt (⌘K stays the Command Palette).
     private func clear() {
-        core.update(.terminalKey(key: "char", text: "l", ctrl: true, alt: false))
+        core.update(.clearTerminal)
     }
 
     private func menu() -> NSMenu {

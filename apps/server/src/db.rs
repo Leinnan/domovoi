@@ -167,6 +167,30 @@ const MIGRATIONS: &[&str] = &[
      CREATE TABLE scheduled_task_webhook_pending (
         delivery_id TEXT PRIMARY KEY, task_id TEXT NOT NULL, coalesce_key TEXT NOT NULL, due_at INTEGER NOT NULL,
         state TEXT NOT NULL, request_json TEXT NOT NULL, delivery_ids_json TEXT NOT NULL);",
+    // 12: each scheduled task's last runs (t3code keeps only the latest): when,
+    // what started it, the thread and message it went to, and why it failed.
+    "CREATE TABLE scheduled_task_runs (
+        run_key TEXT PRIMARY KEY, task_id TEXT NOT NULL, started_at TEXT NOT NULL, trigger TEXT NOT NULL,
+        thread_id TEXT, message_id TEXT, status TEXT NOT NULL, error TEXT);
+     CREATE INDEX scheduled_task_runs_by_task ON scheduled_task_runs (task_id, started_at);",
+    // 13: what "Allow for Thread" allowed in a thread, given to each new
+    // provider session of the thread (Claude: `--allowedTools`).
+    "CREATE TABLE thread_permission_rules (
+        thread_id TEXT NOT NULL, provider TEXT NOT NULL, rule TEXT NOT NULL, added_at TEXT NOT NULL,
+        PRIMARY KEY (thread_id, provider, rule));",
+    // 14: durable, versioned thread artifacts (MCP t3_artifact_* tools and
+    // captured Claude Code native Artifact calls).
+    "CREATE TABLE artifacts (
+        id TEXT PRIMARY KEY, thread_id TEXT NOT NULL, project_id TEXT NOT NULL,
+        title TEXT NOT NULL, kind TEXT NOT NULL, language TEXT,
+        source_path TEXT, hosted_url TEXT, latest_version INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+     CREATE INDEX idx_artifacts_thread ON artifacts (thread_id, updated_at DESC);
+     CREATE TABLE artifact_versions (
+        artifact_id TEXT NOT NULL, version INTEGER NOT NULL, run_id TEXT,
+        turn_item_id TEXT, summary TEXT, content TEXT NOT NULL,
+        byte_length INTEGER NOT NULL, created_at TEXT NOT NULL,
+        PRIMARY KEY (artifact_id, version));",
 ];
 
 impl Db {

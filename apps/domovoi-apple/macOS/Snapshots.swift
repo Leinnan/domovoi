@@ -28,6 +28,28 @@ enum Snapshots {
             window.setFrame(NSRect(x: 60, y: 60, width: 1440, height: 900), display: true)
         }
         let env = ProcessInfo.processInfo.environment
+        #if DEBUG
+        if env["DOMOVOI_COMPANION_SNAPSHOTS"] == "1" {
+            do { try CompanionGallery.capture(in: dir) }
+            catch { print("companion gallery: \(error)") }
+            if let server = env["DOMOVOI_SERVER"], let code = env["DOMOVOI_PAIRING"] {
+                core.update(.connect(serverUrl: server, pairingCode: code))
+            }
+            await wait(20) { core.view.connection.state == "connected" }
+            await settle()
+            await capture("companion-toolbar", dir)
+            SettingsTab.shared.selection = "companion"
+            openSettings()
+            await settle()
+            await capture("companion-editor", dir)
+            core.update(.disconnect)
+            await wait(5) { core.view.connection.state == "disconnected" }
+            await settle()
+            await capture("companion-offline", dir)
+            NSApp.terminate(nil)
+            return
+        }
+        #endif
         await capture("00-connect", dir)
         core.update(.connect(serverUrl: env["DOMOVOI_SERVER"] ?? "http://127.0.0.1:13774", pairingCode: env["DOMOVOI_PAIRING"] ?? ""))
         await wait(20) { core.view.connection.state == "connected" && !core.view.sidebar.projects.isEmpty }
@@ -35,8 +57,45 @@ enum Snapshots {
         await settle()
         await capture("01-new-thread", dir)
 
+        if env["DOMOVOI_SIDEBAR_SNAPSHOTS"] == "1" {
+            for (mode, appearance) in [("light", NSAppearance.Name.aqua), ("dark", .darkAqua)] {
+                NSApp.appearance = NSAppearance(named: appearance)
+                for grouping in ["status", "project"] {
+                    core.update(.setSidebarGrouping(grouping: grouping))
+                    if grouping == "status" {
+                        for section in core.view.sidebar.sections where !section.expanded { core.update(.toggleSection(section: section.kind)) }
+                    }
+                    await settle(1)
+                    await capture("sidebar-\(grouping)-\(mode)", dir)
+                }
+            }
+            NSApp.terminate(nil)
+            return
+        }
+
         let threads = core.view.sidebar.pickableRows
         let pick = env["DOMOVOI_THREAD"].flatMap { id in threads.first { $0.id == id } } ?? threads.first
+
+        #if DEBUG
+        // The window narrowed with a thread and the side panel open: three
+        // columns must never be wider than the window.
+        if env["DOMOVOI_NARROW_SNAPSHOTS"] == "1", let thread = pick {
+            core.update(.selectThread(threadId: thread.id))
+            await wait(10) { !(core.view.thread?.loading ?? true) }
+            if !core.view.panelOpen { core.update(.togglePanel) }
+            core.update(.showPanel(tab: "diff"))
+            // Narrowed, then widened again: the sidebar hides, then comes back.
+            for (index, width) in [1440, 1100, 930, 760, 1100, 1440, 1700].enumerated() {
+                guard let window = NSApp.windows.first(where: { $0.isVisible }) else { break }
+                window.setFrame(NSRect(x: 60, y: 60, width: CGFloat(width), height: 640), display: true)
+                await settle(1.5)
+                logColumns(window, label: "\(width)")
+                await capture(String(format: "narrow-%d-%d", index, width), dir)
+            }
+            NSApp.terminate(nil)
+            return
+        }
+        #endif
         if let thread = pick {
             core.update(.selectThread(threadId: thread.id))
             await wait(10) { !(core.view.thread?.loading ?? true) }
@@ -130,6 +189,21 @@ enum Snapshots {
         field.selectAll(nil)
         if text.isEmpty { field.deleteBackward(nil) } else { field.insertText(text, replacementRange: field.selectedRange()) }
     }
+
+    #if DEBUG
+    /// Prints the window's width and each split view's columns, outermost first.
+    private static func logColumns(_ window: NSWindow, label: String) {
+        func splits(in view: NSView) -> [NSSplitView] {
+            ((view as? NSSplitView).map { [$0] } ?? []) + view.subviews.flatMap(splits(in:))
+        }
+        let root = window.contentView.map { [$0] } ?? []
+        var line = "columns \(label): window \(Int(window.frame.width)) content \(Int(window.contentView?.frame.width ?? 0)) minSize \(Int(window.minSize.width))/\(Int(window.contentMinSize.width))"
+        for split in root.flatMap(splits(in:)) {
+            line += " | split \(Int(split.frame.minX))+\(Int(split.frame.width)): " + split.arrangedSubviews.map { "\(Int($0.frame.width))\($0.isHidden ? "h" : "")" }.joined(separator: ",")
+        }
+        print(line)
+    }
+    #endif
 
     private static func wait(_ seconds: Double, _ condition: () -> Bool) async {
         let deadline = Date().addingTimeInterval(seconds)

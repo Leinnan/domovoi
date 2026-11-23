@@ -1,0 +1,6 @@
+[targets.apple]
+output = "../domovoi-apple/generated/SharedMac"
+include_ios = false
+# BoltFFI selects Cargo targets from these lists.
+ios_architectures = []
+simulator_architectures = []

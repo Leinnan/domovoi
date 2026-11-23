@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/*", "apps/server", "apps/ws-tap", "apps/domovoi-core"]
+members = ["crates/*", "apps/server", "apps/ws-tap", "apps/domovoi-core", "apps/domovoi-iced"]
 
 [workspace.package]
 version = "0.1.0"
@@ -25,3 +25,38 @@ divan = "0.1.21"
 # builds; Domovoi's own code stays fast to compile and debuggable.
 [profile.dev.package."*"]
 opt-level = 2
+
+# Shipped builds (the server, and the core in the apps through `boltffi pack
+# --release`): whole-program optimization and no symbol table. Panics still
+# unwind: tokio keeps a panicking task from taking the server down, and the
+# core must not abort the app it is linked into.
+[profile.release]
+lto = "fat"
+codegen-units = 1
+strip = "symbols"
+
+# The Mermaid renderer (the server's `diagrams.rs`) is a sixth of the
+# server's code and runs only to draw a diagram, cached, under a 2 s
+# deadline: optimized for size it is 3.6 MB smaller and about 3% slower
+# (45 ms vs 44 ms a diagram). Size-optimizing everything was measured too
+# and is not worth it: the core's streaming render took 2.5x as long.
+[profile.release.package.merman]
+opt-level = "s"
+[profile.release.package.merman-core]
+opt-level = "s"
+[profile.release.package.merman-export]
+opt-level = "s"
+[profile.release.package.merman-markup]
+opt-level = "s"
+[profile.release.package.merman-model]
+opt-level = "s"
+[profile.release.package.merman-render]
+opt-level = "s"
+[profile.release.package.merman-theme-contract]
+opt-level = "s"
+[profile.release.package.merman-unicode-linebreak]
+opt-level = "s"
+[profile.release.package.dugong]
+opt-level = "s"
+[profile.release.package.dugong-graphlib]
+opt-level = "s"

@@ -33,6 +33,7 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
@@ -54,6 +55,7 @@ import androidx.navigation3.ui.NavDisplay
 import androidx.window.core.layout.WindowSizeClass
 import com.crayen.domovoi.app.Event
 import com.crayen.domovoi.core.Core
+import com.crayen.domovoi.ui.common.ArtifactsScreen
 import com.crayen.domovoi.ui.common.EmptyState
 import com.crayen.domovoi.ui.common.ToastEffect
 import com.crayen.domovoi.ui.common.watch
@@ -85,7 +87,7 @@ enum class Tab(val label: String, val icon: ImageVector, val selectedIcon: Image
 }
 
 /** Screens that belong in a list-detail layout's extra pane, beside the thread. */
-private val toolScreens = setOf(Screen.Diff, Screen.Terminal, Screen.Files, Screen.Git)
+private val toolScreens = setOf(Screen.Diff, Screen.Artifacts, Screen.Terminal, Screen.Files, Screen.Git)
 
 /**
  * The connected app: a navigation bar or rail of tabs; in Threads, the list
@@ -101,6 +103,7 @@ fun MainScaffold(core: Core) {
     val snackbars = remember { SnackbarHostState() }
     val sidebar by core.view.sidebar.watch()
     val connection by core.view.connection.watch()
+    val palette by core.view.palette.watch()
     val windowInfo = currentWindowAdaptiveInfo()
     val expanded = windowInfo.windowSizeClass.isWidthAtLeastBreakpoint(WindowSizeClass.WIDTH_DP_MEDIUM_LOWER_BOUND)
 
@@ -124,7 +127,12 @@ fun MainScaffold(core: Core) {
     val threadsNav = stacks.getValue(Tab.Threads).let { threads ->
         remember(threads) {
             object : Navigator {
-                override fun open(screen: Screen) { tab = Tab.Threads; if (threads.lastOrNull() != screen) threads.add(screen) }
+                override fun open(screen: Screen) {
+                    // Usage is a tab of its own (opened from a thread's usage meter).
+                    if (screen == Screen.Usage) { tab = Tab.Usage; return }
+                    tab = Tab.Threads
+                    if (threads.lastOrNull() != screen) threads.add(screen)
+                }
                 override fun back() { if (threads.size > 1) threads.removeAt(threads.lastIndex) }
                 override fun show(screen: Screen) {
                     tab = Tab.Threads
@@ -173,7 +181,34 @@ fun MainScaffold(core: Core) {
         else -> NavigationSuiteType.NavigationBar
     }
     val searchRequests = remember { MutableSharedFlow<Unit>(extraBufferCapacity = 1) }
-    // Hardware keyboard: Ctrl+N new thread, Ctrl+F find in the thread, Ctrl+K search threads.
+    // A palette item ran: the core changed its own state; where the app goes is ours.
+    fun runPalette(id: String) {
+        core.update(Event.RunPaletteItem(id))
+        val threads = stacks.getValue(Tab.Threads)
+        when {
+            id.startsWith("thread:") -> threadsNav.show(Screen.Thread(id.removePrefix("thread:")))
+            id.startsWith("project:") -> threadsNav.show(Screen.NewThread)
+            // A file or a search match: the core opens it in the files panel.
+            id.startsWith("file:") || id.startsWith("match:") -> threadsNav.open(Screen.Files)
+            else -> when (id) {
+                "action:new-thread", "action:scratch" -> threadsNav.show(Screen.NewThread)
+                "action:diff" -> threadsNav.open(Screen.Diff)
+                "action:artifacts" -> threadsNav.open(Screen.Artifacts)
+                "action:files" -> threadsNav.open(Screen.Files)
+                "action:git" -> threadsNav.open(Screen.Git)
+                "action:terminal" -> threadsNav.open(Screen.Terminal)
+                "action:toggle-panel" -> if (tab == Tab.Threads && threads.lastOrNull() in toolScreens) threadsNav.back() else threadsNav.open(Screen.Diff)
+                "action:find" -> sidebar.selectedThreadId?.let { open ->
+                    if (tab != Tab.Threads || threads.lastOrNull() != Screen.Thread(open)) threadsNav.show(Screen.Thread(open))
+                }
+                "action:pull-requests" -> tab = Tab.PullRequests
+                "action:usage" -> tab = Tab.Usage
+                else -> Unit // pin, settle; go-to-file and search-project keep the palette open
+            }
+        }
+    }
+    // Hardware keyboard: Ctrl+N new thread, Ctrl+F find in the thread, Ctrl+K the
+    // command palette, Ctrl+Shift+K search threads.
     val shortcuts = Modifier.onPreviewKeyEvent { e ->
         if (e.type != KeyEventType.KeyDown || !e.isCtrlPressed) return@onPreviewKeyEvent false
         when (e.key) {
@@ -188,6 +223,10 @@ fun MainScaffold(core: Core) {
                 open
             }
             Key.K -> {
+                if (!e.isShiftPressed) {
+                    core.update(Event.OpenPalette)
+                    return@onPreviewKeyEvent true
+                }
                 tab = Tab.Threads
                 if (!expanded) stacks.getValue(Tab.Threads).let { s -> while (s.size > 1) s.removeAt(s.lastIndex) }
                 searchRequests.tryEmit(Unit)
@@ -218,10 +257,11 @@ fun MainScaffold(core: Core) {
     ) {
         Content(core, tab, stack, nav, threadsNav, snackbars, expanded)
     }
+    palette?.let { PaletteDialog(it, expanded, { e -> core.update(e) }, ::runPalette) }
     }
 }
 
-/** Ctrl+K: the thread list's search field takes focus. */
+/** Ctrl+Shift+K: the thread list's search field takes focus. */
 val LocalSearchRequests = staticCompositionLocalOf<SharedFlow<Unit>> { MutableSharedFlow() }
 
 @Composable
@@ -245,8 +285,9 @@ private fun Content(core: Core, tab: Tab, stack: SnapshotStateList<Screen>, nav:
             entry<Screen.AddServer> { PairingScreen(core, onboarding = false, onBack = nav::back) }
             val tool = ListDetailSceneStrategy.extraPane()
             entry<Screen.Diff>(metadata = tool) { DiffScreen(core, threadsNav, onBack = threadsNav::back) }
+            entry<Screen.Artifacts>(metadata = tool) { ArtifactsScreen(core, onBack = threadsNav::back) }
             entry<Screen.Files>(metadata = tool) { FilesScreen(core, onBack = threadsNav::back) }
-            entry<Screen.Git>(metadata = tool) { GitScreen(core, onBack = threadsNav::back) }
+            entry<Screen.Git>(metadata = tool) { GitScreen(core, onBack = threadsNav::back, openTerminal = { threadsNav.open(Screen.Terminal) }) }
             entry<Screen.Terminal>(metadata = tool) { TerminalScreen(core, onBack = threadsNav::back) }
             entry<Screen.ImportSessions> { ImportSessionsScreen(core, onBack = nav::back) }
             entry<Screen.BrowseFolders> { FolderBrowserScreen(core, threadsNav, onBack = nav::back) }
@@ -255,7 +296,7 @@ private fun Content(core: Core, tab: Tab, stack: SnapshotStateList<Screen>, nav:
             entry<Screen.Settings> { SettingsScreen(core, nav) }
             entry<Screen.ServerSettings> { ServerSettingsScreen(core, onBack = nav::back) }
             entry<Screen.Providers> { ProvidersScreen(core, onBack = nav::back) }
-            entry<Screen.ScheduledTasks> { ScheduledTasksScreen(core, onBack = nav::back) }
+            entry<Screen.ScheduledTasks> { ScheduledTasksScreen(core, onBack = nav::back, openThread = { threadsNav.show(Screen.Thread(it)) }) }
             entry<Screen.Maintenance> { MaintenanceScreen(core, onBack = nav::back) }
             entry<Screen.Access> { AccessScreen(core, onBack = nav::back) }
         },

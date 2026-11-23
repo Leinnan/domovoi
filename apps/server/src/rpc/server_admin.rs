@@ -50,8 +50,14 @@ async fn update_settings(ctx: Arc<ConnCtx>, input: UpdateSettingsInput) -> Resul
     if let Some(mutation) = &input.provider_instance_mutation {
         next = next.with_instance(mutation);
     }
+    // Credentials go to the secret store; the settings keep a mark in their place.
+    let next = crate::secrets::stash(&ctx.state.paths.userdata, next);
+    let launches = crate::antigravity::launch_keys();
     crate::settings::save(&ctx.state.paths.userdata, &next)?;
     *settings = next.clone();
+    drop(settings);
+    // Sessions started with an instance's old sign-in settings stop now (t3code's do).
+    crate::antigravity::stop_changed(&launches).await;
     Ok(next)
 }
 

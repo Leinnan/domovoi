@@ -40,6 +40,9 @@ pub struct LaunchOptions {
     pub allowed_tools: Vec<String>,
     /// Added to Claude Code's own system prompt (`--append-system-prompt`).
     pub append_system_prompt: Option<String>,
+    /// Sets `CLAUDE_CODE_ARTIFACTS=1` so Claude Code exposes its native
+    /// `Artifact` / `ArtifactComments` / `ArtifactData` tools in stream-json mode.
+    pub enable_artifacts: bool,
 }
 
 impl LaunchOptions {
@@ -105,10 +108,15 @@ pub enum CliEvent {
     Exited,
 }
 
+/// Writes one protocol log line: (`direction`, message).
+type ProtocolLog = Arc<dyn Fn(&str, &Value) + Send + Sync>;
+
 pub struct ClaudeCli {
     stdin: Mutex<ChildStdin>,
     child: Mutex<Child>,
     pending: Arc<Mutex<HashMap<String, oneshot::Sender<Value>>>>,
+    /// The session's protocol log (`direction`, message).
+    log: ProtocolLog,
 }
 
 fn request_id() -> String {
@@ -120,21 +128,25 @@ impl ClaudeCli {
         opts: &LaunchOptions,
         log: impl Fn(&str, &Value) + Send + Sync + 'static,
     ) -> std::io::Result<(Arc<Self>, mpsc::UnboundedReceiver<CliEvent>)> {
-        let mut child = crate::process::command(&opts.binary)
-            .args(opts.args())
+        let mut cmd = crate::process::command(&opts.binary);
+        cmd.args(opts.args())
             .current_dir(&opts.cwd)
             .env("CLAUDE_CODE_ENTRYPOINT", "sdk-ts")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
-            .kill_on_drop(true)
-            .spawn()?;
+            .kill_on_drop(true);
+        if opts.enable_artifacts {
+            cmd.env("CLAUDE_CODE_ARTIFACTS", "1");
+        }
+        let mut child = cmd.spawn()?;
         let stdin = child.stdin.take().expect("piped stdin");
         let stdout = child.stdout.take().expect("piped stdout");
         #[expect(clippy::disallowed_methods, reason = "the reader also delivers the answers the turn waits for: made to wait for room here, it could never read the answer that frees the turn")]
         let (tx, rx) = mpsc::unbounded_channel();
         let pending: Arc<Mutex<HashMap<String, oneshot::Sender<Value>>>> = Arc::default();
-        let cli = Arc::new(ClaudeCli { stdin: Mutex::new(stdin), child: Mutex::new(child), pending: pending.clone() });
+        let log: ProtocolLog = Arc::new(log);
+        let cli = Arc::new(ClaudeCli { stdin: Mutex::new(stdin), child: Mutex::new(child), pending: pending.clone(), log: log.clone() });
         tokio::spawn(async move {
             let mut lines = BufReader::new(stdout).lines();
             while let Ok(Some(line)) = lines.next_line().await {
@@ -166,6 +178,11 @@ impl ClaudeCli {
     }
 
     async fn write(&self, msg: &Value) -> std::io::Result<()> {
+        // What was asked and answered (permission answers, mode switches);
+        // user messages stay out, they can carry whole images.
+        if matches!(msg["type"].as_str(), Some("control_request" | "control_response")) {
+            (self.log)("outgoing", msg);
+        }
         let mut line = serde_json::to_vec(msg).expect("serializable");
         line.push(b'\n');
         let mut s = self.stdin.lock().await;
@@ -273,12 +290,7 @@ impl ClaudeCli {
     /// the Agent SDK does; deny carries a message the model sees.
     pub async fn answer_permission(&self, request_id: &str, request: &Value, allow: bool, message: Option<&str>) -> std::io::Result<()> {
         let response = if allow {
-            json!({
-                "behavior": "allow",
-                "updatedInput": request["input"],
-                "toolUseID": request["tool_use_id"],
-                "decisionClassification": "user_temporary",
-            })
+            allow_response(request, false)
         } else {
             json!({
                 "behavior": "deny",
@@ -289,6 +301,16 @@ impl ClaudeCli {
         self.write(&json!({
             "type": "control_response",
             "response": { "subtype": "success", "request_id": request_id, "response": response },
+        }))
+        .await
+    }
+
+    /// Allows a tool call and what it asked to be allowed for the rest of the
+    /// session ("Allow for Session"): Claude asks no more for it.
+    pub async fn answer_permission_for_session(&self, request_id: &str, request: &Value) -> std::io::Result<()> {
+        self.write(&json!({
+            "type": "control_response",
+            "response": { "subtype": "success", "request_id": request_id, "response": allow_response(request, true) },
         }))
         .await
     }
@@ -313,16 +335,67 @@ impl ClaudeCli {
     }
 }
 
+/// What "Allow for Session" grants (t3code `toSessionPermissionUpdates`):
+/// the request's own suggestions, kept for the session, else an allow rule
+/// for the tool.
+pub fn session_permission_updates(request: &Value) -> Vec<Value> {
+    let suggested: Vec<Value> = request["permission_suggestions"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|suggestion| suggestion.is_object())
+        .map(|suggestion| {
+            let mut suggestion = suggestion.clone();
+            suggestion["destination"] = json!("session");
+            suggestion
+        })
+        .collect();
+    if !suggested.is_empty() {
+        return suggested;
+    }
+    vec![json!({ "type": "addRules", "rules": [{ "toolName": request["tool_name"] }], "behavior": "allow", "destination": "session" })]
+}
+
+/// The answer that allows a `can_use_tool` request: once, or (`for_session`)
+/// with what it suggested allowed for the rest of the session.
+fn allow_response(request: &Value, for_session: bool) -> Value {
+    let mut response = json!({
+        "behavior": "allow",
+        "updatedInput": request["input"],
+        "toolUseID": request["tool_use_id"],
+        "decisionClassification": if for_session { "user_permanent" } else { "user_temporary" },
+    });
+    if for_session {
+        response["updatedPermissions"] = json!(session_permission_updates(request));
+    }
+    response
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn allow_for_session_keeps_what_the_request_suggested_for_the_session() {
+        let fetch = json!({ "tool_name": "WebFetch", "tool_use_id": "toolu_1", "input": { "url": "https://allegro.pl/x" },
+            "permission_suggestions": [{ "type": "addRules", "rules": [{ "toolName": "WebFetch", "ruleContent": "domain:allegro.pl" }], "behavior": "allow", "destination": "localSettings" }] });
+        let once = allow_response(&fetch, false);
+        assert_eq!((once["decisionClassification"].as_str(), once.get("updatedPermissions")), (Some("user_temporary"), None));
+        let session = allow_response(&fetch, true);
+        assert_eq!(session["decisionClassification"], "user_permanent");
+        assert_eq!(session["updatedInput"], fetch["input"]);
+        assert_eq!(session["updatedPermissions"], json!([{ "type": "addRules", "rules": [{ "toolName": "WebFetch", "ruleContent": "domain:allegro.pl" }], "behavior": "allow", "destination": "session" }]));
+        // Without suggestions: the tool, for the session.
+        let search = json!({ "tool_name": "WebSearch", "tool_use_id": "toolu_2", "input": { "query": "ceny" } });
+        assert_eq!(allow_response(&search, true)["updatedPermissions"], json!([{ "type": "addRules", "rules": [{ "toolName": "WebSearch" }], "behavior": "allow", "destination": "session" }]));
+    }
 
     #[test]
     fn launch_args_match_the_recorded_sdk_invocation() {
         let opts = LaunchOptions {
             binary: "claude".into(), cwd: "/w".into(), model: "claude-haiku-5-5".into(),
             session_id: "s1".into(), resume: false, resume_at: None, permission_mode: "default".into(),
-            effort: Some("medium".into()), extra_dirs: vec![], fork_from: None, mcp_config: None, allowed_tools: vec![], append_system_prompt: None,
+            effort: Some("medium".into()), extra_dirs: vec![], fork_from: None, mcp_config: None, allowed_tools: vec![], append_system_prompt: None, enable_artifacts: false,
         };
         let a = opts.args();
         let recorded = include_str!("../../../fixtures/golden/ts-session1/claude-cli.args.txt");

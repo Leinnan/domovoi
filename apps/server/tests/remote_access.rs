@@ -383,8 +383,15 @@ async fn the_command_line_manages_a_running_server() {
     let status = cli(&server, &["remote", "status"]);
     assert!(status.contains("Server: running") && status.contains("Remote access: on (local network only)"), "{status}");
     assert!(status.contains("Devices: none paired"), "the command's own sign-in is not a device: {status}");
-    let address = |text: &str| text.lines().find_map(|l| l.strip_prefix("Addresses: ")).map(str::to_owned);
+    // The IPv4 addresses: their port is the one kept across restarts (an
+    // IPv6 socket, when the machine has addresses for it, takes a new one).
+    let address = |text: &str| {
+        text.lines()
+            .find_map(|l| l.strip_prefix("Addresses: "))
+            .map(|list| list.split(", ").filter(|a| !a.starts_with('[')).collect::<Vec<_>>().join(", "))
+    };
     let before = address(&status).expect("addresses listed");
+    assert!(!before.is_empty(), "an IPv4 address is listed: {status}");
 
     let (ticket, code) = parse_link(&pair_link(&server.home, server.port));
     let (phone, base, token) = paired(&ticket, &code).await;

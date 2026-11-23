@@ -541,6 +541,9 @@ turn_item! {
         pub new_str: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub changes: Option<Vec<FileChangeDetail>>,
+        /// Domovoi's own: why a failed edit was not made, as the agent was told.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub error: Option<String>,
     }
 }
 

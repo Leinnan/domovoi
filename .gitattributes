@@ -1,15 +1,23 @@
-# Images are stored in Git LFS.
-*.png  filter=lfs diff=lfs merge=lfs -text
-*.jpg  filter=lfs diff=lfs merge=lfs -text
-*.jpeg filter=lfs diff=lfs merge=lfs -text
-*.gif  filter=lfs diff=lfs merge=lfs -text
-*.webp filter=lfs diff=lfs merge=lfs -text
-*.avif filter=lfs diff=lfs merge=lfs -text
-*.heic filter=lfs diff=lfs merge=lfs -text
-*.bmp  filter=lfs diff=lfs merge=lfs -text
-*.tif  filter=lfs diff=lfs merge=lfs -text
-*.tiff filter=lfs diff=lfs merge=lfs -text
-*.ico  filter=lfs diff=lfs merge=lfs -text
-*.icns filter=lfs diff=lfs merge=lfs -text
-*.psd  filter=lfs diff=lfs merge=lfs -text
-*.svg  filter=lfs diff=lfs merge=lfs -text
+# Raster images and icon files are stored in Git LFS (`just lfs-check`
+# verifies a checkout has their contents, not pointer files).
+#
+# Not in LFS, on purpose:
+# - SVGs are small text: they diff, and a checkout without LFS still draws
+#   every icon.
+# - Fonts (apps/domovoi-iced/assets/fonts): text renders even before
+#   `git lfs pull`.
+*.[pP][nN][gG]     filter=lfs diff=lfs merge=lfs -text
+*.[jJ][pP][gG]     filter=lfs diff=lfs merge=lfs -text
+*.[jJ][pP][eE][gG] filter=lfs diff=lfs merge=lfs -text
+*.[gG][iI][fF]     filter=lfs diff=lfs merge=lfs -text
+*.[wW][eE][bB][pP] filter=lfs diff=lfs merge=lfs -text
+*.[aA][vV][iI][fF] filter=lfs diff=lfs merge=lfs -text
+*.[hH][eE][iI][cC] filter=lfs diff=lfs merge=lfs -text
+*.[hH][eE][iI][fF] filter=lfs diff=lfs merge=lfs -text
+*.[jJ][xX][lL]     filter=lfs diff=lfs merge=lfs -text
+*.[bB][mM][pP]     filter=lfs diff=lfs merge=lfs -text
+*.[tT][iI][fF]     filter=lfs diff=lfs merge=lfs -text
+*.[tT][iI][fF][fF] filter=lfs diff=lfs merge=lfs -text
+*.[iI][cC][oO]     filter=lfs diff=lfs merge=lfs -text
+*.[iI][cC][nN][sS] filter=lfs diff=lfs merge=lfs -text
+*.[pP][sS][dD]     filter=lfs diff=lfs merge=lfs -text

@@ -19,12 +19,15 @@ struct SidePanel: View {
             .padding(Space.s)
             Divider()
             switch panel.tab {
+            case "artifacts": ArtifactPane(core: core, artifacts: panel.artifacts)
             case "terminal": TerminalPane(core: core, terminal: panel.terminal)
             case "files": FilesPane(core: core, files: panel.files)
             case "git": GitPane(core: core, git: panel.git)
             default: DiffPane(core: core, diff: panel.diff)
             }
         }
+        // The tabs at the top, however short the pane below them.
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 }
 
@@ -37,6 +40,7 @@ struct PanelTab {
 
     static let all = [
         PanelTab(id: "diff", title: "Diff", icon: "plus.forwardslash.minus", shortcut: "⌘⇧D"),
+        PanelTab(id: "artifacts", title: "Artifacts", icon: "sparkles.rectangle.stack", shortcut: "⌘⇧A"),
         PanelTab(id: "terminal", title: "Terminal", icon: "terminal", shortcut: "⌘⇧T"),
         PanelTab(id: "files", title: "Files", icon: "folder", shortcut: "⌘⇧E"),
         PanelTab(id: "git", title: "Git", icon: "arrow.triangle.branch", shortcut: "⌥⌘G"),
@@ -196,17 +200,65 @@ struct FilesPane: View {
                     HStack {
                         Text(preview.path).font(TypeRole.monoSmall).lineLimit(1).truncationMode(.head)
                         Spacer()
-                        Button { Platform.copy(preview.text) } label: { Image(systemName: "doc.on.doc") }
+                        if let size = preview.sizeLabel {
+                            Text(size).font(TypeRole.metaSmall).foregroundStyle(.secondary)
+                        }
+                        if !preview.loading, preview.error == nil, preview.imageUrl == nil, !preview.truncated,
+                           ["html", "htm", "svg", "jsx", "tsx", "mmd", "mermaid"].contains((preview.path as NSString).pathExtension.lowercased()) {
+                            Button("Preview", systemImage: "sparkles.rectangle.stack") {
+                                if let tid = core.view.threadId {
+                                    core.update(.openArtifactWorkspacePath(threadId: tid, path: preview.path, dark: NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua))
+                                }
+                            }
                             .buttonStyle(.borderless)
-                            .help("Copy the file's text")
-                            .accessibilityLabel("Copy file text")
+                            .help("Open in Artifacts preview")
+                        }
+                        if preview.editable, !preview.loading, preview.error == nil, edit.path != preview.path {
+                            Button { edit.begin(preview) } label: { Image(systemName: "pencil") }
+                                .buttonStyle(.borderless)
+                                .help("Edit this file")
+                                .accessibilityLabel("Edit file")
+                        }
+                        if preview.error == nil {
+                            Button { FilesPane.addToMessage(preview.path, core: core) } label: { Image(systemName: "text.bubble") }
+                                .buttonStyle(.borderless)
+                                .help("Ask about this file (mentions it in the message)")
+                                .accessibilityLabel("Ask about this file")
+                        }
+                        if preview.imageUrl != nil {
+                            Button { Platform.copy(preview.path) } label: { Image(systemName: "doc.on.doc") }
+                                .buttonStyle(.borderless)
+                                .help("Copy the file path")
+                                .accessibilityLabel("Copy file path")
+                        } else if !preview.loading, preview.error == nil {
+                            Button { Platform.copy(preview.text) } label: { Image(systemName: "doc.on.doc") }
+                                .buttonStyle(.borderless)
+                                .help("Copy the file's text")
+                                .accessibilityLabel("Copy file text")
+                        }
                     }
                     .padding(Space.s)
                     Divider()
-                    if preview.loading {
+                    if let lfs = preview.lfs, !preview.loading, preview.error == nil {
+                        LfsCard(lfs: lfs) { core.update(.fetchLfsObject(path: preview.path)) }
+                        Divider()
+                    }
+                    if edit.path == preview.path {
+                        FileEditor(
+                            text: Binding(get: { edit.text }, set: { edit.text = $0 }),
+                            changed: edit.dirty,
+                            save: {
+                                edit.saving = edit.text
+                                core.update(.saveFile(path: preview.path, text: edit.text))
+                            },
+                            cancel: { _ = edit.mayLeave() }
+                        )
+                    } else if preview.loading {
                         ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
                     } else if let error = preview.error {
                         Text(error).foregroundStyle(.secondary).padding()
+                    } else if let address = preview.imageUrl {
+                        FileImagePreview(address: address, path: preview.path)
                     } else {
                         ScrollView([.vertical, .horizontal]) {
                             Text(CodeHighlight.text(preview.spans, fallback: preview.text))
@@ -223,8 +275,20 @@ struct FilesPane: View {
                     }
                 }
                 .frame(minHeight: 160)
+                // Saved: the preview comes back with the new text.
+                .onChange(of: preview.text) { _, text in
+                    if edit.path == preview.path, let saved = edit.saving, text == saved { edit.finish() }
+                }
             }
         }
+    }
+
+    private var edit: FileEdit { FileEdit.shared }
+
+    /// Mentions the file in the message (as iOS does), and puts the cursor there.
+    static func addToMessage(_ path: String, core: Core) {
+        core.update(.appendToDraft(text: "@\(path) "))
+        ComposerCommands.shared.focus()
     }
 }
 
@@ -237,7 +301,7 @@ struct FileRow: View {
         Button {
             if entry.directory {
                 core.update(.toggleDirectory(path: entry.path))
-            } else {
+            } else if FileEdit.shared.path == entry.path || FileEdit.shared.mayLeave() {
                 core.update(.openFile(path: entry.path))
             }
         } label: {
@@ -258,6 +322,56 @@ struct FileRow: View {
         }
         .buttonStyle(.plain)
         .font(.callout)
+        .contextMenu {
+            Button("Add to Message") { FilesPane.addToMessage(entry.path, core: core) }
+            Button("Copy Path") { Platform.copy(entry.path) }
+        }
+    }
+}
+
+/// The file being edited in the files panel: kept outside the pane, so
+/// another tab and back keeps the changes.
+@MainActor
+@Observable
+final class FileEdit {
+    static let shared = FileEdit()
+
+    var path: String?
+    var text = ""
+    private var original = ""
+    /// Text sent to be saved, until the preview shows it.
+    var saving: String?
+
+    var dirty: Bool { path != nil && text != original }
+
+    func begin(_ preview: FilePreviewView) {
+        path = preview.path
+        text = preview.text
+        original = preview.text
+        saving = nil
+    }
+
+    func finish() {
+        path = nil
+        saving = nil
+    }
+
+    /// Ends the edit when nothing would be lost, or the user agrees to lose
+    /// it; false keeps editing.
+    func mayLeave() -> Bool {
+        guard dirty, let path else {
+            finish()
+            return true
+        }
+        let alert = NSAlert()
+        alert.messageText = "Discard your changes to \((path as NSString).lastPathComponent)?"
+        alert.informativeText = "They haven't been saved."
+        alert.addButton(withTitle: "Discard Changes")
+        alert.addButton(withTitle: "Keep Editing")
+        alert.buttons.first?.hasDestructiveAction = true
+        guard alert.runModal() == .alertFirstButtonReturn else { return false }
+        finish()
+        return true
     }
 }
 
@@ -339,6 +453,7 @@ struct GitPane: View {
                     }
                 }
                 .disabled(git.busy)
+                WorktreesSection(git: git) { core.update($0) }
                 if !git.progress.isEmpty || git.error != nil {
                     Section("Activity") {
                         ForEach(Array(git.progress.enumerated()), id: \.offset) { _, line in

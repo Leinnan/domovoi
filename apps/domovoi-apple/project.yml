@@ -37,6 +37,9 @@ targets:
         LSApplicationCategoryType: public.app-category.developer-tools
         NSHumanReadableCopyright: "MIT License"
         NSLocalNetworkUsageDescription: Domovoi finds the shortest path to your remote servers on the local network.
+        # Dictation in the composer (not sandboxed: no audio-input entitlement needed).
+        NSMicrophoneUsageDescription: Domovoi listens while you dictate a message.
+        NSSpeechRecognitionUsageDescription: Domovoi turns what you dictate into the text of your message, on this Mac when it can.
         CFBundleURLTypes:
           - CFBundleURLName: com.crayen.domovoi.connect
             CFBundleURLSchemes: [domovoi]
@@ -65,6 +68,17 @@ targets:
         Debug:
           PRODUCT_BUNDLE_IDENTIFIER: com.crayen.domovoi.mac.debug
           DOMOVOI_DISPLAY_NAME: Domovoi Dev
+        # Apple silicon only, and stripped: `xcodebuild build` does not
+        # post-process unless told to, and the symbol table was over a third
+        # of the binary.
+        Release:
+          ARCHS: arm64
+          ONLY_ACTIVE_ARCH: NO
+          DEPLOYMENT_POSTPROCESSING: YES
+          STRIP_INSTALLED_PRODUCT: YES
+          STRIP_STYLE: all
+          DEAD_CODE_STRIPPING: YES
+          SWIFT_OPTIMIZATION_LEVEL: -Osize
   DomovoiSmoke:
     type: tool
     platform: macOS
@@ -116,6 +130,7 @@ targets:
           - UIInterfaceOrientationLandscapeRight
         ITSAppUsesNonExemptEncryption: false
         NSCameraUsageDescription: Domovoi scans the pairing QR code your Mac shows, and takes photos you attach to a message.
+        NSPhotoLibraryAddUsageDescription: Domovoi saves the images you choose from a thread to your photo library.
         NSLocalNetworkUsageDescription: Domovoi looks for a direct path to your Mac on the local network.
         NSSupportsLiveActivities: true
         NSMicrophoneUsageDescription: Domovoi listens while you dictate a message.

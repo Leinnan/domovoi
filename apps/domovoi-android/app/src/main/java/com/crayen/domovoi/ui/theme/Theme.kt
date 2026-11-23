@@ -41,21 +41,22 @@ data class Tints(
     val caution: Color,
     val success: Color,
     val question: Color,
-    /** Claude Code, Codex and Pi badges. */
+    /** Claude Code, Codex, Pi and Antigravity badges. */
     val claude: Color,
     val codex: Color,
     val pi: Color,
+    val antigravity: Color,
 )
 
 private val LightTints = Tints(
     plan = Color(0xFF7A4FD0), onPlan = Color.White, planContainer = Color(0xFFEDE3FF),
     caution = Color(0xFFB45F06), success = Color(0xFF2E7D32), question = Color(0xFF1E66D0),
-    claude = Color(0xFFC2622D), codex = Color(0xFF0F8A7E), pi = Color(0xFFC2185B),
+    claude = Color(0xFFC2622D), codex = Color(0xFF0F8A7E), pi = Color(0xFFC2185B), antigravity = Color(0xFF3B5BDB),
 )
 private val DarkTints = Tints(
     plan = Color(0xFFC6AEFF), onPlan = Color(0xFF2C1060), planContainer = Color(0xFF3C2A63),
     caution = Color(0xFFFFB870), success = Color(0xFF8AD48F), question = Color(0xFF9CC2FF),
-    claude = Color(0xFFF0A273), codex = Color(0xFF6ED6CA), pi = Color(0xFFF48FB1),
+    claude = Color(0xFFF0A273), codex = Color(0xFF6ED6CA), pi = Color(0xFFF48FB1), antigravity = Color(0xFF9DB2FF),
 )
 
 val LocalTints = staticCompositionLocalOf { LightTints }

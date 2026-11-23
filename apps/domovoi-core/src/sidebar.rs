@@ -1,14 +1,14 @@
 //! The thread list: threads by what they need from you (Inbox, Running,
-//! Hibernating, Archived), or under their projects.
+//! Inactive, Archived), or under their projects.
 
-use crate::app::age_label;
+use crate::app::{age_label, millis_from_iso};
 use crate::model::Model;
 use crate::replies::shell_status;
-use crate::view::{SearchHitView, SidebarProjectView, SidebarSectionView, SidebarView, ThreadRowView};
+use crate::view::{ProjectIconView, SearchHitView, SidebarProjectView, SidebarSectionView, SidebarView, ThreadRowView};
 use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
-use domovoi_model::typed::{ParentRelationship, ProjectShell, RuntimeRequestKind, ShellStatus, ThreadShell, Timestamp};
+use domovoi_model::typed::{InteractionMode, ParentRelationship, ProjectShell, RuntimeRequestKind, ShellStatus, ThreadShell, Timestamp};
 
 const THREADS_PER_PROJECT: usize = 8;
 const EARLIER_PER_PROJECT: usize = 5;
@@ -26,18 +26,20 @@ pub enum Section {
     /// Working.
     Running,
     /// Read and idle, settled, or snoozed.
-    Hibernating,
+    // Keep the device-store value readable across upgrades and downgrades.
+    #[serde(rename = "hibernating")]
+    Inactive,
     Archived,
 }
 
 impl Section {
-    pub const ALL: [Section; 4] = [Section::Inbox, Section::Running, Section::Hibernating, Section::Archived];
+    pub const ALL: [Section; 4] = [Section::Inbox, Section::Running, Section::Inactive, Section::Archived];
 
     pub fn as_str(self) -> &'static str {
         match self {
             Section::Inbox => "inbox",
             Section::Running => "running",
-            Section::Hibernating => "hibernating",
+            Section::Inactive => "inactive",
             Section::Archived => "archived",
         }
     }
@@ -46,7 +48,7 @@ impl Section {
         match self {
             Section::Inbox => "Inbox",
             Section::Running => "Running",
-            Section::Hibernating => "Hibernating",
+            Section::Inactive => "Inactive",
             Section::Archived => "Archived",
         }
     }
@@ -91,7 +93,7 @@ pub struct SidebarLayout {
 
 impl Default for SidebarLayout {
     fn default() -> Self {
-        SidebarLayout { grouping: Grouping::Status, collapsed_sections: [Section::Hibernating, Section::Archived].into(), collapsed_projects: BTreeSet::new() }
+        SidebarLayout { grouping: Grouping::Status, collapsed_sections: [Section::Inactive, Section::Archived].into(), collapsed_projects: BTreeSet::new() }
     }
 }
 
@@ -128,7 +130,7 @@ fn is_unread(model: &Model, t: &ThreadShell) -> bool {
 
 /// The section a thread's state puts it in, the first that fits: waiting on
 /// you, working, put away (settled or snoozed), worth a look (unread or
-/// pinned), and the rest hibernate.
+/// pinned), and the remaining inactive threads.
 fn natural_section(model: &Model, t: &ThreadShell) -> Section {
     if t.archived_at.is_some() {
         return Section::Archived;
@@ -139,21 +141,21 @@ fn natural_section(model: &Model, t: &ThreadShell) -> Section {
         _ => {}
     }
     if is_settled(t) || snoozed_until(model, t).is_some() {
-        Section::Hibernating
+        Section::Inactive
     } else if is_unread(model, t) || is_pinned(t) {
         Section::Inbox
     } else {
-        Section::Hibernating
+        Section::Inactive
     }
 }
 
 /// The section a thread is listed in. The open thread keeps the section it
-/// was opened from rather than drop to Hibernating as it is read, so its row
+/// was opened from rather than drop to Inactive as it is read, so its row
 /// does not move from under the click.
 pub fn section_of(model: &Model, t: &ThreadShell) -> Section {
     let section = natural_section(model, t);
     match &model.held_section {
-        Some((id, held)) if section == Section::Hibernating && id == t.id.as_str() && model.selected_thread.as_deref() == Some(id.as_str()) => *held,
+        Some((id, held)) if section == Section::Inactive && id == t.id.as_str() && model.selected_thread.as_deref() == Some(id.as_str()) => *held,
         _ => section,
     }
 }
@@ -181,6 +183,7 @@ fn thread_source(t: &ThreadShell) -> &'static str {
 /// Project titles and model names, looked up once for a list of rows.
 pub struct Labels<'a> {
     projects: FxHashMap<&'a str, &'a str>,
+    icons: FxHashMap<&'a str, ProjectIconView>,
     models: FxHashMap<(&'a str, &'a str), &'a str>,
 }
 
@@ -193,43 +196,84 @@ impl<'a> Labels<'a> {
             .flat_map(|p| p.models.iter().map(move |m| ((p.instance_id.as_str(), m.slug.as_str()), m.name.as_str())))
             .filter(|(_, name)| !name.is_empty())
             .collect();
-        Labels { projects, models }
+        Labels { projects, models, icons: model.projects.iter().map(|p| (p.id.as_str(), crate::project_icons::view(model, p, false))).collect() }
     }
 
-    fn model_label(&self, t: &'a ThreadShell) -> String {
+    pub(crate) fn model_label(&self, t: &'a ThreadShell) -> String {
         let selection = &t.model_selection;
         self.models.get(&(selection.instance_id.as_str(), selection.model.as_str())).copied().unwrap_or(selection.model.as_str()).to_owned()
     }
 }
 
+/// The thread waits on an answer to a question (not an approval).
+fn is_question(t: &ThreadShell) -> bool {
+    t.pending_runtime_request.as_ref().is_some_and(|pending| pending.kind == RuntimeRequestKind::UserInput)
+}
+
+/// The thread is in plan mode: its turns plan rather than act.
+fn is_planning(t: &ThreadShell) -> bool {
+    t.interaction_mode == InteractionMode::Plan
+}
+
+/// When the thread's turn under way started.
+fn working_started_at(t: &ThreadShell) -> Option<&Timestamp> {
+    if !matches!(shell_status(t), ShellStatus::Working | ShellStatus::Approval) {
+        return None;
+    }
+    t.activity_run_started_at.as_ref().and_then(Option::as_ref).or(t.latest_run_started_at.as_ref().and_then(Option::as_ref))
+}
+
+fn working_since_ms(t: &ThreadShell) -> Option<i64> {
+    working_started_at(t).map(|at| millis_from_iso(at.as_str())).filter(|ms| *ms > 0)
+}
+
 /// What a thread is doing, when that says more than its age.
-fn status_label(model: &Model, t: &ThreadShell) -> String {
+pub(crate) fn status_label(model: &Model, t: &ThreadShell) -> String {
     match shell_status(t) {
-        ShellStatus::Approval => {
-            let question = t.pending_runtime_request.as_ref().is_some_and(|pending| pending.kind == RuntimeRequestKind::UserInput);
-            if question { "Question" } else { "Needs you" }.into()
-        }
+        ShellStatus::Approval => if is_question(t) { "Question" } else { "Needs you" }.into(),
         ShellStatus::Working => {
-            let started = t.activity_run_started_at.as_ref().and_then(Option::as_ref).or(t.latest_run_started_at.as_ref().and_then(Option::as_ref));
-            match started.map(|at| age_label(model.shown_ms, at.as_str())) {
-                Some(age) if !age.is_empty() && age != "now" => format!("Working {age}"),
-                _ => "Working".into(),
+            let doing = if is_planning(t) { "Planning" } else { "Working" };
+            match working_started_at(t).map(|at| age_label(model.shown_ms, at.as_str())) {
+                Some(age) if !age.is_empty() && age != "now" => format!("{doing} {age}"),
+                _ => doing.into(),
             }
         }
         ShellStatus::Failed => "Failed".into(),
+        _ if t.has_actionable_proposed_plan => "Plan ready".into(),
         _ => String::new(),
     }
 }
 
+/// The thread's pull request (linked by hand first, else its branch's) and
+/// its state: `("#12", "open")`.
+pub(crate) fn pull_request_badge(t: &ThreadShell) -> (String, String) {
+    if let Some(link) = t.pull_requests.iter().flatten().next() {
+        let state = link.snapshot.as_ref().map(|s| if s.is_draft && s.state.as_str() == "open" { "draft" } else { s.state.as_str() }).unwrap_or_default();
+        return (format!("#{}", link.number), state.to_owned());
+    }
+    match t.linked_pull_request.clone().flatten().or_else(|| t.branch_pull_request.clone().flatten()) {
+        Some(pr) => (format!("#{}", pr.number), String::new()),
+        None => (String::new(), String::new()),
+    }
+}
+
 fn row(model: &Model, labels: &Labels, t: &ThreadShell) -> ThreadRowView {
+    let (pull_request, pull_request_state) = pull_request_badge(t);
     ThreadRowView {
+        plan_ready: t.has_actionable_proposed_plan && !matches!(shell_status(t), ShellStatus::Working | ShellStatus::Approval),
+        plan_mode: is_planning(t),
+        pull_request,
+        pull_request_state,
         id: t.id.as_str().to_owned(),
         project_id: t.project_id.as_str().to_owned(),
+        project_icon: labels.icons.get(t.project_id.as_str()).cloned().unwrap_or_default(),
         project_title: labels.projects.get(t.project_id.as_str()).copied().unwrap_or_default().to_owned(),
         title: t.title.clone(),
         model_label: labels.model_label(t),
         status_label: status_label(model, t),
         status: shell_status(t).as_str().into(),
+        working_since_ms: working_since_ms(t).unwrap_or(0),
+        question: is_question(t),
         unread: is_unread(model, t),
         pinned: is_pinned(t),
         settled: is_settled(t),
@@ -249,11 +293,19 @@ pub fn thread_rows<'a>(model: &'a Model, threads: impl IntoIterator<Item = &'a T
     threads.into_iter().map(|t| row(model, &labels, t)).collect()
 }
 
+// A subagent's thread is opened from its row in the parent thread.
+pub(crate) fn is_live_thread(thread: &ThreadShell) -> bool {
+    thread.deleted_at.is_none() && thread.archived_at.is_none() && relation(thread) != "subagent"
+}
+
+pub(crate) fn live_threads(model: &Model) -> impl Iterator<Item = &ThreadShell> {
+    model.threads.iter().filter(|thread| is_live_thread(thread))
+}
+
 pub fn sidebar(model: &Model) -> SidebarView {
     let labels = Labels::new(model);
     let q = model.search.query.trim().to_lowercase();
-    // A subagent's thread is opened from its row in the parent thread.
-    let all_live: Vec<&ThreadShell> = model.threads.iter().filter(|t| t.deleted_at.is_none() && t.archived_at.is_none() && relation(t) != "subagent").collect();
+    let all_live: Vec<&ThreadShell> = live_threads(model).collect();
     let wanted = |t: &ThreadShell| !model.unread_only || shell_status(t) == ShellStatus::Approval || is_unread(model, t);
     let matches = |t: &ThreadShell| (q.is_empty() || t.title.to_lowercase().contains(&q)) && wanted(t);
     let attention = all_live.iter().filter(|t| shell_status(t) == ShellStatus::Approval).count() as u32;
@@ -303,6 +355,7 @@ fn list_launching(model: &Model, labels: &Labels, view: &mut SidebarView) {
     let row = ThreadRowView {
         id: l.id.clone(),
         project_id: l.project_id.clone(),
+        project_icon: labels.icons.get(l.project_id.as_str()).cloned().unwrap_or_default(),
         project_title: labels.projects.get(l.project_id.as_str()).copied().unwrap_or_default().to_owned(),
         title: l.title.clone(),
         status_label: "Starting".into(),
@@ -311,8 +364,22 @@ fn list_launching(model: &Model, labels: &Labels, view: &mut SidebarView) {
         ..ThreadRowView::default()
     };
     view.surface_threads.insert(0, row.clone());
-    if let Some(section) = view.sections.first_mut() {
-        section.rows.insert(0, row.clone());
+    // Under Running, where it stays once it starts.
+    if model.sidebar_layout.grouping == Grouping::Status && !model.unread_only {
+        let running = Section::Running.as_str();
+        let at = match view.sections.iter().position(|s| s.kind == running) {
+            Some(at) => at,
+            None => {
+                let at = usize::from(view.sections.first().is_some_and(|s| s.kind == Section::Inbox.as_str()));
+                let expanded = !model.sidebar_layout.collapsed_sections.contains(&Section::Running);
+                view.sections.insert(at, SidebarSectionView { kind: running.into(), title: Section::Running.title().into(), expanded, ..SidebarSectionView::default() });
+                at
+            }
+        };
+        let section = &mut view.sections[at];
+        if section.expanded {
+            section.rows.insert(0, row.clone());
+        }
         section.count += 1;
     }
     if let Some(project) = view.projects.iter_mut().find(|p| p.id == l.project_id) {
@@ -348,10 +415,8 @@ fn sections(model: &Model, labels: &Labels, live: &[&ThreadShell], q: &str, matc
         .into_iter()
         .filter_map(|section| {
             let mut threads = by.remove(&section).unwrap_or_default();
-            // Inbox always shows (empty, it says you're caught up), the
-            // others only with threads; while filtering, only sections with matches.
-            let keep = !threads.is_empty() || (section == Section::Inbox && !searching);
-            if !keep || (model.unread_only && section != Section::Inbox) {
+            // Only sections with threads (while filtering, with matches).
+            if threads.is_empty() || (model.unread_only && section != Section::Inbox) {
                 return None;
             }
             sort_section(section, &mut threads);
@@ -377,7 +442,7 @@ fn sort_section(section: Section, threads: &mut [&ThreadShell]) {
             threads.sort_by(|a, b| rank(a).cmp(&rank(b)).then(b.updated_at.as_str().cmp(a.updated_at.as_str())));
         }
         Section::Running => threads.sort_by(|a, b| b.updated_at.as_str().cmp(a.updated_at.as_str())),
-        Section::Hibernating => threads.sort_by(|a, b| shown_at(b).cmp(shown_at(a))),
+        Section::Inactive => threads.sort_by(|a, b| shown_at(b).cmp(shown_at(a))),
         Section::Archived => {
             fn at(t: &ThreadShell) -> &str {
                 t.archived_at.as_ref().map_or("", Timestamp::as_str)
@@ -391,7 +456,8 @@ fn sort_section(section: Section, threads: &mut [&ThreadShell]) {
 fn project_header(model: &Model, p: &ProjectShell) -> SidebarProjectView {
     let id = p.id.as_str().to_owned();
     SidebarProjectView {
-        monogram: crate::present::monogram(&p.title),
+        icon: crate::project_icons::view(model, p, false),
+        automatic_icon: crate::project_icons::view(model, p, true),
         expanded: !model.sidebar_layout.collapsed_projects.contains(&id),
         is_scratch: p.workspace_root.ends_with("/scratch"),
         pinned: matches!(p.pinned_at, Some(Some(_))),
@@ -448,4 +514,23 @@ fn by_project(model: &Model, labels: &Labels, all_live: &[&ThreadShell], q: &str
     view.projects = projects;
     view.settled = settled.into_iter().take(50).map(|t| row(model, labels, t)).collect();
     view.snoozed = if model.unread_only { vec![] } else { snoozed.into_iter().map(|t| row(model, labels, t)).collect() };
+}
+
+/// Resolve both current and legacy server icon records.
+pub fn project_icon(p: &ProjectShell) -> ProjectIconView {
+    use domovoi_model::typed::ProjectIcon;
+    let (text, color) = crate::present::project_identity(&p.title);
+    let mut view = ProjectIconView { kind: "monogram".into(), text, color: color.into(), ..Default::default() };
+    match p.project_icon.as_ref().and_then(Option::as_ref) {
+        Some(ProjectIcon::Monogram(icon)) => { view.text = icon.text.clone(); view.color = icon.color.as_str().into(); }
+        Some(ProjectIcon::Lucide(icon)) => {
+            view.color = icon.color.as_str().into();
+            if let Some(text) = icon.monogram_text.as_ref().or(icon.monogram.as_ref()) { view.text = text.clone(); }
+            else { view.kind = "symbol".into(); view.symbol = icon.name.clone(); view.text.clear(); }
+        }
+        Some(ProjectIcon::Emoji(icon)) => { view.kind = "emoji".into(); view.text = icon.emoji.clone(); }
+        _ => return view,
+    }
+    view.custom = true;
+    view
 }

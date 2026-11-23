@@ -47,12 +47,22 @@ if "-p" in sys.argv:
     answers = {"title": "Generated Title", "needsRefinement": False, "branch": "add-search", "subject": "Add the search bar", "body": "- search"}
     print(json.dumps({"type": "result", "is_error": False, "structured_output": {k: answers[k] for k in keys}}))
     sys.exit(0)
+if "--no-session-persistence" in sys.argv:
+    # The account's limits read: no session, so no launch logged. Answers as
+    # a Claude Code without `get_usage` (which changes nothing).
+    for line in sys.stdin:
+        m = json.loads(line)
+        if m.get("type") == "control_request":
+            print(json.dumps({"type": "control_response", "response": {"request_id": m["request_id"], "subtype": "success", "response": {}}}), flush=True)
+    sys.exit(0)
 open(os.path.join(out, "args.json"), "w").write(json.dumps(sys.argv[1:]))
 open(os.path.join(out, "args.log"), "a").write(json.dumps(sys.argv[1:]) + "\n")
 def emit(m):
     sys.stdout.write(json.dumps(m) + "\n"); sys.stdout.flush()
 def ev(e):
     emit({"type": "stream_event", "event": e, "parent_tool_use_id": None})
+def snapshot(mid, uuid, blocks):
+    emit({"type": "assistant", "uuid": uuid, "parent_tool_use_id": None, "message": {"id": mid, "content": blocks}})
 for line in sys.stdin:
     m = json.loads(line)
     if m.get("type") == "user" and "--replay-user-messages" in sys.argv:
@@ -77,9 +87,19 @@ for line in sys.stdin:
             emit({"type": "result", "subtype": "success", "is_error": False, "result": "ok"})
         if m["request"].get("subtype") == "interrupt":
             emit({"type": "result", "subtype": "error_during_execution", "is_error": True, "result": None, "terminal_reason": "aborted_streaming"})
+    elif m.get("type") == "control_response" and m["response"]["request_id"] == "edit1":
+        # Allowed for the thread: Claude asks again for the same tool (as it does in plan mode).
+        open(os.path.join(out, "answer-edit1.json"), "w").write(json.dumps(m["response"]))
+        emit({"type": "control_request", "request_id": "edit2", "request": {"subtype": "can_use_tool", "tool_name": "Edit", "tool_use_id": "toolu_ed2",
+            "input": {"file_path": "/w/a.swift", "old_string": "b", "new_string": "c"}}})
     elif m.get("type") == "control_response":
         # The answer to the question below: record it and end the turn.
         open(os.path.join(out, "answer.json"), "w").write(json.dumps(m["response"]))
+        if m["response"]["request_id"] == "p1":
+            # Claude reports the native tool and the expected denial after the callback.
+            snapshot("plan-exit", "plan-exit", [{"type": "tool_use", "id": "toolu_plan", "name": "ExitPlanMode", "input": {}}])
+            emit({"type": "user", "parent_tool_use_id": None, "message": {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "toolu_plan", "is_error": True, "content": "Stopped at plan handoff"}]}})
         emit({"type": "result", "subtype": "success", "is_error": False, "result": "done", "modelUsage": {"claude-haiku-5-5": {"contextWindow": 200000}}})
     elif m.get("type") == "user" and m.get("priority") == "now" and "FINISH" in json.dumps(m["message"]["content"]):
         # The background agent reports back, and Claude wakes itself: it says
@@ -119,6 +139,45 @@ for line in sys.stdin:
             {"type": "text", "text": "Looking."}, {"type": "tool_use", "id": "toolu_bls", "name": "Bash", "input": {"command": "ls"}}]}})
         emit({"type": "user", "parent_tool_use_id": "toolu_bg", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_bls", "content": "a.txt"}]}})
         emit({"type": "system", "subtype": "task_progress", "task_id": "task-bg", "description": "Listed the files"})
+    elif m.get("type") == "user" and "BGCHAIN" in json.dumps(m["message"]["content"]):
+        # Two agents in the background (as a session recorded on 2026-11-23):
+        # each report gets a turn of Claude's own, the second report comes
+        # while Claude works on the first, and its turn starts right after.
+        for n in ("1", "2"):
+            emit({"type": "assistant", "uuid": "a-c" + n, "parent_tool_use_id": None, "message": {"id": "msg_c" + n, "content": [
+                {"type": "tool_use", "id": "toolu_c" + n, "name": "Agent", "input": {"description": "Explore " + n, "prompt": "Look", "run_in_background": True}}]}})
+            emit({"type": "user", "parent_tool_use_id": None, "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_c" + n,
+                "content": [{"type": "text", "text": "Async agent launched successfully.\nagentId: c" + n}]}]}})
+            emit({"type": "system", "subtype": "task_started", "task_id": "task-c" + n, "tool_use_id": "toolu_c" + n, "description": "Explore " + n, "is_backgrounded": True, "task_type": "local_agent"})
+        emit({"type": "assistant", "uuid": "a-cw", "parent_tool_use_id": None, "message": {"id": "msg_cw", "content": [{"type": "text", "text": "Waiting on both."}]}})
+        emit({"type": "result", "subtype": "success", "is_error": False, "num_turns": 3, "result": "Waiting on both."})
+        emit({"type": "system", "subtype": "task_notification", "task_id": "task-c1", "tool_use_id": "toolu_c1", "status": "completed", "summary": "One"})
+        emit({"type": "system", "subtype": "init"})
+        emit({"type": "system", "subtype": "task_notification", "task_id": "task-c2", "tool_use_id": "toolu_c2", "status": "completed", "summary": "Two"})
+        emit({"type": "system", "subtype": "background_tasks_changed", "tasks": []})
+        emit({"type": "assistant", "uuid": "a-c1d", "parent_tool_use_id": None, "message": {"id": "msg_c1d", "content": [{"type": "text", "text": "One is done."}]}})
+        emit({"type": "result", "subtype": "success", "is_error": False, "num_turns": 1, "result": "One is done."})
+        emit({"type": "system", "subtype": "init"})
+        emit({"type": "assistant", "uuid": "a-c2d", "parent_tool_use_id": None, "message": {"id": "msg_c2d", "content": [{"type": "text", "text": "Here is the analysis."}]}})
+        emit({"type": "control_request", "request_id": "q-chain", "request": {"subtype": "can_use_tool", "tool_name": "AskUserQuestion", "tool_use_id": "toolu_qc",
+            "input": {"questions": [{"question": "Go on?", "header": "Next", "multiSelect": False, "options": [{"label": "Yes", "description": "Go"}, {"label": "No", "description": "Stop"}]}]}}})
+    elif m.get("type") == "user" and "BGSHELL" in json.dumps(m["message"]["content"]):
+        # A command Claude puts in the background: its turn ends, the command
+        # reports later, and Claude starts a turn of its own to say how it went.
+        emit({"type": "assistant", "uuid": "a-sh", "parent_tool_use_id": None, "message": {"id": "msg_sh", "content": [
+            {"type": "tool_use", "id": "toolu_sh", "name": "Bash", "input": {"command": "make", "description": "Build it", "run_in_background": True}}]}})
+        emit({"type": "system", "subtype": "background_tasks_changed", "tasks": [{"task_id": "bsh1", "task_type": "local_bash", "description": "Build it"}]})
+        emit({"type": "system", "subtype": "task_started", "task_id": "bsh1", "tool_use_id": "toolu_sh", "description": "Build it", "is_backgrounded": True, "task_type": "local_bash"})
+        emit({"type": "user", "parent_tool_use_id": None, "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_sh",
+            "content": "Command running in background with ID: bsh1. You will be notified when it completes."}]}})
+        emit({"type": "assistant", "uuid": "a-shw", "parent_tool_use_id": None, "message": {"id": "msg_shw", "content": [{"type": "text", "text": "Building in the background."}]}})
+        emit({"type": "result", "subtype": "success", "is_error": False, "num_turns": 2, "result": "Building in the background."})
+        import time; time.sleep(1.0)
+        emit({"type": "system", "subtype": "task_notification", "task_id": "bsh1", "tool_use_id": "toolu_sh", "status": "completed", "summary": "Background command \"Build it\" completed (exit code 0)"})
+        emit({"type": "system", "subtype": "background_tasks_changed", "tasks": []})
+        emit({"type": "system", "subtype": "init"})
+        emit({"type": "assistant", "uuid": "a-shd", "parent_tool_use_id": None, "message": {"id": "msg_shd", "content": [{"type": "text", "text": "The build passed."}]}})
+        emit({"type": "result", "subtype": "success", "is_error": False, "num_turns": 1, "result": "The build passed."})
     elif m.get("type") == "user" and "AGENT" in json.dumps(m["message"]["content"]):
         # A subagent that looks around, then keeps working until stopped.
         emit({"type": "assistant", "uuid": "a-t", "parent_tool_use_id": None, "message": {"id": "msg_t", "content": [
@@ -131,7 +190,9 @@ for line in sys.stdin:
     elif m.get("type") == "user" and "LIMIT" in json.dumps(m["message"]["content"]):
         # A usage limit turns the turn away (as Claude Code 2.1 reports one); it reset a moment ago.
         import time
-        emit({"type": "rate_limit_event", "rate_limit_info": {"status": "allowed_warning", "rateLimitType": "seven_day", "utilization": 0.97, "resetsAt": int(time.time()) + 86400}})
+        # Below a warning threshold the use is only in `unifiedWindows`.
+        emit({"type": "rate_limit_event", "rate_limit_info": {"status": "allowed", "rateLimitType": "seven_day", "resetsAt": int(time.time()) + 86400,
+            "unifiedWindows": {"seven_day": {"utilization": 0.97, "resetsAt": int(time.time()) + 86400, "status": "allowed"}}}})
         emit({"type": "rate_limit_event", "rate_limit_info": {"status": "rejected", "rateLimitType": "five_hour", "utilization": 1.0, "resetsAt": int(time.time()) - 5, "overageStatus": "rejected"}})
         emit({"type": "result", "subtype": "success", "is_error": True, "result": "You've hit your session limit"})
     elif m.get("type") == "user" and "EXITAFTER" in json.dumps(m["message"]["content"]):
@@ -184,12 +245,76 @@ for line in sys.stdin:
     elif m.get("type") == "user" and "DONE" in json.dumps(m["message"]["content"]):
         emit({"type": "assistant", "uuid": "a-done", "parent_tool_use_id": None, "message": {"id": "msg_d", "content": [{"type": "text", "text": "Finished."}]}})
         emit({"type": "result", "subtype": "success", "is_error": False, "result": "Finished."})
+    elif m.get("type") == "user" and "THINKING" in json.dumps(m["message"]["content"]):
+        prompt = json.dumps(m["message"]["content"])
+        def thought(mid, uuid, text):
+            snapshot(mid, uuid, [{"type": "thinking", "thinking": text, "signature": "secret"}])
+        ev({"type": "message_start", "message": {"id": "thoughts"}})
+        ev({"type": "content_block_start", "index": 0, "content_block": {"type": "thinking", "thinking": "  First "}})
+        ev({"type": "content_block_delta", "index": 0, "delta": {"type": "thinking_delta", "thinking": "thought.\n"}})
+        ev({"type": "content_block_delta", "index": 0, "delta": {"type": "signature_delta", "signature": "secret"}})
+        ev({"type": "content_block_stop", "index": 0})
+        # A second block already exists when the first snapshot is repeated.
+        ev({"type": "content_block_start", "index": 2, "content_block": {"type": "thinking", "thinking": "Second thought"}})
+        ev({"type": "content_block_stop", "index": 2})
+        thought("thoughts", "first", "")
+        thought("thoughts", "first", "")
+        snapshot("thoughts", "tool", [{"type": "tool_use", "id": "check", "name": "Bash", "input": {"command": "pwd"}}])
+        emit({"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "check", "content": "/workspace"}]}})
+        thought("thoughts", "second", " \n")
+        ev({"type": "content_block_start", "index": 4, "content_block": {"type": "thinking", "thinking": "Draft"}})
+        ev({"type": "content_block_stop", "index": 4})
+        thought("thoughts", "authoritative", "Final thought")
+        ev({"type": "message_start", "message": {"id": "empty"}})
+        ev({"type": "content_block_start", "index": 0, "content_block": {"type": "thinking", "thinking": ""}})
+        ev({"type": "content_block_delta", "index": 0, "delta": {"type": "thinking_delta", "thinking": " \n"}})
+        ev({"type": "content_block_stop", "index": 0})
+        thought("empty", "empty", "")
+        thought("whitespace", "whitespace", " \n")
+        snapshot("redacted", "redacted", [{"type": "redacted_thinking", "data": "secret"}])
+        thought("snapshot-only", "snapshot-only", "Completion only")
+        ev({"type": "message_start", "message": {"id": "partial"}})
+        ev({"type": "content_block_start", "index": 0, "content_block": {"type": "thinking", "thinking": "Partial"}})
+        ev({"type": "content_block_delta", "index": 0, "delta": {"type": "thinking_delta", "thinking": " thought"}})
+        # No block stop or snapshot: terminal cleanup must finish this item.
+        status = "interrupted" if "interrupted" in prompt else "failed" if "failed" in prompt else "completed"
+        emit({"type": "result", "subtype": "success" if status == "completed" else "error_during_execution", "is_error": status != "completed", "terminal_reason": "aborted_streaming" if status == "interrupted" else None, "result": "done" if status == "completed" else None})
     elif m.get("type") == "user" and "PLAN" in json.dumps(m["message"]["content"]):
         # A to-do list and the context used, then leaving plan mode with a plan.
         emit({"type": "assistant", "uuid": "a1", "parent_tool_use_id": None, "message": {"id": "msg_p",
             "usage": {"input_tokens": 100, "cache_read_input_tokens": 900, "output_tokens": 50}, "content": [
             {"type": "tool_use", "id": "toolu_todo", "name": "TodoWrite", "input": {"todos": [{"content": "Read code", "status": "completed"}, {"content": "Write plan", "status": "in_progress"}]}}]}})
-        emit({"type": "control_request", "request_id": "p1", "request": {"subtype": "can_use_tool", "tool_name": "ExitPlanMode", "tool_use_id": "toolu_plan", "input": {"plan": "Plan:\n1. Do it"}}})
+        emit({"type": "user", "parent_tool_use_id": None, "message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "toolu_todo", "content": "Todos updated"}]}})
+        plans = os.path.join(os.getcwd(), "fixture-claude", "plans")
+        os.makedirs(plans, exist_ok=True)
+        path = os.path.join(plans, "draft.md")
+        markdown = "Plan:\n1. Do it"
+        with open(path, "w") as f:
+            f.write(markdown)
+        def tool_call(id, name, tool_input, result=None, failed=False):
+            snapshot(id, id, [{"type": "tool_use", "id": id, "name": name, "input": tool_input}])
+            emit({"type": "user", "parent_tool_use_id": None, "tool_use_result": result, "message": {
+                "role": "user", "content": [{"type": "tool_result", "tool_use_id": id, "content": "Tool result", "is_error": failed}]}})
+        tool_call("failed-write", "Write", {"file_path": path, "content": markdown}, failed=True)
+        if "PLAN_BLANK" in json.dumps(m["message"]["content"]):
+            outside = os.path.join(os.getcwd(), "outside.md")
+            with open(outside, "w") as f:
+                f.write("Workspace file")
+            tool_call("outside-write", "Write", {"file_path": outside, "content": "Workspace file"})
+            emit({"type": "control_request", "request_id": "p1", "request": {"subtype": "can_use_tool", "tool_name": "ExitPlanMode",
+                "tool_use_id": "toolu_plan", "input": {"plan": "  ", "planFilePath": path}}})
+            continue
+        tool_call("plan-write", "Write", {"file_path": path, "content": markdown})
+        tool_call("plan-edit", "Edit", {"file_path": path, "old_string": "Do it", "new_string": "Do it"})
+        tool_call("task-create", "TaskCreate", {"subject": "Verify output"}, {"task": {"id": "7", "subject": "Verify output"}})
+        tool_call("task-update", "TaskUpdate", {"taskId": "7", "status": "in_progress"}, {"success": True, "taskId": "7"})
+        tool_call("task-delete", "TaskUpdate", {"taskId": "7", "status": "deleted"}, {"success": True, "taskId": "7"})
+        tool_call("task-empty", "TaskList", {}, {"tasks": []})
+        emit({"type": "control_request", "request_id": "p1", "request": {"subtype": "can_use_tool", "tool_name": "ExitPlanMode", "tool_use_id": "toolu_plan", "input": {"planFilePath": path}}})
+    elif m.get("type") == "user" and "EDITTWICE" in json.dumps(m["message"]["content"]):
+        emit({"type": "control_request", "request_id": "edit1", "request": {"subtype": "can_use_tool", "tool_name": "Edit", "tool_use_id": "toolu_ed1",
+            "input": {"file_path": "/w/a.swift", "old_string": "a", "new_string": "b"}}})
     elif m.get("type") == "user" and "ASK" in json.dumps(m["message"]["content"]):
         emit({"type": "control_request", "request_id": "q1", "request": {"subtype": "can_use_tool", "tool_name": "AskUserQuestion", "tool_use_id": "toolu_q",
             "input": {"questions": [
@@ -370,6 +495,24 @@ def script(session, message, text):
         interrupts.get()
         counter["running"] = False
         return emit(session, "session.execution.interrupted")
+    if "FORMS" in text:
+        fid = "form_" + message
+        fields = [
+            {"type": "string", "key": "scope", "title": "Scope", "required": True, "options": [{"value": "all", "label": "All platforms"}]},
+            {"type": "multiselect", "key": "features", "title": "Features", "options": [{"value": "tags", "label": "Tags"}]},
+            {"type": "string", "key": "notes", "title": "Notes", "custom": True},
+        ]
+        if "UNSUPPORTED" in text:
+            fields = [{"type": "external", "key": "url"}]
+        frame = "data: " + json.dumps({"id": "evt_" + fid, "type": "form.created", "data": {"form": {"id": fid, "sessionID": session, "fields": fields}}}) + "\n\n"
+        for stream in list(streams):
+            stream.put(frame)
+            stream.put(frame)
+        if "EXTERNAL" in text:
+            time.sleep(0.2)
+            emit(session, "form.cancelled", id=fid)
+        else:
+            replies.get()
     if "ALL" in text:
         emit(session, "session.reasoning.delta", delta="Thinking ", **part(0))
         emit(session, "session.reasoning.ended", text="Thinking it over.", **part(0))
@@ -460,6 +603,13 @@ class Handler(BaseHTTPRequestHandler):
             counter["running"] = True
             threading.Thread(target=run, args=(parts[2], message, (body or {}).get("text", "")), daemon=True).start()
             return self.reply({"data": {"id": message}})
+        if len(parts) == 6 and parts[3] == "form":
+            if not counter.get("failed_form_reply"):
+                counter["failed_form_reply"] = True
+                return self.reply({}, 503)
+            emit(parts[2], "form.replied", id=parts[4], answer=body["answer"])
+            replies.put(body)
+            return self.reply({})
         if len(parts) == 6 and parts[3] == "permission":
             replies.put(body)
             return self.reply({})
@@ -472,6 +622,10 @@ class Handler(BaseHTTPRequestHandler):
         self.reply({})
     def do_DELETE(self):
         self.note(None)
+        parts = self.path.split("?")[0].strip("/").split("/")
+        if len(parts) == 5 and parts[3] == "form" and parts[4].startswith("form_msg"):
+            emit(parts[2], "form.cancelled", id=parts[4])
+            replies.put(None)
         self.reply({})
 ThreadingHTTPServer(("127.0.0.1", port), Handler).serve_forever()
 "##;
@@ -742,6 +896,302 @@ for line in sys.stdin:
         send({"id": pid, "result": {"stopReason": "end_turn"}})
 "#;
 
+/// A stand-in for Google's `agy` (Antigravity's CLI) serving ACP like
+/// `agy acp` 1.5: `--version`; `initialize`; `authenticate`, which needs a
+/// sign-in unless `out/agy-signed-in` or the profile's `acp_token.json`
+/// exists (it then opens a Google link with the `open` on its PATH, as the
+/// native CLI does, and waits for Google's redirect on a loopback
+/// `/auth/callback`, which writes the token);
+/// sessions with a model, a thinking level and a mode; `logout`. Turns by a
+/// word: `TOOLS` (a command to approve, a native question, a file it reads
+/// from the client), `WAIT` (until cancelled), `STUCK` (ignores the cancel),
+/// `SIGNOUT` (needs signing in), anything else a short reply with usage.
+/// Logs its launch and what it is sent to `out/agy.log`.
+const FAKE_AGY: &str = r###"#!/usr/bin/python3
+import json, sys, os, uuid, shlex, subprocess, threading, http.server, urllib.parse, socket
+if sys.argv[1:] == ["--version"]:
+    print("1.5.14"); sys.exit(0)
+out = os.environ.get("FAKE_CLAUDE_OUT", "/tmp")
+log = open(os.path.join(out, "agy.log"), "a")
+home = os.environ.get("GEMINI_HOME", "")
+env = {k: os.environ.get(k) for k in ["GEMINI_HOME", "BROWSER", "TMPDIR", "GEMINI_API_KEY", "GOOGLE_API_KEY", "AGY_ACP_FORCE_FILE_STORAGE", "T3CODE_THREAD_ID"]}
+log.write(json.dumps({"argv": sys.argv[1:], "exe": os.path.realpath(sys.argv[0]), "env": env, "cwd": os.getcwd()}) + "\n"); log.flush()
+lock = threading.Lock()
+def send(m):
+    m["jsonrpc"] = "2.0"
+    with lock:
+        sys.stdout.write(json.dumps(m) + "\n"); sys.stdout.flush()
+def update(sid, u):
+    send({"method": "session/update", "params": {"sessionId": sid, "update": u}})
+token = os.path.join(home, "antigravity-acp", "acp_token.json")
+def signed_in():
+    return os.path.exists(os.path.join(out, "agy-signed-in")) or os.path.exists(token)
+def options(model, level, mode):
+    return [{"id": "model", "name": "Model", "category": "model", "type": "select", "currentValue": model,
+             "options": [{"value": "gemini-4-neon", "name": "Gemini 4 Neon"}, {"value": "gemini-3.8-flash", "name": "Gemini 3.8 Flash"}]},
+            {"id": "thought_level", "name": "Thinking Level", "category": "thought_level", "type": "select", "currentValue": level,
+             "options": [{"value": "low", "name": "Low"}, {"value": "high", "name": "High"}]},
+            {"id": "mode", "name": "Mode", "category": "mode", "type": "select", "currentValue": mode,
+             "options": [{"value": "default", "name": "Default"}, {"value": "plan", "name": "Plan"}]}]
+state = {"model": "gemini-4-neon", "thought_level": "high", "mode": "default"}
+def session_answer(sid):
+    return {"sessionId": sid, "configOptions": options(state["model"], state["thought_level"], state["mode"]),
+        "modes": {"currentModeId": state["mode"], "availableModes": [{"id": "default", "name": "Default"}, {"id": "plan", "name": "Plan"}]}}
+def sign_in(mid):
+    s = socket.socket(); s.bind(("127.0.0.1", 0)); port = s.getsockname()[1]; s.close()
+    st = uuid.uuid4().hex
+    class H(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a): pass
+        def do_GET(self):
+            u = urllib.parse.urlparse(self.path)
+            q = urllib.parse.parse_qs(u.query)
+            ok = u.path == "/auth/callback" and q.get("state") == [st] and "code" in q
+            self.send_response(200 if ok else 400); self.end_headers(); self.wfile.write(b"done")
+            if ok:
+                os.makedirs(os.path.dirname(token), exist_ok=True)
+                open(token, "w").write(json.dumps({"refresh_token": "r", "client_id": "c", "client_secret": "s"}))
+                send({"id": mid, "result": {"_meta": {"antigravity": {"tier": {"name": "Google AI Pro"}}}}})
+                threading.Thread(target=srv.shutdown).start()
+    srv = http.server.HTTPServer(("127.0.0.1", port), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    url = "https://accounts.google.com/o/oauth2/auth?" + urllib.parse.urlencode({"access_type": "offline", "client_id": "x", "code_challenge": "c", "code_challenge_method": "S256",
+        "prompt": "consent", "redirect_uri": "http://localhost:%d/auth/callback" % port, "response_type": "code", "scope": "openid", "state": st})
+    # The native CLI reads no BROWSER: it runs `open`, its stderr discarded.
+    subprocess.run(["open", url], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+sessions = {}
+pending = {}
+keyed = False
+for line in sys.stdin:
+    m = json.loads(line)
+    log.write(json.dumps(m) + "\n"); log.flush()
+    method, mid, p = m.get("method"), m.get("id"), m.get("params", {})
+    if method == "initialize":
+        send({"id": mid, "result": {"protocolVersion": 1, "agentCapabilities": {"loadSession": True, "mcpCapabilities": {"http": True},
+            "promptCapabilities": {"image": True, "audio": True, "embeddedContext": True}, "sessionCapabilities": {"resume": {}, "list": {}},
+            "auth": {"logout": {}}, "_meta": {"antigravity": {"systemPrompt": {"append": True}}}},
+            "agentInfo": {"name": "Antigravity ACP Server", "version": "1.5.14"},
+            "authMethods": [{"id": "oauth-personal", "name": "Log in with Google"}, {"id": "gemini-api-key", "name": "Gemini API key"}]}})
+    elif method == "authenticate":
+        if signed_in() or p.get("methodId") == "gemini-api-key" and os.environ.get("GEMINI_API_KEY"):
+            keyed = p.get("methodId") == "gemini-api-key"
+            send({"id": mid, "result": {} if keyed else {"_meta": {"antigravity": {"tier": {"name": "Google AI Pro"}}}}})
+        else:
+            sign_in(mid)
+    elif method == "logout":
+        for f in [token, os.path.join(out, "agy-signed-in")]:
+            if os.path.exists(f): os.remove(f)
+        send({"id": mid, "result": {}})
+    elif method == "session/new":
+        if not (signed_in() or keyed):
+            send({"id": mid, "error": {"code": -32000, "message": "Authentication required"}}); continue
+        sid = str(uuid.uuid4())
+        send({"id": mid, "result": session_answer(sid)})
+    elif method == "session/resume":
+        send({"id": mid, "result": session_answer(p["sessionId"])})
+    elif method == "session/set_config_option":
+        state[p["configId"]] = p["value"]
+        send({"id": mid, "result": {"configOptions": options(state["model"], state["thought_level"], state["mode"])}})
+    elif method in ("session/set_mode", "session/set_model"):
+        send({"id": mid, "result": {}})
+    elif method == "session/cancel":
+        if "wait" in pending:
+            pid, sid = pending.pop("wait")
+            send({"id": pid, "result": {"stopReason": "cancelled"}})
+    elif method == "session/prompt":
+        sid = p["sessionId"]
+        text = " ".join(b.get("text", "") for b in p["prompt"] if b.get("type") == "text")
+        if "Return only the requested JSON object" in text:
+            update(sid, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": json.dumps({"title": "Antigravity Title"})}})
+            send({"id": mid, "result": {"stopReason": "end_turn"}})
+        elif text.startswith("GRAPH_QUESTIONS"):
+            args = {"questions": [
+                {"question": "Which platforms?", "options": ["All platforms", "Apple first", "Desktop first"], "is_multi_select": False},
+                {"question": "How should orphan notes appear?", "options": ["Separate ring", "Hide", "Use tags"], "is_multi_select": False},
+                {"question": "What should a tap do?", "options": ["Preview", "Open"], "is_multi_select": False},
+                {"question": "How should nodes be colored?", "options": ["By folder", "By tag", "Monochrome"], "is_multi_select": False},
+            ]}
+            call = {"toolCallId": "call_" + str(mid), "name": "ask_question", "args": args, "title": "Run ask_question", "kind": "other"}
+            update(sid, dict(call, sessionUpdate="tool_call", status="in_progress"))
+            update(sid, dict(call, sessionUpdate="tool_call_update", status="pending"))
+            update(sid, dict(call, sessionUpdate="tool_call_update", status="pending"))
+            update(sid, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Which platforms? All platforms, Apple first, or Desktop first."}})
+            send({"id": mid, "result": {"stopReason": "end_turn"}})
+        elif "SIGNOUT" in text:
+            send({"id": mid, "error": {"code": -32000, "message": "Authentication required"}})
+        elif "ASYNC_SUBAGENT" in text:
+            import sqlite3, threading, time
+            def varint(v):
+                out = b""
+                while True:
+                    b = v & 0x7f; v >>= 7
+                    if v == 0: return out + bytes([b])
+                    out += bytes([b | 0x80])
+            def field(n, body):
+                return varint((n << 3) | 2) + varint(len(body)) + body
+            acp = os.path.join(home, "antigravity-acp")
+            logs = os.path.join(acp, "brain", "child-async-1", ".system_generated", "logs")
+            os.makedirs(logs, exist_ok=True)
+            transcript = os.path.join(logs, "transcript.jsonl")
+            open(transcript, "w").write(
+                json.dumps({"step_index": 0, "type": "SYSTEM_MESSAGE", "status": "DONE", "content": "Render concept A"}) + "\n"
+                + json.dumps({"step_index": 1, "type": "PLANNER_RESPONSE", "status": "DONE", "tool_calls": [{"name": "generate_image", "args": {"ImageName": json.dumps("concept_a")}}]}) + "\n"
+            )
+            uri = "file://" + os.path.realpath(transcript)
+            out_text = "Created At: 2026-11-21T18:28:49+01:00\nCreated the following subagent:\n" + json.dumps({"conversationId": "child-async-1", "logAbsoluteUri": uri}) + "\nThe subagent will send you a message when it finishes."
+            tc = field(1, b"call_async_1") + field(2, b"invoke_subagent")
+            generic = field(1, field(1, b"Role") + field(2, b"App Icon Designer A")) + field(1, field(1, b"Prompt") + field(2, b"Render concept A")) + field(2, field(1, out_text.encode()))
+            payload = field(5, field(4, tc)) + field(140, generic)
+            conv = os.path.join(acp, "conversations")
+            os.makedirs(conv, exist_ok=True)
+            db_path = os.path.join(conv, sid + ".db")
+            db = sqlite3.connect(db_path)
+            db.execute("CREATE TABLE IF NOT EXISTS steps (idx INTEGER, step_type INTEGER, status INTEGER, step_format INTEGER, step_payload BLOB)")
+            db.execute("INSERT INTO steps VALUES (1, 132, 3, 0, ?)", (payload,))
+            db.commit(); db.close()
+            raw = {"Role": "App Icon Designer A", "Prompt": "Render concept A", "TypeName": "image-generator", "Model": "inherit", "Workspace": "inherit"}
+            update(sid, {"sessionUpdate": "tool_call", "toolCallId": "call_async_1", "name": "invoke_subagent", "args": raw, "title": "Run invoke_subagent", "kind": "other", "status": "in_progress", "rawInput": raw})
+            update(sid, {"sessionUpdate": "tool_call_update", "toolCallId": "call_async_1", "name": "invoke_subagent", "args": raw, "title": "Run invoke_subagent", "kind": "other", "status": "completed", "rawInput": raw})
+            update(sid, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Launched background designer."}})
+            send({"id": mid, "result": {"stopReason": "end_turn"}})
+            def finish_async():
+                time.sleep(0.45)
+                with open(transcript, "a") as tf:
+                    tf.write(json.dumps({"step_index": 2, "type": "GENERIC", "status": "DONE", "content": "Generated /tmp/concept_a.png"}) + "\n")
+                    tf.write(json.dumps({"step_index": 3, "type": "PLANNER_RESPONSE", "status": "DONE", "content": "Sent icon path to parent."}) + "\n")
+                db2 = sqlite3.connect(db_path)
+                env = field(3, b"child-async-1") + field(4, b"/tmp/concept_a.png")
+                msg = field(114, field(3, b"agent_message") + field(4, env))
+                db2.execute("INSERT INTO steps VALUES (2, 101, 3, 0, ?)", (msg,))
+                db2.commit()
+                update(sid, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "All icons rendered: /tmp/concept_a.png"}})
+                settled = field(20, field(1, b"All icons rendered: /tmp/concept_a.png"))
+                db2.execute("INSERT INTO steps VALUES (3, 15, 3, 0, ?)", (settled,))
+                db2.commit(); db2.close()
+            threading.Thread(target=finish_async, daemon=True).start()
+        elif "BATCH" in text:
+            import sqlite3
+            def varint(v):
+                out = b""
+                while True:
+                    b = v & 0x7f; v >>= 7
+                    if v == 0: return out + bytes([b])
+                    out += bytes([b | 0x80])
+            def field(n, body):
+                return varint((n << 3) | 2) + varint(len(body)) + body
+            acp = os.path.join(home, "antigravity-acp")
+            logs = os.path.join(acp, "brain", "child-1", ".system_generated", "logs")
+            os.makedirs(logs, exist_ok=True)
+            transcript = os.path.join(logs, "transcript.jsonl")
+            open(transcript, "w").write(json.dumps({"step_index": 0, "type": "SYSTEM_MESSAGE", "content": "Role tester: run the tests"}) + "\n"
+                + json.dumps({"step_index": 1, "type": "PLANNER_RESPONSE", "status": "DONE", "content": "All green", "tool_calls": [{"name": "run_command", "args": {"CommandLine": json.dumps("cargo test")}}]}) + "\n")
+            uri = "file://" + os.path.realpath(transcript)
+            spec = field(2, b"tester") + field(3, b"run the tests")
+            result = field(1, b"child-1") + field(2, uri.encode())
+            payload = field(5, field(4, field(1, b"tc-1"))) + field(143, field(9, spec) + field(10, result))
+            conv = os.path.join(acp, "conversations")
+            os.makedirs(conv, exist_ok=True)
+            db = sqlite3.connect(os.path.join(conv, sid + ".db"))
+            db.execute("CREATE TABLE IF NOT EXISTS steps (idx INTEGER, step_type INTEGER, step_format INTEGER, step_payload BLOB)")
+            db.execute("INSERT INTO steps VALUES (1, 127, 0, ?)", (payload,))
+            db.commit(); db.close()
+            update(sid, {"sessionUpdate": "tool_call", "toolCallId": "batch-1", "title": "Running invoke_subagent", "status": "in_progress",
+                "rawInput": {"Subagents": [{"Role": "tester", "Prompt": "run the tests"}]}})
+            update(sid, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Tests delegated."}})
+            send({"id": mid, "result": {"stopReason": "end_turn"}})
+        elif "TOOLS" in text:
+            update(sid, {"sessionUpdate": "tool_call", "toolCallId": "call-1", "title": "Run run_command?", "status": "pending", "rawInput": {"CommandLine": "ls", "Cwd": os.getcwd()}})
+            send({"id": 900, "method": "session/request_permission", "params": {"sessionId": sid, "toolCall": {"toolCallId": "call-1", "title": "Run run_command?", "kind": "execute"},
+                "options": [{"optionId": "once", "name": "Allow", "kind": "allow_once"},
+                            {"optionId": "always", "name": "Always", "kind": "allow_always", "_meta": {"agy.security.warning": {"message": "Allows every command"}}},
+                            {"optionId": "no", "name": "Deny", "kind": "reject_once"}]}})
+            pending["tools"] = (mid, sid)
+        elif "NATIVE_EDIT" in text:
+            # agy 1.5's `edit_file`: Target / Replacement, then the whole file before and after.
+            target = os.path.join(os.getcwd(), "notes.txt")
+            raw = {"Path": target, "Target": "three", "Replacement": "THREE"}
+            update(sid, {"sessionUpdate": "tool_call", "toolCallId": "edit-n", "name": "edit_file", "args": raw, "title": "File notes.txt", "kind": "edit", "status": "in_progress", "rawInput": raw, "locations": [{"path": target}]})
+            before = open(target).read()
+            after = before.replace("three", "THREE")
+            open(target, "w").write(after)
+            update(sid, {"sessionUpdate": "tool_call_update", "toolCallId": "edit-n", "name": "edit_file", "args": raw, "title": "File notes.txt", "kind": "edit", "status": "completed", "rawInput": raw, "rawOutput": {},
+                "content": [{"type": "diff", "path": target, "oldText": before, "newText": after}]})
+            send({"id": mid, "result": {"stopReason": "end_turn"}})
+        elif "EDIT" in text:
+            target = os.path.join(os.getcwd(), "notes.txt")
+            raw = {"TargetFile": target, "TargetContent": "two\n", "ReplacementContent": "TWO\n"}
+            diff = [{"type": "diff", "path": target, "oldText": "two\n", "newText": "TWO\n"}]
+            update(sid, {"sessionUpdate": "tool_call", "toolCallId": "edit-1", "title": "Running replace_file_content", "kind": "edit", "status": "pending", "rawInput": raw, "content": diff, "locations": [{"path": target}]})
+            # The edit lands a moment after it is announced (the server reads the file first).
+            import time; time.sleep(0.5)
+            body = open(target).read()
+            open(target, "w").write(body.replace("two\n", "TWO\n"))
+            update(sid, {"sessionUpdate": "tool_call_update", "toolCallId": "edit-1", "status": "completed", "content": diff})
+            update(sid, {"sessionUpdate": "tool_call", "toolCallId": "view-1", "title": "Running client_view_file", "status": "pending", "locations": [{"path": target}]})
+            send({"id": 903, "method": "fs/read_text_file", "params": {"sessionId": sid, "path": target, "line": 3, "limit": 1}})
+            pending["edit"] = (mid, sid)
+        elif "PLAN_ARTIFACT" in text:
+            brain = os.path.join(home, "antigravity-acp", "brain", sid)
+            os.makedirs(brain, exist_ok=True)
+            target = os.path.join(brain, "feature_plan.md")
+            body = "# Feature Implementation Plan\n\n" + ("Step details for verification.\n" * 400) + "## Done\n"
+            raw = {"Path": target, "Content": body, "Overwrite": True, "ArtifactMetadata": {"UserFacing": True, "RequestFeedback": True, "Summary": "Feature plan"}}
+            update(sid, {"sessionUpdate": "tool_call", "toolCallId": "plan-write-1", "name": "write_file", "args": raw, "title": "File feature_plan.md", "kind": "edit", "status": "in_progress", "rawInput": raw, "locations": [{"path": target}]})
+            open(target, "w").write(body)
+            update(sid, {"sessionUpdate": "tool_call_update", "toolCallId": "plan-write-1", "name": "write_file", "args": raw, "title": "File feature_plan.md", "kind": "edit", "status": "completed", "rawInput": raw, "rawOutput": {}, "content": [{"type": "diff", "path": target, "newText": body}]})
+            update(sid, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Plan ready in [feature_plan.md](file://" + target + ")."}})
+            send({"id": mid, "result": {"stopReason": "end_turn"}})
+        elif "PLAN_REVISE" in text:
+            target = os.path.join(home, "antigravity-acp", "brain", sid, "feature_plan.md")
+            before = open(target).read()
+            after = before.replace("## Done", "## Revised Final Step")
+            raw = {"Path": target, "Target": "## Done", "Replacement": "## Revised Final Step"}
+            update(sid, {"sessionUpdate": "tool_call", "toolCallId": "plan-edit-2", "name": "edit_file", "args": raw, "title": "File feature_plan.md", "kind": "edit", "status": "in_progress", "rawInput": raw, "locations": [{"path": target}]})
+            open(target, "w").write(after)
+            update(sid, {"sessionUpdate": "tool_call_update", "toolCallId": "plan-edit-2", "name": "edit_file", "args": raw, "title": "File feature_plan.md", "kind": "edit", "status": "completed", "rawInput": raw, "rawOutput": {}, "content": [{"type": "diff", "path": target, "oldText": before, "newText": after}]})
+            update(sid, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Updated the plan."}})
+            send({"id": mid, "result": {"stopReason": "end_turn"}})
+        elif "QUOTA" in text:
+            import sqlite3
+            conv = os.path.join(home, "antigravity-acp", "conversations")
+            os.makedirs(conv, exist_ok=True)
+            db = sqlite3.connect(os.path.join(conv, sid + ".db"))
+            db.execute("CREATE TABLE IF NOT EXISTS steps (idx INTEGER, step_type INTEGER, step_payload BLOB)")
+            n = db.execute("SELECT coalesce(max(idx), -1) FROM steps").fetchone()[0] + 1
+            db.execute("INSERT INTO steps VALUES (?, 17, ?)", (n, b"Error 429, Message: Resource exhausted, Status: RESOURCE_EXHAUSTED [reason:QUOTA_EXHAUSTED quotaResetDelay:2h0m0s]"))
+            db.commit(); db.close()
+            update(sid, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "I ran into a problem."}})
+            send({"id": mid, "result": {"stopReason": "end_turn"}})
+        elif "WAIT" in text or "STUCK" in text:
+            update(sid, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Working"}})
+            if "WAIT" in text: pending["wait"] = (mid, sid)
+        else:
+            update(sid, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Hi there."}})
+            send({"id": mid, "result": {"stopReason": "end_turn", "usage": {"inputTokens": 100, "outputTokens": 20, "cachedReadTokens": 50, "thoughtTokens": 5, "totalTokens": 175}}})
+    elif mid == 900:
+        pid, sid = pending["tools"]
+        update(sid, {"sessionUpdate": "tool_call_update", "toolCallId": "call-1", "status": "completed", "rawOutput": {"combinedOutput": "a.txt\nb.txt"}})
+        send({"id": 901, "method": "session/request_permission", "params": {"sessionId": sid, "toolCall": {"toolCallId": "interaction_1", "title": "Which file?"},
+            "options": [{"optionId": "o1", "name": "a.txt", "kind": "allow_once"}, {"optionId": "o2", "name": "b.txt", "kind": "allow_once"}]}})
+    elif mid == 901:
+        pid, sid = pending["tools"]
+        chosen = {"o1": "a.txt", "o2": "b.txt"}.get(m.get("result", {}).get("outcome", {}).get("optionId"), "none")
+        send({"id": 902, "method": "fs/read_text_file", "params": {"sessionId": sid, "path": os.path.join(os.getcwd(), chosen)}})
+    elif mid == 903:
+        pid, sid = pending.pop("edit")
+        content = m.get("result", {}).get("content", "ERROR")
+        # The agent fails the read it never completed, with another step's error.
+        update(sid, {"sessionUpdate": "tool_call_update", "toolCallId": "view-1", "status": "failed", "rawOutput": "unrelated step error"})
+        update(sid, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Line 3: " + content}})
+        send({"id": pid, "result": {"stopReason": "end_turn"}})
+    elif mid == 902:
+        pid, sid = pending.pop("tools")
+        content = m.get("result", {}).get("content", "ERROR " + json.dumps(m.get("error")))
+        update(sid, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Read: " + content}})
+        update(sid, {"sessionUpdate": "available_commands_update", "availableCommands": [{"name": "goal", "description": "Pursue a goal"}]})
+        update(sid, {"sessionUpdate": "usage_update", "used": 900, "size": 1048576})
+        send({"id": pid, "result": {"stopReason": "end_turn", "usage": {"inputTokens": 100, "outputTokens": 20, "cachedReadTokens": 50, "thoughtTokens": 5}}})
+"###;
+
 fn http() -> reqwest::Client {
     let _ = rustls::crypto::ring::default_provider().install_default();
     reqwest::Client::new()
@@ -766,6 +1216,7 @@ impl Drop for Server {
         }
         let _ = self.child.kill();
         let _ = self.child.wait();
+        live::keep_antigravity_logs_of(&self.dir, &name);
         // `DOMOVOI_KEEP_FAILED=1` keeps a failed test's home (its protocol logs) to look at.
         if std::thread::panicking() && std::env::var_os("DOMOVOI_KEEP_FAILED").is_some() {
             eprintln!("kept {}", self.dir.display());
@@ -785,16 +1236,24 @@ fn start_scripted(name: &str) -> Server {
 }
 
 fn start_in(name: &str, scripted: bool) -> Server {
+    start_with_env(name, scripted, &[])
+}
+
+/// A server with more variables in its environment (kept for its restarts).
+fn start_with_env(name: &str, scripted: bool, env: &[(&str, &str)]) -> Server {
     use std::os::unix::fs::PermissionsExt;
     let dir = std::env::temp_dir().join(format!("domovoi-provider-turns-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     for d in ["w", "out"] {
         std::fs::create_dir_all(dir.join(d)).unwrap();
     }
+    if !env.is_empty() {
+        std::fs::write(dir.join("extra-env"), env.iter().map(|(k, v)| format!("{k}={v}\n")).collect::<String>()).unwrap();
+    }
     if scripted {
         std::fs::write(dir.join("scripted"), "").unwrap();
     }
-    for (name, script) in [("claude", FAKE_CLAUDE), ("codex", FAKE_CODEX), ("opencode", FAKE_OPENCODE), ("pi", FAKE_PI), ("acp-agent", FAKE_ACP)] {
+    for (name, script) in [("claude", FAKE_CLAUDE), ("codex", FAKE_CODEX), ("opencode", FAKE_OPENCODE), ("pi", FAKE_PI), ("acp-agent", FAKE_ACP), ("agy", FAKE_AGY)] {
         let path = dir.join(name);
         std::fs::write(&path, script).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -846,18 +1305,23 @@ fn spawn_in(dir: PathBuf, port: u16) -> Option<Server> {
     } else {
         (dir.join("claude"), if scripted { dir.join("codex") } else { PathBuf::from("/usr/bin/false") }, "/usr/bin:/bin:/usr/sbin:/sbin".to_owned())
     };
-    let mut child = Command::new(server_bin())
+    let mut child = isolated_git(Command::new(server_bin()))
         .env("DOMOVOI_NO_SESSION_IMPORT", "1")
         .env("DOMOVOI_NO_SHELL_ENV", "1")
         .env("DOMOVOI_CLAUDE_BINARY", &claude)
         .env("DOMOVOI_CODEX_BINARY", &codex)
         .env("DOMOVOI_OPENCODE_BINARY", if scripted { dir.join("opencode").to_string_lossy().into_owned() } else { std::env::var("DOMOVOI_OPENCODE_BINARY").unwrap_or_default() })
+        .env("DOMOVOI_ANTIGRAVITY_BINARY", if live { std::env::var("DOMOVOI_ANTIGRAVITY_BINARY").unwrap_or_default() } else { dir.join("agy").to_string_lossy().into_owned() })
+        // Ambient Google credentials an Antigravity instance must not use.
+        .env("GEMINI_API_KEY", "ambient-key")
+        .env("DOMOVOI_ANTIGRAVITY_CANCEL_GRACE_MS", "1500")
         .env("DOMOVOI_PI_BINARY", if scripted { dir.join("pi").to_string_lossy().into_owned() } else { std::env::var("DOMOVOI_PI_BINARY").unwrap_or_default() })
         .env("FAKE_CLAUDE_OUT", dir.join("out"))
         .env("PATH", path)
         .env("DOMOVOI_AGENT_SESSIONS_HOME", dir.join("agent-home"))
         .env("DOMOVOI_USAGE_RECOVERY_EVERY_MS", "300")
         .env("RUST_LOG", "warn")
+        .envs(std::fs::read_to_string(dir.join("extra-env")).unwrap_or_default().lines().filter_map(|l| l.split_once('=')).map(|(k, v)| (k.to_owned(), v.to_owned())).collect::<Vec<_>>())
         .args(["--home-dir", dir.join("home").to_str().unwrap(), "--port", &port.to_string()])
         .stdout(Stdio::piped())
         // `DOMOVOI_TEST_STDERR=1` shows the servers' logs.
@@ -986,6 +1450,34 @@ async fn events(ws: &mut Ws, id: &str, thread: &str) -> Vec<Value> {
 const PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
 
 #[tokio::test(flavor = "multi_thread")]
+async fn claude_thinking_preserves_streams_and_omits_empty_snapshots() {
+    for status in ["completed", "interrupted", "failed"] {
+        let server = start(&format!("thinking-{status}"));
+        let token = signed_in(&server).await;
+        let mut ws = socket(&server, &token).await;
+        let workspace = server.dir.join("w").canonicalize().unwrap();
+        launched(&mut ws, &workspace, "claudeAgent", "claude-haiku-5-5", &format!("THINKING {status}")).await;
+        let all = until(&mut ws, "t1", status, |all| run_status(all, 1).as_deref() == Some(status)).await;
+        let mut latest = std::collections::BTreeMap::new();
+        for item in all.iter().filter(|e| e["type"] == "turn-item.updated" && e["payload"]["type"] == "reasoning").map(|e| &e["payload"]) {
+            assert!(!item["text"].as_str().unwrap().trim().is_empty(), "empty reasoning was emitted: {item}");
+            assert!(!item.to_string().contains("secret"));
+            latest.insert(item["id"].as_str().unwrap().to_owned(), item.clone());
+        }
+        let mut items: Vec<_> = latest.values().collect();
+        items.sort_by_key(|i| i["ordinal"].as_u64().unwrap());
+        assert_eq!(items.iter().map(|i| i["text"].as_str().unwrap()).collect::<Vec<_>>(),
+            ["  First thought.\n", "Second thought", "Final thought", "Completion only", "Partial thought"], "{status}");
+        assert_eq!(items.iter().map(|i| i["nativeItemRef"]["nativeId"].as_str().unwrap()).collect::<Vec<_>>(),
+            ["thoughts:0", "thoughts:2", "thoughts:4", "snapshot-only:0", "partial:0"], "the snapshots retain the stream's IDs");
+        for item in items {
+            assert_eq!(item["streaming"], false, "{status}: {item}");
+            assert_ne!(item["status"], "running", "{status}: {item}");
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_streamed_turn_is_throttled_and_a_stop_keeps_its_last_words() {
     let server = start("stream");
     let token = signed_in(&server).await;
@@ -1106,7 +1598,7 @@ async fn a_question_is_answered_with_its_options() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_plan_becomes_plan_items_and_is_completed_by_implementing_it() {
-    let server = start("plan");
+    let server = start_with_env("plan", false, &[("CLAUDE_CONFIG_DIR", "fixture-claude")]);
     let token = signed_in(&server).await;
     let mut ws = socket(&server, &token).await;
     let workspace = server.dir.join("w").canonicalize().unwrap();
@@ -1129,10 +1621,20 @@ async fn a_plan_becomes_plan_items_and_is_completed_by_implementing_it() {
         tokio::time::sleep(Duration::from_millis(100)).await;
     };
     let items = |ty: &str| all.iter().filter(|e| e["type"] == "turn-item.updated" && e["payload"]["type"] == ty).map(|e| e["payload"].clone()).collect::<Vec<_>>();
-    let todo = items("todo_list").pop().expect("a to-do list");
+    let checklists = items("todo_list");
+    let todo = checklists.first().expect("a to-do list");
     assert_eq!(todo["steps"][0], json!({ "id": "step-1", "text": "Read code", "status": "completed" }));
     assert_eq!(todo["steps"][1]["status"], "running");
-    let proposed = items("proposed_plan").pop().expect("a proposed plan");
+    assert!(checklists.iter().any(|list| list["steps"][0]["id"] == "7" && list["steps"][0]["status"] == "running"));
+    assert_eq!(checklists.last().unwrap()["steps"], json!([]));
+    // Draft artifacts are durable; streaming rows are only sent live.
+    let drafts = all.iter().filter(|e| e["type"] == "plan.updated" && e["payload"]["status"] == "draft").count();
+    assert_eq!(drafts, 2);
+    let proposals = items("proposed_plan");
+    let proposed = proposals.last().expect("a proposed plan");
+    assert!(!items("dynamic_tool").iter().any(|item| item["toolName"] == "ExitPlanMode"));
+    assert_eq!(all.iter().filter(|e| e["type"] == "turn-item.updated" && e["payload"]["id"] == proposed["id"])
+        .last().unwrap()["payload"]["type"], "proposed_plan");
     assert_eq!(proposed["markdown"], "Plan:\n1. Do it");
     assert_eq!(proposed["streaming"], false);
     let plan = all.iter().filter(|e| e["type"] == "plan.updated" && e["payload"]["id"] == proposed["planId"]).last().expect("a plan artifact");
@@ -1161,6 +1663,17 @@ async fn a_plan_becomes_plan_items_and_is_completed_by_implementing_it() {
     assert_eq!(plan["payload"]["status"], "completed");
     let run = all.iter().filter(|e| e["type"] == "run.created").last().unwrap();
     assert_eq!(run["payload"]["sourcePlanRef"]["planId"], proposed["planId"]);
+    // Out of plan mode with no mode change of the client's, before the run
+    // starts (from the thread `b9ab8fd2`, whose mode change came after it).
+    let left = all.iter().position(|e| e["type"] == "thread.interaction-mode-updated" && e["payload"]["interactionMode"] == "default").expect("out of plan mode");
+    let created = all.iter().position(|e| e["type"] == "run.created" && e["payload"]["id"] == run["payload"]["id"]).unwrap();
+    assert!(left < created, "the mode changes before the run");
+    let modes = server.dir.join("out").join("modes.log");
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    while !std::fs::read_to_string(&modes).is_ok_and(|m| m.lines().any(|l| l == "bypassPermissions ok")) {
+        assert!(tokio::time::Instant::now() < deadline, "Claude never left plan mode: {:?}", std::fs::read_to_string(&modes));
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
     // A plan is implemented once.
     let r = call(&mut ws, "4", "orchestration.dispatchCommand", json!({ "type": "message.dispatch", "commandId": "c4", "threadId": "t1", "createdBy": "user", "creationSource": "web", "dispatchMode": { "type": "queue_after_active" },
         "messageId": "m3", "text": "Again.", "attachments": [], "sourcePlanRef": { "threadId": "t1", "planId": proposed["planId"] } })).await;
@@ -1226,9 +1739,45 @@ async fn a_steer_reaches_the_running_turn() {
     assert_eq!(item["payload"]["runId"], run);
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn claude_does_not_claim_to_capture_an_unobserved_plan_file() {
+    let server = start_with_env("plan-blank", false, &[("CLAUDE_CONFIG_DIR", "fixture-claude")]);
+    let token = signed_in(&server).await;
+    let mut ws = socket(&server, &token).await;
+    let workspace = server.dir.join("w").canonicalize().unwrap();
+    let r = call(&mut ws, "1", "projects.mutate", json!({ "type": "project.create", "commandId": "c1", "projectId": "p1", "title": "w",
+        "workspaceRoot": workspace, "createWorkspaceRootIfMissing": false, "defaultModelSelection": null })).await;
+    assert_eq!(r["exit"]["_tag"], "Success", "{r}");
+    let r = call(&mut ws, "2", "orchestration.launchThread", json!({ "commandId": "c2", "creationSource": "web", "threadId": "t1", "projectId": "p1",
+        "title": "Plan it", "modelSelection": { "instanceId": "claudeAgent", "model": "claude-haiku-5-5" },
+        "runtimeMode": "full-access", "interactionMode": "plan", "workspaceStrategy": { "type": "root" },
+        "initialMessage": { "messageId": "m1", "text": "PLAN_BLANK", "attachments": [] } })).await;
+    assert_eq!(r["exit"]["_tag"], "Success", "{r}");
+    let all = until(&mut ws, "t1", "Claude's failed handoff", |all| all.iter()
+        .any(|e| e["type"] == "run.updated" && e["payload"]["status"] == "completed")).await;
+    assert!(!all.iter().any(|e| e["type"] == "plan.updated" && e["payload"]["kind"] == "proposed_plan"));
+    assert!(all.iter().any(|e| e["payload"]["type"] == "system_notice"
+        && e["payload"]["message"].as_str().is_some_and(|s| s.contains("could not be captured"))));
+    let got: Value = serde_json::from_str(&std::fs::read_to_string(server.dir.join("out").join("answer.json")).unwrap()).unwrap();
+    assert!(got["response"]["message"].as_str().unwrap().contains("could not capture"));
+}
+
+/// Git as on a machine with no configuration of its own: the developer's
+/// global and system settings (hooks, LFS filters, signing) stay out of the
+/// tests, and commits are made as `t <t@t>`.
+fn isolated_git(mut command: Command) -> Command {
+    static CONFIG: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    let config = CONFIG.get_or_init(|| {
+        let path = std::env::temp_dir().join(format!("domovoi-test-gitconfig-{}", std::process::id()));
+        std::fs::write(&path, "[user]\n\tname = t\n\temail = t@t\n[init]\n\tdefaultBranch = main\n").unwrap();
+        path
+    });
+    command.env("GIT_CONFIG_GLOBAL", config).env("GIT_CONFIG_NOSYSTEM", "1");
+    command
+}
+
 fn git(cwd: &std::path::Path, args: &[&str]) {
-    let ok = Command::new("git").args(args).current_dir(cwd).env("GIT_AUTHOR_NAME", "t").env("GIT_AUTHOR_EMAIL", "t@t")
-        .env("GIT_COMMITTER_NAME", "t").env("GIT_COMMITTER_EMAIL", "t@t").output().unwrap().status.success();
+    let ok = isolated_git(Command::new("git")).args(args).current_dir(cwd).output().unwrap().status.success();
     assert!(ok, "git {args:?}");
 }
 
@@ -1298,7 +1847,7 @@ async fn the_text_model_names_the_thread_and_branch_and_writes_commits() {
     };
     assert!(thread["titleRegeneration"].is_null());
     assert_eq!(thread["lastTitleRegeneration"]["status"], "renamed");
-    let head = Command::new("git").args(["symbolic-ref", "--short", "HEAD"]).current_dir(&worktree).output().unwrap();
+    let head = isolated_git(Command::new("git")).args(["symbolic-ref", "--short", "HEAD"]).current_dir(&worktree).output().unwrap();
     assert_eq!(String::from_utf8_lossy(&head.stdout).trim(), "t3/add-search", "the worktree's branch was renamed");
     let prompt = std::fs::read_to_string(server.dir.join("out").join("textgen-title-needsRefinement.txt")).unwrap();
     assert!(prompt.contains("please add a search bar") && prompt.contains("(\"w\")"), "the prompt has the message and the project");
@@ -1334,7 +1883,7 @@ async fn the_text_model_names_the_thread_and_branch_and_writes_commits() {
         }
     }
     assert_eq!(finished["result"]["commit"]["subject"], "Add the search bar", "the action's events: {seen:#?}");
-    let log = Command::new("git").args(["log", "-1", "--format=%s%n%b"]).current_dir(&worktree).output().unwrap();
+    let log = isolated_git(Command::new("git")).args(["log", "-1", "--format=%s%n%b"]).current_dir(&worktree).output().unwrap();
     assert_eq!(String::from_utf8_lossy(&log.stdout).trim(), "Add the search bar\n- search");
 }
 
@@ -1583,6 +2132,82 @@ async fn a_background_agent_keeps_the_run_open_until_it_reports_back() {
     assert!(second.iter().all(|t| *t == "Finished."), "{second:?}");
 }
 
+/// Starts thread `t1` in a new project with `text` as its first message.
+async fn launch_claude_thread(ws: &mut Ws, workspace: &std::path::Path, text: &str) {
+    let r = call(ws, "1", "projects.mutate", json!({ "type": "project.create", "commandId": "c1", "projectId": "p1", "title": "w",
+        "workspaceRoot": workspace, "createWorkspaceRootIfMissing": false, "defaultModelSelection": null })).await;
+    assert_eq!(r["exit"]["_tag"], "Success", "{r}");
+    let r = call(ws, "2", "orchestration.launchThread", json!({ "commandId": "c2", "creationSource": "web", "threadId": "t1", "projectId": "p1",
+        "title": "Background", "generateTitle": false, "modelSelection": { "instanceId": "claudeAgent", "model": "claude-haiku-5-5" },
+        "runtimeMode": "full-access", "interactionMode": "default", "workspaceStrategy": { "type": "root" },
+        "initialMessage": { "messageId": "m1", "text": text, "attachments": [] } })).await;
+    assert_eq!(r["exit"]["_tag"], "Success", "{r}");
+}
+
+/// The assistant's words in run `run`, in order.
+fn said_in<'a>(all: &'a [Value], run: &str) -> Vec<&'a str> {
+    let mut texts: Vec<&str> = vec![];
+    for e in all.iter().filter(|e| e["type"] == "message.updated" && e["payload"]["role"] == "assistant" && e["payload"]["runId"] == run) {
+        let text = e["payload"]["text"].as_str().unwrap_or_default();
+        if !texts.contains(&text) {
+            texts.push(text);
+        }
+    }
+    texts
+}
+
+/// Each background report gets a turn of Claude's own; one that came while
+/// Claude worked on another starts right after that turn's result. Both are
+/// the run's, and the question the last one asks is asked (as a session
+/// recorded on 2026-11-23 did, whose analysis and plan were lost).
+#[tokio::test(flavor = "multi_thread")]
+async fn every_turn_claude_owes_its_background_agents_stays_in_the_run() {
+    let server = start("bgchain");
+    let token = signed_in(&server).await;
+    let mut ws = socket(&server, &token).await;
+    let workspace = server.dir.join("w").canonicalize().unwrap();
+    launch_claude_thread(&mut ws, &workspace, "BGCHAIN").await;
+    let run = "run:thread:t1:ordinal:1";
+    let all = until(&mut ws, "t1", "the last turn's question", |all| last(all, "runtime-request.updated").is_some_and(|r| r["status"] == "pending")).await;
+    assert_eq!(said_in(&all, run), ["Waiting on both.", "One is done.", "Here is the analysis."]);
+    assert_eq!(last(&all, "run.updated").unwrap()["status"], "running", "the question is the run's");
+    let request = last(&all, "runtime-request.updated").unwrap()["id"].clone();
+    let r = call(&mut ws, "3", "orchestration.dispatchCommand", json!({ "type": "runtime-request.respond", "commandId": "c3", "threadId": "t1",
+        "requestId": request, "answers": { "Go on?": ["No"] } })).await;
+    assert_eq!(r["exit"]["_tag"], "Success", "{r}");
+    // The CLI gets the answer: the question was asked in the run, not declined.
+    let answer = server.dir.join("out").join("answer.json");
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    let got: Value = loop {
+        if let Some(v) = std::fs::read_to_string(&answer).ok().and_then(|t| serde_json::from_str(&t).ok()) {
+            break v;
+        }
+        assert!(tokio::time::Instant::now() < deadline, "no answer reached the CLI");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
+    assert_eq!((got["request_id"].as_str(), got["response"]["behavior"].as_str()), (Some("q-chain"), Some("allow")), "{got}");
+}
+
+/// A command Claude put in the background keeps the run open; what Claude
+/// says when it reports is the run's (as in a session recorded on
+/// 2026-11-23, whose build reports were lost).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_background_command_keeps_the_run_open_for_claudes_report() {
+    let server = start("bgshell");
+    let token = signed_in(&server).await;
+    let mut ws = socket(&server, &token).await;
+    let workspace = server.dir.join("w").canonicalize().unwrap();
+    launch_claude_thread(&mut ws, &workspace, "BGSHELL").await;
+    let run = "run:thread:t1:ordinal:1";
+    let all = until(&mut ws, "t1", "the command in the background", |all| last(all, "provider-thread.updated").is_some_and(|p| p["pendingBackgroundTasks"][0]["kind"] == "command")).await;
+    let pending = &last(&all, "provider-thread.updated").unwrap()["pendingBackgroundTasks"][0];
+    assert_eq!((pending["taskId"].as_str(), pending["description"].as_str()), (Some("bsh1"), Some("Build it")));
+    assert_eq!(last(&all, "run.updated").unwrap()["status"], "running");
+    let all = until(&mut ws, "t1", "the run to finish", |all| last(all, "run.updated").is_some_and(|r| r["status"] == "completed")).await;
+    assert_eq!(said_in(&all, run), ["Building in the background.", "The build passed."]);
+    assert_eq!(last(&all, "provider-thread.updated").unwrap()["pendingBackgroundTasks"], json!([]));
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn what_claude_says_between_turns_stays_out_of_the_next_one() {
     let server = start("latewake");
@@ -1695,6 +2320,90 @@ async fn a_process_that_refuses_full_access_is_replaced_by_one_in_it() {
     let args: Vec<String> = serde_json::from_value(launches[1].clone()).unwrap();
     assert!(args.iter().any(|a| a.starts_with("--resume")), "{args:?}");
     assert!(args.contains(&"--permission-mode=bypassPermissions".to_owned()), "launched in full access: {args:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_thread_mode_change_reaches_the_live_claude_and_keeps_plan_mode() {
+    let server = start("mode-live");
+    let token = signed_in(&server).await;
+    let mut ws = socket(&server, &token).await;
+    let workspace = server.dir.join("w").canonicalize().unwrap();
+    let r = call(&mut ws, "1", "projects.mutate", json!({ "type": "project.create", "commandId": "c1", "projectId": "p1", "title": "w",
+        "workspaceRoot": workspace, "createWorkspaceRootIfMissing": false, "defaultModelSelection": null })).await;
+    assert_eq!(r["exit"]["_tag"], "Success", "{r}");
+    let r = call(&mut ws, "2", "orchestration.launchThread", json!({ "commandId": "c2", "creationSource": "web", "threadId": "t1", "projectId": "p1",
+        "title": "Modes", "generateTitle": false, "modelSelection": { "instanceId": "claudeAgent", "model": "claude-haiku-5-5" },
+        "runtimeMode": "full-access", "interactionMode": "default", "workspaceStrategy": { "type": "root" },
+        "initialMessage": { "messageId": "m1", "text": "DONE", "attachments": [] } })).await;
+    assert_eq!(r["exit"]["_tag"], "Success", "{r}");
+    until(&mut ws, "t1", "the first run", |all| last(all, "run.updated").is_some_and(|r| r["status"] == "completed")).await;
+    let modes = server.dir.join("out").join("modes.log");
+    let wait_for = |want: Vec<&'static str>| {
+        let modes = modes.clone();
+        async move {
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+            loop {
+                let got = std::fs::read_to_string(&modes).unwrap_or_default();
+                if got.lines().collect::<Vec<_>>() == want {
+                    break;
+                }
+                assert!(tokio::time::Instant::now() < deadline, "modes {got:?}, wanted {want:?}");
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        }
+    };
+    // Into plan mode: the idle process switches now, not at the next turn.
+    let r = call(&mut ws, "3", "orchestration.dispatchCommand", json!({ "type": "thread.interaction-mode.set", "commandId": "c3", "threadId": "t1", "interactionMode": "plan" })).await;
+    assert_eq!(r["exit"]["_tag"], "Success", "{r}");
+    wait_for(vec!["plan ok"]).await;
+    // A runtime mode change keeps plan mode.
+    let r = call(&mut ws, "4", "orchestration.dispatchCommand", json!({ "type": "thread.runtime-mode.set", "commandId": "c4", "threadId": "t1", "runtimeMode": "approval-required" })).await;
+    assert_eq!(r["exit"]["_tag"], "Success", "{r}");
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    wait_for(vec!["plan ok"]).await;
+    // Out of plan mode: the runtime mode's.
+    let r = call(&mut ws, "5", "orchestration.dispatchCommand", json!({ "type": "thread.interaction-mode.set", "commandId": "c5", "threadId": "t1", "interactionMode": "default" })).await;
+    assert_eq!(r["exit"]["_tag"], "Success", "{r}");
+    wait_for(vec!["plan ok", "default ok"]).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn allowed_for_the_thread_is_not_asked_again() {
+    let server = start("allow-thread");
+    let token = signed_in(&server).await;
+    let mut ws = socket(&server, &token).await;
+    let workspace = server.dir.join("w").canonicalize().unwrap();
+    let r = call(&mut ws, "1", "projects.mutate", json!({ "type": "project.create", "commandId": "c1", "projectId": "p1", "title": "w",
+        "workspaceRoot": workspace, "createWorkspaceRootIfMissing": false, "defaultModelSelection": null })).await;
+    assert_eq!(r["exit"]["_tag"], "Success", "{r}");
+    let r = call(&mut ws, "2", "orchestration.launchThread", json!({ "commandId": "c2", "creationSource": "web", "threadId": "t1", "projectId": "p1",
+        "title": "Edits", "generateTitle": false, "modelSelection": { "instanceId": "claudeAgent", "model": "claude-haiku-5-5" },
+        "runtimeMode": "approval-required", "interactionMode": "default", "workspaceStrategy": { "type": "root" },
+        "initialMessage": { "messageId": "m1", "text": "EDITTWICE", "attachments": [] } })).await;
+    assert_eq!(r["exit"]["_tag"], "Success", "{r}");
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    let request = loop {
+        let all = events(&mut ws, &fresh_id("e"), "t1").await;
+        if let Some(r) = all.iter().filter(|e| e["type"] == "runtime-request.updated").last() {
+            break r["payload"].clone();
+        }
+        assert!(tokio::time::Instant::now() < deadline, "no request came");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+    assert_eq!((request["kind"].as_str(), request["status"].as_str()), (Some("file-change"), Some("pending")));
+    let r = call(&mut ws, "3", "orchestration.dispatchCommand", json!({ "type": "runtime-request.respond", "commandId": "c3", "threadId": "t1",
+        "requestId": request["id"], "decision": "acceptForSession" })).await;
+    assert_eq!(r["exit"]["_tag"], "Success", "{r}");
+    let all = until(&mut ws, "t1", "the run", |all| last(all, "run.updated").is_some_and(|r| r["status"] == "completed")).await;
+    // Claude asked again; the server answered from the thread's rule.
+    let second: Value = serde_json::from_str(&std::fs::read_to_string(server.dir.join("out").join("answer.json")).unwrap()).unwrap();
+    assert_eq!((second["request_id"].as_str(), second["response"]["behavior"].as_str()), (Some("edit2"), Some("allow")));
+    let requests: std::collections::BTreeSet<&str> = all.iter().filter(|e| e["type"] == "runtime-request.updated").filter_map(|e| e["payload"]["id"].as_str()).collect();
+    assert_eq!(requests.len(), 1, "asked once: {requests:?}");
+    // What was answered is in the protocol log.
+    let logs: String = std::fs::read_dir(server.dir.join("home/userdata/logs/provider")).unwrap().flatten()
+        .map(|e| std::fs::read_to_string(e.path()).unwrap_or_default()).collect();
+    assert!(logs.lines().any(|l| l.contains("\"outgoing\"") && l.contains("\"edit2\"")), "the answer is logged");
 }
 
 async fn mcp(url: &str, token: Option<&str>, method: &str, params: Value) -> (u16, Value) {
@@ -2047,6 +2756,9 @@ async fn a_scripted_codex_turn_records_every_kind_of_item() {
     {
         assert!(types.contains(wanted), "no {wanted} item: {types:?}");
     }
+    let statuses: Vec<_> = all.iter().filter(|e| e["type"] == "plan.updated" && e["payload"]["kind"] == "proposed_plan")
+        .filter_map(|e| e["payload"]["status"].as_str()).collect();
+    assert_eq!(statuses, ["draft", "active"]);
     let streamed = all.iter().filter(|e| e["type"] == "turn-item.updated" && e["payload"]["input"] == "false").last().expect("the failed command");
     assert_eq!((streamed["payload"]["output"].as_str(), streamed["payload"]["status"].as_str()), (Some("streamed only\n"), Some("failed")));
     let patch = all.iter().filter(|e| e["type"] == "turn-item.updated" && e["payload"]["type"] == "file_change").last().unwrap();
@@ -2306,7 +3018,7 @@ async fn pi_names_threads_and_branches_and_writes_commits() {
             break;
         }
     }
-    let log = Command::new("git").args(["log", "-1", "--format=%s%n%b"]).current_dir(&worktree).output().unwrap();
+    let log = isolated_git(Command::new("git")).args(["log", "-1", "--format=%s%n%b"]).current_dir(&worktree).output().unwrap();
     assert_eq!(String::from_utf8_lossy(&log.stdout).trim(), "Add the search bar\n- search");
 }
 
@@ -2734,6 +3446,25 @@ async fn agents_organize_threads_schedule_and_hand_off_to_a_worktree() {
     assert_eq!(tool("delete_scheduled_task", json!({ "scheduledTaskId": id })).await["deleted"], true);
     assert_eq!(tool("list_scheduled_tasks", json!({})).await["tasks"], json!([]));
 
+    // A task in a thread keeps it through a change that does not say where
+    // it runs; another thread can be named; `false` goes back to new threads.
+    let hourly = json!({ "type": "interval", "everyMs": 3600000 });
+    let here = tool("schedule_task", json!({ "prompt": "check", "title": "Here", "schedule": hourly, "bindToCurrentThread": true })).await;
+    let here_id = here["scheduledTaskId"].clone();
+    assert_eq!((here["boundThreadId"].as_str(), here["threadMode"].as_str()), (Some("t1"), Some("continue")), "{here}");
+    let renamed = tool("schedule_task", json!({ "scheduledTaskId": here_id, "title": "Still here" })).await;
+    let kept = (renamed["title"].as_str(), renamed["prompt"].as_str(), renamed["boundThreadId"].as_str(), renamed["threadMode"].as_str(), renamed["enabled"].as_bool());
+    assert_eq!(kept, (Some("Still here"), Some("check"), Some("t1"), Some("continue"), Some(true)), "{renamed}");
+    let moved = tool("schedule_task", json!({ "scheduledTaskId": here_id, "threadId": "t2", "freshSession": true })).await;
+    assert_eq!((moved["boundThreadId"].as_str(), moved["threadMode"].as_str()), (Some("t2"), Some("fresh_session")), "{moved}");
+    let unbound = tool("schedule_task", json!({ "scheduledTaskId": here_id, "bindToCurrentThread": false })).await;
+    assert_eq!((unbound["boundThreadId"].as_str(), unbound["threadMode"].as_str()), (None, Some("new_thread")), "{unbound}");
+    // A run in a new thread answers the thread it started.
+    let ran = tool("run_scheduled_task_now", json!({ "taskId": here_id })).await;
+    let started = ran["threadId"].as_str().unwrap_or_default();
+    assert!(!started.is_empty() && started != "t1" && started != "t2", "{ran}");
+    assert_eq!(tool("delete_scheduled_task", json!({ "scheduledTaskId": here_id })).await["deleted"], true);
+
     // Hand t1 off to a worktree from inside a turn (as an agent does): the
     // continuation waits for the turn, then runs in the worktree, in a new
     // session given the conversation.
@@ -2900,4 +3631,807 @@ async fn an_acp_agent_runs_turns() {
     let load = sent.iter().find(|m| m["method"] == "session/load").expect("the session loaded");
     // The thread's process numbered its sessions from 1 (the probe's process had its own).
     assert_eq!(load["params"]["sessionId"], "acp-session-1");
+    let session = last(&all, "provider-session.updated").expect("ACP sessions report their capabilities");
+    assert_eq!(session["capabilities"]["threads"]["canRollbackThread"], true, "{session}");
+
+    // A rollback: ACP can't truncate, so the next turn opens a new agent session.
+    let first = all.iter().find(|e| e["type"] == "checkpoint.captured" && e["payload"]["appRunOrdinal"] == 1).expect("the first run's checkpoint");
+    let r = call(&mut ws, "back", "orchestration.dispatchCommand", json!({ "type": "checkpoint.rollback", "commandId": "back-1", "threadId": "t1",
+        "scopeId": first["payload"]["scopeId"], "checkpointId": first["payload"]["id"], "restoreFiles": false })).await;
+    assert_eq!(r["exit"]["_tag"], "Success", "{r}");
+    until(&mut ws, "t1", "the rollback", |all| run_status(all, 4).as_deref() == Some("rolled_back")).await;
+    let loads_before = std::fs::read_to_string(server.dir.join("out").join("acp.log")).unwrap().lines().filter(|l| l.contains("\"session/load\"")).count();
+    say(&mut ws, 5, "hello", json!({ "type": "queue_after_active" })).await;
+    until(&mut ws, "t1", "the run after the rollback", |all| run_status(all, 5).as_deref() == Some("completed")).await;
+    let sent: Vec<Value> = std::fs::read_to_string(server.dir.join("out").join("acp.log")).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    assert_eq!(sent.iter().filter(|m| m["method"] == "session/load").count(), loads_before, "the undone conversation is not loaded again");
+    assert_eq!(sent.iter().filter(|m| m["method"] == "session/new").count(), 3, "the probe's, the thread's first, the one after the rollback");
+}
+
+/// What the stand-in `agy` logged: its launches and every message it was sent.
+fn agy_log(server: &Server) -> Vec<Value> {
+    std::fs::read_to_string(server.dir.join("out").join("agy.log")).unwrap_or_default().lines().map(|l| serde_json::from_str(l).unwrap()).collect()
+}
+
+fn antigravity_entry(r: &Value) -> Value {
+    r["exit"]["value"]["providers"].as_array().unwrap().iter().find(|p| p["instanceId"] == "antigravity").cloned().unwrap_or_else(|| panic!("no Antigravity: {r}"))
+}
+
+/// Google's Antigravity: its own profile and environment, signing in at
+/// launch, the account's models and thinking level, an approval with the
+/// agent's labels, a native question, a file it reads, a stop the agent
+/// ignores, a resumed session after a restart, and a sign-out.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_antigravity_agent_runs_turns() {
+    let server = start("antigravity");
+    let token = signed_in(&server).await;
+    let mut ws = socket(&server, &token).await;
+    let r = call(&mut ws, "p", "server.refreshProviders", json!({ "instanceId": "antigravity" })).await;
+    let p = antigravity_entry(&r);
+    assert_eq!((p["driver"].as_str(), p["installed"].as_bool(), p["version"].as_str(), p["status"].as_str()), (Some("antigravity"), Some(true), Some("1.5.14"), Some("warning")), "{p}");
+    assert_eq!((p["auth"]["status"].as_str(), p["supportsConversationRollback"].as_bool(), p["showInteractionModeToggle"].as_bool()), (Some("unknown"), Some(false), Some(true)), "{p}");
+    assert_eq!(p["setup"]["canAuthenticate"], true);
+    assert_eq!(p["models"][0]["slug"], "antigravity-default");
+    assert!(agy_log(&server).iter().all(|m| m.get("argv").is_none()), "the probe does not start the agent");
+
+    // Not signed in: the turn says so, and so does the provider.
+    let workspace = workspace_repository(&server);
+    std::fs::write(workspace.join("b.txt"), "bee").unwrap();
+    let r = call(&mut ws, "1", "projects.mutate", json!({ "type": "project.create", "commandId": "c1", "projectId": "p1", "title": "w",
+        "workspaceRoot": workspace, "createWorkspaceRootIfMissing": false, "defaultModelSelection": null })).await;
+    assert_eq!(r["exit"]["_tag"], "Success", "{r}");
+    let r = call(&mut ws, "2", "orchestration.launchThread", json!({ "commandId": "c2", "creationSource": "web", "threadId": "t1", "projectId": "p1",
+        "title": "Antigravity", "generateTitle": false,
+        "modelSelection": { "instanceId": "antigravity", "model": "gemini-3.8-flash", "options": [{ "id": "thought_level", "value": "low" }] },
+        "runtimeMode": "approval-required", "interactionMode": "default", "workspaceStrategy": { "type": "root" },
+        "initialMessage": { "messageId": "m1", "text": "hello", "attachments": [] } })).await;
+    assert_eq!(r["exit"]["_tag"], "Success", "{r}");
+    let all = until(&mut ws, "t1", "the run that needs a sign-in", |all| run_status(all, 1).as_deref() == Some("failed")).await;
+    let error = all.iter().filter(|e| e["type"] == "turn-item.updated" && e["payload"]["type"] == "error").last().expect("an error item");
+    assert_eq!(error["payload"]["failure"]["message"], "Sign in to Antigravity in Settings before you continue.", "{error}");
+    let r = call(&mut ws, "p2", "server.getConfig", json!({})).await;
+    let p = r["exit"]["value"]["providers"].as_array().unwrap().iter().find(|p| p["instanceId"] == "antigravity").cloned().unwrap();
+    assert_eq!(p["auth"]["status"], "unauthenticated", "{p}");
+    let launch = agy_log(&server).into_iter().find(|m| m.get("argv").is_some()).expect("the agent started");
+    let home = launch["env"]["GEMINI_HOME"].as_str().unwrap().to_owned();
+    assert!(home.starts_with(server.dir.join("home").join("userdata").join("providers").join("antigravity").to_str().unwrap()), "{launch}");
+    assert_eq!(launch["argv"], json!(["acp", "--gemini-dir", home, "--app-data-dir", "antigravity-acp"]));
+    assert_eq!(launch["env"]["GEMINI_API_KEY"], Value::Null, "the server's own Google key is not the instance's: {launch}");
+    assert_eq!(launch["env"]["AGY_ACP_FORCE_FILE_STORAGE"], "1");
+    assert!(launch["env"]["BROWSER"].as_str().unwrap().contains("antigravity-browser-url"), "{launch}");
+    assert_eq!(std::fs::read_to_string(std::path::Path::new(&home).join("antigravity-acp/settings.json")).unwrap(), "{\"auth\":{\"type\":\"oauth-personal\"}}\n");
+    let tmp = launch["env"]["TMPDIR"].as_str().unwrap().to_owned();
+    assert!(!std::path::Path::new(&tmp).exists(), "the launch's temp folder went with it");
+
+    // Signed in: approvals with the agent's labels, a question, a file read.
+    std::fs::write(server.dir.join("out").join("agy-signed-in"), "").unwrap();
+    say(&mut ws, 2, "TOOLS please", json!({ "type": "queue_after_active" })).await;
+    let all = answering(&mut ws, &[json!({ "decision": "accept" }), json!({ "answers": { "interaction_1": ["b.txt"] } })], 2, "completed").await;
+    let approval = all.iter().filter(|e| e["type"] == "turn-item.updated" && e["payload"]["type"] == "approval_request").last().unwrap();
+    assert_eq!(approval["payload"]["options"][1], json!({ "decision": "acceptForSession", "label": "Allow for this thread", "warning": "Allows every command" }), "{approval}");
+    let question = all.iter().filter(|e| e["type"] == "turn-item.updated" && e["payload"]["type"] == "user_input_request").last().expect("the native question");
+    assert_eq!(question["payload"]["questions"][0]["question"], "Which file?");
+    let reply = last(&all, "message.updated").unwrap();
+    assert_eq!(reply["text"], "Read: bee", "the agent read the chosen file through Domovoi");
+    let turn = all.iter().filter(|e| e["type"] == "provider-turn.updated" && e["payload"]["tokenUsage"]["outputTokens"] == 25).last().expect("Gemini's usage counted");
+    assert_eq!((turn["payload"]["tokenUsage"]["inputTokens"].as_u64(), turn["payload"]["tokenUsage"]["usedTokens"].as_u64()), (Some(150), Some(900)), "{turn}");
+    let sent = agy_log(&server);
+    let by = |method: &str| sent.iter().filter(|m| m["method"] == method).cloned().collect::<Vec<_>>();
+    assert_eq!(by("authenticate").last().unwrap()["params"], json!({ "methodId": "oauth-personal" }), "signed in at every launch");
+    let new = by("session/new").last().unwrap().clone();
+    assert!(new["params"]["_meta"]["antigravity"]["systemPrompt"]["append"].as_str().is_some_and(|t| !t.is_empty()), "the tool instructions are a system prompt addition: {new}");
+    assert!(new["params"]["additionalDirectories"][0].as_str().unwrap().ends_with("attachments"), "{new}");
+    let prompt = by("session/prompt").last().unwrap()["params"]["prompt"][0]["text"].as_str().unwrap().to_owned();
+    assert_eq!(prompt, "TOOLS please", "nothing wrapped around the user's text");
+    let set: Vec<(String, String)> = by("session/set_config_option").iter().map(|m| (m["params"]["configId"].as_str().unwrap().to_owned(), m["params"]["value"].as_str().unwrap().to_owned())).collect();
+    assert!(set.contains(&("model".into(), "gemini-3.8-flash".into())) && set.contains(&("thought_level".into(), "low".into())), "{set:?}");
+    assert!(sent.iter().any(|m| m["id"] == 900 && m["result"]["outcome"]["optionId"] == "once"));
+    let r = call(&mut ws, "p3", "server.getConfig", json!({})).await;
+    let p = r["exit"]["value"]["providers"].as_array().unwrap().iter().find(|p| p["instanceId"] == "antigravity").cloned().unwrap();
+    assert_eq!((p["status"].as_str(), p["auth"]["status"].as_str(), p["auth"]["label"].as_str()), (Some("ready"), Some("authenticated"), Some("Google AI Pro")), "{p}");
+    let models: Vec<&str> = p["models"].as_array().unwrap().iter().filter_map(|m| m["slug"].as_str()).collect();
+    assert_eq!(models, ["gemini-4-neon", "gemini-3.8-flash"], "the account's models: {p}");
+    assert_eq!(p["slashCommands"][0]["name"], "goal");
+
+    // A stop the agent ignores: the process goes after the grace period.
+    say(&mut ws, 3, "STUCK", json!({ "type": "queue_after_active" })).await;
+    until(&mut ws, "t1", "the reply to start", |all| all.iter().any(|e| e["type"] == "message.updated" && e["payload"]["text"] == "Working")).await;
+    let r = call(&mut ws, "stop", "orchestration.dispatchCommand", json!({ "type": "thread.stop", "commandId": "stop-1", "threadId": "t1" })).await;
+    assert_eq!(r["exit"]["_tag"], "Success", "{r}");
+    until(&mut ws, "t1", "the stopped run", |all| run_status(all, 3).as_deref() == Some("interrupted")).await;
+
+    // Another runtime mode keeps the process; the next one after the kill resumes the session.
+    let r = call(&mut ws, "rm", "orchestration.dispatchCommand", json!({ "type": "thread.runtime-mode.set", "commandId": "rm-1", "threadId": "t1", "runtimeMode": "full-access" })).await;
+    assert_eq!(r["exit"]["_tag"], "Success", "{r}");
+    say(&mut ws, 4, "hello", json!({ "type": "queue_after_active" })).await;
+    until(&mut ws, "t1", "the next run", |all| run_status(all, 4).as_deref() == Some("completed")).await;
+    say(&mut ws, 5, "hello again", json!({ "type": "queue_after_active" })).await;
+    until(&mut ws, "t1", "another run", |all| run_status(all, 5).as_deref() == Some("completed")).await;
+    let sent = agy_log(&server);
+    let resume = sent.iter().filter(|m| m["method"] == "session/resume").last().expect("the session resumed").clone();
+    let first = sent.iter().filter(|m| m["method"] == "session/new").last().unwrap().clone();
+    assert_eq!(sent.iter().filter(|m| m["method"] == "session/load").count(), 0, "never loaded: that replays it");
+    assert_eq!(sent.iter().filter(|m| m.get("argv").is_some()).count(), 3, "the unsigned launch, the first, the one after the kill: {sent:?}");
+    assert!(resume["params"]["sessionId"].is_string(), "{resume}");
+    let _ = first;
+
+    // After a restart the account is as it was; a sign-out shows.
+    drop(ws);
+    let server = restart(server);
+    let token = signed_in(&server).await;
+    let mut ws = socket(&server, &token).await;
+    let r = call(&mut ws, "p4", "server.getConfig", json!({})).await;
+    let p = r["exit"]["value"]["providers"].as_array().unwrap().iter().find(|p| p["instanceId"] == "antigravity").cloned().unwrap();
+    assert_eq!(p["auth"]["status"], "authenticated", "kept across restarts: {p}");
+    say(&mut ws, 6, "SIGNOUT", json!({ "type": "queue_after_active" })).await;
+    let all = until(&mut ws, "t1", "the signed-out run", |all| run_status(all, 6).as_deref() == Some("failed")).await;
+    let error = all.iter().filter(|e| e["type"] == "turn-item.updated" && e["payload"]["type"] == "error").last().unwrap();
+    assert_eq!(error["payload"]["failure"]["message"], "Sign in to Antigravity in Settings before you continue.");
+    let resumed = agy_log(&server).iter().filter(|m| m["method"] == "session/resume").count();
+    assert!(resumed >= 2, "the restarted server resumed the thread's session");
+}
+
+/// The sign-in state of `instance` from `provider.auth.subscribe`, once `done` holds.
+async fn auth_state(ws: &mut Ws, instance: &str, what: &str, done: impl Fn(&Value) -> bool) -> Value {
+    let id = fresh_id("auth");
+    let request = json!({ "_tag": "Request", "id": id, "tag": "provider.auth.subscribe", "payload": { "instanceId": instance }, "headers": [] });
+    record(&request);
+    ws.send(Message::Text(request.to_string().into())).await.unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    let mut last = Value::Null;
+    loop {
+        let next = tokio::time::timeout_at(deadline, ws.next()).await.unwrap_or_else(|_| panic!("no sign-in state {what}; last: {last}"));
+        let t = match next {
+            Some(Ok(Message::Text(t))) => t,
+            Some(Ok(_)) => continue,
+            _ => panic!("socket closed"),
+        };
+        let v: Value = serde_json::from_str(&t).unwrap();
+        if v["requestId"] != id.as_str() {
+            continue;
+        }
+        record(&v);
+        assert_eq!(v["_tag"], "Chunk", "{v}");
+        ws.send(Message::Text(json!({ "_tag": "Ack", "requestId": id }).to_string().into())).await.unwrap();
+        for state in v["values"].as_array().unwrap() {
+            last = state.clone();
+            if done(state) {
+                ws.send(Message::Text(json!({ "_tag": "Interrupt", "requestId": id }).to_string().into())).await.unwrap();
+                return state.clone();
+            }
+        }
+    }
+}
+
+async fn antigravity_config(ws: &mut Ws, instance: &str) -> Value {
+    let r = call(ws, &fresh_id("cfg"), "server.getConfig", json!({})).await;
+    r["exit"]["value"]["providers"].as_array().unwrap().iter().find(|p| p["instanceId"] == instance).cloned().unwrap_or_else(|| panic!("no {instance}: {r}"))
+}
+
+/// Signing Antigravity in through the browser link (the agent opens it with
+/// `open`, as the native CLI does), the redirect pasted from another device
+/// and delivered to the agent's listener; what another client sees
+/// meanwhile; sign-out, which leaves the machine's shared Google sign-in
+/// alone; a cancelled sign-in; an added instance refused a Google sign-in;
+/// one connecting with an API key that settings never show.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_antigravity_instance_signs_in_and_out() {
+    let server = start("antigravity-auth");
+    let token = signed_in(&server).await;
+    let mut ws = socket(&server, &token).await;
+    let other_token = signed_in(&server).await;
+    let mut other = socket(&server, &other_token).await;
+    call(&mut ws, "p", "server.refreshProviders", json!({ "instanceId": "antigravity" })).await;
+
+    let r = call(&mut ws, "s1", "provider.auth.start", json!({ "instanceId": "antigravity" })).await;
+    assert_eq!(r["exit"]["value"]["phase"], "starting", "{r}");
+    let flow = r["exit"]["value"]["flowId"].as_str().unwrap().to_owned();
+    let waiting = auth_state(&mut ws, "antigravity", "waiting", |s| s["phase"] == "waiting").await;
+    assert_eq!((waiting["interaction"]["type"].as_str(), waiting["interaction"]["acceptsCallback"].as_bool(), waiting["credentialOwner"].as_str()), (Some("browser"), Some(true), Some("provider")), "{waiting}");
+    let link = url::Url::parse(waiting["authorizationUrl"].as_str().unwrap()).unwrap();
+    assert_eq!(link.host_str(), Some("accounts.google.com"));
+    let query: std::collections::HashMap<String, String> = link.query_pairs().into_owned().collect();
+    let (redirect, state) = (query["redirect_uri"].clone(), query["state"].clone());
+
+    // Another client sees a sign-in running, not its link, and can't finish it.
+    let seen = auth_state(&mut other, "antigravity", "the other client's view", |s| s["phase"] == "waiting").await;
+    assert_eq!((seen["authorizationUrl"].clone(), seen["flowId"].clone(), seen["message"].as_str()), (Value::Null, Value::Null, Some("Sign-in is in progress in another client.")), "{seen}");
+    let r = call(&mut other, "c0", "provider.auth.complete", json!({ "instanceId": "antigravity", "flowId": flow, "callbackUrl": format!("{redirect}?state={state}&code=x") })).await;
+    assert_eq!(r["exit"]["cause"][0]["error"]["_tag"], "ProviderSetupError", "{r}");
+    let r = call(&mut ws, "c1", "provider.auth.complete", json!({ "instanceId": "antigravity", "flowId": flow, "callbackUrl": format!("{redirect}?state=other&code=x") })).await;
+    assert!(r["exit"]["cause"][0]["error"]["detail"].as_str().unwrap().contains("does not belong"), "{r}");
+
+    // The redirect, pasted: delivered to the agent's listener, which finishes the sign-in.
+    let r = call(&mut ws, "c2", "provider.auth.complete", json!({ "instanceId": "antigravity", "flowId": flow, "callbackUrl": format!("{redirect}?state={state}&code=4%2Fabc&scope=openid") })).await;
+    assert_eq!(r["exit"]["_tag"], "Success", "{r}");
+    let done = auth_state(&mut ws, "antigravity", "succeeded", |s| s["phase"] == "succeeded" || s["phase"] == "failed").await;
+    assert_eq!((done["phase"].as_str(), done["message"].as_str()), (Some("succeeded"), Some("Signed in with Google.")), "{done}");
+    let p = antigravity_config(&mut ws, "antigravity").await;
+    assert_eq!((p["status"].as_str(), p["auth"]["status"].as_str()), (Some("ready"), Some("authenticated")), "{p}");
+    let models: Vec<&str> = p["models"].as_array().unwrap().iter().filter_map(|m| m["slug"].as_str()).collect();
+    assert_eq!(models, ["gemini-4-neon", "gemini-3.8-flash"]);
+    let levels = &p["models"][1]["capabilities"]["optionDescriptors"][0];
+    assert_eq!((levels["id"].as_str(), levels["role"].as_str()), (Some("thought_level"), Some("reasoning")), "each model's thinking levels, learnt: {p}");
+    let walked: Vec<String> = agy_log(&server).iter().filter(|m| m["method"] == "session/set_config_option").filter_map(|m| m["params"]["value"].as_str().map(str::to_owned)).collect();
+    assert_eq!(walked, ["gemini-4-neon", "gemini-3.8-flash", "gemini-4-neon"], "every model selected once, then the session's own");
+    let setup_cwd = agy_log(&server).iter().find(|m| m.get("argv").is_some()).unwrap()["cwd"].as_str().unwrap().to_owned();
+    assert!(!std::path::Path::new(&setup_cwd).exists(), "the scratch folder went");
+
+    // `/logout` in a thread signs the instance out.
+    let workspace = workspace_repository(&server);
+    let r = call(&mut ws, "1", "projects.mutate", json!({ "type": "project.create", "commandId": "c1", "projectId": "p1", "title": "w",
+        "workspaceRoot": workspace, "createWorkspaceRootIfMissing": false, "defaultModelSelection": null })).await;
+    assert_eq!(r["exit"]["_tag"], "Success", "{r}");
+    let r = call(&mut ws, "2", "orchestration.launchThread", json!({ "commandId": "c2", "creationSource": "web", "threadId": "t1", "projectId": "p1",
+        "title": "Antigravity", "generateTitle": false, "modelSelection": { "instanceId": "antigravity", "model": "antigravity-default" },
+        "runtimeMode": "approval-required", "interactionMode": "default", "workspaceStrategy": { "type": "root" },
+        "initialMessage": { "messageId": "m1", "text": "/logout", "attachments": [] } })).await;
+    assert_eq!(r["exit"]["_tag"], "Success", "{r}");
+    let all = until(&mut ws, "t1", "the sign-out run", |all| run_status(all, 1).as_deref() == Some("completed")).await;
+    let note = all.iter().filter(|e| e["type"] == "turn-item.updated").find_map(|e| e["payload"]["message"].as_str().filter(|m| m.contains("agy"))).map(str::to_owned);
+    assert!(note.as_deref().is_some_and(|n| n.contains("/logout there")), "says where to sign out: {note:?}");
+    let r = call(&mut ws, "lo", "provider.auth.logout", json!({ "instanceId": "antigravity" })).await;
+    assert!(r["exit"]["cause"][0]["error"]["detail"].as_str().unwrap_or_default().contains("doesn't sign it out"), "{r}");
+    assert!(!agy_log(&server).iter().any(|m| m["method"] == "logout"), "the shared Google sign-in is never signed out");
+    let p = antigravity_config(&mut ws, "antigravity").await;
+    assert_eq!((p["auth"]["status"].as_str(), p["auth"]["label"].as_str(), p["auth"]["canLogout"].as_bool()), (Some("authenticated"), Some("Google AI Pro"), Some(false)), "{p}");
+
+    // Signed out with agy itself, then a sign-in, cancelled.
+    std::fs::remove_dir_all(server.dir.join("home/userdata/providers")).unwrap();
+    let _ = std::fs::remove_file(server.dir.join("out").join("agy-signed-in"));
+    let r = call(&mut ws, "s2", "provider.auth.start", json!({ "instanceId": "antigravity" })).await;
+    let flow = r["exit"]["value"]["flowId"].as_str().unwrap().to_owned();
+    auth_state(&mut ws, "antigravity", "waiting again", |s| s["phase"] == "waiting").await;
+    let r = call(&mut ws, "x", "provider.auth.cancel", json!({ "instanceId": "antigravity", "flowId": flow })).await;
+    assert_eq!((r["exit"]["value"]["phase"].as_str(), r["exit"]["value"]["message"].as_str()), (Some("cancelled"), Some("Google sign-in was cancelled.")), "{r}");
+
+    // An added instance can't sign in to another Google account (one sign-in per user).
+    let r = call(&mut ws, "u0", "server.updateSettings", json!({ "patch": {}, "providerInstanceMutation": { "operation": "upsert", "instanceId": "ag-two",
+        "instance": { "driver": "antigravity", "config": { "authMethod": "oauth-personal" } } } })).await;
+    assert_eq!(r["exit"]["_tag"], "Success", "{r}");
+    let r = call(&mut ws, "p1", "server.refreshProviders", json!({ "instanceId": "ag-two" })).await;
+    let two = r["exit"]["value"]["providers"].as_array().unwrap().iter().find(|p| p["instanceId"] == "ag-two").cloned().unwrap();
+    assert!((two["status"] == "error") && two["message"].as_str().unwrap_or_default().contains("can't sign in to another Google account"), "{two}");
+    let r = call(&mut ws, "s4", "provider.auth.start", json!({ "instanceId": "ag-two" })).await;
+    assert_eq!(r["exit"]["cause"][0]["error"]["_tag"], "ProviderSetupError", "{r}");
+
+    // An API key: kept out of the settings, given to that instance's agent only.
+    let r = call(&mut ws, "u", "server.updateSettings", json!({ "patch": {}, "providerInstanceMutation": { "operation": "upsert", "instanceId": "ag-key",
+        "instance": { "driver": "antigravity", "config": { "authMethod": "gemini-api-key", "apiKey": "k-123" } } } })).await;
+    assert_eq!(r["exit"]["value"]["providerInstances"]["ag-key"]["config"]["apiKey"], "\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}", "{r}");
+    let saved = std::fs::read_to_string(server.dir.join("home").join("userdata").join("settings.json")).unwrap();
+    assert!(!saved.contains("k-123"), "{saved}");
+    call(&mut ws, "p2", "server.refreshProviders", json!({ "instanceId": "ag-key" })).await;
+    call(&mut ws, "s3", "provider.auth.start", json!({ "instanceId": "ag-key" })).await;
+    let done = auth_state(&mut ws, "ag-key", "connected", |s| s["phase"] == "succeeded" || s["phase"] == "failed").await;
+    assert_eq!(done["message"], "Connected to Antigravity.", "{done}");
+    let keyed = agy_log(&server).into_iter().filter(|m| m.get("argv").is_some()).last().unwrap();
+    assert_eq!(keyed["env"]["GEMINI_API_KEY"], "k-123", "{keyed}");
+    let p = antigravity_config(&mut ws, "ag-key").await;
+    assert_eq!((p["auth"]["status"].as_str(), p["auth"]["label"].as_str()), (Some("authenticated"), Some("Gemini API key")), "{p}");
+}
+
+/// Antigravity's edits placed in their file (it reports bare snippets), a
+/// read the client served shown done though the agent fails it, and a quota
+/// the agent reports only in its session log failing the turn as a limit.
+#[tokio::test(flavor = "multi_thread")]
+async fn antigravity_turns_show_edits_reads_and_limits() {
+    let server = start("antigravity-protocol");
+    std::fs::write(server.dir.join("out").join("agy-signed-in"), "").unwrap();
+    let token = signed_in(&server).await;
+    let mut ws = socket(&server, &token).await;
+    let workspace = workspace_repository(&server);
+    std::fs::write(workspace.join("notes.txt"), "one\ntwo\nthree\n").unwrap();
+    let r = call(&mut ws, "1", "projects.mutate", json!({ "type": "project.create", "commandId": "c1", "projectId": "p1", "title": "w",
+        "workspaceRoot": workspace, "createWorkspaceRootIfMissing": false, "defaultModelSelection": null })).await;
+    assert_eq!(r["exit"]["_tag"], "Success", "{r}");
+    let r = call(&mut ws, "2", "orchestration.launchThread", json!({ "commandId": "c2", "creationSource": "web", "threadId": "t1", "projectId": "p1",
+        "title": "Antigravity", "generateTitle": false, "modelSelection": { "instanceId": "antigravity", "model": "antigravity-default" },
+        "runtimeMode": "full-access", "interactionMode": "default", "workspaceStrategy": { "type": "root" },
+        "initialMessage": { "messageId": "m1", "text": "EDIT it", "attachments": [] } })).await;
+    assert_eq!(r["exit"]["_tag"], "Success", "{r}");
+    let all = until(&mut ws, "t1", "the edit run", |all| run_status(all, 1).as_deref() == Some("completed")).await;
+    let edit = all.iter().filter(|e| e["type"] == "turn-item.updated" && e["payload"]["type"] == "file_change").last().expect("the edit");
+    assert_eq!(edit["payload"]["diffStr"], format!("--- {p}\n+++ {p}\n@@ -2,1 +2,1 @@\n-two\n+TWO\n", p = workspace.join("notes.txt").display()), "placed at line 2: {edit}");
+    assert!(edit["payload"]["oldStr"].is_null(), "no bare snippet shown at line 1: {edit}");
+    let view = all.iter().filter(|e| e["type"] == "turn-item.updated" && e["payload"]["nativeItemRef"]["nativeId"] == "view-1").last().expect("the read");
+    assert_eq!(view["payload"]["status"], "completed", "{view}");
+    assert_eq!(last(&all, "message.updated").unwrap()["text"], "Line 3: three");
+    let sent = agy_log(&server);
+    let new = sent.iter().find(|m| m["method"] == "session/set_config_option" && m["params"]["configId"] == "model").expect("the catalog default set");
+    assert_eq!(new["params"]["value"], "gemini-3.8-flash-high", "the default chat model, an older id of a listed family");
+
+    say(&mut ws, 2, "NATIVE_EDIT it", json!({ "type": "queue_after_active" })).await;
+    let all = until(&mut ws, "t1", "the native edit run", |all| run_status(all, 2).as_deref() == Some("completed")).await;
+    let edit = all.iter().filter(|e| e["type"] == "turn-item.updated" && e["payload"]["nativeItemRef"]["nativeId"] == "edit-n").last().expect("the native edit");
+    let diff = edit["payload"]["diffStr"].as_str().unwrap_or_default();
+    assert!(diff.contains("-three\n+THREE") && diff.contains("@@ -1,3 +1,3 @@"), "the whole file's diff: {edit}");
+
+    say(&mut ws, 3, "QUOTA please", json!({ "type": "queue_after_active" })).await;
+    let all = until(&mut ws, "t1", "the limited run", |all| run_status(all, 3).as_deref() == Some("failed")).await;
+    let error = all.iter().filter(|e| e["type"] == "turn-item.updated" && e["payload"]["type"] == "error").last().expect("an error item");
+    assert_eq!((error["payload"]["failure"]["class"].as_str(), error["payload"]["failure"]["message"].as_str()), (Some("usage_limit"), Some("You have reached your Antigravity quota for this period.")), "{error}");
+    assert!(error["payload"]["failure"]["resetAt"].is_string(), "{error}");
+
+    // A goal control Antigravity would take as an objective is refused.
+    say(&mut ws, 4, "/goal clear", json!({ "type": "queue_after_active" })).await;
+    let all = until(&mut ws, "t1", "the refused goal control", |all| run_status(all, 4).as_deref() == Some("failed")).await;
+    let error = all.iter().filter(|e| e["type"] == "turn-item.updated" && e["payload"]["type"] == "error").last().unwrap();
+    assert!(error["payload"]["failure"]["message"].as_str().unwrap().contains("/goal followed by an objective"), "{error}");
+    assert!(!agy_log(&server).iter().any(|m| m["method"] == "session/prompt" && m.to_string().contains("/goal clear")), "never sent to the agent");
+}
+
+/// A stand-in for Google's OAuth token, user info and Cloud Code quota
+/// services, on a loopback port; it records the paths it was asked.
+async fn fake_google() -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+    let asked = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let seen = asked.clone();
+    let app = axum::Router::new().fallback(move |uri: axum::http::Uri| {
+        let seen = seen.clone();
+        async move {
+            let path = uri.path().to_owned();
+            seen.lock().unwrap().push(path.clone());
+            let body = match path.as_str() {
+                "/token" => json!({ "access_token": "at-1", "expires_in": 3600 }),
+                "/userinfo" => json!({ "id": "g-123" }),
+                "/v1internal:retrieveUserQuotaSummary" => json!({ "groups": [{ "displayName": "Gemini", "buckets": [
+                    { "bucketId": "gemini-5h", "window": "5h", "remainingFraction": 0.4, "resetTime": "2099-01-01T00:00:00Z" },
+                    { "bucketId": "3p-weekly", "window": "weekly", "remainingFraction": 0.75, "resetTime": "2099-01-02T00:00:00Z" }] }] }),
+                _ => json!({}),
+            };
+            axum::Json(body)
+        }
+    });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    (url, asked)
+}
+
+/// Antigravity's account limits read from Google with its saved sign-in, its
+/// skills by folder, a thread title it writes, and a subagent batch whose
+/// child is read from the parent session's log.
+#[tokio::test(flavor = "multi_thread")]
+async fn antigravity_reports_limits_skills_titles_and_batches() {
+    use sha2::Digest as _;
+    let (google, asked) = fake_google().await;
+    let server = start_with_env("antigravity-extras", false, &[("DOMOVOI_ANTIGRAVITY_GOOGLE_API", &google)]);
+    std::fs::write(server.dir.join("out").join("agy-signed-in"), "").unwrap();
+    let profile = server.dir.join("home/userdata/providers/antigravity").join(hex::encode(sha2::Sha256::digest(b"antigravity")));
+    std::fs::create_dir_all(profile.join("antigravity-acp")).unwrap();
+    std::fs::write(profile.join("antigravity-acp/acp_token.json"), json!({ "client_id": "c", "client_secret": "s", "refresh_token": "r" }).to_string()).unwrap();
+    let user_skill = server.dir.join("agent-home/.gemini/config/skills/review");
+    std::fs::create_dir_all(&user_skill).unwrap();
+    std::fs::write(user_skill.join("SKILL.md"), "---\nname: review\ndescription: Review a change\n---\n").unwrap();
+    let workspace = workspace_repository(&server);
+    std::fs::create_dir_all(workspace.join(".agents/skills/deploy")).unwrap();
+    std::fs::write(workspace.join(".agents/skills/deploy/SKILL.md"), "---\nname: deploy\ndescription: Ship it\n---\n").unwrap();
+    let token = signed_in(&server).await;
+    let mut ws = socket(&server, &token).await;
+    let r = call(&mut ws, "t", "server.updateSettings", json!({ "patch": { "textGenerationModelSelection": { "instanceId": "antigravity", "model": "gemini-3.8-flash" } } })).await;
+    assert_eq!(r["exit"]["_tag"], "Success", "{r}");
+    let r = call(&mut ws, "1", "projects.mutate", json!({ "type": "project.create", "commandId": "c1", "projectId": "p1", "title": "w",
+        "workspaceRoot": workspace, "createWorkspaceRootIfMissing": false, "defaultModelSelection": null })).await;
+    assert_eq!(r["exit"]["_tag"], "Success", "{r}");
+    let r = call(&mut ws, "2", "orchestration.launchThread", json!({ "commandId": "c2", "creationSource": "web", "threadId": "t1", "projectId": "p1",
+        "title": "please run the tests", "generateTitle": true, "modelSelection": { "instanceId": "antigravity", "model": "gemini-3.8-flash" },
+        "runtimeMode": "full-access", "interactionMode": "default", "workspaceStrategy": { "type": "root" },
+        "initialMessage": { "messageId": "m1", "text": "BATCH the tests", "attachments": [] } })).await;
+    assert_eq!(r["exit"]["_tag"], "Success", "{r}");
+    let all = until(&mut ws, "t1", "the batch run", |all| run_status(all, 1).as_deref() == Some("completed")).await;
+    let item = all.iter().filter(|e| e["type"] == "turn-item.updated" && e["payload"]["type"] == "subagent").last().expect("the batch as a subagent");
+    assert_eq!((item["payload"]["title"].as_str(), item["payload"]["status"].as_str()), (Some("tester"), Some("completed")), "{item}");
+    let child = item["payload"]["childThreadId"].as_str().unwrap().to_owned();
+    let r = call(&mut ws, "cw", "orchestration.getNativeChildWork", json!({ "threadId": child })).await;
+    let children = &r["exit"]["value"]["children"];
+    assert_eq!((children[0]["conversationId"].as_str(), children[0]["role"].as_str()), (Some("child-1"), Some("tester")), "{r}");
+    assert_eq!(children[0]["steps"][0]["text"], "All green", "the launch envelope is left out: {r}");
+    assert_eq!(children[0]["steps"][0]["toolCalls"][0]["input"], "{\"CommandLine\":\"cargo test\"}");
+    let r = call(&mut ws, "cw2", "orchestration.getNativeChildWork", json!({ "threadId": "t1" })).await;
+    assert_eq!(r["exit"]["value"]["children"], json!([]), "a thread that is no batch has none");
+
+    // The title, written by Antigravity in a scratch folder.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    loop {
+        let all = events(&mut ws, &fresh_id("e"), "t1").await;
+        if all.iter().any(|e| e["type"] == "thread.metadata-updated" && e["payload"]["title"] == "Antigravity Title") {
+            break;
+        }
+        assert!(tokio::time::Instant::now() < deadline, "not titled");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    // Limits, read in the background after the session started.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    let p = loop {
+        let p = antigravity_config(&mut ws, "antigravity").await;
+        if p["usageLimits"]["windows"].as_array().is_some_and(|w| !w.is_empty()) {
+            break p;
+        }
+        assert!(tokio::time::Instant::now() < deadline, "no limits: {p}");
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    };
+    let windows: Vec<(&str, &str, f64)> = p["usageLimits"]["windows"].as_array().unwrap().iter().map(|w| (w["id"].as_str().unwrap(), w["label"].as_str().unwrap(), w["usedPercent"].as_f64().unwrap())).collect();
+    assert_eq!(windows, [("gemini-5h", "Gemini \u{b7} 5-hour", 60.0), ("3p-weekly", "Claude & GPT (shared) \u{b7} Weekly", 25.0)].map(|(a, b, c)| (a, b, c as f64)));
+    assert_eq!(p["usageLimits"]["credentialFingerprint"], hex::encode(sha2::Sha256::digest(b"google-account\0g-123")));
+    assert!(asked.lock().unwrap().iter().any(|a| a == "/token"));
+    assert_eq!(p["supportsTextGeneration"], true);
+    let skills: Vec<&str> = p["skills"].as_array().unwrap().iter().filter_map(|s| s["name"].as_str()).collect();
+    assert_eq!(skills, ["review"], "the user's skills: {p}");
+    let snapshot = p["workspaceSnapshots"].as_array().unwrap().iter().find(|w| w["cwd"].as_str() == workspace.to_str()).expect("the thread's folder").clone();
+    let project_skills: Vec<&str> = snapshot["skills"].as_array().unwrap().iter().filter_map(|s| s["name"].as_str()).collect();
+    assert_eq!(project_skills, ["deploy", "review"], "{snapshot}");
+}
+
+/// A stand-in for Google's Antigravity release channel: this platform's
+/// manifest, naming a `.tar.gz` that holds the scripted `agy` as `antigravity`.
+async fn fake_releases(dir: &std::path::Path) -> String {
+    use sha2::Digest as _;
+    let stage = dir.join("release");
+    std::fs::create_dir_all(&stage).unwrap();
+    let exe = stage.join("antigravity");
+    std::fs::write(&exe, FAKE_AGY).unwrap();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut std::fs::metadata(&exe).unwrap().permissions(), 0o755);
+    let archive = dir.join("cli.tar.gz");
+    assert!(Command::new("tar").args(["-czf"]).arg(&archive).arg("-C").arg(&stage).arg("antigravity").status().unwrap().success());
+    let bytes = std::fs::read(&archive).unwrap();
+    let sha = hex::encode(sha2::Sha512::digest(&bytes));
+    let (os, folder, cpu) = match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("macos", "aarch64") => ("darwin", "darwin-arm", "mac_arm64"),
+        ("macos", _) => ("darwin", "darwin-x64", "mac_x64"),
+        (_, "aarch64") => ("linux", "linux-arm", "linux_arm64"),
+        _ => ("linux", "linux-x64", "linux_x64"),
+    };
+    let target = format!("{os}_{}", if std::env::consts::ARCH == "aarch64" { "arm64" } else { "amd64" });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let file = format!("/antigravity-public/antigravity-cli/1.5.14-7/{folder}/cli_{cpu}.tar.gz");
+    let manifest = json!({ "version": "1.5.14", "url": format!("{base}{file}"), "sha512": sha });
+    let manifest_path = format!("/manifests/{target}.json");
+    let app = axum::Router::new().fallback(move |uri: axum::http::Uri| {
+        let (manifest, bytes, manifest_path, file) = (manifest.clone(), bytes.clone(), manifest_path.clone(), file.clone());
+        async move {
+            use axum::response::IntoResponse;
+            if uri.path() == manifest_path {
+                axum::Json(manifest).into_response()
+            } else if uri.path() == file {
+                bytes.into_response()
+            } else {
+                axum::http::StatusCode::NOT_FOUND.into_response()
+            }
+        }
+    });
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    base
+}
+
+/// Domovoi installs Antigravity from the release channel: downloaded,
+/// checked, proved by starting it, then what instances run; not removed
+/// while a session runs from it; removed once none does.
+#[tokio::test(flavor = "multi_thread")]
+async fn antigravity_is_installed_from_googles_release_channel() {
+    let dir = std::env::temp_dir().join(format!("domovoi-ag-releases-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let releases = fake_releases(&dir).await;
+    let server = start_with_env("antigravity-install", false, &[("DOMOVOI_ANTIGRAVITY_RELEASES", &releases)]);
+    std::fs::write(server.dir.join("out").join("agy-signed-in"), "").unwrap();
+    let token = signed_in(&server).await;
+    let mut ws = socket(&server, &token).await;
+    let p = antigravity_config(&mut ws, "antigravity").await;
+    assert_eq!(p["setup"]["canInstall"], true, "{p}");
+
+    let r = call(&mut ws, "i", "provider.install.start", json!({ "instanceId": "antigravity" })).await;
+    assert_eq!(r["exit"]["value"]["phase"], "downloading", "{r}");
+    let id = fresh_id("inst");
+    ws.send(Message::Text(json!({ "_tag": "Request", "id": id, "tag": "provider.install.subscribe", "payload": { "instanceId": "antigravity" }, "headers": [] }).to_string().into())).await.unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    let done = loop {
+        let t = match tokio::time::timeout_at(deadline, ws.next()).await.expect("the install to finish") {
+            Some(Ok(Message::Text(t))) => t,
+            Some(Ok(_)) => continue,
+            _ => panic!("socket closed"),
+        };
+        let v: Value = serde_json::from_str(&t).unwrap();
+        if v["requestId"] != id.as_str() || v["_tag"] != "Chunk" {
+            continue;
+        }
+        record(&v);
+        ws.send(Message::Text(json!({ "_tag": "Ack", "requestId": id }).to_string().into())).await.unwrap();
+        if let Some(s) = v["values"].as_array().unwrap().iter().find(|s| s["phase"] == "succeeded" || s["phase"] == "failed") {
+            ws.send(Message::Text(json!({ "_tag": "Interrupt", "requestId": id }).to_string().into())).await.unwrap();
+            break s.clone();
+        }
+    };
+    assert_eq!((done["phase"].as_str(), done["installedVersion"].as_str(), done["source"].as_str()), (Some("succeeded"), Some("1.5.14"), Some("managed")), "{done}");
+    let installed = done["executablePath"].as_str().unwrap().to_owned();
+    assert!(installed.contains("tools/antigravity-acp"), "{installed}");
+
+    // Instances now run the install.
+    let workspace = workspace_repository(&server);
+    let r = call(&mut ws, "1", "projects.mutate", json!({ "type": "project.create", "commandId": "c1", "projectId": "p1", "title": "w",
+        "workspaceRoot": workspace, "createWorkspaceRootIfMissing": false, "defaultModelSelection": null })).await;
+    assert_eq!(r["exit"]["_tag"], "Success", "{r}");
+    let r = call(&mut ws, "2", "orchestration.launchThread", json!({ "commandId": "c2", "creationSource": "web", "threadId": "t1", "projectId": "p1",
+        "title": "A", "generateTitle": false, "modelSelection": { "instanceId": "antigravity", "model": "gemini-3.8-flash" },
+        "runtimeMode": "full-access", "interactionMode": "default", "workspaceStrategy": { "type": "root" },
+        "initialMessage": { "messageId": "m1", "text": "hello", "attachments": [] } })).await;
+    assert_eq!(r["exit"]["_tag"], "Success", "{r}");
+    until(&mut ws, "t1", "the run", |all| run_status(all, 1).as_deref() == Some("completed")).await;
+    let launch = agy_log(&server).into_iter().filter(|m| m.get("argv").is_some()).last().unwrap();
+    assert_eq!(launch["exe"].as_str(), std::fs::canonicalize(&installed).ok().as_deref().and_then(std::path::Path::to_str), "the thread ran the install: {launch}");
+    let r = call(&mut ws, "rm", "provider.install.remove", json!({ "instanceId": "antigravity" })).await;
+    assert!(r["exit"]["cause"][0]["error"]["detail"].as_str().unwrap_or_default().contains("Stop Antigravity sessions"), "a session runs from it: {r}");
+    let r = call(&mut ws, "fs", "orchestration.forceStopThread", json!({ "threadId": "t1" })).await;
+    assert_eq!(r["exit"]["_tag"], "Success", "{r}");
+    let r = call(&mut ws, "rm2", "provider.install.remove", json!({ "instanceId": "antigravity" })).await;
+    assert_eq!((r["exit"]["value"]["phase"].as_str(), r["exit"]["value"]["installedVersion"].clone()), (Some("idle"), Value::Null), "{r}");
+    assert!(!std::path::Path::new(&installed).exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn antigravity_plan_mode_captures_revises_and_implements_plans() {
+    let server = start("antigravity-plans");
+    std::fs::write(server.dir.join("out").join("agy-signed-in"), "").unwrap();
+    let token = signed_in(&server).await;
+    let mut ws = socket(&server, &token).await;
+    let workspace = workspace_repository(&server);
+    let r = call(&mut ws, "1", "projects.mutate", json!({ "type": "project.create", "commandId": "c1", "projectId": "p1", "title": "w",
+        "workspaceRoot": workspace, "createWorkspaceRootIfMissing": false, "defaultModelSelection": null })).await;
+    assert_eq!(r["exit"]["_tag"], "Success", "{r}");
+
+    // Launch in plan mode: Antigravity enters `plan` mode and its >10 KiB brain artifact becomes an untruncated ProposedPlan.
+    let r = call(&mut ws, "2", "orchestration.launchThread", json!({ "commandId": "c2", "creationSource": "web", "threadId": "t1", "projectId": "p1",
+        "title": "Antigravity Plan", "generateTitle": false,
+        "modelSelection": { "instanceId": "antigravity", "model": "gemini-4-neon" },
+        "runtimeMode": "full-access", "interactionMode": "plan", "workspaceStrategy": { "type": "root" },
+        "initialMessage": { "messageId": "m1", "text": "PLAN_ARTIFACT please", "attachments": [] } })).await;
+    assert_eq!(r["exit"]["_tag"], "Success", "{r}");
+    let all = until(&mut ws, "t1", "first plan run", |all| run_status(all, 1).as_deref() == Some("completed")).await;
+    let proposed: Vec<Value> = all.iter().filter(|e| e["type"] == "turn-item.updated" && e["payload"]["type"] == "proposed_plan").map(|e| e["payload"].clone()).collect();
+    let plan1 = proposed.last().expect("a proposed_plan turn item");
+    let md1 = plan1["markdown"].as_str().unwrap();
+    assert!(md1.starts_with("# Feature Implementation Plan") && md1.ends_with("## Done") && md1.len() > 10_000, "full untruncated plan captured (len={})", md1.len());
+    assert!(!md1.contains("[Earlier output truncated]"), "must not be truncated");
+    assert!(!all.iter().any(|e| e["type"] == "turn-item.updated" && e["payload"]["type"] == "file_change"), "brain artifact must not emit a noisy file_change");
+    let plan1_id = plan1["planId"].as_str().unwrap().to_owned();
+    let plan1_art = all.iter().filter(|e| e["type"] == "plan.updated" && e["payload"]["id"] == plan1_id).last().expect("plan.updated");
+    assert_eq!(plan1_art["payload"]["status"], "active");
+    let mode_sets: Vec<String> = agy_log(&server).into_iter()
+        .filter(|m| m["method"] == "session/set_config_option" && m["params"]["configId"] == "mode")
+        .filter_map(|m| m["params"]["value"].as_str().map(str::to_owned))
+        .collect();
+    assert_eq!(mode_sets, vec!["plan".to_owned()], "entered Antigravity plan mode");
+
+    // Revising the plan with edit_file supersedes the earlier plan and activates the new revision.
+    say(&mut ws, 2, "PLAN_REVISE please", json!({ "type": "queue_after_active" })).await;
+    let all = until(&mut ws, "t1", "plan revision run", |all| run_status(all, 2).as_deref() == Some("completed")).await;
+    let plan2 = all.iter().filter(|e| e["type"] == "turn-item.updated" && e["payload"]["type"] == "proposed_plan" && e["payload"]["runId"] == "run:thread:t1:ordinal:2").last().expect("revised proposed_plan");
+    let md2 = plan2["payload"]["markdown"].as_str().unwrap();
+    assert!(md2.ends_with("## Revised Final Step"), "updated plan read from disk");
+    let plan2_id = plan2["payload"]["planId"].as_str().unwrap().to_owned();
+    let plan1_latest = all.iter().filter(|e| e["type"] == "plan.updated" && e["payload"]["id"] == plan1_id).last().unwrap();
+    assert_eq!(plan1_latest["payload"]["status"], "superseded", "earlier plan superseded by revision");
+    let plan2_latest = all.iter().filter(|e| e["type"] == "plan.updated" && e["payload"]["id"] == plan2_id).last().unwrap();
+    assert_eq!(plan2_latest["payload"]["status"], "active");
+
+    // Implementing the plan leaves plan mode (`default`) and marks the plan completed.
+    let r = call(&mut ws, "mode", "orchestration.dispatchCommand", json!({ "type": "thread.interaction-mode.set", "commandId": "mode-default", "threadId": "t1", "interactionMode": "default" })).await;
+    assert_eq!(r["exit"]["_tag"], "Success", "{r}");
+    let r = call(&mut ws, "impl", "orchestration.dispatchCommand", json!({
+        "type": "message.dispatch", "commandId": "impl-1", "threadId": "t1", "messageId": "m-impl",
+        "text": "Implement the plan.", "attachments": [], "createdBy": "user", "creationSource": "web",
+        "dispatchMode": { "type": "queue_after_active" },
+        "sourcePlanRef": { "threadId": "t1", "planId": plan2_id }
+    })).await;
+    assert_eq!(r["exit"]["_tag"], "Success", "{r}");
+    let all = until(&mut ws, "t1", "implement run", |all| run_status(all, 3).as_deref() == Some("completed")).await;
+    let plan2_done = all.iter().filter(|e| e["type"] == "plan.updated" && e["payload"]["id"] == plan2_id).last().unwrap();
+    assert_eq!(plan2_done["payload"]["status"], "completed");
+    let mode_sets: Vec<String> = agy_log(&server).into_iter()
+        .filter(|m| m["method"] == "session/set_config_option" && m["params"]["configId"] == "mode")
+        .filter_map(|m| m["params"]["value"].as_str().map(str::to_owned))
+        .collect();
+    assert_eq!(mode_sets, vec!["plan".to_owned(), "default".to_owned()], "left Antigravity plan mode on implement");
+}
+
+/// Antigravity 1.5.x single-call async `invoke_subagent`: shows up as a live
+/// background task (`pendingBackgroundTasks`) and `subagent` row, stays open
+/// across `end_turn` while the child runs, mirrors the child's tool calls and
+/// result into its child thread, and captures the agent's wake-up reply.
+#[tokio::test(flavor = "multi_thread")]
+async fn antigravity_async_subagents_stream_background_activity_and_child_transcripts() {
+    let server = start_with_env(
+        "antigravity-async-subagent",
+        false,
+        &[
+            ("DOMOVOI_ANTIGRAVITY_POLL_MS", "50"),
+            ("DOMOVOI_ANTIGRAVITY_WAKE_MS", "2000"),
+            ("DOMOVOI_ANTIGRAVITY_SETTLE_MS", "400"),
+        ],
+    );
+    std::fs::write(server.dir.join("out").join("agy-signed-in"), "").unwrap();
+    let workspace = workspace_repository(&server);
+    let token = signed_in(&server).await;
+    let mut ws = socket(&server, &token).await;
+    let r = call(&mut ws, "1", "projects.mutate", json!({ "type": "project.create", "commandId": "c1", "projectId": "p1", "title": "w",
+        "workspaceRoot": workspace, "createWorkspaceRootIfMissing": false, "defaultModelSelection": null })).await;
+    assert_eq!(r["exit"]["_tag"], "Success", "{r}");
+
+    let r = call(&mut ws, "2", "orchestration.launchThread", json!({
+        "commandId": "c2", "creationSource": "web", "threadId": "t1", "projectId": "p1",
+        "title": "Render icons", "modelSelection": { "instanceId": "antigravity", "model": "gemini-3.8-flash" },
+        "runtimeMode": "full-access", "interactionMode": "default", "workspaceStrategy": { "type": "root" },
+        "initialMessage": { "messageId": "m1", "text": "ASYNC_SUBAGENT please", "attachments": [] }
+    })).await;
+    assert_eq!(r["exit"]["_tag"], "Success", "{r}");
+
+    let all = until(&mut ws, "t1", "async subagent run", |all| run_status(all, 1).as_deref() == Some("completed")).await;
+
+    // Surface live background task while running, then clear it at turn end.
+    let bg_updates: Vec<&Value> = all.iter()
+        .filter(|e| e["type"] == "provider-thread.updated")
+        .filter_map(|e| e["payload"]["pendingBackgroundTasks"].as_array().map(|_| &e["payload"]["pendingBackgroundTasks"]))
+        .collect();
+    assert!(
+        bg_updates.iter().any(|tasks| tasks.as_array().is_some_and(|list| list.iter().any(|t| {
+            t["kind"] == "subagent" && t["description"] == "App Icon Designer A" && t["childThreadId"].is_string()
+        }))),
+        "emitted pendingBackgroundTasks for the running subagent: {bg_updates:?}"
+    );
+    assert_eq!(bg_updates.last().and_then(|v| v.as_array()).map(Vec::len), Some(0), "background tasks cleared when done");
+
+    // Parent subagent row records real result from step_type = 101 agent_message.
+    let sub_item = all.iter()
+        .filter(|e| e["type"] == "turn-item.updated" && e["payload"]["type"] == "subagent")
+        .last()
+        .expect("subagent turn item");
+    assert_eq!(
+        (sub_item["payload"]["title"].as_str(), sub_item["payload"]["status"].as_str(), sub_item["payload"]["result"].as_str()),
+        (Some("App Icon Designer A"), Some("completed"), Some("/tmp/concept_a.png")),
+        "{sub_item}"
+    );
+
+    // Parent captured the post-end_turn wake-up reply after the subagent finished.
+    let replies: Vec<&str> = all.iter()
+        .filter(|e| e["type"] == "turn-item.updated" && e["payload"]["type"] == "assistant_message")
+        .filter_map(|e| e["payload"]["text"].as_str())
+        .collect();
+    assert!(replies.iter().any(|t| t.contains("All icons rendered: /tmp/concept_a.png")), "wake-up reply captured: {replies:?}");
+
+    // Child thread has prompt, mirrored tool call + output, and final result.
+    let child_id = sub_item["payload"]["childThreadId"].as_str().unwrap().to_owned();
+    let child_events = events(&mut ws, "child-ev", &child_id).await;
+    let gen_tool = child_events.iter()
+        .filter(|e| e["type"] == "turn-item.updated" && e["payload"]["type"] == "dynamic_tool" && e["payload"]["toolName"] == "generate_image")
+        .last()
+        .expect("child generate_image tool mirrored");
+    assert_eq!(gen_tool["payload"]["status"], "completed");
+    assert_eq!(gen_tool["payload"]["output"], "Generated /tmp/concept_a.png");
+    assert!(
+        child_events.iter().any(|e| e["type"] == "message.updated" && e["payload"]["role"] == "assistant" && e["payload"]["text"] == "/tmp/concept_a.png"),
+        "child thread received final result"
+    );
+
+    // orchestration.getNativeChildWork also decodes step_type = 132 cleanly.
+    let r = call(&mut ws, "cw", "orchestration.getNativeChildWork", json!({ "threadId": child_id })).await;
+    assert_eq!(r["exit"]["value"]["children"][0]["conversationId"], "child-async-1", "{r}");
+}
+
+fn latest_question(all: &[Value]) -> Option<&Value> {
+    all.iter().rev().find(|event| event["type"] == "runtime-request.updated" && event["payload"]["kind"] == "user_input").map(|event| &event["payload"])
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn antigravity_questions_survive_turn_end_and_restart() {
+    let server = start("antigravity-message-question");
+    std::fs::write(server.dir.join("out/agy-signed-in"), "").unwrap();
+    let workspace = workspace_repository(&server);
+    let token = signed_in(&server).await;
+    let mut ws = socket(&server, &token).await;
+    launched(&mut ws, &workspace, "antigravity", "gemini-4-neon", "GRAPH_QUESTIONS").await;
+    let all = until(&mut ws, "t1", "completed turn with a question", |all| run_status(all, 1).as_deref() == Some("completed")).await;
+    let question = latest_question(&all).unwrap();
+    assert_eq!(question["status"], "pending");
+    assert_eq!(question["responseCapability"]["type"], "message");
+    let request_id = question["id"].clone();
+    let items: Vec<_> = all.iter().filter(|e| e["type"] == "turn-item.updated" && e["payload"]["type"] == "user_input_request").collect();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["payload"]["questions"].as_array().unwrap().len(), 4);
+    assert_eq!(items[0]["payload"]["responseMode"], "message");
+
+    drop(ws);
+    let server = restart(server);
+    let token = signed_in(&server).await;
+    let mut ws = socket(&server, &token).await;
+    assert_eq!(latest_question(&events(&mut ws, "after-restart", "t1").await).unwrap()["status"], "pending");
+
+    let invalid = json!({"type": "runtime-request.respond", "commandId": "invalid-question", "threadId": "t1", "requestId": request_id, "answers": {"question-1": "bogus"}});
+    assert_eq!(call(&mut ws, "invalid", "orchestration.dispatchCommand", invalid).await["exit"]["_tag"], "Failure");
+    let mut answer = json!({"type": "runtime-request.respond", "commandId": "graph-answer", "threadId": "t1", "requestId": request_id,
+        "answers": {"question-1": "option-1", "question-2": ["option-3"], "question-3": "option-1", "question-4": "option-2"}});
+    for _ in 0..2 {
+        let r = call(&mut ws, "answer", "orchestration.dispatchCommand", answer.clone()).await;
+        assert_eq!(r["exit"]["_tag"], "Success", "{r}");
+    }
+    answer["commandId"] = json!("graph-answer-duplicate");
+    assert_eq!(call(&mut ws, "duplicate", "orchestration.dispatchCommand", answer).await["exit"]["_tag"], "Failure");
+    let all = until(&mut ws, "t1", "the answer run", |all| run_status(all, 2).as_deref() == Some("completed")).await;
+    assert_eq!(latest_question(&all).unwrap()["status"], "resolved");
+    let prompts: Vec<_> = agy_log(&server).into_iter().filter(|m| m["method"] == "session/prompt").collect();
+    assert_eq!(prompts.len(), 2);
+    assert_eq!(prompts[1]["params"]["prompt"][0]["text"],
+        "Which platforms?\nAll platforms\n\nHow should orphan notes appear?\nUse tags\n\nWhat should a tap do?\nPreview\n\nHow should nodes be colored?\nBy tag");
+
+    for ordinal in [3, 4] {
+        say(&mut ws, ordinal, "GRAPH_QUESTIONS", json!({ "type": "queue_after_active" })).await;
+        let all = until(&mut ws, "t1", "the next question", |all| run_status(all, ordinal).as_deref() == Some("completed")).await;
+        let question = latest_question(&all).unwrap();
+        assert_eq!(question["status"], "pending");
+        if ordinal == 3 {
+            let r = call(&mut ws, "skip", "orchestration.dispatchCommand", json!({
+                "type": "thread.user-input.dismiss", "commandId": "skip-question", "threadId": "t1", "requestId": question["id"]
+            })).await;
+            assert_eq!(r["exit"]["_tag"], "Success", "{r}");
+            assert_eq!(latest_question(&events(&mut ws, "skipped", "t1").await).unwrap()["status"], "cancelled");
+        } else {
+            say(&mut ws, 5, "Go with the recommendations.", json!({ "type": "queue_after_active" })).await;
+        }
+    }
+    let all = until(&mut ws, "t1", "the typed answer", |all| run_status(all, 5).as_deref() == Some("completed")).await;
+    assert_eq!(latest_question(&all).unwrap()["status"], "cancelled");
+
+    say(&mut ws, 6, "GRAPH_QUESTIONS", json!({ "type": "queue_after_active" })).await;
+    let all = until(&mut ws, "t1", "a question before rollback", |all| run_status(all, 6).as_deref() == Some("completed")).await;
+    assert_eq!(latest_question(&all).unwrap()["status"], "pending");
+    let checkpoint = all.iter().find(|e| e["type"] == "checkpoint.captured" && e["payload"]["appRunOrdinal"] == 5).unwrap();
+    let r = call(&mut ws, "rollback", "orchestration.dispatchCommand", json!({
+        "type": "checkpoint.rollback", "commandId": "rollback-question", "threadId": "t1",
+        "checkpointId": checkpoint["payload"]["id"], "scopeId": checkpoint["payload"]["scopeId"], "restoreFiles": false,
+    })).await;
+    assert_eq!(r["exit"]["_tag"], "Success", "{r}");
+    assert_eq!(latest_question(&events(&mut ws, "rolled-back", "t1").await).unwrap()["status"], "cancelled");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn opencode_questions_reply_retry_and_cancel() {
+    let server = start_scripted("opencode-questions");
+    let workspace = workspace_repository(&server);
+    let token = signed_in(&server).await;
+    let mut ws = socket(&server, &token).await;
+    launched(&mut ws, &workspace, "opencode", "fake/m1", "FORMS").await;
+    let all = until(&mut ws, "t1", "the form", |all| latest_question(all).is_some()).await;
+    let request = latest_question(&all).unwrap();
+    assert_eq!(request["responseCapability"]["type"], "live");
+    let form_id = request["id"].clone();
+    for command_id in ["reply-first", "reply-retry"] {
+        let r = call(&mut ws, command_id, "orchestration.dispatchCommand", json!({"type": "runtime-request.respond", "commandId": command_id, "threadId": "t1", "requestId": form_id,
+            "answers": {"scope": "all", "features": ["tags"], "notes": ["Include accessibility."]}})).await;
+        assert_eq!(r["exit"]["_tag"], "Success", "{r}");
+        if command_id == "reply-first" {
+            let all = until(&mut ws, "t1", "the retry notice", |all| all.iter().any(|e| e["payload"]["message"].as_str().is_some_and(|message| message.contains("Try again")))).await;
+            assert_eq!(latest_question(&all).unwrap()["status"], "pending");
+        }
+    }
+    let all = until(&mut ws, "t1", "the answered form", |all| run_status(all, 1).as_deref() == Some("completed")).await;
+    assert_eq!(latest_question(&all).unwrap()["status"], "resolved");
+    assert_eq!(all.iter().filter(|e| e["type"] == "runtime-request.updated" && e["payload"]["status"] == "pending").count(), 1);
+    say(&mut ws, 2, "FORMS", json!({ "type": "queue_after_active" })).await;
+    let all = until(&mut ws, "t1", "a form to skip", |all| latest_question(all).is_some_and(|r| r["status"] == "pending")).await;
+    let r = call(&mut ws, "skip", "orchestration.dispatchCommand", json!({
+        "type": "thread.user-input.dismiss", "commandId": "skip-form", "threadId": "t1", "requestId": latest_question(&all).unwrap()["id"]
+    })).await;
+    assert_eq!(r["exit"]["_tag"], "Success", "{r}");
+    for (ordinal, next) in [(2, "FORMS EXTERNAL"), (3, "FORMS UNSUPPORTED")] {
+        let all = until(&mut ws, "t1", "a cancelled form", |all| run_status(all, ordinal).as_deref() == Some("completed")).await;
+        assert_eq!(latest_question(&all).unwrap()["status"], "cancelled");
+        say(&mut ws, ordinal + 1, next, json!({ "type": "queue_after_active" })).await;
+    }
+    until(&mut ws, "t1", "the fallback turn", |all| run_status(all, 4).as_deref() == Some("completed")).await;
+    let sent: Vec<Value> = std::fs::read_to_string(server.dir.join("out/opencode-requests.log")).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    let replies: Vec<_> = sent.iter().filter(|r| r["path"].as_str().is_some_and(|p| p.contains("/form/") && p.ends_with("/reply"))).collect();
+    assert_eq!(replies.len(), 2);
+    assert_eq!(replies[1]["body"], json!({ "answer": { "scope": "all", "features": ["tags"], "notes": "Include accessibility." } }));
+    assert!(sent.iter().any(|r| r["method"] == "DELETE" && r["path"].as_str().unwrap_or("").contains("message=")));
 }

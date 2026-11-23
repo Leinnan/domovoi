@@ -14,35 +14,48 @@ struct SettingsWindow: View {
     @ObservedObject var core: Core
     @ObservedObject private var tab = SettingsTab.shared
 
-    private var settings: SettingsView { core.view.settings }
-
     private var connected: Bool { ["connected", "reconnecting"].contains(core.view.connection.state) }
 
     var body: some View {
-        Group {
+        TabView(selection: Binding(
+            get: { connected ? tab.selection : "companion" },
+            set: { tab.selection = $0 }
+        )) {
             if connected {
-                tabs
-            } else {
-                ContentUnavailableView(
-                    "Not Connected",
-                    systemImage: "network.slash",
-                    description: Text("Settings belong to a server. Connect to one in the Domovoi window to change them.")
-                )
+                GeneralSettings(core: core).tabItem { Label("General", systemImage: "gearshape") }.tag("general")
+                ProvidersSettings(core: core).tabItem { Label("Providers", systemImage: "cpu") }.tag("providers")
+                KeybindingsSettings(core: core).tabItem { Label("Keybindings", systemImage: "keyboard") }.tag("keybindings")
+                ScheduledSettings(core: core).tabItem { Label("Scheduled", systemImage: "calendar.badge.clock") }.tag("scheduled")
+                ArchivedSettings(core: core).tabItem { Label("Archived", systemImage: "archivebox") }.tag("archived")
+                ProjectsSettings(core: core).tabItem { Label("Projects", systemImage: "folder") }.tag("projects")
+                MaintenanceSettings(core: core).tabItem { Label("Maintenance", systemImage: "wrench.and.screwdriver") }.tag("maintenance")
+                AccessSettings(core: core).tabItem { Label("Access", systemImage: "person.badge.key") }.tag("access")
             }
+            CompanionSettings(core: core).tabItem { Label("Companion", systemImage: "face.smiling") }.tag("companion")
         }
         .frame(width: 720, height: 600)
     }
+}
 
-    private var tabs: some View {
-        TabView(selection: $tab.selection) {
-            GeneralSettings(core: core).tabItem { Label("General", systemImage: "gearshape") }.tag("general")
-            ProvidersSettings(core: core).tabItem { Label("Providers", systemImage: "cpu") }.tag("providers")
-            KeybindingsSettings(core: core).tabItem { Label("Keybindings", systemImage: "keyboard") }.tag("keybindings")
-            ScheduledSettings(core: core).tabItem { Label("Scheduled", systemImage: "calendar.badge.clock") }.tag("scheduled")
-            ArchivedSettings(core: core).tabItem { Label("Archived", systemImage: "archivebox") }.tag("archived")
-            ProjectsSettings(core: core).tabItem { Label("Projects", systemImage: "folder") }.tag("projects")
-            MaintenanceSettings(core: core).tabItem { Label("Maintenance", systemImage: "wrench.and.screwdriver") }.tag("maintenance")
-            AccessSettings(core: core).tabItem { Label("Access", systemImage: "person.badge.key") }.tag("access")
+private struct CompanionSettings: View {
+    @ObservedObject var core: Core
+    @State private var chosenServer: String?
+
+    private var servers: [EnvironmentView] { core.view.connection.environments }
+    private var serverId: String {
+        if let chosenServer, servers.contains(where: { $0.id == chosenServer }) { return chosenServer }
+        return (servers.first(where: { $0.active }) ?? servers.first)?.id ?? ""
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            if !servers.isEmpty {
+                Picker("Server", selection: Binding(get: { serverId }, set: { chosenServer = $0 })) {
+                    ForEach(servers, id: \.id) { Text($0.label).tag($0.id) }
+                }
+                .padding()
+            }
+            CompanionEditor(core: core, environmentId: serverId)
         }
     }
 }
@@ -74,6 +87,7 @@ struct GeneralSettings: View {
 
 struct ProvidersSettings: View {
     @ObservedObject var core: Core
+    @State private var editing: ProviderEditing?
 
     var body: some View {
         Form {
@@ -88,32 +102,94 @@ struct ProvidersSettings: View {
                     LabeledContent("Models", value: "\(p.modelCount)")
                     if !p.limits.isEmpty { LabeledContent("Limits", value: p.limits) }
                     if !p.message.isEmpty { Text(p.message).font(.caption).foregroundStyle(.secondary) }
+                    ProviderSetupRows(provider: p, update: { core.update($0) }, edit: { editing = $0 })
                 } header: {
                     Text(p.name.isEmpty ? p.instanceId : p.name)
                 }
             }
-            Button("Check Again") { core.update(.refreshProviders) }
+            HStack {
+                Button("Check Again") { core.update(.refreshProviders) }
+                if core.view.settings.canAddAntigravity {
+                    Button("Add Antigravity Account…") { editing = .newAntigravity() }
+                }
+            }
         }
         .formStyle(.grouped)
+        .sheet(item: $editing) { draft in
+            NavigationStack {
+                ProviderInstanceEditor(editing: draft, update: { core.update($0) }) { editing = nil }
+                    .navigationTitle(draft.edit.instanceId.isEmpty ? "New Antigravity Account" : "Edit \(draft.edit.displayName.isEmpty ? draft.edit.instanceId : draft.edit.displayName)")
+            }
+            .frame(minWidth: 480, minHeight: 380)
+        }
         .onAppear { core.update(.loadSettings(section: "providers")) }
     }
 }
 
 struct KeybindingsSettings: View {
     @ObservedObject var core: Core
+    /// A binding waiting for a yes: there is no adding it back from here.
+    @State private var removing: KeybindingView?
 
     var body: some View {
         Table(core.view.settings.keybindings) {
             TableColumn("Command", value: \.command)
             TableColumn("Shortcut", value: \.shortcut).width(90)
             TableColumn("When", value: \.condition)
+            TableColumn("") { binding in
+                Button { removing = binding } label: { Image(systemName: "trash") }
+                    .buttonStyle(.borderless)
+                    .help("Remove this shortcut")
+                    .accessibilityLabel("Remove \(binding.shortcut) for \(binding.command)")
+            }
+            .width(28)
+        }
+        .contextMenu(forSelectionType: KeybindingView.ID.self) { ids in
+            if let id = ids.first, let binding = core.view.settings.keybindings.first(where: { $0.id == id }) {
+                Button("Remove Shortcut…") { removing = binding }
+            }
         }
         .padding()
+        .confirmationDialog(
+            removing.map { "Remove \($0.shortcut) for “\($0.command)”?" } ?? "",
+            isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } }),
+            titleVisibility: .visible,
+            presenting: removing
+        ) { binding in
+            Button("Remove", role: .destructive) {
+                core.update(.removeKeybinding(command: binding.command, shortcut: binding.shortcut, condition: binding.condition))
+            }
+        } message: { _ in
+            Text("It comes off the server's keybindings.")
+        }
     }
 }
 
 extension KeybindingView: @retroactive Identifiable {
     public var id: String { "\(command)|\(shortcut)|\(condition)" }
+}
+
+/// A task's last runs under its row: each opens the thread it went to.
+struct ScheduledRunsList: View {
+    let runs: [ScheduledRunView]
+    let openThread: (String) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Space.xxs) {
+            if runs.isEmpty { Text("No runs yet.").font(.caption).foregroundStyle(.secondary) }
+            ForEach(Array(runs.enumerated()), id: \.offset) { _, run in
+                HStack(spacing: Space.xs) {
+                    Text(run.status).font(.caption.weight(.medium)).foregroundStyle(run.failed ? .red : .primary)
+                    Text([run.trigger, run.started, run.error.isEmpty ? run.threadTitle : run.error].filter { !$0.isEmpty }.joined(separator: " · "))
+                        .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    Spacer()
+                    if !run.threadId.isEmpty {
+                        Button("Open") { openThread(run.threadId) }.controlSize(.small)
+                    }
+                }
+            }
+        }
+    }
 }
 
 struct ScheduledSettings: View {
@@ -137,6 +213,12 @@ struct ScheduledSettings: View {
                             if task.scheduleKind != "webhook" {
                                 Button("Run Now") { core.update(.runScheduledNow(id: task.id)) }
                             }
+                            if let thread = task.openableThread {
+                                Button("Open Thread") { core.update(.selectThread(threadId: thread)) }
+                            }
+                            Button(core.view.settings.scheduledRunsTask == task.id ? "Hide Runs" : "Runs") {
+                                core.update(core.view.settings.scheduledRunsTask == task.id ? .loadScheduledRuns(id: "") : .loadScheduledRuns(id: task.id))
+                            }
                             Button("Edit") { editing = ScheduledTaskEditor.from(task) }
                             Button(role: .destructive) { deleting = task } label: { Image(systemName: "trash") }
                                 .buttonStyle(.borderless)
@@ -144,9 +226,14 @@ struct ScheduledSettings: View {
                                 .accessibilityLabel("Delete \(task.name)")
                         }
                         Text(task.prompt).font(.caption).foregroundStyle(.secondary).lineLimit(2)
-                        Text("\(task.schedule) · \(task.projectTitle) · next \(task.nextRun) · \(task.lastRun)").font(.caption2).foregroundStyle(.tertiary)
-                        if !task.lastError.isEmpty {
+                        Text("\(task.schedule) · \(task.projectTitle) · \(task.destination) · next \(task.nextRun) · \(task.lastRun)").font(.caption2).foregroundStyle(.tertiary)
+                        if !task.runState.isEmpty {
+                            Text(task.runState).font(.caption2).foregroundStyle(.tint)
+                        } else if !task.lastError.isEmpty {
                             Text(task.lastError).font(.caption2).foregroundStyle(.red).lineLimit(2)
+                        }
+                        if core.view.settings.scheduledRunsTask == task.id {
+                            ScheduledRunsList(runs: core.view.settings.scheduledRuns) { core.update(.selectThread(threadId: $0)) }
                         }
                         if task.scheduleKind == "webhook" {
                             WebhookTaskDetails(core: core, task: task)
@@ -218,35 +305,41 @@ struct ProjectsSettings: View {
     @ObservedObject var core: Core
     @State private var removing: ProjectSettingsView?
     @State private var renaming: ProjectSettingsView?
+    @State private var pickingIcon: ProjectSettingsView?
     @State private var title = ""
 
     var body: some View {
         Form {
             ForEach(core.view.settings.projects, id: \.id) { p in
-                LabeledContent {
-                    HStack {
-                        Text("\(p.threadCount) threads").foregroundStyle(.secondary)
-                        if core.view.connection.isOnThisMac {
-                            Button { NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: p.workspaceRoot) } label: { Image(systemName: "folder") }
-                                .buttonStyle(.borderless)
-                                .help("Reveal in Finder")
-                                .accessibilityLabel("Reveal \(p.title) in Finder")
-                        }
-                        Button("Rename…") {
-                            title = p.title
-                            renaming = p
-                        }
-                        Button("Remove…", role: .destructive) { removing = p }
-                    }
-                } label: {
+                HStack(spacing: Space.s) {
+                    ProjectIconTile(icon: p.icon, size: 24, core: core)
                     VStack(alignment: .leading) {
                         Text(p.title)
-                        Text(p.workspaceRoot).font(.caption).foregroundStyle(.secondary)
+                        Text(p.workspaceRoot).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.head)
                     }
+                    Spacer(minLength: Space.xs)
+                    Text("\(p.threadCount) threads").foregroundStyle(.secondary).fixedSize()
+                    if core.view.connection.isOnThisMac {
+                        Button { NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: p.workspaceRoot) } label: { Image(systemName: "folder") }
+                            .buttonStyle(.borderless)
+                            .help("Reveal in Finder")
+                            .accessibilityLabel("Reveal \(p.title) in Finder")
+                    }
+                    Button("Change Icon…") { pickingIcon = p }
+                        .disabled(p.icon.saving || core.view.connection.state != "connected")
+                        .accessibilityLabel("Change icon for \(p.title)")
+                    Button("Rename…") {
+                        title = p.title
+                        renaming = p
+                    }
+                    Button("Remove…", role: .destructive) { removing = p }
                 }
             }
         }
         .formStyle(.grouped)
+        .sheet(isPresented: Binding(get: { pickingIcon != nil }, set: { if !$0 { pickingIcon = nil } })) {
+            if let project = pickingIcon { ProjectIconPicker(project: project, core: core) }
+        }
         .confirmingDestructive($removing, title: { "Remove “\($0.title)” from Domovoi?" }, action: "Remove Project",
                                message: "Its threads leave Domovoi. The folder and its files on the server stay as they are.") {
             core.update(.removeProject(projectId: $0.id))

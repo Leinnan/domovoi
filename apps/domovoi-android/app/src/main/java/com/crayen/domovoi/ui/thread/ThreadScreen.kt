@@ -5,11 +5,28 @@ import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.Crossfade
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.layout.height
+import androidx.compose.material.icons.outlined.Checklist
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.font.FontWeight
+import com.crayen.domovoi.app.PlanProgressView
+import com.crayen.domovoi.app.TaskProgressView
+import com.crayen.domovoi.ui.common.MarkdownBlocks
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
+import com.crayen.domovoi.app.ThreadLinkView
+import androidx.compose.material.icons.filled.PanTool
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -42,6 +59,8 @@ import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material.icons.outlined.UnfoldMore
 import androidx.compose.material.icons.outlined.CommentsDisabled
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -81,8 +100,21 @@ import com.crayen.domovoi.app.ContextUsageView
 import com.crayen.domovoi.app.Event
 import com.crayen.domovoi.app.FindView
 import com.crayen.domovoi.core.Core
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import com.crayen.domovoi.app.SessionUsageView
+import com.crayen.domovoi.ui.common.LimitWindowRow
+import com.crayen.domovoi.ui.common.PercentBar
+import com.crayen.domovoi.ui.common.limitColor
+import com.crayen.domovoi.ui.common.ArtifactGallery
 import com.crayen.domovoi.ui.common.ConnectionBanner
 import com.crayen.domovoi.ui.common.EmptyState
+import com.crayen.domovoi.ui.common.ProjectIconTile
 import com.crayen.domovoi.ui.common.copyText
 import com.crayen.domovoi.ui.common.watch
 import com.crayen.domovoi.ui.nav.Navigator
@@ -105,6 +137,12 @@ fun ThreadScreen(core: Core, threadId: String, nav: Navigator, snackbars: Snackb
     var deleting by remember { mutableStateOf(false) }
     var forking by remember { mutableStateOf(false) }
     var menu by remember { mutableStateOf(false) }
+    // A scheduled task for this thread, being set up.
+    var scheduling by remember { mutableStateOf<com.crayen.domovoi.app.ScheduledTaskEdit?>(null) }
+    var artifacts by remember(threadId) { mutableStateOf(false) }
+    var artifactJump by remember(threadId) { mutableStateOf<String?>(null) }
+    var progress by remember(threadId) { mutableStateOf(false) }
+    var contextDetails by remember { mutableStateOf(false) }
     val context = LocalContext.current
 
     LaunchedEffect(threadId) {
@@ -121,7 +159,23 @@ fun ThreadScreen(core: Core, threadId: String, nav: Navigator, snackbars: Snackb
         val id = sidebar.selectedThreadId
         if (forking && id != null && id != threadId) { forking = false; nav.show(Screen.Thread(id)) }
     }
-    val actions = remember(nav) { TranscriptActions(send = core::update, openThread = { nav.show(Screen.Thread(it)) }, openDiff = { nav.open(Screen.Diff) }) }
+    val dark = isSystemInDarkTheme()
+    val actions = remember(nav, threadId, dark) {
+        TranscriptActions(
+            send = core::update,
+            openThread = { nav.show(Screen.Thread(it)) },
+            openDiff = { nav.open(Screen.Diff) },
+            openArtifact = { artifactId, version, codeMode ->
+                core.update(Event.OpenArtifact(threadId, artifactId, version, dark))
+                if (codeMode) core.update(Event.SetArtifactViewMode("code"))
+                nav.open(Screen.Artifacts)
+            },
+            openWorkspaceArtifact = { path ->
+                core.update(Event.OpenArtifactWorkspacePath(threadId, path, dark))
+                nav.open(Screen.Artifacts)
+            },
+        )
+    }
     val isScratch = thread != null && sidebar.projects.firstOrNull { it.id == thread.projectId }?.isScratch == true
 
     Scaffold(
@@ -138,7 +192,17 @@ fun ThreadScreen(core: Core, threadId: String, nav: Navigator, snackbars: Snackb
                     }
                 },
                 actions = {
-                    thread?.context?.let { ContextMeter(it) }
+                    thread?.usage?.let { UsageMeter(it) { contextDetails = true } }
+                    if (thread != null && thread.artifactCount > 0u) {
+                        IconButton(onClick = {
+                            core.update(Event.ShowPanel("artifacts"))
+                            nav.open(Screen.Artifacts)
+                        }) {
+                            BadgedBox(badge = { Badge { Text("${thread.artifactCount}") } }) {
+                                Icon(Icons.Outlined.AutoAwesome, "Artifacts (${thread.artifactCount})")
+                            }
+                        }
+                    }
                     IconButton(onClick = { nav.open(Screen.Diff) }) { Icon(Icons.Outlined.Difference, "Changes") }
                     IconButton(onClick = { nav.open(Screen.Terminal) }) { Icon(Icons.Outlined.Terminal, "Terminal") }
                     Box {
@@ -148,6 +212,15 @@ fun ThreadScreen(core: Core, threadId: String, nav: Navigator, snackbars: Snackb
                             DropdownMenuItem(text = { Text("Git") }, leadingIcon = { Icon(Icons.AutoMirrored.Outlined.CallSplit, null) }, onClick = { menu = false; nav.open(Screen.Git) })
                             if (thread != null) {
                                 HorizontalDivider()
+                                DropdownMenuItem(
+                                    text = { Text(if (thread.artifactCount > 0u) "Artifacts (${thread.artifactCount})" else "Artifacts") },
+                                    leadingIcon = { Icon(Icons.Outlined.AutoAwesome, null) },
+                                    onClick = {
+                                        menu = false
+                                        core.update(Event.ShowPanel("artifacts"))
+                                        nav.open(Screen.Artifacts)
+                                    },
+                                )
                                 DropdownMenuItem(text = { Text("Find in thread") }, leadingIcon = { Icon(Icons.Outlined.Search, null) }, onClick = { menu = false; core.update(Event.FindInThread("")) })
                                 DropdownMenuItem(text = { Text("Rename") }, onClick = { menu = false; renaming = true })
                                 DropdownMenuItem(text = { Text(if (thread.pinned) "Unpin" else "Pin") }, onClick = { menu = false; core.update(Event.PinThread(thread.id, !thread.pinned)) })
@@ -158,6 +231,12 @@ fun ThreadScreen(core: Core, threadId: String, nav: Navigator, snackbars: Snackb
                                     if (!thread.archived) nav.back()
                                 })
                                 DropdownMenuItem(text = { Text("Copy thread ID") }, onClick = { menu = false; copyText(context, thread.id) })
+                                DropdownMenuItem(text = { Text("Schedule this thread…") }, enabled = !thread.archived, onClick = {
+                                    menu = false
+                                    core.update(Event.LoadSettings("scheduled"))
+                                    scheduling = com.crayen.domovoi.ui.settings.scheduledTaskFromThread(thread)
+                                })
+                                DropdownMenuItem(text = { Text("Forget allowed tools") }, onClick = { menu = false; core.update(Event.ForgetThreadPermissions(thread.id)) })
                                 HorizontalDivider()
                                 DropdownMenuItem(
                                     text = { Text("Fork thread") }, leadingIcon = { Icon(Icons.AutoMirrored.Outlined.CallSplit, null) }, enabled = thread.canFork,
@@ -187,12 +266,22 @@ fun ThreadScreen(core: Core, threadId: String, nav: Navigator, snackbars: Snackb
         },
         snackbarHost = { SnackbarHost(snackbars) },
         bottomBar = {
-            Column(Modifier.background(MaterialTheme.colorScheme.surface).navigationBarsPadding().imePadding()) {
+            Column(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface).navigationBarsPadding().imePadding(), horizontalAlignment = Alignment.CenterHorizontally) {
+                // Subagents and side threads that wait on you: one banner each.
+                thread?.waitingChildren?.forEach { child ->
+                    WaitingChildBanner(child, Modifier.widthIn(max = Space.column)) {
+                        core.update(Event.SelectThread(child.threadId))
+                        nav.show(Screen.Thread(child.threadId))
+                    }
+                }
                 val requests = thread?.pendingRequests.orEmpty()
                 AnimatedVisibility(requests.isNotEmpty(), enter = slideInVertically { it } + fadeIn(), exit = slideOutVertically { it } + fadeOut()) {
                     ApprovalBar(requests, core::update)
                 }
-                Composer(core)
+                if (thread != null && (thread.plan != null || thread.tasks != null)) {
+                    WorkProgressStrip(thread.plan, thread.tasks, Modifier.widthIn(max = Space.column)) { progress = true }
+                }
+                Composer(core, Modifier.widthIn(max = Space.column).fillMaxWidth())
             }
         },
     ) { padding ->
@@ -204,6 +293,7 @@ fun ThreadScreen(core: Core, threadId: String, nav: Navigator, snackbars: Snackb
                     thread, retryBlocked, actions,
                     modifier = Modifier.weight(1f).fillMaxWidth(),
                     contentPadding = PaddingValues(bottom = padding.calculateBottomPadding()),
+                    artifactJump = artifactJump,
                 )
                 slow -> Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
                     val connected = connection.state == "connected"
@@ -216,6 +306,29 @@ fun ThreadScreen(core: Core, threadId: String, nav: Navigator, snackbars: Snackb
         }
     }
 
+    if (artifacts && thread != null) {
+        ArtifactGallery(core, thread, close = { artifacts = false }) { item ->
+            core.update(Event.CloseFind)
+            artifactJump = item
+            artifacts = false
+        }
+    }
+    if (progress && thread != null) {
+        WorkProgressSheet(thread.plan, thread.tasks, onDismiss = { progress = false }) { planId ->
+            progress = false
+            core.update(Event.ImplementPlan(planId))
+        }
+    }
+    val usage = thread?.usage
+    LaunchedEffect(usage == null) { if (usage == null) contextDetails = false }
+    if (contextDetails && usage != null) {
+        UsageDetailsSheet(
+            usage,
+            onCompact = { contextDetails = false; core.update(Event.Compact) },
+            onShowAll = { contextDetails = false; nav.open(Screen.Usage) },
+        ) { contextDetails = false }
+    }
+    scheduling?.let { draft -> com.crayen.domovoi.ui.settings.ScheduledTaskEditorFor(core, draft) { scheduling = null } }
     if (renaming && thread != null) {
         NameDialog(title = "Rename thread", label = "Title", confirm = "Rename", initial = thread.title, onDismiss = { renaming = false }) {
             renaming = false
@@ -233,26 +346,194 @@ fun ThreadScreen(core: Core, threadId: String, nav: Navigator, snackbars: Snackb
     }
 }
 
-/** How full the agent's context window is, as a ring and a percentage. */
+/** The meter's colour: red all but full (90 %), orange nearly full (80 %). */
 @Composable
-private fun ContextMeter(context: ContextUsageView) {
-    val tints = LocalTints.current
-    Row(Modifier.padding(horizontal = Space.xs), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Space.xs)) {
-        if (context.maxTokens > 0uL) {
-            androidx.compose.material3.CircularProgressIndicator(
-                progress = { context.percent.toFloat() / 100f },
-                modifier = Modifier.size(16.dp),
-                strokeWidth = 2.5.dp,
-                color = if (context.high) tints.caution else MaterialTheme.colorScheme.primary,
-                trackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
-                strokeCap = StrokeCap.Round,
-            )
+private fun contextColor(context: ContextUsageView, normal: Color): Color = when {
+    context.critical -> MaterialTheme.colorScheme.error
+    context.high -> LocalTints.current.caution
+    else -> normal
+}
+
+/**
+ * The thread's usage at a glance: a ring for how full the agent's context window
+ * is (or the fullest provider limit when there is no context yet) and its
+ * percentage, with a dot when a limit runs low; a tap shows both in detail.
+ */
+@Composable
+private fun UsageMeter(usage: SessionUsageView, onClick: () -> Unit) {
+    val context = usage.context
+    val fullest = usage.fullest
+    // What the ring fills to: the context, else the fullest limit (null: no ring).
+    val ring: Pair<UInt, Color>? = when {
+        context != null -> if (context.maxTokens > 0uL) context.percent to contextColor(context, MaterialTheme.colorScheme.primary) else null
+        fullest != null -> fullest.percent to limitColor(fullest)
+        else -> null
+    }
+    val textColor = when {
+        context != null -> contextColor(context, MaterialTheme.colorScheme.onSurfaceVariant)
+        fullest != null && fullest.high -> limitColor(fullest)
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    val alert = when (usage.limitAlert) {
+        "danger" -> MaterialTheme.colorScheme.error
+        "caution" -> LocalTints.current.caution
+        else -> null
+    }
+    Row(
+        Modifier.clip(MaterialTheme.shapes.small).clickable(onClickLabel = "Usage details", onClick = onClick).padding(horizontal = Space.xs, vertical = Space.s)
+            .semantics(mergeDescendants = true) { contentDescription = usageSummary(usage).joinToString(". ") },
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Space.xs),
+    ) {
+        if (ring != null) {
+            Box {
+                androidx.compose.material3.CircularProgressIndicator(
+                    progress = { ring.first.toFloat() / 100f },
+                    modifier = Modifier.size(16.dp),
+                    strokeWidth = 2.5.dp,
+                    color = ring.second,
+                    trackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                    strokeCap = StrokeCap.Round,
+                )
+                if (alert != null) {
+                    // A provider limit nearly used up.
+                    Box(
+                        Modifier.align(Alignment.TopEnd).offset(x = 3.dp, y = (-3).dp).size(7.dp)
+                            .background(MaterialTheme.colorScheme.surface, CircleShape).padding(1.dp).background(alert, CircleShape),
+                    )
+                }
+            }
         }
         Text(
-            if (context.maxTokens > 0uL) "${context.percent}%" else context.label,
+            if (ring != null) "${ring.first}%" else context?.label.orEmpty(),
             style = MaterialTheme.typography.labelMedium,
-            color = if (context.high) tints.caution else MaterialTheme.colorScheme.onSurfaceVariant,
+            color = textColor,
         )
+    }
+}
+
+/** `Context: 48k of 200k tokens (24%)`, `Claude Weekly: 92% used, resets in 2d`. */
+private fun usageSummary(usage: SessionUsageView): List<String> = buildList {
+    usage.context?.let { add("Context: ${it.label}" + if (it.maxTokens > 0uL) " (${it.percent}%)" else "") }
+    val provider = usage.limits?.provider
+    val fullest = usage.fullest
+    if (provider != null && fullest != null) {
+        add("$provider ${fullest.label}: ${fullest.percent}% used" + if (fullest.resets.isNotEmpty()) ", resets ${fullest.resets}" else "")
+    } else if (provider != null && usage.limitsNotice.isNotEmpty()) {
+        add("$provider limits: ${usage.limitsNotice}")
+    }
+}
+
+/**
+ * The thread's usage in full: the context window (how much is used, where it
+ * compacts, what it is made of, the cost), then the limits of the provider it
+ * runs on, and the way to the Usage tab.
+ */
+@Composable
+private fun UsageDetailsSheet(usage: SessionUsageView, onCompact: () -> Unit, onShowAll: () -> Unit, onDismiss: () -> Unit) {
+    val uriHandler = LocalUriHandler.current
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(
+            Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = Space.xl),
+            verticalArrangement = Arrangement.spacedBy(Space.m),
+        ) {
+            usage.context?.let { context ->
+                Text("Context", style = MaterialTheme.typography.titleMedium)
+                Text(context.label, style = MaterialTheme.typography.bodyLarge, color = contextColor(context, MaterialTheme.colorScheme.onSurface))
+                if (context.maxTokens > 0uL) {
+                    PercentBar(context.percent, contextColor(context, MaterialTheme.colorScheme.primary), tick = context.compactAtPercent)
+                    Row {
+                        Text("${context.percent}% used", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
+                        if (context.compactAtPercent > 0u) Text("Compacts at ${context.compactAtPercent}%", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+                if (context.breakdown.isNotEmpty() || context.cost.isNotEmpty()) {
+                    context.breakdown.forEach { line -> StatRow(line.label, line.value) }
+                    if (context.cost.isNotEmpty()) StatRow("Cost", context.cost, strong = true)
+                }
+                if (context.canCompact) {
+                    OutlinedButton(onClick = onCompact, modifier = Modifier.fillMaxWidth()) { Text("Compact now") }
+                }
+            }
+            usage.limits?.let { limits ->
+                if (usage.context != null) HorizontalDivider()
+                Row(verticalAlignment = Alignment.Bottom) {
+                    Text("${limits.provider} limits", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                    if (usage.limitsChecked.isNotEmpty()) {
+                        Text(
+                            if (usage.limitsChecked == "now") "Updated now" else "Updated ${usage.limitsChecked} ago",
+                            style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+                if (usage.limitsNotice.isNotEmpty()) {
+                    Text(usage.limitsNotice, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                limits.windows.forEach { LimitWindowRow(it) }
+                if (limits.externalUrl.isNotEmpty()) {
+                    TextButton(onClick = { runCatching { uriHandler.openUri(limits.externalUrl) } }) {
+                        Text(limits.externalLabel.ifEmpty { "Usage on the web" })
+                    }
+                }
+            }
+            HorizontalDivider()
+            TextButton(onClick = onShowAll, modifier = Modifier.fillMaxWidth()) { Text("All usage") }
+            Spacer(Modifier.height(Space.xl))
+        }
+    }
+}
+
+@Composable
+private fun StatRow(label: String, value: String, strong: Boolean = false) {
+    Row(Modifier.fillMaxWidth()) {
+        Text(label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
+        Text(value, style = MaterialTheme.typography.bodyMedium, fontWeight = if (strong) FontWeight.SemiBold else FontWeight.Normal)
+    }
+}
+
+/** A child thread waiting for an approval or an answer, with the way there. */
+@Composable
+private fun WaitingChildBanner(child: ThreadLinkView, modifier: Modifier = Modifier, open: () -> Unit) {
+    val tint = LocalTints.current.caution
+    val relation = when (child.relation) { "subagent" -> "Subagent"; "fork" -> "Fork"; "side" -> "Side thread"; else -> "Thread" }
+    Surface(
+        color = tint.copy(alpha = 0.12f),
+        shape = MaterialTheme.shapes.medium,
+        modifier = modifier.fillMaxWidth().padding(horizontal = Space.m, vertical = Space.xxs),
+    ) {
+        Row(Modifier.padding(start = Space.m), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Space.s)) {
+            Icon(Icons.Filled.PanTool, null, tint = tint, modifier = Modifier.size(16.dp))
+            Text(
+                "$relation waiting: ${child.title.ifEmpty { "Untitled" }}",
+                style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f),
+            )
+            TextButton(onClick = open) { Text("Open") }
+        }
+    }
+}
+
+/** Opens the latest plan and checklist without moving the transcript. */
+@Composable
+private fun WorkProgressStrip(plan: PlanProgressView?, tasks: TaskProgressView?, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        shape = MaterialTheme.shapes.medium,
+        modifier = modifier.fillMaxWidth().padding(horizontal = Space.m, vertical = Space.xxs).clip(MaterialTheme.shapes.medium).clickable(onClickLabel = "Show plan and checklist", onClick = onClick),
+    ) {
+        Column(Modifier.padding(horizontal = Space.m, vertical = Space.xs), verticalArrangement = Arrangement.spacedBy(Space.xxs)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Space.s)) {
+                Icon(Icons.Outlined.Checklist, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(14.dp))
+                Text(listOfNotNull(plan?.label, tasks?.label).joinToString(" · "), style = MaterialTheme.typography.labelMedium, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+            }
+            if (tasks != null && tasks.total > 0u) {
+                LinearProgressIndicator(
+                    progress = { tasks.done.toFloat() / tasks.total.toFloat() },
+                    trackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                    strokeCap = StrokeCap.Round,
+                    drawStopIndicator = {},
+                    modifier = Modifier.fillMaxWidth().height(3.dp),
+                )
+            }
+        }
     }
 }
 
@@ -313,7 +594,12 @@ fun NewThreadScreen(core: Core, nav: Navigator, snackbars: SnackbarHostState, sh
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(Space.l, Alignment.CenterVertically),
         ) {
-            Icon(Icons.Outlined.AutoAwesome, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(44.dp))
+            // The project's own icon: which project this starts in, at a glance.
+            Crossfade(project?.id, label = "projectIcon") { id ->
+                val shown = sidebar.projects.firstOrNull { it.id == id }
+                if (shown != null) ProjectIconTile(shown.icon, core, size = 64.dp)
+                else Icon(Icons.Outlined.AutoAwesome, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(44.dp))
+            }
             Text(project?.let { "What should we do in ${it.title}?" } ?: "Pick a project to start", style = MaterialTheme.typography.titleLarge, textAlign = TextAlign.Center)
             FlowRow(horizontalArrangement = Arrangement.spacedBy(Space.s, Alignment.CenterHorizontally), verticalArrangement = Arrangement.spacedBy(Space.s)) {
                 ChoiceChip(project?.title ?: "Project", Icons.Outlined.Folder, sidebar.projects.map { it.id to it.title }) { core.update(Event.NewThread(it)) }
@@ -351,6 +637,47 @@ private fun ChoiceChip(label: String, icon: androidx.compose.ui.graphics.vector.
         )
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             choices.forEach { (value, text) -> DropdownMenuItem(text = { Text(text) }, onClick = { open = false; pick(value) }) }
+        }
+    }
+}
+
+
+@Composable
+private fun WorkProgressSheet(
+    plan: PlanProgressView?, tasks: TaskProgressView?, onDismiss: () -> Unit, implement: (String) -> Unit,
+) {
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = Space.xl),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("Plan and checklist", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f).semantics { heading() })
+            TextButton(onClick = onDismiss) { Text("Done") }
+        }
+        HorizontalDivider()
+        Column(
+            Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(Space.xl),
+            verticalArrangement = Arrangement.spacedBy(Space.m),
+        ) {
+            if (plan != null) {
+                Text(plan.label, style = MaterialTheme.typography.titleMedium, modifier = Modifier.semantics { heading() })
+                MarkdownBlocks(plan.blocks)
+                if (plan.canImplement) {
+                    Button(onClick = { implement(plan.planId) }) { Text("Implement plan") }
+                }
+            }
+            if (tasks != null) {
+                if (plan != null) HorizontalDivider()
+                Text("Checklist · ${tasks.done}/${tasks.total}", style = MaterialTheme.typography.titleMedium, modifier = Modifier.semantics { heading() })
+                if (tasks.previousRun) {
+                    Text("Previous run", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                tasks.explanation?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
+                TodoSteps(tasks.todos)
+            }
+            if (plan == null && tasks == null) {
+                Text("No plan or checklist is available.")
+            }
         }
     }
 }

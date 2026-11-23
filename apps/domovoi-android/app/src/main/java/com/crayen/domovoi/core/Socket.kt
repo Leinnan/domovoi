@@ -42,7 +42,12 @@ class Socket(
     private var watchdog: Job? = null
 
     fun open(url: String, requestId: UInt) {
-        current?.cancel()
+        // Forget the old socket before cancelling it: its failure callback
+        // must find it replaced, not current, and stay quiet.
+        val old = current
+        current = null
+        opening = null
+        old?.cancel()
         watchdog?.cancel()
         val request = try {
             Request.Builder().url(url).build()

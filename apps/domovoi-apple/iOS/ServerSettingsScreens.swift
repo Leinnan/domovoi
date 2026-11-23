@@ -11,9 +11,6 @@ struct ServerSettingsScreen: View {
 
     var body: some View {
         Form {
-            if groups.isEmpty, connected {
-                ProgressView().frame(maxWidth: .infinity)
-            }
             ForEach(groups, id: \.title) { group in
                 Section(group.title) {
                     ForEach(group.fields, id: \.key) { field in
@@ -24,7 +21,9 @@ struct ServerSettingsScreen: View {
         }
         .overlay {
             // Not a spinner forever: the settings come from a server.
-            if groups.isEmpty, !connected {
+            if groups.isEmpty, connected {
+                ProgressView()
+            } else if groups.isEmpty {
                 ContentUnavailableView {
                     Label("Not Connected", systemImage: "network.slash")
                 } description: {
@@ -40,9 +39,10 @@ struct ServerSettingsScreen: View {
     }
 }
 
-/// Codex and Claude on the server: installed, signed in, how many models.
+/// The agents on the server: installed, signed in, how many models.
 struct ProvidersScreen: View {
     @ObservedObject var core: Core
+    @State private var editing: ProviderEditing?
 
     var body: some View {
         Form {
@@ -59,54 +59,157 @@ struct ProvidersScreen: View {
                     if !p.auth.isEmpty { LabeledContent("Account", value: p.auth) }
                     LabeledContent("Models", value: "\(p.modelCount)")
                     if !p.limits.isEmpty { LabeledContent("Limits", value: p.limits) }
-                    if !p.message.isEmpty { Text(p.message).font(.caption).foregroundStyle(.secondary) }
+                    if !p.message.isEmpty { Text(p.message).font(TypeRole.meta).foregroundStyle(.secondary) }
+                    ProviderSetupRows(provider: p, update: { core.update($0) }, edit: { editing = $0 })
                 } header: {
                     Text(p.name.isEmpty ? p.instanceId : p.name)
                 }
             }
             Section {
                 Button("Check Again") { core.update(.refreshProviders) }
+                if core.view.settings.canAddAntigravity {
+                    Button("Add Antigravity Account") { editing = .newAntigravity() }
+                }
             } footer: {
-                Text("Sign in and install on the server itself, in the Claude Code and Codex command-line tools.")
+                Text("Other agents sign in and install on the server itself, in their command-line tools. Antigravity signs in here: Google returns to the server's machine, so from this device paste the address the browser ended on.")
             }
         }
         .navigationTitle("Providers")
         .navigationBarTitleDisplayMode(.inline)
+        .sheet(item: $editing) { draft in
+            NavigationStack {
+                ProviderInstanceEditor(editing: draft, update: { core.update($0) }) { editing = nil }
+                    .navigationTitle(draft.edit.instanceId.isEmpty ? "New Account" : "Edit Account")
+                    .navigationBarTitleDisplayMode(.inline)
+            }
+        }
         .onAppear { core.update(.loadSettings(section: "providers")) }
         .refreshable { await core.refresh(.refreshProviders) }
+    }
+}
+
+/// One scheduled task: what it does, its last runs (each opens its thread),
+/// and Run Now, Open Thread and Edit.
+struct ScheduledTaskDetail: View {
+    @ObservedObject var core: Core
+    let taskId: String
+    let open: (Screen) -> Void
+    @State private var editing: ScheduledTaskEdit?
+
+    private var task: ScheduledTaskView? { core.view.settings.scheduledTasks.first { $0.id == taskId } }
+    private var runs: [ScheduledRunView] { core.view.settings.scheduledRunsTask == taskId ? core.view.settings.scheduledRuns : [] }
+
+    var body: some View {
+        List {
+            if let task {
+                Section {
+                    Toggle("Enabled", isOn: Binding(get: { task.enabled }, set: { core.update(.setScheduledEnabled(id: task.id, enabled: $0)) }))
+                    LabeledContent("Runs", value: task.schedule)
+                    LabeledContent("Project", value: task.projectTitle)
+                    LabeledContent("Where", value: task.destination)
+                    if task.enabled && task.scheduleKind != "webhook" { LabeledContent("Next", value: task.nextRun) }
+                    if !task.runState.isEmpty { LabeledContent("Now", value: task.runState) }
+                } footer: {
+                    Text(task.prompt).lineLimit(6)
+                }
+                Section {
+                    if task.scheduleKind != "webhook" {
+                        Button("Run Now", systemImage: "play") { core.update(.runScheduledNow(id: task.id)) }
+                    }
+                    if let thread = task.openableThread {
+                        Button("Open Thread", systemImage: "bubble.left.and.text.bubble.right") { open(.thread(thread)) }
+                    }
+                    Button("Edit", systemImage: "pencil") { editing = ScheduledTaskEditor.from(task) }
+                }
+                Section("Last runs") {
+                    if runs.isEmpty {
+                        Text(task.lastRun).foregroundStyle(.secondary)
+                    }
+                    ForEach(Array(runs.enumerated()), id: \.offset) { _, run in
+                        Button {
+                            if !run.threadId.isEmpty { open(.thread(run.threadId)) }
+                        } label: {
+                            VStack(alignment: .leading, spacing: Space.xxs) {
+                                HStack {
+                                    Text(run.status).foregroundStyle(run.failed ? Tint.danger : .primary)
+                                    Spacer()
+                                    Text(run.trigger).font(TypeRole.meta).foregroundStyle(.secondary)
+                                }
+                                Text([run.started, run.threadTitle].filter { !$0.isEmpty }.joined(separator: " · "))
+                                    .font(TypeRole.meta).foregroundStyle(.secondary)
+                                if !run.error.isEmpty { Text(run.error).font(TypeRole.meta).foregroundStyle(Tint.danger).lineLimit(3) }
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(run.threadId.isEmpty)
+                    }
+                }
+            }
+        }
+        .overlay {
+            if task == nil {
+                ContentUnavailableView("Task Deleted", systemImage: "calendar.badge.exclamationmark", description: Text("This task is no longer on the server."))
+            }
+        }
+        .navigationTitle(task?.name ?? "Task")
+        .navigationBarTitleDisplayMode(.inline)
+        .onAppear { core.update(.loadScheduledRuns(id: taskId)) }
+        .refreshable { core.update(.loadScheduledRuns(id: taskId)) }
+        .sheet(item: $editing) { draft in
+            NavigationStack {
+                ScheduledTaskEditor(core: core, draft: draft) { editing = nil }
+                    .navigationTitle("Edit Task")
+                    .navigationBarTitleDisplayMode(.inline)
+            }
+        }
     }
 }
 
 /// Prompts the server runs on a schedule (or on webhook requests).
 struct ScheduledTasksScreen: View {
     @ObservedObject var core: Core
+    let open: (Screen) -> Void
     @State private var editing: ScheduledTaskEdit?
     @State private var deleting: ScheduledTaskView?
+    /// The task whose runs and details are pushed.
+    @State private var detail: String?
 
     private var settings: SettingsView { core.view.settings }
 
     var body: some View {
         List {
             Section {
-                if settings.scheduledTasks.isEmpty {
-                    ContentUnavailableView("No scheduled tasks", systemImage: "calendar.badge.clock", description: Text("A scheduled task sends its prompt on its own: at a time, every so often, or when its URL gets a request."))
-                }
                 ForEach(settings.scheduledTasks, id: \.id) { task in
                     VStack(alignment: .leading, spacing: Space.xs) {
                         Toggle(isOn: Binding(get: { task.enabled }, set: { core.update(.setScheduledEnabled(id: task.id, enabled: $0)) })) {
-                            Text(task.name).font(.body.weight(.semibold))
+                            Text(task.name)
                         }
-                        Text(task.prompt).font(.caption).foregroundStyle(.secondary).lineLimit(2)
-                        Text([task.schedule, task.projectTitle, task.enabled && task.scheduleKind != "webhook" ? "next \(task.nextRun)" : "", task.lastRun].filter { !$0.isEmpty }.joined(separator: " · "))
-                            .font(.caption2).foregroundStyle(.tertiary)
-                        if !task.lastError.isEmpty {
-                            Text(task.lastError).font(.caption2).foregroundStyle(.red).lineLimit(2)
+                        Text(task.prompt).font(TypeRole.meta).foregroundStyle(.secondary).lineLimit(2)
+                        Text([task.schedule, task.projectTitle, task.destination, task.enabled && task.scheduleKind != "webhook" ? "next \(task.nextRun)" : "", task.lastRun].filter { !$0.isEmpty }.joined(separator: " · "))
+                            .font(TypeRole.metaSmall).foregroundStyle(.tertiary)
+                        if !task.runState.isEmpty {
+                            Label(task.runState, systemImage: task.runState == "Needs you" ? "hand.raised.fill" : task.runState == "Running" ? "play.circle" : "hourglass")
+                                .font(TypeRole.metaSmall).foregroundStyle(task.runState == "Needs you" ? AnyShapeStyle(Tint.caution) : AnyShapeStyle(.tint))
+                        } else if !task.lastError.isEmpty {
+                            Text(task.lastError).font(TypeRole.metaSmall).foregroundStyle(Tint.danger).lineLimit(2)
                         }
                         if task.scheduleKind == "webhook" {
                             WebhookTaskDetails(core: core, task: task)
                         }
+                        // A button, not a link nested in the row: a link took
+                        // the row's tap, so a tap meant to edit opened details.
+                        Button { detail = task.id } label: {
+                            HStack(spacing: Space.xs) {
+                                Text("Runs and details")
+                                Image(systemName: "chevron.right").imageScale(.small)
+                            }
+                            .font(TypeRole.meta)
+                            .tapTarget()
+                        }
+                        .buttonStyle(.borderless)
                     }
                     .contentShape(Rectangle())
+                    // The rest of the row edits.
                     .onTapGesture { editing = ScheduledTaskEditor.from(task) }
                     .swipeActions {
                         Button("Delete", role: .destructive) { deleting = task }
@@ -114,8 +217,16 @@ struct ScheduledTasksScreen: View {
                             Button("Run Now") { core.update(.runScheduledNow(id: task.id)) }.tint(.blue)
                         }
                     }
+                    .swipeActions(edge: .leading) {
+                        if let thread = task.openableThread {
+                            Button("Open Thread") { open(.thread(thread)) }.tint(.indigo)
+                        }
+                    }
                     .contextMenu {
                         Button("Edit", systemImage: "pencil") { editing = ScheduledTaskEditor.from(task) }
+                        if let thread = task.openableThread {
+                            Button("Open Thread", systemImage: "bubble.left.and.text.bubble.right") { open(.thread(thread)) }
+                        }
                         if task.scheduleKind != "webhook" {
                             Button("Run Now", systemImage: "play") { core.update(.runScheduledNow(id: task.id)) }
                         }
@@ -126,8 +237,16 @@ struct ScheduledTasksScreen: View {
                 if !settings.scheduledTimeZone.isEmpty { Text("Times are in \(settings.scheduledTimeZone), the server's time zone.") }
             }
         }
+        .overlay {
+            if settings.scheduledTasks.isEmpty {
+                ContentUnavailableView("No Scheduled Tasks", systemImage: "calendar.badge.clock", description: Text("A scheduled task sends its prompt on its own: at a time, every so often, or when its URL gets a request."))
+            }
+        }
         .navigationTitle("Scheduled Tasks")
         .navigationBarTitleDisplayMode(.inline)
+        .navigationDestination(item: $detail) { id in
+            ScheduledTaskDetail(core: core, taskId: id, open: open)
+        }
         .toolbar {
             Button { editing = ScheduledTaskEditor.new(projectId: settings.projects.first?.id ?? "") } label: { Image(systemName: "plus") }
                 .accessibilityLabel("New Scheduled Task")
@@ -151,6 +270,14 @@ struct ScheduledTasksScreen: View {
             }
         }
         .onAppear { core.update(.loadSettings(section: "scheduled")) }
+        .onReceive(IOSSnapshots.openScheduledEditor) { draft in
+            // Closed first: an open sheet keeps its draft for the same (empty) id.
+            editing = nil
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(600))
+                editing = draft
+            }
+        }
     }
 }
 
@@ -170,7 +297,7 @@ struct MaintenanceScreen: View {
                 LabeledContent("Last cleanup", value: storage.lastCleanup)
                 Button("Clean Up Now") { core.update(.runStorageCleanup) }
                 Button("Reclaim Database Space…") { reclaiming = true }
-                if storage.busy { ProgressView() }
+                if storage.busy { LoadingRow("Working…") }
             } header: {
                 Text("Storage")
             } footer: {
@@ -185,8 +312,8 @@ struct MaintenanceScreen: View {
                         Text(p.command).font(TypeRole.monoSmall).lineLimit(1).truncationMode(.middle)
                             .padding(.leading, CGFloat(p.depth) * Space.m)
                         Spacer()
-                        Text(p.cpu).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-                        Text(p.memory).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                        Text(p.cpu).font(TypeRole.meta.monospacedDigit()).foregroundStyle(.secondary)
+                        Text(p.memory).font(TypeRole.meta.monospacedDigit()).foregroundStyle(.secondary)
                     }
                 }
             }
@@ -233,10 +360,8 @@ struct AccessScreen: View {
                             pairing
                         }
                     }
-                    if remote.busy { ProgressView() }
-                    if let error = remote.error {
-                        Label(error, systemImage: "exclamationmark.triangle.fill").foregroundStyle(Tint.danger)
-                    }
+                    if remote.busy { LoadingRow("Working…") }
+                    if let error = remote.error { ErrorRow(error) }
                 } header: {
                     Text("Remote access")
                 } footer: {
@@ -247,14 +372,9 @@ struct AccessScreen: View {
             }
             Section("Signed-in devices") {
                 ForEach(core.view.settings.access, id: \.id) { entry in
-                    HStack(spacing: Space.m) {
+                    SettingsRow(title: entry.label + (entry.current ? " (this device)" : ""), subtitle: entry.detail + (entry.connected ? " · connected" : "")) {
                         Image(systemName: icon(entry))
                             .foregroundStyle(entry.connected ? Tint.success : .secondary)
-                            .frame(width: 24)
-                        VStack(alignment: .leading, spacing: Space.xxs) {
-                            Text(entry.label + (entry.current ? " (this device)" : ""))
-                            Text(entry.detail + (entry.connected ? " · connected" : "")).font(.caption).foregroundStyle(.secondary)
-                        }
                     }
                     .swipeActions {
                         if entry.kind == "session", !entry.current {
@@ -299,7 +419,7 @@ struct AccessScreen: View {
             Text("Scan with Domovoi on another iPhone or iPad, or send the link to a Mac.")
                 .font(.callout).multilineTextAlignment(.center)
             Text("Code \(remote.code) · works once, until \(ServerTime.local(remote.linkExpiresAt))")
-                .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                .font(TypeRole.meta).foregroundStyle(.secondary).multilineTextAlignment(.center)
             HStack(spacing: Space.l) {
                 ShareLink(item: remote.link) { Label("Share", systemImage: "square.and.arrow.up") }
                 Button("Copy", systemImage: "doc.on.doc") { Platform.copy(remote.link) }

@@ -1,7 +1,7 @@
 import App
 import SwiftUI
 
-/// The thread list, grouped by status (Inbox, Running, Hibernating,
+/// The thread list, grouped by status (Inbox, Running, Inactive,
 /// Archived) or by project, with search.
 struct ThreadListView: View {
     @ObservedObject var core: Core
@@ -16,6 +16,12 @@ struct ThreadListView: View {
     @Environment(\.dynamicTypeSize) private var typeSize
     @State private var pickingSnoozeDate: ThreadRowView?
     @State private var deleting: ThreadRowView?
+    @State private var iconProject: SidebarProjectView?
+    @ScaledMetric(relativeTo: .body) private var avatarSize = Size.avatar
+    /// A section header's icon column and the project tile in it, growing
+    /// with the header's text.
+    @ScaledMetric(relativeTo: .subheadline) private var headerIconWidth = Size.rowIcon
+    @ScaledMetric(relativeTo: .subheadline) private var headerTile: CGFloat = 18
     @Environment(\.sidebarOpen) private var sidebarOpen
 
     private var actions: AddProjectActions {
@@ -68,16 +74,25 @@ struct ThreadListView: View {
             }
             if !search.isEmpty, sidebar.searching || !sidebar.searchResults.isEmpty {
                 Section(sidebar.searching ? "Searching…" : "Results") {
+                    let listed = Dictionary(sidebar.listedRows.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
                     ForEach(sidebar.searchResults, id: \.threadId) { hit in
-                        let label = VStack(alignment: .leading, spacing: 2) {
-                            Text(hit.title).foregroundStyle(.primary)
-                            Text("\(hit.projectTitle) · \(hit.snippet)").font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                        // The same leading column as a thread row, so titles line up.
+                        let label = HStack(alignment: .top, spacing: Space.s) {
+                            leadingColumn(unread: false) { hitAvatar(listed[hit.threadId]) }
+                            VStack(alignment: .leading, spacing: Space.xs) {
+                                Text(hit.title).font(TypeRole.rowTitle).foregroundStyle(.primary)
+                                Text("\(hit.projectTitle) · \(hit.snippet)").font(TypeRole.meta).foregroundStyle(.secondary).lineLimit(2)
+                            }
+                            .alignmentGuide(.listRowSeparatorLeading) { d in d[.leading] }
                         }
-                        if sidebarOpen != nil {
-                            label.tag(Self.hitTag + hit.threadId)
-                        } else {
-                            NavigationLink(value: Screen.thread(hit.threadId)) { label }
+                        Group {
+                            if sidebarOpen != nil {
+                                label.tag(Self.hitTag + hit.threadId)
+                            } else {
+                                NavigationLink(value: Screen.thread(hit.threadId)) { label }
+                            }
                         }
+                        .modifier(ThreadListRowInsets())
                     }
                 }
             }
@@ -87,21 +102,16 @@ struct ThreadListView: View {
                 Section {
                     ForEach(section.rows, id: \.id) { row($0, showsProject: true) }
                     if section.hiddenCount > 0 {
-                        Button("Show \(section.hiddenCount) more") { core.update(.showAllInSection(section: section.kind)) }
-                            .font(.footnote)
+                        showMore("Show \(section.hiddenCount) more") { core.update(.showAllInSection(section: section.kind)) }
                     }
                 } header: {
                     Button { core.update(.toggleSection(section: section.kind)) } label: {
-                        HStack(spacing: 6) {
-                            Image(systemName: "chevron.right")
-                                .font(.caption.weight(.bold))
-                                .rotationEffect(.degrees(section.expanded ? 90 : 0))
-                            Text(section.title)
-                            if section.kind == "running", section.count > 0 { ProgressView().controlSize(.mini) }
-                            Spacer()
-                            if section.count > 0 { Text("\(section.count)").monospacedDigit().foregroundStyle(.secondary) }
+                        HStack(spacing: Space.tight) {
+                            DisclosureChevron(open: section.expanded)
+                            sectionTitle(section.title) { SectionGlyph(kind: section.kind, count: section.count) }
+                            if section.count > 0 { CountCapsule(count: section.count) }
                         }
-                        .contentShape(Rectangle())
+                        .tapTarget()
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel("\(section.title), \(section.count) threads")
@@ -117,7 +127,7 @@ struct ThreadListView: View {
                     ForEach(waiting, id: \.id) { row($0) }
                 } header: {
                     // Orange on the icon only: orange text is hard to read in light mode.
-                    Label { Text("Needs You") } icon: { Image(systemName: "hand.raised.fill").foregroundStyle(Tint.caution) }
+                    sectionTitle("Needs You") { SectionGlyph(kind: "needs-you") }
                 }
             }
             ForEach(byStatus ? [] : sidebar.projects, id: \.id) { project in
@@ -126,30 +136,33 @@ struct ThreadListView: View {
                         row(thread)
                     }
                     if project.hiddenCount > 0 {
-                        Button("Show \(project.hiddenCount) more") { core.update(.showAllThreads(projectId: project.id)) }
-                            .font(.footnote)
+                        showMore("Show \(project.hiddenCount) more") { core.update(.showAllThreads(projectId: project.id)) }
                     }
                     if project.earlierCount > 0 {
                         earlier(project)
                     }
                 } header: {
-                    HStack {
+                    HStack(spacing: Space.tight) {
+                        Button { iconProject = project } label: {
+                            ProjectIconTile(icon: project.icon, size: headerTile, core: core)
+                                .iconColumn(headerIconWidth)
+                                .tapTarget()
+                        }.buttonStyle(.plain).accessibilityLabel("Change icon for \(project.title)")
                         Text(project.title).lineLimit(1).truncationMode(.middle)
-                        Spacer()
+                        Spacer(minLength: Space.s)
                         Button { newThread(project.id) } label: {
-                            Image(systemName: "square.and.pencil")
-                                .frame(minWidth: 44, minHeight: 32)
-                                .contentShape(Rectangle())
+                            Image(systemName: "square.and.pencil").tapTarget(width: true)
                         }
                         .accessibilityLabel("New thread in \(project.title)")
                     }
+                    .contextMenu { Button("Change Icon…") { iconProject = project } }
                 }
             }
             if !byStatus, !sidebar.snoozed.isEmpty, search.isEmpty {
                 Section {
                     ForEach(sidebar.snoozed, id: \.id) { row($0) }
                 } header: {
-                    Label("Snoozed", systemImage: "moon.zzz").foregroundStyle(.secondary)
+                    sectionTitle("Snoozed") { SectionGlyph(kind: "snoozed") }
                 }
             }
             // Settled threads show under their project ("Earlier sessions").
@@ -208,7 +221,10 @@ struct ThreadListView: View {
         .task(id: connection.state) {
             if connection.state == "connected" { core.update(.scanAgentSessions) }
         }
-        .listStyle(.insetGrouped)
+        .modifier(ThreadListStyle(sidebar: sidebarOpen != nil))
+        .sheet(isPresented: Binding(get: { iconProject != nil }, set: { if !$0 { iconProject = nil } })) {
+            if let project = iconProject { ProjectIconPicker(project: project, core: core).standardSheet() }
+        }
         .searchable(text: $search, prompt: "Search threads")
         .onChange(of: search) { _, query in core.update(.setSearch(query: query)) }
         // Connected: catch up on anything missed. Disconnected: try now
@@ -221,7 +237,7 @@ struct ThreadListView: View {
                 VStack(spacing: 0) {
                     Text(connection.environmentLabel.isEmpty ? "Domovoi" : connection.environmentLabel).font(.headline)
                     if let route = routeLine {
-                        Text(route).font(.caption2).foregroundStyle(.secondary)
+                        Text(route).font(TypeRole.metaSmall).foregroundStyle(.secondary)
                     }
                 }
                 .accessibilityElement(children: .combine)
@@ -230,6 +246,9 @@ struct ThreadListView: View {
                 ServerMenu(core: core, open: open)
             }
             ToolbarItemGroup(placement: .topBarTrailing) {
+                // ⌘K is the Thread menu's (a hardware keyboard).
+                Button { core.update(.openPalette) } label: { Image(systemName: "command") }
+                    .accessibilityLabel("Command Palette")
                 Menu {
                     Toggle("Unread Only", isOn: Binding(get: { sidebar.unreadOnly }, set: { core.update(.setUnreadOnly(on: $0)) }))
                     Picker("Group By", selection: Binding(get: { sidebar.grouping }, set: { core.update(.setSidebarGrouping(grouping: $0)) })) {
@@ -265,35 +284,44 @@ struct ThreadListView: View {
     /// A thread's row; `showsProject` under a status section, where no
     /// header names the project.
     private func row(_ thread: ThreadRowView, showsProject: Bool = false) -> some View {
-        let subtitle = [showsProject ? thread.projectTitle : "", thread.modelLabel].filter { !$0.isEmpty }.joined(separator: " · ")
+        let subtitle = thread.subtitle(showsProject: showsProject)
         return link(thread) {
-            HStack(spacing: 10) {
-                StatusIcon(status: thread.status, unread: thread.unread)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(thread.title).lineLimit(typeSize.isAccessibilitySize ? 4 : 2)
-                        .fontWeight(thread.unread ? .semibold : .regular)
-                    if !subtitle.isEmpty {
-                        Text(subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                    }
-                    if let branch = thread.branch {
-                        HStack(spacing: 3) {
-                            Image(systemName: "arrow.triangle.branch")
-                            Text(branch)
-                        }
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                    }
-                    // Large text: the details go under the title, which keeps
-                    // the row's width.
-                    if typeSize.isAccessibilitySize {
-                        HStack(spacing: 6) { rowDetails(thread) }
-                    }
+            HStack(alignment: .top, spacing: Space.s) {
+                leadingColumn(unread: thread.unread) {
+                    if showsProject { ThreadAvatar(icon: thread.projectIcon, status: thread.status, size: rowAvatar, core: core) }
+                    else { StatusIcon(status: thread.status).frame(width: rowAvatar, height: rowAvatar) }
                 }
-                Spacer()
-                if !typeSize.isAccessibilitySize { rowDetails(thread) }
+                VStack(alignment: .leading, spacing: Space.xs) {
+                    HStack(alignment: .firstTextBaseline, spacing: Space.s) {
+                        Text(thread.title.isEmpty ? "New thread" : thread.title).lineLimit(typeSize.isAccessibilitySize ? 4 : 2)
+                            .font(TypeRole.rowTitle).fontWeight(thread.unread ? .semibold : .regular)
+                        if !typeSize.isAccessibilitySize { Spacer(minLength: 0); rowTime(thread) }
+                    }
+                    if typeSize.isAccessibilitySize {
+                        Text(subtitle).font(TypeRole.meta).foregroundStyle(.secondary).lineLimit(2)
+                        HStack(spacing: Space.xs) {
+                            ThreadRowBadges(thread: thread)
+                            if thread.relation == "fork" { Image(systemName: "arrow.triangle.branch") }
+                            if !thread.source.isEmpty { Text(thread.source).lineLimit(1).minimumScaleFactor(0.7) }
+                            if thread.pinned { Image(systemName: "pin.fill") }
+                        }.font(TypeRole.metaSmall).foregroundStyle(.secondary)
+                    } else {
+                        HStack(spacing: Space.xs) {
+                            Text(subtitle.isEmpty ? " " : subtitle).font(TypeRole.meta).foregroundStyle(.secondary).lineLimit(1)
+                            Spacer(minLength: 0)
+                            ThreadRowBadges(thread: thread).font(TypeRole.metaSmall)
+                            if thread.relation == "fork" { Image(systemName: "arrow.triangle.branch").font(TypeRole.metaSmall).foregroundStyle(.secondary) }
+                            if !thread.source.isEmpty { SourceBadge(source: thread.source) }
+                            if thread.pinned { Image(systemName: "pin.fill").font(TypeRole.metaSmall).foregroundStyle(.secondary) }
+                        }
+                    }
+                    if typeSize.isAccessibilitySize { rowTime(thread) }
+                }
+                .alignmentGuide(.listRowSeparatorLeading) { d in d[.leading] }
             }
+            .accessibilityElement(children: .ignore).accessibilityLabel([thread.spokenLabel, thread.spokenBadges].filter { !$0.isEmpty }.joined(separator: ", "))
         }
+        .modifier(ThreadListRowInsets())
         .swipeActions(edge: .trailing) {
             Button(thread.archived ? "Unarchive" : "Archive") { core.update(.archiveThread(threadId: thread.id, archived: !thread.archived)) }
                 .tint(.gray)
@@ -315,22 +343,48 @@ struct ThreadListView: View {
         .contextMenu { rowMenu(thread) }
     }
 
-    /// Fork, agent, pin and age (or when a snooze ends).
+    /// The avatar, no bigger than a tap target at the largest text sizes.
+    private var rowAvatar: CGFloat { min(avatarSize, Size.tap) }
+
+    /// A row's leading column: the unread dot, centred on the avatar beside it.
+    private func leadingColumn(unread: Bool, @ViewBuilder avatar: () -> some View) -> some View {
+        HStack(spacing: Space.s) {
+            Circle().fill(unread ? Color.accentColor : .clear).frame(width: Size.dot, height: Size.dot).accessibilityHidden(true)
+            avatar()
+        }
+    }
+
+    /// A search hit's avatar: its thread's when the list has it.
     @ViewBuilder
-    private func rowDetails(_ thread: ThreadRowView) -> some View {
-        if thread.relation == "fork" {
-            Image(systemName: "arrow.triangle.branch").font(.caption2).foregroundStyle(.secondary).accessibilityLabel("Fork")
-        }
-        if !thread.source.isEmpty { SourceBadge(source: thread.source) }
-        if thread.pinned { Image(systemName: "pin.fill").font(.caption2).foregroundStyle(.secondary).accessibilityLabel("Pinned") }
-        if !thread.statusLabel.isEmpty {
-            Text(thread.statusLabel).font(.caption.weight(.medium)).monospacedDigit()
-                .foregroundStyle(thread.status == "failed" ? Tint.danger : .secondary)
-        } else if thread.snoozedUntilMs > 0 {
-            Text(SnoozeTimes.label(thread.snoozedUntilMs)).font(.caption).foregroundStyle(.secondary)
+    private func hitAvatar(_ row: ThreadRowView?) -> some View {
+        if let row {
+            ThreadAvatar(icon: row.projectIcon, status: row.status, size: rowAvatar, core: core)
         } else {
-            Text(thread.age).font(.caption).foregroundStyle(.secondary)
+            Image(systemName: "text.magnifyingglass").foregroundStyle(.secondary).frame(width: rowAvatar, height: rowAvatar)
         }
+    }
+
+    /// A section header's title: its glyph in a fixed column, so every
+    /// header's text starts at the same place.
+    private func sectionTitle(_ title: String, @ViewBuilder glyph: () -> some View) -> some View {
+        HStack(spacing: Space.tight) {
+            glyph().iconColumn(headerIconWidth)
+            Text(title)
+            Spacer(minLength: Space.s)
+        }
+    }
+
+    /// "Show N more" under a section: one look for every such row.
+    private func showMore(_ title: String, action: @escaping () -> Void) -> some View {
+        Button(title, action: action)
+            .font(.footnote)
+            .modifier(ThreadListRowInsets())
+    }
+
+    private func rowTime(_ thread: ThreadRowView) -> some View {
+        Text(thread.statusLabel.isEmpty ? (thread.snoozedUntilMs > 0 ? SnoozeTimes.label(thread.snoozedUntilMs) : thread.age) : thread.statusLabel)
+            .font(TypeRole.meta).monospacedDigit().lineLimit(1).fixedSize()
+            .foregroundStyle(thread.statusTint).fontWeight(thread.isPlanning ? .medium : nil)
     }
 
     /// Everything a row can do, on a long press.
@@ -364,10 +418,9 @@ struct ThreadListView: View {
         }
     }
 
-    /// Settling, as the grouping names it: grouped by status, a settled
-    /// thread hibernates.
+    /// Use the status-list action label when grouped by status.
     private func settleLabel(_ thread: ThreadRowView) -> String {
-        if byStatus { return thread.settled ? "Move to Inbox" : "Hibernate" }
+        if byStatus { return thread.settled ? "Move to Inbox" : "Set Aside" }
         return thread.settled ? "Unsettle" : "Settle"
     }
 
@@ -391,8 +444,7 @@ struct ThreadListView: View {
         if shown {
             ForEach(project.earlier.dropFirst(inline.count), id: \.id) { thread in row(thread) }
             if project.earlier.count < Int(project.earlierCount) {
-                Button("Show all \(project.earlierCount)") { core.update(.showAllThreads(projectId: project.id)) }
-                    .font(.footnote)
+                showMore("Show all \(project.earlierCount)") { core.update(.showAllThreads(projectId: project.id)) }
             }
         }
     }
@@ -409,15 +461,16 @@ struct ThreadListView: View {
                 Image(systemName: "chevron.right")
                     .rotationEffect(.degrees(shown ? 90 : 0))
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.tertiary)
             }
         }
-        .font(.subheadline)
+        .font(.footnote)
         .foregroundStyle(.secondary)
+        .modifier(ThreadListRowInsets())
     }
 
     private var emptyState: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: Space.l) {
             ContentUnavailableView {
                 Label("No projects yet", systemImage: "folder")
             } description: {
@@ -425,7 +478,7 @@ struct ThreadListView: View {
                     ? "The server has Claude Code or Codex sessions in \(core.view.agentSessions.available) folders."
                     : "Pick a folder on the server, start a new project, or import your Claude Code sessions.")
             }
-            VStack(spacing: 10) {
+            VStack(spacing: Space.s) {
                 Button(action: actions.importSessions) {
                     Label("Import from Claude Code", systemImage: "square.and.arrow.down").frame(maxWidth: .infinity)
                 }
@@ -434,7 +487,7 @@ struct ThreadListView: View {
                     Label("Add Folder on Server", systemImage: "folder.badge.plus").frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.bordered)
-                HStack(spacing: 10) {
+                HStack(spacing: Space.s) {
                     Button(action: actions.newProject) { Text("New Project").frame(maxWidth: .infinity) }
                     Button(action: actions.withoutProject) { Text("No Project").frame(maxWidth: .infinity) }
                 }
@@ -442,6 +495,9 @@ struct ThreadListView: View {
             }
             .controlSize(.large)
         }
+        // The buttons keep the list's side margin instead of running edge to edge.
+        .padding(.horizontal, Space.gutter)
+        .padding(.vertical, Space.xl)
         .listRowBackground(Color.clear)
         .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
     }
@@ -455,6 +511,7 @@ struct ThreadListView: View {
 /// The connection's state and route, saved servers and app screens.
 struct ServerMenu: View {
     @ObservedObject var core: Core
+    @EnvironmentObject private var companion: CompanionBrain
     let open: (Screen) -> Void
 
     private var connection: ConnectionView { core.view.connection }
@@ -474,29 +531,16 @@ struct ServerMenu: View {
             Button { open(.usage) } label: { Label("Usage", systemImage: "chart.bar") }
             Button { open(.settings) } label: { Label("Settings", systemImage: "gearshape") }
         } label: {
-            Image(systemName: icon).foregroundStyle(color)
+            CompanionView(look: connection.companion.look, brain: companion, size: Size.avatar, tracksPointer: true)
         }
-        .accessibilityLabel("Server")
-        // The icon's colour is the state; say it too.
-        .accessibilityValue(statusLine)
+        .accessibilityLabel(connection.companionServerLabel)
+        .accessibilityValue(connection.companionVoiceOverValue(companion.expression.mood))
     }
 
     private var statusLine: String {
         var line = connection.state.capitalized
         if connection.remote, !connection.path.isEmpty { line += " · \(connection.path) · \(connection.rttMs) ms" }
         return line
-    }
-
-    private var icon: String {
-        connection.remote ? "globe" : "desktopcomputer"
-    }
-
-    private var color: Color {
-        switch connection.state {
-        case "connected": return .green
-        case "reconnecting", "connecting": return .orange
-        default: return .secondary
-        }
     }
 }
 
@@ -527,5 +571,21 @@ private struct SnoozeDatePicker: View {
             }
         }
         .presentationDetents([.large])
+    }
+}
+
+/// Every row of the thread list (threads, search hits, "Show more"): one
+/// vertical inset, and the system's side margins, which the section headers
+/// use too, so rows and headers start at the same edge on every device.
+private struct ThreadListRowInsets: ViewModifier {
+    func body(content: Content) -> some View {
+        content.listRowInsets(.vertical, Space.s)
+    }
+}
+
+private struct ThreadListStyle: ViewModifier {
+    let sidebar: Bool
+    @ViewBuilder func body(content: Content) -> some View {
+        if sidebar { content.listStyle(.sidebar) } else { content.listStyle(.plain) }
     }
 }

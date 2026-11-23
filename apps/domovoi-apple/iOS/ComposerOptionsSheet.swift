@@ -27,6 +27,9 @@ struct ComposerOptionsSheet: View {
                             EffortPicker(composer: composer) { core.update(.selectEffort(value: $0)) }
                                 .id(ComposerOption.effort)
                         }
+                        if !composer.traits.isEmpty {
+                            TraitControls(traits: composer.traits) { core.update(.setModelOption(id: $0, value: $1)) }
+                        }
                         PermissionCards(composer: composer) { mode in
                             if mode == "full-access" {
                                 confirmFullAccess = true
@@ -60,7 +63,6 @@ struct ComposerOptionsSheet: View {
                 Text(ModeInfo.fullAccessMessage)
             }
         }
-        .presentationDetents([.medium, .large])
-        .presentationDragIndicator(.visible)
+        .standardSheet()
     }
 }

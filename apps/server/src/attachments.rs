@@ -71,6 +71,8 @@ pub fn dir(userdata: &Path) -> PathBuf {
 }
 
 fn signing_key(userdata: &Path) -> std::io::Result<Vec<u8>> {
+    static LOCK: parking_lot::Mutex<()> = parking_lot::const_mutex(());
+    let _guard = LOCK.lock();
     let path = userdata.join("attachment-signing-key");
     match std::fs::read(&path) {
         Ok(k) if k.len() >= 32 => Ok(k),
@@ -86,6 +88,21 @@ fn sign(key: &[u8], payload: &str) -> String {
     let mut mac = HmacSha256::new_from_slice(key).expect("any key length");
     mac.update(payload.as_bytes());
     URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes())
+}
+
+pub(crate) fn sign_asset_claims(userdata: &Path, claims: &impl Serialize) -> std::io::Result<String> {
+    let key = signing_key(userdata)?;
+    let payload = URL_SAFE_NO_PAD.encode(serde_json::to_vec(claims)?);
+    Ok(format!("{payload}.{}", sign(&key, &payload)))
+}
+
+pub(crate) fn verify_asset_claims<T: serde::de::DeserializeOwned>(userdata: &Path, token: &str) -> Option<T> {
+    let (payload, signature) = token.split_once('.')?;
+    let key = std::fs::read(userdata.join("attachment-signing-key")).ok()?;
+    let mut mac = HmacSha256::new_from_slice(&key).ok()?;
+    mac.update(payload.as_bytes());
+    mac.verify_slice(&URL_SAFE_NO_PAD.decode(signature).ok()?).ok()?;
+    serde_json::from_slice(&URL_SAFE_NO_PAD.decode(payload).ok()?).ok()
 }
 
 /// `attachmentFileExtension`: a short lowercase extension, else `.bin`.
@@ -247,11 +264,9 @@ pub fn stored_file(userdata: &Path, attachment_id: &str) -> Option<PathBuf> {
 pub fn issue_asset_url(userdata: &Path, attachment_id: &str) -> Result<AssetCreateUrlResult, Failure> {
     let err = |m: &str| Failure::AssetUrl { message: m.to_owned() };
     stored_file(userdata, attachment_id).ok_or_else(|| err("Attachment not found."))?;
-    let key = signing_key(userdata).map_err(|_| err("Could not sign the URL."))?;
     let expires_at = domovoi_contracts::time_fmt::now_millis() + ASSET_URL_TTL_MS;
     let claims = ReadClaims { version: 1, kind: "attachment-read".into(), attachment_id: attachment_id.to_owned(), expires_at };
-    let payload = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&claims).expect("plain data serializes"));
-    let token = format!("{payload}.{}", sign(&key, &payload));
+    let token = sign_asset_claims(userdata, &claims).map_err(|_| err("Could not sign the URL."))?;
     Ok(AssetCreateUrlResult {
         relative_url: format!("{ASSET_ROUTE_PREFIX}/{token}"),
         expires_at: expires_at.into(),
@@ -263,12 +278,7 @@ pub fn issue_asset_url(userdata: &Path, attachment_id: &str) -> Result<AssetCrea
 
 /// The file and content type an attachment URL's token grants, while valid.
 pub fn read_asset(userdata: &Path, token: &str) -> Option<(PathBuf, &'static str)> {
-    let (payload, signature) = token.split_once('.')?;
-    let key = signing_key(userdata).ok()?;
-    let mut mac = HmacSha256::new_from_slice(&key).ok()?;
-    mac.update(payload.as_bytes());
-    mac.verify_slice(&URL_SAFE_NO_PAD.decode(signature).ok()?).ok()?;
-    let claims: ReadClaims = serde_json::from_slice(&URL_SAFE_NO_PAD.decode(payload).ok()?).ok()?;
+    let claims: ReadClaims = verify_asset_claims(userdata, token)?;
     if claims.version != 1 || claims.kind != "attachment-read" || claims.expires_at <= domovoi_contracts::time_fmt::now_millis() {
         return None;
     }

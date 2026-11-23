@@ -19,19 +19,21 @@ struct ToastCapsule: View {
             HStack(spacing: Space.s) {
                 Image(systemName: icon(toast.kind))
                     .foregroundStyle(tint(toast.kind))
+                    .iconColumn(Size.rowIcon)
                 Text(toast.message).font(.footnote).lineLimit(4)
                 Spacer(minLength: 0)
                 if !toast.actionLabel.isEmpty {
-                    Button(toast.actionLabel) { core.update(.toastAction) }
+                    Button { core.update(.toastAction) } label: {
+                        Text(toast.actionLabel).tapTarget(inPadding: Space.m)
+                    }
                         .font(.footnote.weight(.semibold))
                         .buttonStyle(.borderless)
                         .foregroundStyle(Color.accentColor)
                 }
                 if toast.queued > 0 {
                     Text("+\(toast.queued)")
-                        .font(.caption2.monospacedDigit())
-                        .padding(.horizontal, Space.xs + 1)
-                        .background(.quaternary, in: Capsule())
+                        .monospacedDigit()
+                        .badgeCapsule()
                         .accessibilityLabel("\(toast.queued) more")
                 }
                 #if os(macOS)
@@ -52,7 +54,8 @@ struct ToastCapsule: View {
             .fixedSize(horizontal: false, vertical: true)
             .onHover { hovering = $0 }
             #else
-            .padding(.horizontal, Space.m)
+            // The composer panel's own side inset: their edges line up.
+            .padding(.horizontal, Space.s)
             .offset(y: min(0, drag))
             .gesture(
                 DragGesture(minimumDistance: 8)

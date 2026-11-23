@@ -6,8 +6,13 @@ struct ThreadScreen: View {
     let threadId: String
     let open: (Screen) -> Void
     @State private var confirmDelete = false
+    @State private var artifacts = false
+    @State private var progress = false
+    @State private var artifactJump: String?
     @State private var renaming = false
     @State private var newTitle = ""
+    /// A scheduled task for this thread, being set up.
+    @State private var scheduling: ScheduledTaskEdit?
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// Still loading after a while: offer to try again.
@@ -32,6 +37,101 @@ struct ThreadScreen: View {
         core.view.sidebar.projects.first { $0.id == thread.projectId }?.isScratch ?? false
     }
 
+    private var artifactSheetTrigger: String {
+        "\(core.view.panel.open)|\(core.view.panel.tab)|\(core.view.panel.artifacts.active?.id ?? "")"
+    }
+
+    @ToolbarContentBuilder
+    private var toolbarContent: some ToolbarContent {
+        if let usage = thread?.usage {
+            ToolbarItem(placement: .topBarTrailing) {
+                UsageMeter(usage: usage, showsLabel: true, compact: { core.update(.compact) }, showAll: { open(.usage) })
+            }
+        }
+        if let thread, thread.artifactCount > 0 {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    artifactJump = nil
+                    core.update(.showPanel(tab: "artifacts"))
+                    artifacts = true
+                } label: {
+                    HStack(spacing: 3) {
+                        Image(systemName: "sparkles.rectangle.stack")
+                        Text("\(thread.artifactCount)").font(.caption2.monospacedDigit().weight(.semibold))
+                    }
+                }
+                .accessibilityLabel("Artifacts (\(thread.artifactCount))")
+            }
+        }
+        if thread != nil {
+            ToolbarItem(placement: .topBarTrailing) { ScriptsToolbarButton(core: core) { open(.terminal) } }
+        }
+        ToolbarItem(placement: .topBarTrailing) {
+            Menu {
+                Button("Artifacts", systemImage: "sparkles.rectangle.stack") {
+                    artifactJump = nil
+                    core.update(.showPanel(tab: "artifacts"))
+                    artifacts = true
+                }
+                Section {
+                    Button { open(.diff) } label: { Label("Changes", systemImage: "plus.forwardslash.minus") }
+                    Button { open(.terminal) } label: { Label("Terminal", systemImage: "terminal") }
+                    Button { open(.files) } label: { Label("Files", systemImage: "folder") }
+                    Button { open(.git) } label: { Label("Git", systemImage: "arrow.triangle.branch") }
+                }
+                if let thread {
+                    Section {
+                        // ⌘F is in the app's Thread menu (a hardware keyboard).
+                        Button { core.update(.findInThread(query: "")) } label: { Label("Find in Thread", systemImage: "magnifyingglass") }
+                        Button {
+                            newTitle = thread.title
+                            renaming = true
+                        } label: { Label("Rename", systemImage: "pencil") }
+                        Button(thread.pinned ? "Unpin" : "Pin") { core.update(.pinThread(threadId: thread.id, pinned: !thread.pinned)) }
+                        Button(thread.settled ? "Unsettle" : "Settle") { core.update(.settleThread(threadId: thread.id, settled: !thread.settled)) }
+                        Button(thread.archived ? "Unarchive" : "Archive") {
+                            core.update(.archiveThread(threadId: thread.id, archived: !thread.archived))
+                            if !thread.archived { dismiss() }
+                        }
+                        Button("Copy Thread ID") { Platform.copy(thread.id) }
+                    }
+                    Section {
+                        Button {
+                            core.update(.loadSettings(section: "scheduled"))
+                            scheduling = ScheduledTaskEditor.new(thread: thread)
+                        } label: { Label("Schedule This Thread…", systemImage: "calendar.badge.clock") }
+                        .disabled(thread.archived)
+                        Button { core.update(.forgetThreadPermissions(threadId: thread.id)) } label: {
+                            Label("Forget Allowed Tools", systemImage: "hand.raised")
+                        }
+                    }
+                    Section {
+                        Button {
+                            forking = true
+                            core.update(.forkThread(threadId: thread.id))
+                        } label: { Label("Fork Thread", systemImage: "arrow.triangle.branch") }
+                        .disabled(!thread.canFork)
+                        if thread.canMergeBack, let parent = thread.parent {
+                            Button { core.update(.mergeBack) } label: { Label("Merge Back into “\(parent.title)”", systemImage: "arrow.uturn.left") }
+                        }
+                        Button { core.update(.regenerateTitle(threadId: thread.id)) } label: { Label("Regenerate Title", systemImage: "sparkles") }
+                            .disabled(thread.items.isEmpty)
+                    }
+                    if thread.worktreePath != nil, isScratch(thread) {
+                        Button {
+                            core.update(.promoteScratchThread(threadId: thread.id))
+                        } label: { Label("Make This Folder a Project", systemImage: "folder.badge.plus") }
+                        .disabled(thread.working)
+                    }
+                    Button("Delete Thread", role: .destructive) { confirmDelete = true }
+                }
+            } label: {
+                Image(systemName: "ellipsis.circle")
+            }
+            .accessibilityLabel("Thread actions")
+        }
+    }
+
     var body: some View {
         #if DEBUG
         let _ = DebugViews.printChanges ? Self._printChanges() : ()
@@ -42,7 +142,10 @@ struct ThreadScreen: View {
                     FindBar(core: core, find: find)
                     Divider()
                 }
-                Transcript(core: core, thread: thread)
+                // One per thread (as on the Mac): another thread starts at its
+                // own end (or where it was read), not with this one's scroll state.
+                Transcript(core: core, thread: thread, artifactJump: artifactJump)
+                    .id(thread.id)
                     .environment(\.openDiff) { open(.diff) }
                     .environment(\.openThread) { open(.thread($0)) }
             } else if slow {
@@ -69,11 +172,29 @@ struct ThreadScreen: View {
             VStack(spacing: 0) {
                 if let requests = thread?.pendingRequests, !requests.isEmpty {
                     ApprovalBar(core: core, requests: requests)
+                        .frame(maxWidth: Space.column)
                         .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
                 }
-                MobileComposer(core: core)
+                ForEach(thread?.waitingChildren ?? [], id: \.threadId) { child in
+                    WaitingChildBanner(child: child) { open(.thread($0)) }
+                        // The composer panel's own inset: their edges line up.
+                        .padding(.horizontal, Space.s)
+                        .padding(.top, Space.xs)
+                        .frame(maxWidth: Space.column)
+                }
+                if let thread, thread.plan != nil || thread.tasks != nil {
+                    WorkProgressStrip(plan: thread.plan, tasks: thread.tasks) { progress = true }
+                    .padding(.horizontal, Space.s)
+                    .padding(.top, Space.xs)
+                    // With the composer's own top inset, an 8 pt gap to the panel.
+                    .padding(.bottom, Space.xs)
+                    .frame(maxWidth: Space.column)
+                }
+                MobileComposer(core: core).frame(maxWidth: Space.column)
             }
             .animation(.snappy, value: thread?.pendingRequests.map(\.id))
+            .animation(.snappy, value: thread?.tasks == nil && thread?.plan == nil)
+            .animation(.snappy, value: thread?.waitingChildren.map(\.threadId))
         }
         .task(id: threadId) {
             slow = false
@@ -85,70 +206,46 @@ struct ThreadScreen: View {
         .onChange(of: core.view.connection.state) { _, state in
             if state != "connected", thread == nil || thread?.items.isEmpty == true && thread?.loading == true { slow = true }
         }
+        .sheet(isPresented: $artifacts, onDismiss: { core.update(.closeArtifact) }) {
+            if let thread {
+                ArtifactGallery(core: core, thread: thread, close: { artifacts = false }) { item in
+                    core.update(.closeFind)
+                    artifactJump = item
+                    artifacts = false
+                }
+                .presentationDetents([.large])
+            }
+        }
+        .onChange(of: artifactSheetTrigger) { _, _ in
+            let p = core.view.panel
+            if p.tab == "artifacts", (p.open || p.artifacts.active != nil), !artifacts {
+                artifacts = true
+            }
+        }
+        .sheet(isPresented: $progress) {
+            WorkProgressPanel(core: core, threadID: threadId) { progress = false }
+        }
+        .onChange(of: threadId) { progress = false }
         .navigationTitle(title)
         // Where it works: project and branch, under the title.
         .navigationSubtitle(thread.map { [$0.projectTitle, $0.branch ?? ""].filter { !$0.isEmpty }.joined(separator: " · ") } ?? "")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            if let context = thread?.context {
-                ToolbarItem(placement: .topBarTrailing) { ContextMeter(context: context, showsLabel: true) }
-            }
-            ToolbarItem(placement: .topBarTrailing) {
-                Menu {
-                    Section {
-                        Button { open(.diff) } label: { Label("Changes", systemImage: "plus.forwardslash.minus") }
-                        Button { open(.terminal) } label: { Label("Terminal", systemImage: "terminal") }
-                        Button { open(.files) } label: { Label("Files", systemImage: "folder") }
-                        Button { open(.git) } label: { Label("Git", systemImage: "arrow.triangle.branch") }
-                    }
-                    if let thread {
-                        Section {
-                            // ⌘F is in the app's Thread menu (a hardware keyboard).
-                            Button { core.update(.findInThread(query: "")) } label: { Label("Find in Thread", systemImage: "magnifyingglass") }
-                            Button {
-                                newTitle = thread.title
-                                renaming = true
-                            } label: { Label("Rename", systemImage: "pencil") }
-                            Button(thread.pinned ? "Unpin" : "Pin") { core.update(.pinThread(threadId: thread.id, pinned: !thread.pinned)) }
-                            Button(thread.settled ? "Unsettle" : "Settle") { core.update(.settleThread(threadId: thread.id, settled: !thread.settled)) }
-                            Button(thread.archived ? "Unarchive" : "Archive") {
-                                core.update(.archiveThread(threadId: thread.id, archived: !thread.archived))
-                                if !thread.archived { dismiss() }
-                            }
-                            Button("Copy Thread ID") { Platform.copy(thread.id) }
-                        }
-                        Section {
-                            Button {
-                                forking = true
-                                core.update(.forkThread(threadId: thread.id))
-                            } label: { Label("Fork Thread", systemImage: "arrow.triangle.branch") }
-                            .disabled(!thread.canFork)
-                            if thread.canMergeBack, let parent = thread.parent {
-                                Button { core.update(.mergeBack) } label: { Label("Merge Back into “\(parent.title)”", systemImage: "arrow.uturn.left") }
-                            }
-                            Button { core.update(.regenerateTitle(threadId: thread.id)) } label: { Label("Regenerate Title", systemImage: "sparkles") }
-                                .disabled(thread.items.isEmpty)
-                        }
-                        if thread.worktreePath != nil, isScratch(thread) {
-                            Button {
-                                core.update(.promoteScratchThread(threadId: thread.id))
-                            } label: { Label("Make This Folder a Project", systemImage: "folder.badge.plus") }
-                            .disabled(thread.working)
-                        }
-                        Button("Delete Thread", role: .destructive) { confirmDelete = true }
-                    }
-                } label: {
-                    Image(systemName: "ellipsis.circle")
-                }
-                .accessibilityLabel("Thread actions")
-            }
-        }
+        .toolbar { toolbarContent }
         .confirmationDialog("Delete this thread?", isPresented: $confirmDelete, titleVisibility: .visible) {
             Button("Delete", role: .destructive) {
                 core.update(.deleteThread(threadId: threadId))
                 // Gone: back to the list instead of a page that can't load.
                 dismiss()
             }
+        }
+        .sheet(item: $scheduling) { draft in
+            NavigationStack {
+                ScheduledTaskEditor(core: core, draft: draft) { scheduling = nil }
+                    .navigationTitle("Schedule Thread")
+                    .navigationBarTitleDisplayMode(.inline)
+            }
+            // An editor: the whole height, not half.
+            .presentationDetents([.large])
         }
         .alert("Rename Thread", isPresented: $renaming) {
             TextField("Title", text: $newTitle)
@@ -187,14 +284,24 @@ struct NewThreadScreen: View {
         ScrollView {
         VStack(spacing: Space.l) {
             Spacer()
-            Image(systemName: "sparkles")
-                .font(.system(size: 40))
-                .foregroundStyle(.tint)
-                .symbolEffect(.bounce, value: core.view.sidebar.selectedProjectId)
+            Group {
+                if let project {
+                    // The project's own icon: which project this starts in, at a glance.
+                    ProjectIconTile(icon: project.icon, size: 64, core: core)
+                        .id(project.id)
+                        .transition(.scale.combined(with: .opacity))
+                } else {
+                    Image(systemName: "sparkles")
+                        .font(.system(size: Size.heroIcon))
+                        .foregroundStyle(.tint)
+                }
+            }
+            .animation(.snappy, value: project?.id)
             Text(project.map { "What should we do in \($0.title)?" } ?? "Pick a project to start")
                 .font(.title3.weight(.semibold))
                 .multilineTextAlignment(.center)
-                .padding(.horizontal, Space.xl)
+                // The chips' own side margin: the three share one column.
+                .padding(.horizontal, Space.l)
             GlassGroup(spacing: Space.s) {
                 FlowChips {
                     projectMenu
@@ -212,7 +319,7 @@ struct NewThreadScreen: View {
                 .font(TypeRole.meta)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
-                .padding(.horizontal, Space.xl)
+                .padding(.horizontal, Space.l)
             Spacer()
             Spacer()
         }
@@ -237,7 +344,7 @@ struct NewThreadScreen: View {
         }
         .font(.footnote.weight(.medium))
         .padding(.horizontal, Space.m)
-        .frame(minHeight: 34)
+        .frame(minHeight: Size.chip)
         .glassChip()
     }
 

@@ -87,8 +87,19 @@ fn start_env(dir: &Path, transport: Transport, env: &[(String, String)]) -> Serv
     if transport == Transport::Iroh {
         args.extend(["--remote", "--relay", "disabled"].map(String::from));
     }
+    // Git as on a machine without the developer's settings (hooks, LFS
+    // filters): a home of the test's own, whose `.gitconfig` (unless a case
+    // wrote one) only names who commits.
+    let userhome = dir.join("userhome");
+    std::fs::create_dir_all(&userhome).unwrap();
+    let gitconfig = userhome.join(".gitconfig");
+    if !gitconfig.exists() {
+        std::fs::write(&gitconfig, "[user]\n\tname = t\n\temail = t@t\n").unwrap();
+    }
     let mut child = Command::new(server_bin()).env("DOMOVOI_NO_SESSION_IMPORT", "1").env("DOMOVOI_NO_SHELL_ENV", "1")
         .args(&args)
+        .env("HOME", &userhome)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("RUST_LOG", "warn")
         // Turns fail at once instead of reaching a real provider.
         .env("DOMOVOI_CLAUDE_BINARY", "/usr/bin/false")
@@ -221,8 +232,354 @@ fn substitute(v: &mut Value, vars: &[(&str, String)]) {
 }
 
 fn git(dir: &Path, args: &[&str]) {
-    let ok = Command::new("git").args(args).current_dir(dir).output().unwrap().status.success();
+    let ok = Command::new("git").args(args).current_dir(dir).env("GIT_CONFIG_GLOBAL", "/dev/null").env("GIT_CONFIG_NOSYSTEM", "1")
+        .output().unwrap().status.success();
     assert!(ok, "git {args:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn session_file_image_previews() {
+    file_image_previews(Transport::Tcp).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn session_file_image_previews_over_iroh() {
+    file_image_previews(Transport::Iroh).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn mermaid_diagrams_are_drawn_for_clients() {
+    mermaid_diagrams(Transport::Tcp).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn mermaid_diagrams_are_drawn_for_clients_over_iroh() {
+    mermaid_diagrams(Transport::Iroh).await;
+}
+
+/// `assets.createUrl` with Domovoi's `mermaid-diagram` resource: a signed
+/// URL of the PNG, or a failure the client shows the source for.
+async fn mermaid_diagrams(transport: Transport) {
+    let dir = std::env::temp_dir().join(format!("domovoi-diagrams-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let server = start_with(&dir, transport);
+    let mut ws = connect(&server).await;
+    let base = format!("http://127.0.0.1:{}", server.port);
+    let http = http_client();
+    let diagram = |source: &str, theme: &str| json!({ "resource": { "_tag": "mermaid-diagram", "source": source, "theme": theme } });
+
+    for (id, theme) in [(1, "light"), (2, "dark")] {
+        let asset = icon_call(&mut ws, id, "assets.createUrl", diagram("flowchart LR\nA[Request] --> B[Response]", theme)).await;
+        let url = asset["relativeUrl"].as_str().expect("relative URL");
+        assert!(url.starts_with("/api/assets/diagram/"), "{asset}");
+        let response = http.get(format!("{base}{url}")).send().await.unwrap();
+        assert_eq!(response.status(), 200);
+        assert_eq!(response.headers()["content-type"], "image/png");
+        assert!(imagesize::blob_size(&response.bytes().await.unwrap()).unwrap().width > 0);
+    }
+    for (id, source) in [(3, "not a Mermaid diagram".to_owned()), (4, "a".repeat(50_001))] {
+        let exit = call(&mut ws, id, "assets.createUrl", &diagram(&source, "light")).await.unwrap()["exit"].clone();
+        assert_eq!(exit["_tag"], "Failure", "{exit}");
+    }
+    assert_eq!(http.get(format!("{base}/api/assets/diagram/forged.token")).send().await.unwrap().status(), 404);
+}
+
+async fn file_image_previews(transport: Transport) {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    use sha2::{Digest, Sha256};
+
+    let dir = std::env::temp_dir().join(format!("domovoi-file-images-{}", uuid::Uuid::new_v4()));
+    let workspace = dir.join("workspace");
+    let linked = dir.join("linked");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let server = start_with(&dir, transport);
+    let mut ws = connect(&server).await;
+    let base = format!("http://127.0.0.1:{}", server.port);
+    let http = http_client();
+    let png = STANDARD.decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC").unwrap();
+    let oid = hex::encode(Sha256::digest(&png));
+    let pointer = format!("version https://git-lfs.github.com/spec/v1\noid sha256:{oid}\nsize {}\n", png.len());
+    let object = format!("objects/{}/{}/{oid}", &oid[..2], &oid[2..4]);
+    let mut id = 0;
+
+    let preview_url = |exit: &Value| {
+        assert_eq!(exit["_tag"], "Success", "{exit}");
+        assert_eq!(exit["value"]["contents"], "");
+        assert_eq!(exit["value"]["truncated"], false);
+        format!("{base}{}", exit["value"]["imageUrl"].as_str().expect("image URL"))
+    };
+    let message = |exit: Value| {
+        assert_eq!(exit["_tag"], "Failure", "{exit}");
+        exit["cause"][0]["error"]["message"].as_str().unwrap().to_owned()
+    };
+    // A Git LFS file read with `previewImages`: its object's oid, size and state.
+    let lfs = |exit: &Value| {
+        assert_eq!(exit["_tag"], "Success", "{exit}");
+        let lfs = &exit["value"]["lfs"];
+        (lfs["oid"].as_str().expect("an oid").to_owned(), lfs["size"].as_u64().expect("a size"), lfs["state"].as_str().expect("a state").to_owned())
+    };
+
+    std::fs::write(workspace.join("normal.PNG"), &png).unwrap();
+    std::fs::write(workspace.join("page.html"), "<h1>Hello</h1>").unwrap();
+    let url = preview_url(&read_file_exit(&mut ws, &mut id, &workspace, "normal.PNG", true).await);
+    let asset = http.get(&url).send().await.unwrap();
+    assert_eq!(asset.status(), 200);
+    assert_eq!(asset.headers()["content-type"], "image/png");
+    assert_eq!(asset.bytes().await.unwrap().as_ref(), png);
+    let tampered = format!("{url}.invalid");
+    assert_eq!(http.get(tampered).send().await.unwrap().status(), 404);
+    assert_eq!(message(read_file_exit(&mut ws, &mut id, &workspace, "normal.PNG", false).await), "Binary file.");
+    let html = read_file_exit(&mut ws, &mut id, &workspace, "page.html", true).await;
+    assert_eq!(html["value"]["contents"], "<h1>Hello</h1>");
+    assert!(html["value"].get("imageUrl").is_none());
+    assert!(html["value"].get("lfs").is_none(), "not kept in LFS");
+
+    // Formats not every client draws come as PNG.
+    let raster = image::RgbaImage::from_pixel(3, 2, image::Rgba([255, 0, 0, 255]));
+    for (name, format) in [("bitmap.bmp", image::ImageFormat::Bmp), ("scan.TIFF", image::ImageFormat::Tiff), ("favicon.ico", image::ImageFormat::Ico)] {
+        raster.save_with_format(workspace.join(name), format).unwrap();
+        let drawn = http.get(preview_url(&read_file_exit(&mut ws, &mut id, &workspace, name, true).await)).send().await.unwrap();
+        assert_eq!(drawn.headers()["content-type"], "image/png", "{name}");
+        let size = imagesize::blob_size(&drawn.bytes().await.unwrap()).unwrap();
+        assert_eq!((size.width, size.height), (3, 2), "{name}");
+    }
+
+    let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" width="4000" height="1000"><rect width="4000" height="1000" fill="red"/></svg>"#;
+    std::fs::write(workspace.join("vector.svg"), svg).unwrap();
+    let vector = http.get(preview_url(&read_file_exit(&mut ws, &mut id, &workspace, "vector.svg", true).await)).send().await.unwrap();
+    assert_eq!(vector.headers()["content-type"], "image/png");
+    let size = imagesize::blob_size(&vector.bytes().await.unwrap()).unwrap();
+    assert_eq!((size.width, size.height), (2048, 512));
+
+    git(&workspace, &["init", "-q", "-b", "main"]);
+    git(&workspace, &["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "Start", "--allow-empty"]);
+    git(&workspace, &["worktree", "add", "--detach", linked.to_str().unwrap()]);
+    std::fs::write(linked.join(".gitattributes"), "*.png filter=lfs diff=lfs merge=lfs -text\n").unwrap();
+    std::fs::write(linked.join("checked-out.png"), &png).unwrap();
+    let read = read_file_exit(&mut ws, &mut id, &linked, "checked-out.png", true).await;
+    assert_eq!(lfs(&read), (oid.clone(), png.len() as u64, "cached".into()), "a rule puts it in LFS and it is checked out");
+    let checked_out = preview_url(&read);
+    assert_eq!(http.get(checked_out).send().await.unwrap().bytes().await.unwrap().as_ref(), png);
+    let cache = workspace.join(".git/lfs").join(&object);
+    std::fs::create_dir_all(cache.parent().unwrap()).unwrap();
+    std::fs::write(&cache, &png).unwrap();
+    std::fs::write(workspace.join("cached.png"), &pointer).unwrap();
+    let plain = read_file_exit(&mut ws, &mut id, &workspace, "cached.png", false).await;
+    assert_eq!(plain["value"]["contents"], pointer);
+    assert!(plain["value"].get("lfs").is_none(), "as t3code reads it");
+    let read = read_file_exit(&mut ws, &mut id, &workspace, "cached.png", true).await;
+    assert_eq!(lfs(&read), (oid.clone(), png.len() as u64, "cached".into()));
+    assert_eq!(read["value"]["byteLength"], png.len());
+    let url = preview_url(&read);
+    assert_eq!(http.get(url).send().await.unwrap().bytes().await.unwrap().as_ref(), png);
+    assert_eq!(std::fs::read_to_string(workspace.join("cached.png")).unwrap(), pointer);
+
+    // Any file can be a pointer: text shows the object's, a binary file
+    // nothing, and a pointer with extensions only that it is one.
+    let lfs_pointer = |contents: &[u8], extensions: &str| {
+        let oid = hex::encode(Sha256::digest(contents));
+        let cache = workspace.join(".git/lfs/objects").join(&oid[..2]).join(&oid[2..4]).join(&oid);
+        std::fs::create_dir_all(cache.parent().unwrap()).unwrap();
+        std::fs::write(cache, contents).unwrap();
+        (oid.clone(), format!("version https://git-lfs.github.com/spec/v1\n{extensions}oid sha256:{oid}\nsize {}\n", contents.len()))
+    };
+    let (text_oid, text_pointer) = lfs_pointer(b"stored in LFS\n", "");
+    std::fs::write(workspace.join("notes.txt"), &text_pointer).unwrap();
+    let read = read_file_exit(&mut ws, &mut id, &workspace, "notes.txt", true).await;
+    assert_eq!(read["value"]["contents"], "stored in LFS\n");
+    assert_eq!(lfs(&read), (text_oid, 14, "cached".into()));
+    let (blob_oid, blob_pointer) = lfs_pointer(&[0, 159, 146, 150, 255], "");
+    std::fs::write(workspace.join("blob"), &blob_pointer).unwrap();
+    let read = read_file_exit(&mut ws, &mut id, &workspace, "blob", true).await;
+    assert_eq!(read["value"]["contents"], "", "binary");
+    assert_eq!(lfs(&read), (blob_oid, 5, "cached".into()));
+    let ext = format!("ext-0-crypt sha256:{oid}\n");
+    let (_, transformed) = lfs_pointer(b"transformed", &ext);
+    std::fs::write(workspace.join("secret.png"), &transformed).unwrap();
+    let read = read_file_exit(&mut ws, &mut id, &workspace, "secret.png", true).await;
+    assert_eq!(lfs(&read).2, "unsupported");
+    assert_eq!(read["value"]["contents"], transformed, "the pointer's text");
+
+    git(&workspace, &["config", "lfs.storage", "custom-lfs"]);
+    std::fs::rename(workspace.join(".git/lfs"), workspace.join(".git/custom-lfs")).unwrap();
+    std::fs::write(linked.join("cached.png"), &pointer).unwrap();
+    let linked_url = preview_url(&read_file_exit(&mut ws, &mut id, &linked, "cached.png", true).await);
+    assert_eq!(http.get(&linked_url).send().await.unwrap().bytes().await.unwrap().as_ref(), png);
+    let moved_cache = workspace.join(".git/custom-lfs").join(&object);
+    std::fs::write(&moved_cache, vec![0; png.len()]).unwrap();
+    let read = read_file_exit(&mut ws, &mut id, &linked, "cached.png", true).await;
+    assert_eq!(lfs(&read).2, "mismatch");
+    assert_eq!(read["value"]["contents"], pointer);
+    assert!(read["value"].get("imageUrl").is_none());
+    assert_eq!(http.get(linked_url).send().await.unwrap().status(), 404);
+    std::fs::remove_file(moved_cache).unwrap();
+    let read = read_file_exit(&mut ws, &mut id, &linked, "cached.png", true).await;
+    assert_eq!(lfs(&read), (oid.clone(), png.len() as u64, "missing".into()), "not downloaded");
+    assert_eq!(read["value"]["contents"], pointer);
+    assert!(message(read_file_exit(&mut ws, &mut id, &linked, "../workspace/normal.PNG", true).await).contains("outside"));
+    #[cfg(unix)]
+    {
+        let checked_out = preview_url(&read_file_exit(&mut ws, &mut id, &linked, "checked-out.png", true).await);
+        std::fs::remove_file(linked.join("checked-out.png")).unwrap();
+        std::os::unix::fs::symlink(workspace.join("normal.PNG"), linked.join("checked-out.png")).unwrap();
+        assert_eq!(http.get(checked_out).send().await.unwrap().status(), 404);
+    }
+
+    let oversized = workspace.join("large.png");
+    std::fs::write(&oversized, &png).unwrap();
+    std::fs::OpenOptions::new().write(true).open(&oversized).unwrap().set_len(20 * 1024 * 1024 + 1).unwrap();
+    assert!(message(read_file_exit(&mut ws, &mut id, &workspace, "large.png", true).await).contains("20 MiB"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn project_icon_files_are_ranked_served_and_shared() {
+    let dir = std::env::temp_dir().join(format!("domovoi-project-icons-{}", uuid::Uuid::new_v4()));
+    let workspace = dir.join("workspace");
+    std::fs::create_dir_all(workspace.join("public")).unwrap();
+    std::fs::create_dir_all(workspace.join("fixtures")).unwrap();
+    let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" width="400" height="100"><rect width="400" height="100" fill="red"/></svg>"#;
+    std::fs::write(workspace.join("favicon.svg"), "corrupt").unwrap();
+    std::fs::write(workspace.join("public/favicon.svg"), svg).unwrap();
+    std::fs::write(workspace.join("fixtures/favicon.svg"), svg).unwrap();
+    std::fs::write(workspace.join("workspace-logo.svg"), svg).unwrap();
+    std::fs::write(dir.join("outside.svg"), svg).unwrap();
+    let ico = include_bytes!("../icon/domovoi-server.ico");
+    assert!(ico.starts_with(&[0, 0, 1, 0]), "icon/domovoi-server.ico should be an icon; run `git lfs pull`");
+    std::fs::write(workspace.join("custom.ico"), ico).unwrap();
+    let mut server = start(&dir);
+    let mut ws = connect(&server).await;
+    let http = http_client();
+    let base = format!("http://127.0.0.1:{}", server.port);
+    let made = json!({ "type": "project.create", "commandId": "make", "projectId": "icons", "title": "Icons", "workspaceRoot": workspace });
+    assert_eq!(icon_call(&mut ws, 1, "projects.mutate", made).await["id"], "icons");
+
+    let files = icon_call(&mut ws, 2, "projects.searchEntries", json!({ "cwd": workspace, "kind": "file", "imageOnly": true, "query": "", "limit": 20 })).await;
+    let paths: Vec<_> = files["entries"].as_array().unwrap().iter().map(|entry| entry["path"].as_str().unwrap()).collect();
+    assert_eq!(paths, ["favicon.svg", "public/favicon.svg", "fixtures/favicon.svg", "workspace-logo.svg", "custom.ico"]);
+
+    let favicon = |hint: &str| json!({ "resource": { "_tag": "project-favicon", "cwd": workspace, "path": hint } });
+    let thumbnail = |path: &str| json!({ "resource": { "_tag": "draft-workspace-file", "cwd": workspace, "path": path } });
+    let automatic = icon_call(&mut ws, 3, "assets.createUrl", favicon("custom.ico")).await;
+    assert_eq!(automatic["sourcePath"], "public/favicon.svg");
+    let asset_url = |value: &Value| format!("{base}{}", value["relativeUrl"].as_str().unwrap());
+    let response = http.get(asset_url(&automatic)).send().await.unwrap();
+    assert_eq!(response.headers()["content-type"], "image/png");
+    assert_eq!(imagesize::blob_size(&response.bytes().await.unwrap()).unwrap().width, 128);
+
+    let preview = icon_call(&mut ws, 4, "assets.createUrl", thumbnail("custom.ico")).await;
+    assert_eq!(preview["sourcePath"], "custom.ico");
+    assert_eq!(http.get(asset_url(&preview)).send().await.unwrap().headers()["content-type"], "image/png");
+    let outside = icon_call(&mut ws, 5, "assets.createUrl", thumbnail("../outside.svg")).await;
+    assert!(outside.get("sourcePath").is_none());
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(dir.join("outside.svg"), workspace.join("escape.svg")).unwrap();
+        let escaped = icon_call(&mut ws, 6, "assets.createUrl", thumbnail("escape.svg")).await;
+        assert!(escaped.get("sourcePath").is_none());
+    }
+
+    let change = |command: &str, fields: Value| {
+        let mut payload = json!({ "type": "project.update", "commandId": command, "projectId": "icons" });
+        payload.as_object_mut().unwrap().extend(fields.as_object().unwrap().clone());
+        payload
+    };
+    let picked = change("file", json!({ "faviconPath": "custom.ico", "projectIcon": null }));
+    assert_eq!(icon_call(&mut ws, 7, "projects.mutate", picked).await["faviconPath"], "custom.ico");
+    // A new RPC client observes the same saved file.
+    server.pairing = minted_code(&dir.join("home"), server.port);
+    let mut other = connect(&server).await;
+    let saved = icon_call(&mut other, 1, "assets.createUrl", favicon("public/favicon.svg")).await;
+    assert_eq!(saved["sourcePath"], "custom.ico");
+    let rename = change("rename", json!({ "title": "Renamed" }));
+    assert_eq!(icon_call(&mut other, 2, "projects.mutate", rename).await["faviconPath"], "custom.ico");
+    std::fs::remove_file(workspace.join("custom.ico")).unwrap();
+    assert_eq!(http.get(asset_url(&saved)).send().await.unwrap().status(), 404);
+    let missing = icon_call(&mut ws, 8, "assets.createUrl", favicon("")).await;
+    assert!(missing.get("sourcePath").is_none());
+
+    let builtin = change("builtin", json!({ "faviconPath": null, "projectIcon": { "kind": "emoji", "emoji": "🌱" } }));
+    assert_eq!(icon_call(&mut ws, 9, "projects.mutate", builtin).await["projectIcon"]["emoji"], "🌱");
+    let reset = change("reset", json!({ "faviconPath": null, "projectIcon": null }));
+    assert_eq!(icon_call(&mut ws, 10, "projects.mutate", reset).await["projectIcon"], Value::Null);
+    assert_eq!(icon_call(&mut other, 3, "assets.createUrl", favicon("")).await["sourcePath"], "public/favicon.svg");
+
+    std::fs::remove_file(workspace.join("public/favicon.svg")).unwrap();
+    let fallback = icon_call(&mut other, 4, "assets.createUrl", favicon("")).await;
+    assert!(fallback.get("sourcePath").is_none());
+}
+
+async fn icon_call(ws: &mut Ws, id: u64, method: &str, payload: Value) -> Value {
+    let result = call(ws, id, method, &payload).await.unwrap();
+    assert_eq!(result["exit"]["_tag"], "Success", "{result}");
+    result["exit"]["value"].clone()
+}
+
+/// `projects.fetchLfsObject` downloads a Git LFS object (with git-lfs, over
+/// a `file://` remote here) into the cache, and the next read shows it.
+#[tokio::test(flavor = "multi_thread")]
+async fn lfs_objects_are_fetched_on_request() {
+    use sha2::{Digest, Sha256};
+    let Some(lfs_dir) = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()).find(|d| d.join("git-lfs").is_file()) else {
+        eprintln!("skipped: git-lfs is not on PATH");
+        return;
+    };
+    let dir = std::env::temp_dir().join(format!("domovoi-lfs-fetch-{}", uuid::Uuid::new_v4()));
+    let (remote, source, clone) = (dir.join("remote.git"), dir.join("source"), dir.join("clone"));
+    for d in [&remote, &source] {
+        std::fs::create_dir_all(d).unwrap();
+    }
+    let path = format!("{}:/usr/bin:/bin:/usr/sbin:/sbin", lfs_dir.display());
+    let lfs_git = |cwd: &Path, args: &[&str]| {
+        let out = Command::new("git").args(args).current_dir(cwd).env("GIT_CONFIG_GLOBAL", "/dev/null").env("GIT_CONFIG_NOSYSTEM", "1").env("PATH", &path).output().unwrap();
+        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+    };
+    lfs_git(&remote, &["init", "-q", "--bare", "-b", "main"]);
+    lfs_git(&source, &["init", "-q", "-b", "main"]);
+    // The pointer and its object written by hand: no LFS filter is configured.
+    let object = b"fetched from the LFS remote\n";
+    let oid = hex::encode(Sha256::digest(object));
+    let cache = source.join(".git/lfs/objects").join(&oid[..2]).join(&oid[2..4]);
+    std::fs::create_dir_all(&cache).unwrap();
+    std::fs::write(cache.join(&oid), object).unwrap();
+    let pointer = format!("version https://git-lfs.github.com/spec/v1\noid sha256:{oid}\nsize {}\n", object.len());
+    std::fs::write(source.join("notes.txt"), &pointer).unwrap();
+    std::fs::write(source.join(".gitattributes"), "*.txt filter=lfs diff=lfs merge=lfs -text\n").unwrap();
+    std::fs::write(source.join("plain.md"), "plain\n").unwrap();
+    lfs_git(&source, &["add", "."]);
+    lfs_git(&source, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "Start"]);
+    let url = format!("file://{}", remote.display());
+    lfs_git(&source, &["remote", "add", "origin", &url]);
+    lfs_git(&source, &["lfs", "push", "--object-id", "origin", &oid]);
+    lfs_git(&source, &["push", "-q", "origin", "main"]);
+    lfs_git(&dir, &["clone", "-q", "-b", "main", &url, clone.to_str().unwrap()]);
+
+    let server = start_env(&dir, Transport::Tcp, &[("PATH".into(), path.clone())]);
+    let mut ws = connect(&server).await;
+    let mut id = 0;
+    let read = read_file_exit(&mut ws, &mut id, &clone, "notes.txt", true).await;
+    assert_eq!(read["value"]["lfs"]["state"], "missing", "{read}");
+    assert_eq!(read["value"]["contents"], pointer);
+
+    let fetch = |path: &str| json!({ "cwd": clone, "relativePath": path });
+    let fetched = call(&mut ws, 100, "projects.fetchLfsObject", &fetch("notes.txt")).await.unwrap()["exit"].clone();
+    assert_eq!(fetched["_tag"], "Success", "{fetched}");
+    assert_eq!(fetched["value"]["state"], "cached");
+    let read = read_file_exit(&mut ws, &mut id, &clone, "notes.txt", true).await;
+    assert_eq!(read["value"]["lfs"]["state"], "cached");
+    assert_eq!(read["value"]["contents"], "fetched from the LFS remote\n");
+    assert_eq!(std::fs::read_to_string(clone.join("notes.txt")).unwrap(), pointer, "the working tree is left as it is");
+
+    let refused = call(&mut ws, 101, "projects.fetchLfsObject", &fetch("plain.md")).await.unwrap()["exit"].clone();
+    assert_eq!(refused["_tag"], "Failure", "{refused}");
+    assert!(refused["cause"][0]["error"]["message"].as_str().unwrap().contains("isn't kept in Git LFS"), "{refused}");
+    let outside = call(&mut ws, 102, "projects.fetchLfsObject", &fetch("../source/notes.txt")).await.unwrap()["exit"].clone();
+    assert!(outside["cause"][0]["error"]["message"].as_str().unwrap().contains("outside"), "{outside}");
+}
+
+async fn read_file_exit(ws: &mut Ws, id: &mut u64, cwd: &Path, path: &str, preview: bool) -> Value {
+    let payload = json!({ "cwd": cwd, "relativePath": path, "previewImages": preview });
+    *id += 1;
+    call(ws, *id, "projects.readFile", &payload).await.unwrap()["exit"].clone()
 }
 
 #[tokio::test(flavor = "multi_thread")]

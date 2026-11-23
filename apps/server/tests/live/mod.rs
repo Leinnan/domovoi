@@ -7,6 +7,7 @@
 //!
 //! - `DOMOVOI_LIVE_CLAUDE_MODEL` (e.g. `claude-haiku-5-5`) for `claude`,
 //! - `DOMOVOI_LIVE_CODEX_MODEL` for `codex`,
+//! - `DOMOVOI_LIVE_ANTIGRAVITY_MODEL` (e.g. `gemini-3.8-flash`) for `agy`,
 //!
 //! found on PATH, or named by `DOMOVOI_CLAUDE_BINARY` / `DOMOVOI_CODEX_BINARY`.
 //! The CLIs run as this user, signed in as they are. `just live claude` runs
@@ -30,6 +31,7 @@ fn live(instance: &'static str) -> Option<Live> {
     let var = match instance {
         "claudeAgent" => "DOMOVOI_LIVE_CLAUDE_MODEL",
         "codex" => "DOMOVOI_LIVE_CODEX_MODEL",
+        "antigravity" => "DOMOVOI_LIVE_ANTIGRAVITY_MODEL",
         _ => return None,
     };
     let model = std::env::var(var).ok().filter(|m| !m.is_empty())?;
@@ -72,10 +74,21 @@ const TURN: Duration = Duration::from_secs(240);
 async fn ready(server: &Server, p: &Live) -> (Ws, PathBuf) {
     let token = signed_in(server).await;
     let mut ws = socket(server, &token).await;
-    let r = call(&mut ws, &fresh_id("refresh"), "server.refreshProviders", json!({ "instanceId": p.instance })).await;
-    let providers = r["exit"]["value"]["providers"].as_array().cloned().unwrap_or_default();
-    let found = providers.iter().find(|x| x["instanceId"] == p.instance).unwrap_or_else(|| panic!("no {} provider: {r}", p.instance));
-    assert_eq!(found["status"], "ready", "{found}");
+    if p.instance == "antigravity" {
+        antigravity_signed_in(&mut ws).await;
+    }
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(25);
+    loop {
+        let r = call(&mut ws, &fresh_id("refresh"), "server.refreshProviders", json!({ "instanceId": p.instance })).await;
+        let providers = r["exit"]["value"]["providers"].as_array().cloned().unwrap_or_default();
+        let found = providers.iter().find(|x| x["instanceId"] == p.instance).unwrap_or_else(|| panic!("no {} provider: {r}", p.instance));
+        if found["status"] == "ready" {
+            break;
+        }
+        assert!(p.instance == "opencode" && tokio::time::Instant::now() < deadline
+            && found["message"].as_str().is_some_and(|message| message.contains("service_starting")), "{found}");
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
     let workspace = workspace_repository(server);
     let r = call(&mut ws, &fresh_id("project"), "projects.mutate", json!({ "type": "project.create", "commandId": "c-project", "projectId": "p1", "title": "Domovoi Live",
         "workspaceRoot": workspace, "createWorkspaceRootIfMissing": false, "defaultModelSelection": null })).await;
@@ -285,6 +298,8 @@ async fn subagent(p: Live) {
     let (mut ws, _) = ready(&server, &p).await;
     let ask = if p.instance == "codex" {
         "Spawn one subagent whose only task is to reply with the word KIWI. Wait for it, then tell me what it said."
+    } else if p.instance == "antigravity" {
+        "Use your subagent tool (invoke_subagent) to start one subagent whose only task is to reply with the word KIWI. Then tell me what it said."
     } else {
         "Use the Task tool to start one subagent whose only task is to reply with the word KIWI. Then tell me what it said."
     };
@@ -526,4 +541,185 @@ async fn a_registry_agent_installs_and_starts() {
     assert_eq!(p["installed"], true, "it started and initialized: {p}");
     let r = call(&mut ws, &fresh_id("u"), "server.uninstallAcpRegistryManagedBinary", json!({ "agentId": agent })).await;
     assert_eq!(r["exit"]["_tag"], "Failure", "an instance still uses it: {r}");
+}
+
+/// Antigravity's fresh profile signed in: through the machine's shared agy
+/// sign-in it finishes by itself; when Google wants a browser, the test
+/// prints the link and stops.
+async fn antigravity_signed_in(ws: &mut Ws) {
+    let r = call(ws, &fresh_id("p"), "server.refreshProviders", json!({ "instanceId": "antigravity" })).await;
+    let p = r["exit"]["value"]["providers"].as_array().unwrap().iter().find(|x| x["instanceId"] == "antigravity").cloned().expect("agy found");
+    if p["status"] == "ready" {
+        return;
+    }
+    let r = call(ws, &fresh_id("a"), "provider.auth.start", json!({ "instanceId": "antigravity" })).await;
+    assert_eq!(r["exit"]["_tag"], "Success", "{r}");
+    let done = auth_state(ws, "antigravity", "the sign-in to end or wait for a browser", |s| matches!(s["phase"].as_str(), Some("succeeded" | "failed" | "waiting"))).await;
+    if done["phase"] == "waiting" {
+        panic!("Google needs a browser sign-in: open {} (or run `agy` and sign in), then run again", done["authorizationUrl"]);
+    }
+    assert_eq!(done["phase"], "succeeded", "{done}");
+}
+
+/// Keeps a live server's protocol logs of Antigravity, and the agent's own
+/// (its sign-in and token handling), under
+/// `target/live-antigravity-logs/<name>` as the server ends, passed or
+/// failed: to compare with the scripted agy, and so a lost sign-in leaves
+/// the agent's account of it.
+pub fn keep_antigravity_logs_of(dir: &std::path::Path, name: &str) {
+    let agent_logs = dir.join("home/userdata/providers/antigravity");
+    if !dir.join("live").exists() || !agent_logs.exists() {
+        return;
+    }
+    let to = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/live-antigravity-logs").join(name);
+    let _ = std::fs::remove_dir_all(&to);
+    if std::fs::create_dir_all(&to).is_err() {
+        return;
+    }
+    for e in std::fs::read_dir(dir.join("home/userdata/logs/provider")).into_iter().flatten().flatten() {
+        if e.file_name().to_string_lossy().starts_with("antigravity-") {
+            let _ = std::fs::copy(e.path(), to.join(e.file_name()));
+        }
+    }
+    // The agent's own logs (its sign-in and token handling).
+    for profile in std::fs::read_dir(&agent_logs).into_iter().flatten().flatten() {
+        for e in std::fs::read_dir(profile.path().join("antigravity-acp/log")).into_iter().flatten().flatten() {
+            let _ = std::fs::copy(e.path(), to.join(e.file_name()));
+        }
+    }
+}
+
+/// The scenarios Antigravity shares with the others (it has no steering,
+/// native forks or plan toggle), and its own.
+mod antigravity {
+    macro_rules! scenarios {
+        ($($name:ident),* $(,)?) => {
+            $(#[tokio::test(flavor = "multi_thread")] async fn $name() { if let Some(p) = super::live("antigravity") { super::$name(p).await } })*
+        };
+    }
+    scenarios!(command_after_approval, subagent, agent_tools, text_generation, restart_continuation, image_attachment, scheduled_run, edits_and_reads, stop_then_resume, subagent_batch);
+}
+
+/// Antigravity's edit is shown at its line, and a file it reads through the
+/// client completes.
+async fn edits_and_reads(p: Live) {
+    let server = start_live("antigravity-edits");
+    let (mut ws, workspace) = ready(&server, &p).await;
+    std::fs::write(workspace.join("notes.txt"), "alpha\nbravo\ncharlie\ndelta\n").unwrap();
+    launch(&mut ws, &p, "t1", "In the file notes.txt, replace the line `charlie` with `CHARLIE` using your file editing tool (not a shell command). Then reply with DONE.", "approval-required", "default").await;
+    let (all, answered) = settle(&mut ws, "t1", 1).await;
+    eprintln!("answered {answered}; items {:?}", item_types(&all));
+    assert_eq!(std::fs::read_to_string(workspace.join("notes.txt")).unwrap(), "alpha\nbravo\nCHARLIE\ndelta\n");
+    let edit = items(&all, "file_change").into_iter().last().cloned().unwrap_or_else(|| panic!("an edit: {:?}", item_types(&all)));
+    eprintln!("edit: {edit}");
+    let diff = edit["diffStr"].as_str().unwrap_or_default();
+    assert!(diff.contains(" bravo\n-charlie\n+CHARLIE\n delta"), "at its place in the file: {edit}");
+    send(&mut ws, "t1", 2, "Read notes.txt with your file viewing tool and reply with its last line only.", json!({})).await;
+    let (all, _) = settle(&mut ws, "t1", 2).await;
+    assert!(reply(&all, "t1", 2).contains("delta"), "{}", transcript(&all));
+    let open: Vec<_> = items(&all, "dynamic_tool_call").into_iter().filter(|t| t["status"] != "completed").map(|t| t["title"].clone()).collect();
+    assert!(open.is_empty(), "every tool call ended: {open:?}");
+}
+
+/// A stopped turn ends, and after a server restart the thread's session is
+/// resumed (the agent still knows what it was told).
+async fn stop_then_resume(p: Live) {
+    let server = start_live("antigravity-resume");
+    let (mut ws, _) = ready(&server, &p).await;
+    launch(&mut ws, &p, "t1", "Remember the codeword PAPAYA. Reply only with OK.", "full-access", "default").await;
+    settle(&mut ws, "t1", 1).await;
+    send(&mut ws, "t1", 2, "Run the shell command `sleep 60`, then reply with DONE.", json!({})).await;
+    until_within(TURN, &mut ws, "t1", "the sleep", |all| items(all, "command_execution").iter().any(|c| c["input"].as_str().unwrap_or("").contains("sleep 60"))).await;
+    let r = call(&mut ws, &fresh_id("stop"), "orchestration.dispatchCommand", json!({ "type": "thread.stop", "commandId": "stop-1", "threadId": "t1" })).await;
+    assert_eq!(r["exit"]["_tag"], "Success", "{r}");
+    let (all, _) = settle(&mut ws, "t1", 2).await;
+    assert_eq!(status_of(&all, "t1", 2).as_deref(), Some("interrupted"));
+    drop(ws);
+    let server = restart(server);
+    let token = signed_in(&server).await;
+    let mut ws = socket(&server, &token).await;
+    send(&mut ws, "t1", 3, "What was the codeword? Reply with just the word.", json!({})).await;
+    let (all, _) = settle(&mut ws, "t1", 3).await;
+    assert!(reply(&all, "t1", 3).to_uppercase().contains("PAPAYA"), "the resumed session remembers:\n{}", transcript(&all));
+    let logs = std::fs::read_dir(server.dir.join("home/userdata/logs/provider")).unwrap().flatten().map(|e| std::fs::read_to_string(e.path()).unwrap_or_default()).collect::<String>();
+    assert!(logs.contains("\"session/resume\""), "the session was resumed, not started anew");
+}
+
+/// A subagent batch: its child shows read-only through
+/// `orchestration.getNativeChildWork`, read from the parent's session log.
+async fn subagent_batch(p: Live) {
+    let server = start_live("antigravity-batch");
+    let (mut ws, _) = ready(&server, &p).await;
+    launch(&mut ws, &p, "t1", "Use your subagent tool (invoke_subagent) to start exactly one subagent with the role `tester` whose only task is to reply with the word KIWI. Then tell me what it said.", "full-access", "default").await;
+    let (all, _) = settle(&mut ws, "t1", 1).await;
+    let sub = all.iter().filter(|e| e["type"] == "subagent.updated").last().map(|e| e["payload"].clone()).unwrap_or_else(|| panic!("no subagent: {:?}\n{}", item_types(&all), transcript(&all)));
+    eprintln!("batch: {sub}");
+    let child = sub["childThreadId"].as_str().expect("a child thread").to_owned();
+    let r = call(&mut ws, &fresh_id("cw"), "orchestration.getNativeChildWork", json!({ "threadId": child })).await;
+    eprintln!("child work: {}", r["exit"]["value"]);
+    let children = r["exit"]["value"]["children"].as_array().cloned().unwrap_or_default();
+    assert_eq!(children.len(), 1, "the batch's child, proved by the session log: {r}");
+    assert!(children[0]["steps"].as_array().is_some_and(|s| !s.is_empty()), "its transcript: {r}");
+}
+
+/// Opt-in model behavior probe. Use DOMOVOI_SERVER_BIN to run the same inputs
+/// against a baseline build and compare the number of structured questions.
+#[tokio::test(flavor = "multi_thread")]
+async fn question_frequency_smoke() {
+    for (instance, variable) in [
+        ("antigravity", "DOMOVOI_QUESTION_SMOKE_ANTIGRAVITY_MODEL"),
+        ("opencode", "DOMOVOI_QUESTION_SMOKE_OPENCODE_MODEL"),
+    ] {
+        let Ok(model) = std::env::var(variable) else { continue };
+        let provider = Live { instance, model };
+        let server = start_live(&format!("question-smoke-{instance}"));
+        let (mut ws, _) = ready(&server, &provider).await;
+        for (thread, interaction, text) in [
+            ("ambiguous-plan", "plan", "Plan an offline reading-list app for a small newsroom. Editors share iPads, reporters use their own phones, and we haven't agreed which rollout audience should come first. Use only the brief above and leave the workspace untouched."),
+            ("consequential-choice", "default", "Draft release copy for our new offline mode. The team has two audiences in mind, field reporters or editors, and only one goes in the first announcement. I haven't chosen the audience yet. Use only the brief above and leave the workspace untouched."),
+            ("fully-specified", "default", "Write one sentence of release copy for field reporters: offline mode keeps their saved articles readable without a connection. Use plain language. Use only the brief above and leave the workspace untouched."),
+        ] {
+            launch(&mut ws, &provider, thread, text, "approval-required", interaction).await;
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(90);
+            let mut answered_approvals = std::collections::HashSet::new();
+            loop {
+                let all = events(&mut ws, &fresh_id("question-smoke"), thread).await;
+                let question = super::latest_question(&all).filter(|question| question["status"] == "pending");
+                let status = status_of(&all, thread, 1);
+                if let Some(question) = question {
+                    println!("question-smoke {instance} {thread}: card");
+                    let r = call(&mut ws, &fresh_id("dismiss"), "orchestration.dispatchCommand", json!({
+                        "type": "thread.user-input.dismiss", "commandId": format!("dismiss-{thread}"), "threadId": thread, "requestId": question["id"]
+                    })).await;
+                    assert_eq!(r["exit"]["_tag"], "Success", "{r}");
+                    break;
+                }
+                for event in all.iter().filter(|event| event["type"] == "turn-item.updated" && event["payload"]["type"] == "approval_request") {
+                    let request = &event["payload"];
+                    let Some(id) = request["requestId"].as_str() else { continue };
+                    let pending = all.iter().rev().find(|event| event["type"] == "runtime-request.updated" && event["payload"]["id"] == id);
+                    if !pending.is_some_and(|event| event["payload"]["status"] == "pending") || !answered_approvals.insert(id.to_owned()) {
+                        continue;
+                    }
+                    let decision = if matches!(request["prompt"].as_str(), Some("ls -la" | "pwd" | "git status --short")) { "accept" } else { "decline" };
+                    let r = call(&mut ws, &fresh_id("approval"), "orchestration.dispatchCommand", json!({
+                        "type": "runtime-request.respond", "commandId": format!("respond-{id}"), "threadId": thread, "requestId": id, "decision": decision
+                    })).await;
+                    assert_eq!(r["exit"]["_tag"], "Success", "{r}");
+                }
+                if matches!(status.as_deref(), Some("completed" | "failed" | "interrupted")) {
+                    println!("question-smoke {instance} {thread}: {}", status.unwrap());
+                    if let Some(failure) = all.iter().rev().find(|event| event["payload"]["type"] == "error") {
+                        eprintln!("Provider error: {}", failure["payload"]["failure"]["message"].as_str().unwrap_or("unspecified"));
+                    }
+                    break;
+                }
+                if tokio::time::Instant::now() >= deadline {
+                    println!("question-smoke {instance} {thread}: timeout");
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(350)).await;
+            }
+        }
+    }
 }

@@ -44,6 +44,20 @@ import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material.icons.outlined.Photo
 import androidx.compose.material.icons.outlined.Speed
 import androidx.compose.material.icons.outlined.Warning
+import androidx.compose.material.icons.outlined.AutoAwesome
+import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Inventory2
+import androidx.compose.material.icons.outlined.Unarchive
+import androidx.compose.material3.AssistChipDefaults
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.ListItem
+import androidx.compose.material3.ListItemDefaults
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.ui.graphics.Color
+import com.crayen.domovoi.app.LimitWindowView
+import com.crayen.domovoi.app.SlashCommandView
+import com.crayen.domovoi.ui.common.LimitWindowRow
 import androidx.compose.material.icons.outlined.EditNote
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.CircularProgressIndicator
@@ -61,6 +75,7 @@ import androidx.compose.material3.InputChipDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.SuggestionChip
+import androidx.compose.material3.SuggestionChipDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -73,6 +88,12 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isShiftPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.SolidColor
@@ -139,6 +160,8 @@ fun Composer(core: Core, modifier: Modifier = Modifier) {
     var options by remember { mutableStateOf<ComposerOption?>(null) }
     var attachError by remember { mutableStateOf<String?>(null) }
     var addMenu by remember { mutableStateOf(false) }
+    var stashList by remember { mutableStateOf(false) }
+    var limitsList by remember { mutableStateOf(false) }
     val dictation = remember { Dictation(context) }
     var dictationBase by remember { mutableStateOf("") }
     val planning = composer.interactionMode == "plan"
@@ -147,6 +170,12 @@ fun Composer(core: Core, modifier: Modifier = Modifier) {
     // The core's draft comes back on a new revision or another thread.
     LaunchedEffect(composer.draftRevision, threadId) {
         if (field.text != composer.draft) field = TextFieldValue(composer.draft, TextRange(composer.draft.length))
+    }
+    // `/model` asks for the model picker: open it when the count goes up (not at first sight).
+    var pickerSeen by remember { mutableStateOf(composer.modelPickerRequested) }
+    LaunchedEffect(composer.modelPickerRequested) {
+        if (composer.modelPickerRequested > pickerSeen) options = ComposerOption.Model
+        pickerSeen = composer.modelPickerRequested
     }
     LaunchedEffect(attachError) { if (attachError != null) { delay(4000); attachError = null } }
     DisposableEffect(Unit) { onDispose { dictation.stop() } }
@@ -193,18 +222,35 @@ fun Composer(core: Core, modifier: Modifier = Modifier) {
         val mention = composer.mention
         if (mention != null && mention.suggestions.isNotEmpty()) {
             ChipRow {
-                mention.suggestions.forEach { entry ->
+                mention.suggestions.forEachIndexed { index, entry ->
+                    // The one the keyboard's arrows have reached (Enter or Tab takes it).
+                    val highlighted = index == mention.highlighted.toInt()
                     SuggestionChip(
                         onClick = { core.update(Event.PickMention(entry.path)) },
                         label = { Text(entry.name) },
                         icon = { Icon(if (entry.directory) Icons.Outlined.Folder else Icons.Outlined.Description, null, modifier = Modifier.size(16.dp)) },
+                        colors = if (highlighted) SuggestionChipDefaults.suggestionChipColors(
+                            containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                            labelColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                            iconContentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                        ) else SuggestionChipDefaults.suggestionChipColors(),
                     )
                 }
             }
         } else if (composer.slashCommands.isNotEmpty()) {
             ChipRow {
                 composer.slashCommands.forEach { command ->
-                    SuggestionChip(onClick = { core.update(Event.PickSlashCommand(command.name)) }, label = { Text("/${command.name}", fontFamily = Mono) })
+                    SuggestionChip(onClick = { core.update(Event.PickSlashCommand(command.name)) }, label = { CommandLabel("/", command) })
+                }
+            }
+        } else if (composer.skills.isNotEmpty()) {
+            ChipRow {
+                composer.skills.forEach { skill ->
+                    SuggestionChip(
+                        onClick = { core.update(Event.PickSkill(skill.name)) },
+                        label = { CommandLabel("$", skill) },
+                        icon = { Icon(Icons.Outlined.AutoAwesome, null, modifier = Modifier.size(16.dp)) },
+                    )
                 }
             }
         }
@@ -254,7 +300,45 @@ fun Composer(core: Core, modifier: Modifier = Modifier) {
                             textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
                             cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
                             maxLines = 8,
-                            modifier = Modifier.fillMaxWidth().heightIn(min = 24.dp),
+                            modifier = Modifier.fillMaxWidth().heightIn(min = 24.dp).onPreviewKeyEvent { e ->
+                                // A hardware keyboard: arrows move through the @ suggestions,
+                                // Enter or Tab takes one, Escape closes them; Tab or Enter
+                                // takes the first slash command or skill; with no list open,
+                                // Up and Down step through the thread's earlier prompts.
+                                if (e.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                                val picking = composer.mention?.suggestions?.isNotEmpty() == true
+                                val accept = e.key == Key.Enter || e.key == Key.NumPadEnter || e.key == Key.Tab
+                                val listing = picking || composer.slashCommands.isNotEmpty() || composer.skills.isNotEmpty()
+                                val caret = field.selection
+                                when {
+                                    // Earlier prompts: Up on the draft's first line, Down on its last.
+                                    !listing && caret.collapsed && !e.isShiftPressed && e.key == Key.DirectionUp && '\n' !in field.text.take(caret.start) -> {
+                                        core.update(Event.RecallPrompt(-1)); true
+                                    }
+                                    !listing && caret.collapsed && !e.isShiftPressed && e.key == Key.DirectionDown && '\n' !in field.text.drop(caret.start) -> {
+                                        core.update(Event.RecallPrompt(1)); true
+                                    }
+                                    picking && e.key == Key.DirectionUp -> { core.update(Event.MoveMention(-1)); true }
+                                    picking && e.key == Key.DirectionDown -> { core.update(Event.MoveMention(1)); true }
+                                    picking && accept && !e.isShiftPressed -> {
+                                        if (field.text != composer.draft) core.update(Event.SetDraft(field.text))
+                                        core.update(Event.PickMention(""))
+                                        true
+                                    }
+                                    picking && e.key == Key.Escape -> { core.update(Event.DismissMention); true }
+                                    !picking && accept && !e.isShiftPressed && composer.slashCommands.isNotEmpty() -> {
+                                        if (field.text != composer.draft) core.update(Event.SetDraft(field.text))
+                                        core.update(Event.PickSlashCommand(composer.slashCommands.first().name))
+                                        true
+                                    }
+                                    !picking && accept && !e.isShiftPressed && composer.skills.isNotEmpty() -> {
+                                        if (field.text != composer.draft) core.update(Event.SetDraft(field.text))
+                                        core.update(Event.PickSkill(composer.skills.first().name))
+                                        true
+                                    }
+                                    else -> false
+                                }
+                            },
                         )
                     }
                     IconButton(onClick = {
@@ -302,9 +386,25 @@ fun Composer(core: Core, modifier: Modifier = Modifier) {
                                 if (uri == null) attachError = "The clipboard has no image."
                                 else scope.launch { attach(withContext(Dispatchers.IO) { listOf(Images.prepare(context, uri)) }) }
                             })
+                            HorizontalDivider()
+                            DropdownMenuItem(
+                                text = { Text("Stash draft") }, leadingIcon = { Icon(Icons.Outlined.Inventory2, null) },
+                                enabled = field.text.isNotBlank(),
+                                onClick = {
+                                    addMenu = false
+                                    if (field.text != composer.draft) core.update(Event.SetDraft(field.text))
+                                    core.update(Event.StashDraft)
+                                },
+                            )
+                            if (composer.stash.isNotEmpty()) {
+                                DropdownMenuItem(
+                                    text = { Text("Stash (${composer.stash.size})") }, leadingIcon = { Icon(Icons.Outlined.Unarchive, null) },
+                                    onClick = { addMenu = false; stashList = true },
+                                )
+                            }
                         }
                     }
-                    Box(Modifier.weight(1f)) { ModeChips(composer, open = { options = it }, togglePlan = {
+                    Box(Modifier.weight(1f)) { ModeChips(composer, open = { options = it }, showLimits = { limitsList = true }, togglePlan = {
                         haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
                         core.update(Event.SetInteractionMode(if (planning) "default" else "plan"))
                     }) }
@@ -313,6 +413,7 @@ fun Composer(core: Core, modifier: Modifier = Modifier) {
                         typed = field.text.isNotBlank(),
                         planning = planning,
                         onStop = { core.update(Event.Interrupt) },
+                        onForceStop = { core.update(Event.ForceStop) },
                         onSteer = { finishSend(Event.Steer) },
                         onSend = { if (composer.canSend) finishSend(Event.Send) },
                     )
@@ -321,6 +422,59 @@ fun Composer(core: Core, modifier: Modifier = Modifier) {
         }
     }
     options?.let { ComposerOptionsSheet(core, it) { options = null } }
+    if (stashList) {
+        LaunchedEffect(composer.stash.isEmpty()) { if (composer.stash.isEmpty()) stashList = false }
+        StashSheet(composer.stash, restore = { stashList = false; core.update(Event.RestoreStash(it.toUInt())) }, drop = { core.update(Event.DropStash(it.toUInt())) }) { stashList = false }
+    }
+    if (limitsList) LimitsSheet(composer.limits) { limitsList = false }
+}
+
+/** A command or skill in the suggestions: its name, what it takes, and a badge for the app's own. */
+@Composable
+private fun CommandLabel(prefix: String, command: SlashCommandView) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Space.xs)) {
+        Text("$prefix${command.name}", fontFamily = Mono)
+        if (command.hint.isNotEmpty()) Text(command.hint, fontFamily = Mono, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
+        if (command.kind == "builtin") {
+            Surface(color = MaterialTheme.colorScheme.surfaceContainerHighest, shape = MaterialTheme.shapes.extraSmall) {
+                Text("app", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = Space.xs))
+            }
+        }
+    }
+}
+
+/** Drafts put aside: restore one into the composer, or delete it. */
+@Composable
+private fun StashSheet(stash: List<String>, restore: (Int) -> Unit, drop: (Int) -> Unit, onDismiss: () -> Unit) {
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(Modifier.fillMaxWidth().padding(bottom = Space.xl)) {
+            Text("Stashed drafts", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(horizontal = Space.xl, vertical = Space.s))
+            stash.forEachIndexed { index, line ->
+                ListItem(
+                    headlineContent = { Text(line, maxLines = 2, overflow = TextOverflow.Ellipsis) },
+                    trailingContent = {
+                        Row {
+                            TextButton(onClick = { restore(index) }) { Text("Restore") }
+                            IconButton(onClick = { drop(index) }) { Icon(Icons.Outlined.Delete, "Delete stashed draft") }
+                        }
+                    },
+                    colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                )
+            }
+        }
+    }
+}
+
+/** The provider account's usage windows (from the limits chip). */
+@Composable
+private fun LimitsSheet(limits: List<LimitWindowView>, onDismiss: () -> Unit) {
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = Space.xl).padding(bottom = Space.xl), verticalArrangement = Arrangement.spacedBy(Space.l)) {
+            Text("Usage limits", style = MaterialTheme.typography.titleMedium)
+            if (limits.isEmpty()) Text("No limits reported.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            limits.forEach { LimitWindowRow(it) }
+        }
+    }
 }
 
 /** The sent text again, give or take the keyboard's last correction. */
@@ -353,7 +507,7 @@ private fun ProviderNotice(composer: ComposerView, checkAgain: () -> Unit) {
 
 /** Plan toggles in place; effort, permissions and model open the options sheet. */
 @Composable
-private fun ModeChips(composer: ComposerView, open: (ComposerOption) -> Unit, togglePlan: () -> Unit) {
+private fun ModeChips(composer: ComposerView, open: (ComposerOption) -> Unit, showLimits: () -> Unit, togglePlan: () -> Unit) {
     val tints = LocalTints.current
     val planning = composer.interactionMode == "plan"
     Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(Space.xs)) {
@@ -382,14 +536,28 @@ private fun ModeChips(composer: ComposerView, open: (ComposerOption) -> Unit, to
             label = { Text(composer.selectedModel?.label ?: "Model", maxLines = 1, overflow = TextOverflow.Ellipsis) },
             leadingIcon = { Icon(Icons.Outlined.Memory, null, modifier = Modifier.size(16.dp)) },
         )
+        // An account window nearly used up.
+        if (composer.limitsChip.isNotEmpty()) {
+            AssistChip(
+                onClick = showLimits,
+                label = { Text(composer.limitsChip, maxLines = 1) },
+                leadingIcon = { Icon(Icons.Outlined.Warning, null, tint = tints.caution, modifier = Modifier.size(16.dp)) },
+                colors = AssistChipDefaults.assistChipColors(containerColor = tints.caution.copy(alpha = 0.12f), labelColor = tints.caution),
+                border = null,
+            )
+        }
     }
 }
 
 /** Send, a spinner while it goes out, or Stop while a turn runs; typed during a turn, Steer and Send (queues) beside a small Stop. */
 @Composable
-private fun ActionButtons(composer: ComposerView, typed: Boolean, planning: Boolean, onStop: () -> Unit, onSteer: () -> Unit, onSend: () -> Unit) {
+private fun ActionButtons(composer: ComposerView, typed: Boolean, planning: Boolean, onStop: () -> Unit, onForceStop: () -> Unit, onSteer: () -> Unit, onSend: () -> Unit) {
     val tints = LocalTints.current
     Row(horizontalArrangement = Arrangement.spacedBy(Space.xs), verticalAlignment = Alignment.CenterVertically) {
+        // Stop was asked and the turn goes on: end it for good.
+        if (composer.canForceStop) {
+            TextButton(onClick = onForceStop, colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)) { Text("Force stop", maxLines = 1) }
+        }
         if (composer.canStop) {
             FilledIconButton(
                 onClick = onStop,
@@ -410,7 +578,7 @@ private fun ActionButtons(composer: ComposerView, typed: Boolean, planning: Bool
                 modifier = Modifier.size(40.dp),
             ) {
                 if (composer.sending) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onPrimary)
-                else Icon(Icons.Filled.ArrowUpward, "Send")
+                else Icon(Icons.Filled.ArrowUpward, if (composer.canStop || composer.queuesOffline) "Queue message" else "Send")
             }
         }
     }

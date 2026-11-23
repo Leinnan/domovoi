@@ -1,7 +1,8 @@
 //! Token usage from the providers' local session logs (t3code `usage/`):
 //! Claude Code's `projects/**/*.jsonl` assistant `usage` records, Codex's
-//! `sessions/**/rollout-*.jsonl` `token_count` events and Pi's session files
-//! (assistant messages' `usage`, and `usage` entries for work outside one),
+//! `sessions/**/rollout-*.jsonl` `token_count` events, Pi's session files
+//! (assistant messages' `usage`, and `usage` entries for work outside one)
+//! and Antigravity's conversation databases (`crate::antigravity::usage`),
 //! bucketed per day (or hour) in the requested time zone, per provider and model.
 //!
 //! These logs run to gigabytes, so scanning is incremental:
@@ -559,6 +560,13 @@ pub struct SummaryInput {
     model_filter: Option<UsageModelFilter>,
 }
 
+/// Where Antigravity's conversation databases are: its apps' folders in the
+/// scanned home, and each instance's profile.
+fn antigravity_roots(env: &ScanEnv) -> Vec<PathBuf> {
+    let profiles: Vec<PathBuf> = crate::antigravity::instances().iter().map(|id| crate::antigravity::profile(id).home).filter(|p| p.exists()).collect();
+    crate::antigravity::usage::roots(&env.home, &profiles)
+}
+
 /// Fills the cache for the last 30 days, so the first usage request is fast.
 pub fn warm(env: &ScanEnv) {
     let now = domovoi_contracts::time_fmt::now_millis();
@@ -573,6 +581,7 @@ pub fn warm(env: &ScanEnv) {
     for (source, _, dir) in &env.homes {
         let _ = scan(*source, dir, &w);
     }
+    let _ = crate::antigravity::usage::read(&antigravity_roots(env), w.start_ms);
 }
 
 /// A cost of nothing, written `0.0` as t3code writes its costs.
@@ -618,6 +627,41 @@ pub fn summary(env: &ScanEnv, input: &SummaryInput) -> Result<UsageSummary, Fail
             malformed_records: scanned.malformed_records,
             distinct_sessions,
             message: None,
+            refreshing: None,
+        });
+    }
+    // Antigravity keeps its history in SQLite databases, not log lines.
+    let (records, scanned) = crate::antigravity::usage::read(&antigravity_roots(env), w.start_ms);
+    let mut sessions: HashSet<Arc<str>> = HashSet::new();
+    let mut models: HashMap<String, Arc<str>> = HashMap::new();
+    for r in &records {
+        let Some((day, hour)) = w.key(r.ts_ms) else { continue };
+        let session: Arc<str> = r.session.as_str().into();
+        sessions.insert(session.clone());
+        let model = models.entry(r.model.clone()).or_insert_with(|| r.model.as_str().into()).clone();
+        let t = buckets.entry((day, hour, "antigravity", model)).or_default();
+        t.uncached += r.uncached;
+        t.cached += r.cached;
+        t.creation += r.creation;
+        t.output += r.output;
+        t.reasoning += r.reasoning;
+        t.records += 1;
+        t.sessions.insert(session);
+    }
+    for s in scanned {
+        sources.push(UsageSource {
+            fingerprint: UsageSourceFingerprint {
+                host_id: "local".into(),
+                provider: UsageProviderKind::Antigravity,
+                resolved_home_path: s.dir.to_string_lossy().into_owned(),
+                volume_id: "local".into(),
+            },
+            status: if s.failed { UsageSourceStatus::Partial } else if s.exists { UsageSourceStatus::Ok } else { UsageSourceStatus::Missing },
+            scanned_files: s.files,
+            skipped_files: 0,
+            malformed_records: 0,
+            distinct_sessions: sessions.len() as u64,
+            message: s.failed.then(|| "Some Antigravity history could not be read.".to_owned()),
             refreshing: None,
         });
     }

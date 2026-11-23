@@ -12,13 +12,13 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use domovoi_model::typed::{
-    Actor, CompletionWake, ContextUsage, ContextWindowUsage, ConversationMessage, CreationSource, EventBody, ExecutionNode,
+    Actor, ApprovalOption, CompletionWake, ContextUsage, ContextWindowUsage, ConversationMessage, CreationSource, EventBody, ExecutionNode,
     FileChangeDetail, MessageId, MessageRole, NativeRefStrength, NodeId, NodeKind, NodeStatus, PendingBackgroundTask, PlanArtifact,
     PlanId, PlanStatus, PlanStep, ProposedPlan, ProviderCapabilities, ProviderDriverKind, ProviderFailureClass, ProviderInstanceId, ProviderRef,
     ProviderRequestKind, ProviderSession, ProviderSessionId, ProviderSessionStatus, ProviderThread, ProviderThreadId,
-    ProviderThreadStatus, ProviderTurn, ProviderTurnId, ProviderTurnStatus, ResponseCapability, Run, RunAttempt, RunAttemptStatus,
+    ProviderThreadStatus, ProviderTurn, ProviderTurnId, ProviderTurnStatus, ResponseCapability, ResponseMode, Run, RunAttempt, RunAttemptStatus,
     RunId, RunStatus, RuntimeRequest, RuntimeRequestId, RuntimeRequestKind, RuntimeRequestStatus, ThreadId, Timestamp, TodoList,
-    TurnItem, TurnItemId, TurnItemStatus, UserInputQuestion,
+    TurnItem, TurnItemId, TurnItemStatus, UserInputQuestion, WebSearchResult,
 };
 
 const STREAM_FLUSH: Duration = Duration::from_millis(120);
@@ -35,10 +35,10 @@ pub enum Work {
     /// A shell command, with its output and exit code once it has them.
     Command { input: String, output: Option<String>, exit_code: Option<i64> },
     /// An edit to files: the old and new text (`texts`), or a unified patch.
-    FileChange { file_name: String, changes: Vec<FileChangeDetail>, texts: Option<(String, String)>, patch: Option<String> },
+    FileChange { file_name: String, changes: Vec<FileChangeDetail>, texts: Option<(String, String)>, patch: Option<String>, error: Option<String> },
     /// A call to a tool with no item type of its own.
     Tool { name: String, input: Value, output: Option<Value>, viewed_image_path: Option<String> },
-    WebSearch { patterns: Vec<String> },
+    WebSearch { patterns: Vec<String>, results: Option<Vec<WebSearchResult>> },
     Reasoning { text: String, streaming: bool },
     /// The provider compacted its conversation.
     Compaction { before_token_count: Option<u64> },
@@ -648,7 +648,7 @@ impl Turn {
 
     /// The turn item that shows `work`. What `work` does not say (a command's
     /// output before it has any) stays as `previous`, the item's last version, had it.
-    fn work_item(&self, shared: Shared, work: Work, previous: Option<&TurnItem>) -> TurnItem {
+    pub(super) fn work_item(&self, shared: Shared, work: Work, previous: Option<&TurnItem>) -> TurnItem {
         match work {
             Work::Command { input, output, exit_code } => {
                 let previous = match previous {
@@ -665,7 +665,7 @@ impl Turn {
                     completion_wake: Some(CompletionWake::Always),
                 })
             }
-            Work::FileChange { file_name, changes, texts, patch } => {
+            Work::FileChange { file_name, changes, texts, patch, error } => {
                 let previous = match previous {
                     Some(TurnItem::FileChange(previous)) => Some(previous),
                     _ => None,
@@ -679,6 +679,7 @@ impl Turn {
                     old_str: old_str.or_else(|| previous.and_then(|p| p.old_str.clone())),
                     new_str: new_str.or_else(|| previous.and_then(|p| p.new_str.clone())),
                     changes: Some(changes),
+                    error: error,
                 })
             }
             Work::Tool { name, input, output, viewed_image_path } => {
@@ -694,7 +695,7 @@ impl Turn {
                     output_omitted: None,
                 })
             }
-            Work::WebSearch { patterns } => turn_item!(WebSearch(WebSearchItem), shared, { patterns: Some(patterns), results: None }),
+            Work::WebSearch { patterns, results } => turn_item!(WebSearch(WebSearchItem), shared, { patterns: Some(patterns), results: results }),
             Work::Reasoning { text, streaming } => turn_item!(Reasoning(ReasoningItem), shared, { text: text, streaming: streaming }),
             Work::Compaction { before_token_count } => turn_item!(Compaction(CompactionItem), shared, {
                 driver: Some(ProviderDriverKind::from(self.driver.as_str())),
@@ -726,12 +727,28 @@ impl Turn {
         let (thread_id, run_id) = (ThreadId::from(self.thread_id.as_str()), Some(self.run.id.clone()));
         let shared = self.shared(native_id, self.native_item_id("turn-item", native_id), &node_id, native_id, status);
         let (artifact, item) = match plan {
-            Plan::Proposed { markdown } => (
-                PlanArtifact::ProposedPlan(ProposedPlan {
-                    id: plan_id.clone(), thread_id, run_id, node_id, status: PlanStatus::Active, detail_in_turn_item: None, markdown: markdown.clone(),
-                }),
-                turn_item!(ProposedPlan(ProposedPlanItem), shared, { plan_id: plan_id, markdown: markdown, streaming: !completed }),
-            ),
+            Plan::Proposed { markdown } => {
+                if completed
+                    && let Ok(existing) = self.store.records::<PlanArtifact>(&self.thread_id)
+                {
+                    for old in existing {
+                        if let PlanArtifact::ProposedPlan(old) = &*old
+                            && old.id != plan_id
+                            && matches!(old.status, PlanStatus::Active | PlanStatus::Draft)
+                        {
+                            let mut superseded = old.clone();
+                            superseded.status = PlanStatus::Superseded;
+                            self.emit(EventBody::PlanUpdated(Box::new(PlanArtifact::ProposedPlan(superseded))));
+                        }
+                    }
+                }
+                (
+                    PlanArtifact::ProposedPlan(ProposedPlan {
+                        id: plan_id.clone(), thread_id, run_id, node_id, status: if completed { PlanStatus::Active } else { PlanStatus::Draft }, detail_in_turn_item: None, markdown: markdown.clone(),
+                    }),
+                    turn_item!(ProposedPlan(ProposedPlanItem), shared, { plan_id: plan_id, markdown: markdown, streaming: !completed }),
+                )
+            }
             Plan::Todo { steps, explanation } => (
                 PlanArtifact::TodoList(TodoList {
                     id: plan_id.clone(), thread_id, run_id, node_id, status: PlanStatus::Active, detail_in_turn_item: None,
@@ -856,7 +873,7 @@ impl Turn {
     }
 
     /// Records the item of a request just opened, then the request itself, pending.
-    fn request(&mut self, id: RuntimeRequestId, node_id: NodeId, item: TurnItem, native_item_id: &str, kind: RuntimeRequestKind) -> String {
+    fn request(&mut self, id: RuntimeRequestId, node_id: NodeId, item: TurnItem, native_item_id: &str, kind: RuntimeRequestKind, by_message: bool) -> String {
         self.items.insert(id.as_str().to_owned(), item.clone());
         self.emit(EventBody::TurnItemUpdated(item));
         let request = RuntimeRequest {
@@ -866,7 +883,11 @@ impl Turn {
             native_request_ref: Some(native_ref(&self.driver, native_item_id)),
             kind,
             status: RuntimeRequestStatus::Pending,
-            response_capability: ResponseCapability::Live { provider_session_id: ProviderSessionId::from(self.session_id.as_str()), supports_feedback: None },
+            response_capability: if by_message {
+                ResponseCapability::Message
+            } else {
+                ResponseCapability::Live { provider_session_id: ProviderSessionId::from(self.session_id.as_str()), supports_feedback: None }
+            },
             created_at: now(),
             resolved_at: None,
             decision: None,
@@ -874,12 +895,20 @@ impl Turn {
             answers: None,
         };
         self.emit(EventBody::RuntimeRequestUpdated(Box::new(request.clone())));
-        self.requests.insert(id.as_str().to_owned(), request);
+        if !by_message {
+            self.requests.insert(id.as_str().to_owned(), request);
+        }
         id.as_str().to_owned()
     }
 
     /// Opens an approval request attached to a tool item. Returns its id.
     pub fn open_request(&mut self, native_request_id: &str, native_item_id: &str, kind: ProviderRequestKind, prompt: &str) -> String {
+        self.open_request_with(native_request_id, native_item_id, kind, prompt, None)
+    }
+
+    /// [`Turn::open_request`] with the answers the agent offers, as the
+    /// client shows them (labels, and a warning on one).
+    pub fn open_request_with(&mut self, native_request_id: &str, native_item_id: &str, kind: ProviderRequestKind, prompt: &str, options: Option<Vec<ApprovalOption>>) -> String {
         let (id, node_id, shared) = self.open(native_request_id, native_item_id);
         let item = turn_item!(ApprovalRequest(ApprovalRequestItem), shared, {
             request_id: id.clone(),
@@ -888,28 +917,54 @@ impl Turn {
             reason: None,
             full_access_override: None,
             app_name: None,
-            options: None,
+            options: options,
         });
-        self.request(id, node_id, item, native_item_id, request_kind(&kind))
+        self.request(id, node_id, item, native_item_id, request_kind(&kind), false)
     }
 
     /// A question the agent asks (Claude's `AskUserQuestion`), as a
     /// `user_input` request with a `user_input_request` item carrying its
     /// questions; `runtime-request.respond` with `answers` resolves it.
     pub fn open_user_input(&mut self, native_request_id: &str, native_item_id: &str, questions: Vec<UserInputQuestion>) -> String {
+        self.user_input(native_request_id, native_item_id, questions, false)
+    }
+
+    pub fn open_message_question(&mut self, native_item_id: &str, questions: Vec<UserInputQuestion>) {
+        let db = self.store.db().clone();
+        let result = db.batch(|| -> Result<(), crate::store::StoreError> {
+            let thread = self.store.app_thread(&self.thread_id)?;
+            if thread.is_some_and(|thread| thread.deleted_at.is_none() && thread.provider_instance_id.as_str() == self.instance) {
+                self.user_input(native_item_id, native_item_id, questions, true);
+            }
+            Ok(())
+        });
+        if let Err(error) = result {
+            tracing::error!(thread = %self.thread_id, "could not publish the question: {error}");
+        }
+    }
+
+    fn user_input(&mut self, native_request_id: &str, native_item_id: &str, questions: Vec<UserInputQuestion>, by_message: bool) -> String {
         let (id, node_id, shared) = self.open(native_request_id, native_item_id);
         let item = turn_item!(UserInputRequest(UserInputRequestItem), shared, {
             request_id: id.clone(),
             questions: questions,
             question_answer: None,
-            response_mode: None,
+            response_mode: by_message.then_some(ResponseMode::Message),
         });
-        self.request(id, node_id, item, native_item_id, RuntimeRequestKind::UserInput)
+        self.request(id, node_id, item, native_item_id, RuntimeRequestKind::UserInput, by_message)
     }
 
     pub fn resolve_request(&mut self, request_id: &str, decision: &str, answers: Option<&Answers>) {
+        self.settle_live_request(request_id, decision, answers, false);
+    }
+
+    pub fn cancel_request(&mut self, request_id: &str) {
+        self.settle_live_request(request_id, "cancel", None, true);
+    }
+
+    fn settle_live_request(&mut self, request_id: &str, decision: &str, answers: Option<&Answers>, cancelled: bool) {
         let Some(mut request) = self.requests.remove(request_id) else { return };
-        request.status = RuntimeRequestStatus::Resolved;
+        request.status = if cancelled { RuntimeRequestStatus::Cancelled } else { RuntimeRequestStatus::Resolved };
         request.decision = spelled(decision);
         if let Some(answers) = answers {
             request.answers = Some(answers.clone());
@@ -917,11 +972,13 @@ impl Turn {
         request.resolved_at = Some(now());
         self.emit(EventBody::RuntimeRequestUpdated(Box::new(request)));
         if self.nodes.contains_key(request_id) {
-            let node = self.node_for(request_id, NodeKind::ApprovalRequest, NodeStatus::Completed, None, None, String::new());
+            let status = if cancelled { NodeStatus::Cancelled } else { NodeStatus::Completed };
+            let node = self.node_for(request_id, NodeKind::ApprovalRequest, status, None, None, String::new());
             self.emit(EventBody::NodeUpdated(Box::new(node)));
         }
         if let Some(mut item) = self.items.remove(request_id) {
-            end_item(&mut item, TurnItemStatus::Completed, &now());
+            let status = if cancelled { TurnItemStatus::Cancelled } else { TurnItemStatus::Completed };
+            end_item(&mut item, status, &now());
             self.items.insert(request_id.to_owned(), item.clone());
             self.emit(EventBody::TurnItemUpdated(item));
         }
@@ -953,7 +1010,10 @@ impl Turn {
         let open: Vec<String> = self
             .items
             .iter()
-            .filter(|(_, item)| matches!(item.status(), TurnItemStatus::Running | TurnItemStatus::Waiting | TurnItemStatus::Pending))
+            .filter(|(_, item)| {
+                matches!(item.status(), TurnItemStatus::Running | TurnItemStatus::Waiting | TurnItemStatus::Pending)
+                    && !matches!(item, TurnItem::UserInputRequest(question) if question.response_mode == Some(ResponseMode::Message))
+            })
             .map(|(key, _)| key.clone())
             .collect();
         for key in open {
@@ -1070,7 +1130,7 @@ mod tests {
             // What a later update does not say stays as it was.
             turn.item("c1", Work::Command { input: "ls".into(), output: None, exit_code: None }, TurnItemStatus::Completed);
             let changes = vec![FileChangeDetail { operation: "update".into(), path: "src/a.rs".into(), old_path: None, file_type: None, mime_type: None }];
-            turn.item("f1", Work::FileChange { file_name: "a.rs".into(), changes, texts: None, patch: Some("@@ -1 +1 @@".into()) }, TurnItemStatus::Completed);
+            turn.item("f1", Work::FileChange { file_name: "a.rs".into(), changes, texts: None, patch: Some("@@ -1 +1 @@".into()), error: None }, TurnItemStatus::Completed);
             turn.plan("p1", Plan::Todo { steps: vec![PlanStep { id: "step-1".into(), text: "Look".into(), status: domovoi_model::typed::PlanStepStatus::Running, duration_anchor_at: None, duration_ms: None }], explanation: None }, true);
             let approval = turn.open_request("req-1", "c1", ProviderRequestKind::Command, "Run ls");
             let asked: Vec<UserInputQuestion> = serde_json::from_value(json!([

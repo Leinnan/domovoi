@@ -32,12 +32,6 @@ final class SecureStore: @unchecked Sendable {
         case unavailable(OSStatus)
     }
 
-    init() {
-        #if os(macOS) && !DEBUG
-        if !memoryOnly { migrateFileToKeychain() }
-        #endif
-    }
-
     func load(_ key: String) -> String? {
         if case .found(let value) = lookup(key) { return value }
         return nil
@@ -72,7 +66,7 @@ final class SecureStore: @unchecked Sendable {
             return (try? value.write(to: file, atomically: true, encoding: .utf8)) != nil
         }
         if useFile { return updateFile { $0[key] = value } }
-        return keychainWrite(key, value)
+        return keychainWrite(key, value) == errSecSuccess
     }
 
     @discardableResult
@@ -110,11 +104,21 @@ final class SecureStore: @unchecked Sendable {
         switch lookup("deviceKey") {
         case .found(let key) where key.count == 64:
             return key
+        case .found:
+            NSLog("Domovoi: the saved device key is invalid")
+            return nil
         case .unavailable(let status):
             NSLog("Domovoi: the device key could not be read (OSStatus %d)", status)
             return nil
-        default:
+        case .missing:
             let key = tunnelGenerateKey()
+            if !memoryOnly && !useFile {
+                // Another process may have created the device identity since the read.
+                let status = keychainWrite("deviceKey", key, addOnly: true)
+                guard status == errSecSuccess || status == errSecDuplicateItem,
+                      let saved = load("deviceKey"), saved.count == 64 else { return nil }
+                return saved
+            }
             guard save("deviceKey", key), load("deviceKey") == key else {
                 NSLog("Domovoi: a new device key could not be saved")
                 return nil
@@ -130,14 +134,17 @@ final class SecureStore: @unchecked Sendable {
         return base.appendingPathComponent("Domovoi", isDirectory: true).appendingPathComponent("store.json")
     }
 
-    private struct Unreadable: Error {}
-
     /// The saved values; empty when there is no file, a failure when there is
     /// one that cannot be parsed (which is then never overwritten).
     private func readFile() -> Result<[String: String], Error> {
-        guard let data = try? Data(contentsOf: fileURL) else { return .success([:]) }
-        guard let values = try? JSONDecoder().decode([String: String].self, from: data) else { return .failure(Unreadable()) }
-        return .success(values)
+        do {
+            let data = try Data(contentsOf: fileURL)
+            return .success(try JSONDecoder().decode([String: String].self, from: data))
+        } catch let error as CocoaError where error.code == .fileReadNoSuchFile || error.code == .fileNoSuchFile {
+            return .success([:])
+        } catch {
+            return .failure(error)
+        }
     }
 
     private func updateFile(_ change: (inout [String: String]) -> Void) -> Bool {
@@ -169,19 +176,74 @@ final class SecureStore: @unchecked Sendable {
         }
     }
 
-    #if os(macOS) && !DEBUG
-    /// A release build picks up what a debug build saved, once.
-    private func migrateFileToKeychain() {
-        guard case .success(let values) = readFile(), !values.isEmpty else { return }
-        for (key, value) in values where !keychainWrite(key, value) { return }
-        try? FileManager.default.removeItem(at: fileURL)
+    #if os(macOS)
+    var needsKeychainPreparation: Bool { !memoryOnly && !useFile }
+
+    /// Check the existing items before starting the core, which treats a nil
+    /// value as missing. Older releases may need approval per item.
+    func prepareKeychain() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+
+        var search = serviceQuery
+        search[kSecReturnAttributes as String] = true
+        search[kSecMatchLimit as String] = kSecMatchLimitAll
+        var result: AnyObject?
+        let status = SecItemCopyMatching(search as CFDictionary, &result)
+        switch status {
+        case errSecSuccess:
+            guard let items = result as? [[String: Any]] else { return false }
+            for item in items {
+                guard let key = item[kSecAttrAccount as String] as? String else { return false }
+                switch keychainRead(key) {
+                case .found: break
+                case .missing: return false
+                case .unavailable(let status):
+                    NSLog("Domovoi: the Keychain is unavailable (OSStatus %d)", status)
+                    return false
+                }
+            }
+        case errSecItemNotFound:
+            break
+        default:
+            NSLog("Domovoi: the Keychain is unavailable (OSStatus %d)", status)
+            return false
+        }
+
+        return migrateFileToKeychain()
+    }
+
+    /// Import values saved by the debug app without replacing release values.
+    private func migrateFileToKeychain() -> Bool {
+        guard case .success(let values) = readFile() else {
+            NSLog("Domovoi: the debug store could not be read for import")
+            return true
+        }
+        guard !values.isEmpty else { return true }
+        for (key, value) in values {
+            let status = keychainWrite(key, value, addOnly: true)
+            guard status == errSecSuccess || status == errSecDuplicateItem else { return false }
+        }
+        do {
+            try FileManager.default.removeItem(at: fileURL)
+        } catch let error as CocoaError where error.code == .fileNoSuchFile {
+        } catch {
+            NSLog("Domovoi: the imported debug store could not be removed")
+        }
+        return true
     }
     #endif
 
     // MARK: Keychain
 
+    private var serviceQuery: [String: Any] {
+        [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service]
+    }
+
     private func query(_ key: String) -> [String: Any] {
-        [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: key]
+        var query = serviceQuery
+        query[kSecAttrAccount as String] = key
+        return query
     }
 
     private func keychainRead(_ key: String) -> Lookup {
@@ -203,16 +265,18 @@ final class SecureStore: @unchecked Sendable {
 
     /// Readable after the first unlock (a reconnect in the background works),
     /// and carried over in an encrypted backup to a new phone.
-    private func keychainWrite(_ key: String, _ value: String) -> Bool {
+    private func keychainWrite(_ key: String, _ value: String, addOnly: Bool = false) -> OSStatus {
         let data = Data(value.utf8)
         let attributes: [String: Any] = [kSecValueData as String: data, kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock]
-        var status = SecItemUpdate(query(key) as CFDictionary, attributes as CFDictionary)
+        var status = addOnly ? errSecItemNotFound : SecItemUpdate(query(key) as CFDictionary, attributes as CFDictionary)
         if status == errSecItemNotFound {
             var q = query(key)
             q.merge(attributes) { _, new in new }
             status = SecItemAdd(q as CFDictionary, nil)
         }
-        if status != errSecSuccess { NSLog("Domovoi: saving %@ in the Keychain failed (OSStatus %d)", key, status) }
-        return status == errSecSuccess
+        if status != errSecSuccess && !(addOnly && status == errSecDuplicateItem) {
+            NSLog("Domovoi: saving %@ in the Keychain failed (OSStatus %d)", key, status)
+        }
+        return status
     }
 }

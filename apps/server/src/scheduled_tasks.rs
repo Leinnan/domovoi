@@ -787,11 +787,202 @@ pub fn set_enabled(store: &Store, id: &str, enabled: bool, now: &Zoned) -> Resul
     Ok((task, true))
 }
 
+/// The tables that keep a task's run history and a webhook task's
+/// deliveries, replay keys and open coalesce windows, by `task_id`.
+const TASK_TABLES: [&str; 4] = ["scheduled_task_runs", "scheduled_task_webhook_deliveries", "scheduled_task_webhook_replay_keys", "scheduled_task_webhook_pending"];
+
+/// Deletes the tasks `which` selects (a `WHERE` on `scheduled_tasks`, with
+/// `?1`), their webhook rows with them; returns their ids.
+fn delete_where(c: &mut rusqlite::Connection, which: &str, arg: &str) -> rusqlite::Result<Vec<String>> {
+    let tx = c.transaction()?;
+    for table in TASK_TABLES {
+        tx.execute(&format!("DELETE FROM {table} WHERE task_id IN (SELECT task_id FROM scheduled_tasks WHERE {which})"), params![arg])?;
+    }
+    let ids = {
+        let mut st = tx.prepare(&format!("DELETE FROM scheduled_tasks WHERE {which} RETURNING task_id"))?;
+        st.query_map(params![arg], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    tx.commit()?;
+    Ok(ids)
+}
+
 pub fn delete(store: &Store, id: &str) -> Result<(), ScheduledTaskError> {
     store
         .db()
-        .with(|c| c.execute("DELETE FROM scheduled_tasks WHERE task_id = ?1", params![id]).map(|_| ()))
+        .with(|c| delete_where(c, "task_id = ?1", id).map(|_| ()))
         .map_err(|e| task_error_cause("Could not delete schedule task.", Some(id), e))
+}
+
+/// `deleteForThread`: a deleted thread takes the tasks still bound to it
+/// along, as t3code's thread deletion does; returns how many went.
+pub fn delete_for_thread(store: &Store, thread_id: &str) -> usize {
+    match store.db().with(|c| delete_where(c, "thread_id = ?1", thread_id)) {
+        Ok(ids) => {
+            if !ids.is_empty() {
+                tracing::info!(%thread_id, tasks = ?ids, "deleted the scheduled tasks of a deleted thread");
+                notify_service();
+            }
+            ids.len()
+        }
+        Err(e) => {
+            tracing::warn!(%thread_id, "could not delete the scheduled tasks of a deleted thread: {e}");
+            0
+        }
+    }
+}
+
+/// `moveThreadTasks`: a thread that moved to another project (scratch
+/// promotion) takes the tasks bound to it along.
+pub fn move_thread_tasks(store: &Store, thread_id: &str, project_id: &str) {
+    let moved = store.db().with(|c| {
+        c.execute(
+            "UPDATE scheduled_tasks SET project_id = ?2, updated_at = ?3 WHERE thread_id = ?1 AND project_id != ?2",
+            params![thread_id, project_id, iso(local_now().timestamp())],
+        )
+    });
+    match moved {
+        Ok(0) => {}
+        Ok(_) => notify_service(),
+        Err(e) => tracing::warn!(%thread_id, %project_id, "could not move a thread's scheduled tasks: {e}"),
+    }
+}
+
+/// Tells the service (when it runs) that the stored tasks changed.
+fn notify_service() {
+    if let Some(service) = SERVICE.get() {
+        service.notify_changed();
+    }
+}
+
+/// Tasks bound to threads deleted before their tasks went along with them
+/// (by a server older than that) are deleted at startup; returns how many.
+fn sweep_deleted_threads(store: &Store) -> usize {
+    let threads: Vec<String> = store
+        .db()
+        .with(|c| {
+            let mut st = c.prepare("SELECT DISTINCT thread_id FROM scheduled_tasks WHERE thread_id IS NOT NULL")?;
+            st.query_map([], |r| r.get::<_, String>(0))?.collect()
+        })
+        .unwrap_or_default();
+    threads
+        .iter()
+        .filter(|tid| matches!(store.app_thread(tid), Ok(None)) || store.app_thread(tid).ok().flatten().is_some_and(|t| t.deleted_at.is_some()))
+        .map(|tid| delete_for_thread(store, tid))
+        .sum()
+}
+
+// ---- run history (Domovoi's own: t3code keeps only a task's last run) ----
+
+/// How many runs each task keeps.
+const RUNS_KEPT: i64 = 50;
+
+/// A task's run as `scheduledTasks.listRuns` answers it.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskRun {
+    pub task_id: String,
+    pub started_at: String,
+    /// `scheduled`, `manual` or `webhook`.
+    pub trigger: String,
+    pub thread_id: Option<String>,
+    /// `queued`, `running`, `waiting` (on an approval or a question),
+    /// `completed`, `stopped` or `failed` as the run in its thread is now;
+    /// `sent` when that run is not found; `failed` when it did not start;
+    /// `skipped` when the last one still waited in its thread.
+    pub status: String,
+    pub error: Option<String>,
+}
+
+/// A run as the history keeps it: `key` is its message id (or, for a run
+/// refused before it started, one of its own).
+struct HistoryEntry<'a> {
+    key: &'a str,
+    /// `sent`, `failed` or `skipped`; a sent run's state is read from its thread.
+    status: &'a str,
+    task_id: &'a str,
+    started_iso: &'a str,
+    trigger: Trigger,
+    thread_id: Option<&'a str>,
+    message_id: Option<&'a str>,
+    error: Option<&'a str>,
+}
+
+/// Keeps a run in the task's history (and only the last `RUNS_KEPT`).
+fn record_history(store: &Store, run: &HistoryEntry<'_>) {
+    let task_id = run.task_id;
+    let status = run.status;
+    let written = store.db().with(|c| {
+        c.execute(
+            "INSERT OR REPLACE INTO scheduled_task_runs VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![run.key, task_id, run.started_iso, run.trigger.as_str(), run.thread_id, run.message_id, status, run.error],
+        )?;
+        c.execute(
+            "DELETE FROM scheduled_task_runs WHERE task_id = ?1 AND run_key NOT IN
+               (SELECT run_key FROM scheduled_task_runs WHERE task_id = ?1 ORDER BY started_at DESC LIMIT ?2)",
+            params![task_id, RUNS_KEPT],
+        )
+    });
+    if let Err(e) = written {
+        tracing::warn!(task = task_id, "could not keep a scheduled task's run: {e}");
+    }
+}
+
+/// What a run in a thread is doing, as the history names it.
+fn run_state(status: &RunStatus) -> &'static str {
+    match status {
+        RunStatus::Preparing | RunStatus::Queued => "queued",
+        RunStatus::Starting | RunStatus::Running => "running",
+        // On an approval or a question: someone has to answer.
+        RunStatus::Waiting => "waiting",
+        RunStatus::Completed => "completed",
+        RunStatus::Failed => "failed",
+        RunStatus::Interrupted | RunStatus::Cancelled | RunStatus::RolledBack => "stopped",
+        RunStatus::Other(_) => "sent",
+    }
+}
+
+/// `scheduledTasks.listRuns`: a task's runs, newest first; without a task,
+/// every task's latest run. A run sent to a thread says what it is doing now.
+pub fn list_runs(store: &Store, task_id: Option<&str>, limit: u32) -> Result<Vec<TaskRun>, ScheduledTaskError> {
+    let rows: Vec<(TaskRun, Option<String>)> = store
+        .db()
+        .with(|c| {
+            let read = |r: &Row<'_>| {
+                Ok((
+                    TaskRun { task_id: r.get(0)?, started_at: r.get(1)?, trigger: r.get(2)?, thread_id: r.get(3)?, status: r.get(5)?, error: r.get(6)? },
+                    r.get::<_, Option<String>>(4)?,
+                ))
+            };
+            const FIELDS: &str = "task_id, started_at, trigger, thread_id, message_id, status, error";
+            match task_id {
+                Some(id) => {
+                    let mut st = c.prepare(&format!("SELECT {FIELDS} FROM scheduled_task_runs WHERE task_id = ?1 ORDER BY started_at DESC LIMIT ?2"))?;
+                    st.query_map(params![id, limit], read)?.collect()
+                }
+                None => {
+                    let mut st = c.prepare(&format!(
+                        "SELECT {FIELDS} FROM scheduled_task_runs r WHERE started_at = (SELECT MAX(started_at) FROM scheduled_task_runs WHERE task_id = r.task_id)
+                         ORDER BY started_at DESC"
+                    ))?;
+                    st.query_map([], read)?.collect()
+                }
+            }
+        })
+        .map_err(|e| task_error_cause("Could not read the task's runs.", task_id, e))?;
+    // Each thread's runs are read once.
+    let mut threads: std::collections::HashMap<String, Vec<Run>> = std::collections::HashMap::new();
+    Ok(rows
+        .into_iter()
+        .map(|(mut run, message_id)| {
+            if let (Some(tid), Some(message), "sent") = (run.thread_id.clone(), message_id, run.status.as_str()) {
+                let runs = threads.entry(tid.clone()).or_insert_with(|| store.records::<Run>(&tid).map(|runs| runs.into_iter().map(|r| (*r).clone()).collect()).unwrap_or_default());
+                if let Some(found) = runs.iter().find(|r| r.user_message_id.as_str() == message) {
+                    run.status = run_state(&found.status).to_owned();
+                }
+            }
+            run
+        })
+        .collect())
 }
 
 /// `rotateWebhookToken`.
@@ -979,6 +1170,9 @@ impl Drop for Reservation {
 
 static SERVICE: OnceLock<Arc<ScheduledTasks>> = OnceLock::new();
 
+/// How many due tasks the timer starts at once.
+const DUE_AT_ONCE: usize = 3;
+
 /// The process-wide service; the first call recovers interrupted runs and
 /// starts the timer (call it from inside the tokio runtime).
 pub fn service(state: &SharedState) -> Arc<ScheduledTasks> {
@@ -987,6 +1181,7 @@ pub fn service(state: &SharedState) -> Arc<ScheduledTasks> {
             let (changes, _) = broadcast::channel(16);
             let s = Arc::new(ScheduledTasks { state: state.clone(), changes, wake: Notify::new(), active: Arc::default() });
             recover_interrupted(&s.state.store, &local_now());
+            sweep_deleted_threads(&s.state.store);
             let timer = s.clone();
             tokio::spawn(async move { timer.run_timer().await });
             s
@@ -1033,8 +1228,10 @@ impl ScheduledTasks {
 
     /// `runDueTasks`: one at a time, oldest due first.
     async fn run_due(self: Arc<Self>) {
+        use futures::StreamExt;
         let now = local_now();
         let Ok(due) = due_tasks(self.store(), &now) else { return };
+        let mut runnable = vec![];
         for task in due {
             let Some(due_at) = moment(task.next_run_at.as_ref()) else { continue };
             if is_missed_fixed_time_run(&task.schedule, due_at, now.timestamp()) {
@@ -1044,19 +1241,34 @@ impl ScheduledTasks {
                 }
                 continue;
             }
-            if let Err(e) = self.clone().run_task(&task, Trigger::Scheduled).await {
-                tracing::warn!(task = task.id.as_str(), error = %e.written(), "scheduled task run failed");
-            }
+            runnable.push(task);
         }
+        // A few at once, soonest first: one slow start (a new worktree) does
+        // not hold up every other task that is due.
+        futures::stream::iter(runnable)
+            .for_each_concurrent(DUE_AT_ONCE, |task| {
+                let service = self.clone();
+                async move {
+                    if let Err(e) = service.run_task(&task, Trigger::Scheduled).await {
+                        tracing::warn!(task = task.id.as_str(), error = %e.written(), "scheduled task run failed");
+                    }
+                }
+            })
+            .await;
     }
 
     /// `runNow`.
     pub async fn run_now(self: Arc<Self>, id: &str) -> Result<ScheduledTask, ScheduledTaskError> {
+        self.run_now_into(id).await.map(|(task, _)| task)
+    }
+
+    /// `runNow`, with the thread the run went to (none when it did not start).
+    pub async fn run_now_into(self: Arc<Self>, id: &str) -> Result<(ScheduledTask, Option<String>), ScheduledTaskError> {
         let task = load(self.store(), id)?;
         if matches!(task.schedule, ScheduledTaskSchedule::Webhook(_)) {
             return Err(task_error("Webhook tasks run when their URL receives a request.", Some(id)));
         }
-        self.run_task(&task, Trigger::Manual).await
+        self.run_occurrence(&task, Occurrence { trigger: Trigger::Manual, prompt: None, key: None }).await
     }
 
     /// `runTask`: reserves the task, launches or sends, records the outcome.
@@ -1065,21 +1277,22 @@ impl ScheduledTasks {
     /// The run is a task of its own: a caller that goes away (an RPC
     /// cancelled when its socket closes) does not stop it half way.
     async fn run_task(self: Arc<Self>, task: &ScheduledTask, trigger: Trigger) -> Result<ScheduledTask, ScheduledTaskError> {
-        self.run_occurrence(task, Occurrence { trigger, prompt: None, key: None }).await
+        self.run_occurrence(task, Occurrence { trigger, prompt: None, key: None }).await.map(|(task, _)| task)
     }
 
     /// A webhook delivery's run: the task with the prompt its request filled
     /// in, keyed by the delivery so a retry of the dispatch is one run.
     pub(crate) async fn run_webhook(self: Arc<Self>, task: &ScheduledTask, prompt: String, delivery_id: &str) -> Result<ScheduledTask, ScheduledTaskError> {
         let key = format!("{}:{delivery_id}", task.id.as_str());
-        self.run_occurrence(task, Occurrence { trigger: Trigger::Webhook, prompt: Some(prompt), key: Some(key) }).await
+        self.run_occurrence(task, Occurrence { trigger: Trigger::Webhook, prompt: Some(prompt), key: Some(key) }).await.map(|(task, _)| task)
     }
 
-    async fn run_occurrence(self: Arc<Self>, task: &ScheduledTask, occurrence: Occurrence) -> Result<ScheduledTask, ScheduledTaskError> {
+    /// The task as stored after the run, and the thread the run went to.
+    async fn run_occurrence(self: Arc<Self>, task: &ScheduledTask, occurrence: Occurrence) -> Result<(ScheduledTask, Option<String>), ScheduledTaskError> {
         let trigger = occurrence.trigger;
         let id = task.id.as_str().to_owned();
         let Some(reservation) = Reservation::take(&self.active, self.store(), task) else {
-            return if trigger == Trigger::Scheduled { Ok(task.clone()) } else { Err(task_error("Schedule task is already running.", Some(&id))) };
+            return if trigger == Trigger::Scheduled { Ok((task.clone(), None)) } else { Err(task_error("Schedule task is already running.", Some(&id))) };
         };
         let task = task.clone();
         let run = tokio::spawn(async move {
@@ -1094,7 +1307,7 @@ impl ScheduledTasks {
         run.await.unwrap_or_else(|e| Err(task_error(&format!("Schedule task run stopped: {e}"), Some(&id))))
     }
 
-    async fn run_reserved(self: Arc<Self>, task: &ScheduledTask, occurrence: Occurrence) -> Result<ScheduledTask, ScheduledTaskError> {
+    async fn run_reserved(self: Arc<Self>, task: &ScheduledTask, occurrence: Occurrence) -> Result<(ScheduledTask, Option<String>), ScheduledTaskError> {
         let trigger = occurrence.trigger;
         let store = self.store().clone();
         let id = task.id.as_str().to_owned();
@@ -1102,23 +1315,43 @@ impl ScheduledTasks {
         let started_iso = iso(started.timestamp());
         // Re-read: a stale poll snapshot must not fire a deleted, paused or postponed task.
         let Some(active) = find(&store, &id)? else {
-            return if trigger == Trigger::Scheduled { Ok(task.clone()) } else { Err(task_error("Schedule task not found.", Some(&id))) };
+            return if trigger == Trigger::Scheduled { Ok((task.clone(), None)) } else { Err(task_error("Schedule task not found.", Some(&id))) };
         };
         if trigger == Trigger::Scheduled {
             let due = moment(active.next_run_at.as_ref());
             if !active.enabled || due.is_none_or(|d| d > started.timestamp()) {
-                return Ok(active);
+                return Ok((active, None));
             }
             // A busy bound thread would otherwise collect one copy per interval.
             if !matches!(active.schedule, ScheduledTaskSchedule::Once(_)) {
                 if let Some(tid) = active.thread_id.as_ref().map(|thread| thread.as_str()) {
                     if has_queued_occurrence(&store, &id, tid) {
+                        let key = format!("skipped:{id}:{started_iso}");
+                        let why = "Skipped: the last run still waits in its thread.";
+                        let entry = HistoryEntry { key: &key, status: "skipped", task_id: &id, started_iso: &started_iso, trigger, thread_id: Some(tid), message_id: None, error: Some(why) };
+                        record_history(&store, &entry);
                         if reschedule_missed(&store, &active, &started, None)? {
                             self.notify_changed();
                         }
-                        return Ok(active);
+                        return Ok((active, None));
                     }
                 }
+            }
+        }
+        if let Some(tid) = active.thread_id.as_ref().map(|thread| thread.as_str()) {
+            let thread = store.app_thread(tid).map_err(|e| task_error_cause("Could not read the task's thread.", Some(&id), e))?;
+            // Deleted before its tasks went with it (or by an older server).
+            if thread.as_ref().is_none_or(|t| t.deleted_at.is_some()) {
+                delete_for_thread(&store, tid);
+                return Err(task_error("Its thread was deleted, so the task was deleted too.", Some(&id)));
+            }
+            // An archived thread gets no new messages: the run fails and says why.
+            if thread.as_ref().is_some_and(|t| t.archived_at.is_some()) {
+                return self.record_refused(&active, &started, trigger, "Its thread is archived. Unarchive it or pick another thread.").map(|task| (task, None));
+            }
+            // Asked by hand again while the last copy still waits its turn.
+            if trigger == Trigger::Manual && has_queued_occurrence(&store, &id, tid) {
+                return Err(task_error("A run of this task is already waiting in its thread.", Some(&id)));
             }
         }
         let marked = store
@@ -1170,6 +1403,12 @@ impl ScheduledTasks {
             Ok(tid) => (ScheduledTaskRunStatus::Succeeded, None, Some(tid.clone())),
             Err(e) => (ScheduledTaskRunStatus::Failed, Some(e.clone()), None),
         };
+        let history_thread = thread_id.clone().or_else(|| active.thread_id.as_ref().map(|t| t.as_str().to_owned()));
+        let sent_message = thread_id.as_ref().map(|_| message_id.as_str());
+        let entry = HistoryEntry {
+            key: &message_id, status: if error.is_some() { "failed" } else { "sent" }, task_id: &id, started_iso: &started_iso, trigger, thread_id: history_thread.as_deref(), message_id: sent_message, error: error.as_deref(),
+        };
+        record_history(&store, &entry);
         // The stored row can have been edited meanwhile; compute the next run from it.
         let recorded = match find(&store, &id) {
             Ok(Some(current)) => {
@@ -1214,7 +1453,35 @@ impl ScheduledTasks {
                 return Err(e);
             }
         };
-        Ok(recorded)
+        Ok((recorded, thread_id))
+    }
+
+    /// A run refused before it started: recorded as failed with `reason`,
+    /// and the next one scheduled as after any run.
+    fn record_refused(&self, task: &ScheduledTask, started: &Zoned, trigger: Trigger, reason: &str) -> Result<ScheduledTask, ScheduledTaskError> {
+        let id = task.id.as_str();
+        let started_iso = iso(started.timestamp());
+        let ran = ScheduledTask { last_run_at: Some(started_iso.clone().into()), ..task.clone() };
+        let next = next_run_after_run(&ran, started);
+        let written = self
+            .store()
+            .db()
+            .with(|c| {
+                c.execute(
+                    "UPDATE scheduled_tasks SET updated_at = ?2, last_run_at = ?2, next_run_at = ?3, last_run_status = 'failed', last_run_error = ?4,
+                       run_count = run_count + 1 WHERE task_id = ?1",
+                    params![id, started_iso, next, reason],
+                )
+            })
+            .map_err(|e| task_error_cause("Could not record schedule task run.", Some(id), e))?;
+        if written > 0 {
+            let key = format!("refused:{id}:{started_iso}");
+            let thread_id = task.thread_id.as_ref().map(|t| t.as_str());
+            let entry = HistoryEntry { key: &key, status: "failed", task_id: id, started_iso: &started_iso, trigger, thread_id, message_id: None, error: Some(reason) };
+            record_history(self.store(), &entry);
+            self.notify_changed();
+        }
+        Ok(find(self.store(), id)?.unwrap_or(ran))
     }
 
     /// `releaseStuckRun`: a run that failed to record still ends.
@@ -1238,11 +1505,18 @@ impl ScheduledTasks {
         let store = self.store().clone();
         let mut live = store.subscribe();
         let deadline = tokio::time::Instant::now() + RUN_OUTCOME_WAIT;
+        // What the run was doing when last looked at: a change shows in the task list.
+        let mut seen: Option<&'static str> = None;
         loop {
             let Ok(runs) = store.records::<Run>(&thread_id) else { return };
             let Some(run) = runs.into_iter().find(|run| run.user_message_id.as_str() == message_id) else {
                 return;
             };
+            let state = run_state(&run.status);
+            if seen.is_some_and(|was| was != state) {
+                self.notify_changed();
+            }
+            seen = Some(state);
             let generic = match run.status {
                 RunStatus::Completed => return,
                 RunStatus::Failed => Some("The run failed."),
@@ -1259,6 +1533,7 @@ impl ScheduledTasks {
                 });
                 let message = provider_failure.unwrap_or(generic);
                 let n = store.db().with(|c| {
+                    c.execute("UPDATE scheduled_task_runs SET error = ?2 WHERE run_key = ?1", params![message_id, message])?;
                     c.execute(
                         "UPDATE scheduled_tasks SET last_run_status = 'failed', last_run_error = ?3
                          WHERE task_id = ?1 AND last_run_at = ?2 AND last_run_status = 'succeeded'",
@@ -1286,13 +1561,24 @@ impl ScheduledTasks {
 
 /// `bindThread`: a continue / fresh-session task keeps the thread its first run made.
 fn bind_thread(store: &Store, task: &ScheduledTask, thread_id: &str) {
-    let _ = store.db().with(|c| {
+    let bound = store.db().with(|c| {
         c.execute(
             "UPDATE scheduled_tasks SET thread_id = ?2 WHERE task_id = ?1 AND created_at = ?3 AND project_id = ?4
                AND thread_id IS NULL AND thread_mode != 'new_thread'",
             params![task.id.as_str(), thread_id, task.created_at.as_str(), task.project_id.as_str()],
         )
     });
+    match bound {
+        // A thread deleted before the binding landed already had its tasks
+        // deleted, so this one goes the same way.
+        Ok(n) if n > 0 => {
+            if store.app_thread(thread_id).ok().flatten().is_none_or(|t| t.deleted_at.is_some()) {
+                delete_for_thread(store, thread_id);
+            }
+        }
+        Ok(_) => {}
+        Err(e) => tracing::warn!(task = task.id.as_str(), %thread_id, "could not bind a scheduled task to its first thread: {e}"),
+    }
 }
 
 #[cfg(test)]
@@ -1553,6 +1839,106 @@ mod tests {
                 )
             })
             .unwrap();
+    }
+
+    /// A webhook delivery, replay key and open window of `task`.
+    fn insert_webhook_rows(store: &Store, task: &str) {
+        store
+            .db()
+            .with(|c| {
+                c.execute(
+                    "INSERT INTO scheduled_task_webhook_deliveries VALUES (?2, ?1, '2026-11-13T12:00:00.000Z', 'POST', NULL, 0, 'ran', 0, NULL, '[]', NULL, '', '{}', '', 0, NULL, 'run')",
+                    params![task, format!("{task}-d1")],
+                )?;
+                c.execute("INSERT INTO scheduled_task_webhook_replay_keys VALUES (?1, 'k', ?2, 0)", params![task, format!("{task}-d1")])?;
+                c.execute("INSERT INTO scheduled_task_webhook_pending VALUES (?2, ?1, 'k', 0, 'open', '{}', '[]')", params![task, format!("{task}-d2")])
+            })
+            .unwrap();
+    }
+
+    fn webhook_rows(store: &Store, task: &str) -> i64 {
+        TASK_TABLES
+            .iter()
+            .map(|table| store.db().with(|c| c.query_row(&format!("SELECT COUNT(*) FROM {table} WHERE task_id = ?1"), params![task], |r| r.get::<_, i64>(0))).unwrap())
+            .sum()
+    }
+
+    fn bind_row(store: &Store, task: &str, thread: &str) {
+        store.db().with(|c| c.execute("UPDATE scheduled_tasks SET thread_id = ?2, thread_mode = 'continue' WHERE task_id = ?1", params![task, thread])).unwrap();
+    }
+
+    #[test]
+    fn startup_deletes_tasks_whose_thread_is_gone() {
+        let store = Store::new(Db::open_in_memory().unwrap());
+        let (schedule, root, model) = (r#"{"type":"interval","everyMs":3600000}"#, r#"{"type":"root"}"#, r#"{"instanceId":"codex","model":"gpt-5"}"#);
+        insert_row(&store, "bound", schedule, root, model, None);
+        insert_row(&store, "unbound", schedule, root, model, None);
+        bind_row(&store, "bound", "gone");
+        assert_eq!(sweep_deleted_threads(&store), 1);
+        let left: Vec<String> = list(&store).unwrap().into_iter().map(|t| t.id.as_str().to_owned()).collect();
+        assert_eq!(left, ["unbound"]);
+    }
+
+    #[test]
+    fn a_task_keeps_its_last_runs_newest_first() {
+        let store = Store::new(Db::open_in_memory().unwrap());
+        let (schedule, root, model) = (r#"{"type":"interval","everyMs":3600000}"#, r#"{"type":"root"}"#, r#"{"instanceId":"codex","model":"gpt-5"}"#);
+        insert_row(&store, "a", schedule, root, model, None);
+        insert_row(&store, "b", schedule, root, model, None);
+        for n in 0..55 {
+            let (key, at) = (format!("m{n}"), format!("2026-11-13T12:{:02}:00.000Z", n));
+            let entry = HistoryEntry { key: &key, status: "sent", task_id: "a", started_iso: &at, trigger: Trigger::Scheduled, thread_id: Some("t1"), message_id: Some(&key), error: None };
+            record_history(&store, &entry);
+        }
+        let failed = HistoryEntry { key: "b1", status: "failed", task_id: "b", started_iso: "2026-11-13T13:00:00.000Z", trigger: Trigger::Manual, thread_id: None, message_id: None, error: Some("No provider.") };
+        record_history(&store, &failed);
+
+        let runs = list_runs(&store, Some("a"), 50).unwrap();
+        assert_eq!(runs.len(), 50, "only the last fifty are kept");
+        assert_eq!((runs[0].started_at.as_str(), runs[0].status.as_str()), ("2026-11-13T12:54:00.000Z", "sent"), "a run its thread does not have");
+        assert_eq!(list_runs(&store, Some("a"), 3).unwrap().len(), 3);
+        let latest: Vec<(String, String, Option<String>)> = list_runs(&store, None, 50).unwrap().into_iter().map(|r| (r.task_id, r.status, r.error)).collect();
+        assert_eq!(latest, [("b".into(), "failed".into(), Some("No provider.".into())), ("a".into(), "sent".into(), None)]);
+
+        delete(&store, "a").unwrap();
+        assert!(list_runs(&store, Some("a"), 50).unwrap().is_empty(), "a deleted task's runs go with it");
+    }
+
+    #[test]
+    fn a_deleted_task_takes_its_webhook_rows_along() {
+        let store = Store::new(Db::open_in_memory().unwrap());
+        insert_row(&store, "hook", r#"{"type":"webhook"}"#, r#"{"type":"root"}"#, r#"{"instanceId":"codex","model":"gpt-5"}"#, Some("tok"));
+        insert_row(&store, "other", r#"{"type":"webhook"}"#, r#"{"type":"root"}"#, r#"{"instanceId":"codex","model":"gpt-5"}"#, Some("tok2"));
+        insert_webhook_rows(&store, "hook");
+        insert_webhook_rows(&store, "other");
+        delete(&store, "hook").unwrap();
+        assert!(find(&store, "hook").unwrap().is_none());
+        assert_eq!((webhook_rows(&store, "hook"), webhook_rows(&store, "other")), (0, 3));
+    }
+
+    #[test]
+    fn a_deleted_thread_takes_its_tasks_along_and_a_moved_one_moves_them() {
+        let store = Store::new(Db::open_in_memory().unwrap());
+        let (schedule, root, model) = (r#"{"type":"interval","everyMs":3600000}"#, r#"{"type":"root"}"#, r#"{"instanceId":"codex","model":"gpt-5"}"#);
+        for id in ["bound", "also-bound", "elsewhere", "unbound"] {
+            insert_row(&store, id, schedule, root, model, None);
+        }
+        bind_row(&store, "bound", "t1");
+        bind_row(&store, "also-bound", "t1");
+        bind_row(&store, "elsewhere", "t2");
+        insert_webhook_rows(&store, "bound");
+
+        move_thread_tasks(&store, "t2", "p2");
+        let moved = find(&store, "elsewhere").unwrap().unwrap();
+        assert_eq!((moved.project_id.as_str(), moved.thread_id.as_ref().map(|t| t.as_str())), ("p2", Some("t2")));
+        assert_eq!(find(&store, "bound").unwrap().unwrap().project_id.as_str(), "p1", "other threads' tasks stay");
+
+        assert_eq!(delete_for_thread(&store, "t1"), 2);
+        let left: Vec<String> = list(&store).unwrap().into_iter().map(|t| t.id.as_str().to_owned()).collect();
+        assert_eq!(left.len(), 2);
+        assert!(left.contains(&"elsewhere".to_owned()) && left.contains(&"unbound".to_owned()), "{left:?}");
+        assert_eq!(webhook_rows(&store, "bound"), 0);
+        assert_eq!(delete_for_thread(&store, "t1"), 0, "nothing left to delete");
     }
 
     #[test]

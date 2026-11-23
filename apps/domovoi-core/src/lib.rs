@@ -8,6 +8,7 @@
 boltffi::scaffolding!();
 
 pub mod app;
+pub mod companion;
 pub mod delta;
 pub mod diff;
 pub mod environments;
@@ -16,10 +17,13 @@ pub mod ffi;
 #[cfg(feature = "remote")]
 pub mod ffi_remote;
 pub mod markdown;
+pub mod diagrams;
+mod artifacts;
 pub mod model;
 pub mod notify;
 pub mod offline;
 pub mod present;
+pub mod project_icons;
 pub mod replies;
 pub mod requests;
 pub mod rpc;
@@ -28,6 +32,7 @@ pub mod sidebar;
 pub mod socket;
 pub mod store;
 pub mod terminal;
+mod tools;
 pub mod tunnel;
 pub mod update;
 pub mod view;

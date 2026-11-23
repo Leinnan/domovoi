@@ -6,7 +6,7 @@
 
 #![expect(clippy::disallowed_types, reason = "a provider tool call's input, and its output kept as the dynamic tool item's open `output`")]
 
-use super::turn::{Shared, Turn, native_ref, node_status, now, spelled, turn_item};
+use super::turn::{Shared, Turn, Work, native_ref, node_status, now, spelled, turn_item};
 use crate::orchestration::events::enc;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -318,17 +318,19 @@ impl Subagents {
     pub fn tool(&mut self, turn: &Turn, owner: &str, native_id: &str, name: &str, input: &Value, output: Option<&str>, status: &str) {
         let Some(sub) = self.by_native.get_mut(owner) else { return };
         let shared = Self::child_item_shared(sub, native_id, status_of(status), &turn.driver);
-        let item = if name == "Bash" {
+        let item = if matches!(name, "Bash" | "run_command") {
             let previous = match sub.child_items.get(native_id) {
                 Some(TurnItem::CommandExecution(previous)) => previous.output.clone(),
                 _ => None,
             };
+            let command = input["command"].as_str().or_else(|| input["CommandLine"].as_str()).unwrap_or_default().to_owned();
             turn_item!(CommandExecution(CommandExecutionItem), shared, {
-                input: input["command"].as_str().unwrap_or_default().to_owned(),
+                input: command,
                 output: output.map(str::to_owned).or(previous),
                 output_omitted: None,
                 output_indicates_failure: None,
-                exit_code: None,
+                // Claude says only whether it failed (the code is in the output's first line).
+                exit_code: output.map(|_| i64::from(status == "failed")),
                 monitor: None,
                 completion_wake: None,
             })
@@ -345,6 +347,17 @@ impl Subagents {
                 output_omitted: None,
             })
         };
+        sub.child_items.insert(native_id.to_owned(), item.clone());
+        turn.emit_on(&sub.child, EventBody::TurnItemUpdated(item));
+    }
+
+    pub fn record_work(&mut self, turn: &Turn, owner: &str, native_id: &str, work: Work, status: TurnItemStatus) {
+        let Some(sub) = self.by_native.get_mut(owner) else { return };
+        let shared = Self::child_item_shared(sub, native_id, status, &turn.driver);
+        let mut item = turn.work_item(shared, work, sub.child_items.get(native_id));
+        if let TurnItem::CommandExecution(command) = &mut item {
+            command.completion_wake = None;
+        }
         sub.child_items.insert(native_id.to_owned(), item.clone());
         turn.emit_on(&sub.child, EventBody::TurnItemUpdated(item));
     }

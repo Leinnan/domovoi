@@ -64,6 +64,13 @@ final class Core: NSObject, ObservableObject, UNUserNotificationCenterDelegate {
     private var tunnelRequest: UInt32?
     private var keepAlive: Timer?
     private var launched = false
+    #if os(macOS)
+    enum KeychainState {
+        case notChecked, checking, unavailable, ready
+    }
+    @Published private(set) var keychainState: KeychainState
+    private var pendingPairingLink: Event?
+    #endif
     /// A notification was tapped: the screen should show this thread even if
     /// it is already the selected one.
     let openedThread = PassthroughSubject<String, Never>()
@@ -71,6 +78,9 @@ final class Core: NSObject, ObservableObject, UNUserNotificationCenterDelegate {
     override init() {
         let store = SecureStore()
         self.store = store
+        #if os(macOS)
+        keychainState = store.needsKeychainPreparation ? .notChecked : .ready
+        #endif
         engine = CoreEngine(store: store)
         // The core's first view carries every part.
         view = LiveView(engine.first())
@@ -114,10 +124,26 @@ final class Core: NSObject, ObservableObject, UNUserNotificationCenterDelegate {
     /// a window that opens again must not start the connection over).
     func launch() {
         guard !launched else { return }
-        launched = true
         #if os(macOS)
+        guard keychainState != .checking else { return }
+        if keychainState != .ready {
+            keychainState = .checking
+            Task { [weak self, store] in
+                let ready = await Task.detached(priority: .userInitiated) { store.prepareKeychain() }.value
+                guard let self else { return }
+                self.keychainState = ready ? .ready : .unavailable
+                if ready { self.launch() }
+            }
+            return
+        }
+        launched = true
         update(.launch(surface: "desktop", deviceLabel: Host.current().localizedName ?? "Mac", deviceOs: "macOS"))
+        if let event = pendingPairingLink {
+            pendingPairingLink = nil
+            update(event)
+        }
         #else
+        launched = true
         update(.launch(surface: "mobile", deviceLabel: UIDevice.current.name, deviceOs: "iOS"))
         #endif
     }
@@ -141,6 +167,12 @@ final class Core: NSObject, ObservableObject, UNUserNotificationCenterDelegate {
     /// Hands the event to the core. It is taken in order, on the core's
     /// queue; what it changes shows in `view` a moment later.
     func update(_ event: Event) {
+        #if os(macOS)
+        guard keychainState == .ready else {
+            if case .connectRemote = event { pendingPairingLink = event }
+            return
+        }
+        #endif
         // swiftlint:disable:next force_try
         engine.send(try! event.bincodeSerialize())
     }
@@ -148,6 +180,9 @@ final class Core: NSObject, ObservableObject, UNUserNotificationCenterDelegate {
     /// `update`, with `then` run here once the core has taken the event and
     /// the effects it asked for have been carried out.
     func update(_ event: Event, then: @escaping @MainActor @Sendable () -> Void) {
+        #if os(macOS)
+        guard keychainState == .ready else { return }
+        #endif
         // swiftlint:disable:next force_try
         engine.send(try! event.bincodeSerialize(), then: then)
     }
@@ -821,6 +856,8 @@ final class LiveView {
     private(set) var usage: UsageView
     private(set) var agentSessions: AgentSessionsView
     private(set) var folderBrowser: FolderBrowserView
+    /// Mermaid diagrams the server draws (`DiagramPreview`).
+    private(set) var diagrams: [DiagramView]
 
     // Narrow parts, each assigned only when it changes: views that need only
     // these don't redraw on every streamed token (the thread) or keystroke
@@ -858,6 +895,7 @@ final class LiveView {
         self.usage = usage
         self.agentSessions = agentSessions
         self.folderBrowser = folderBrowser
+        diagrams = first.diagrams ?? []
         narrowThread(thread)
         narrowComposer(composer)
         panelOpen = panel.open
@@ -915,6 +953,7 @@ final class LiveView {
         if let v = update.usage { usage = v }
         if let v = update.agentSessions { agentSessions = v }
         if let v = update.folderBrowser { folderBrowser = v }
+        if let v = update.diagrams { diagrams = v }
     }
 }
 
@@ -927,7 +966,8 @@ struct ThreadHeader: Equatable {
     let modelLabel: String
     let cwd: String
     let worktreePath: String?
-    let context: ContextUsageView?
+    /// The context window and the provider's limits, for the header meter.
+    let usage: SessionUsageView?
     let canFork: Bool
     let canMergeBack: Bool
     let parentTitle: String?
@@ -938,6 +978,11 @@ struct ThreadHeader: Equatable {
     let working: Bool
     /// Matches of the open search; `nil` when the find bar is closed.
     let findTotal: UInt32?
+    let plan: PlanProgressView?
+    let tasks: TaskProgressView?
+    /// Subagents and side threads waiting on the user.
+    let waitingChildren: [ThreadLinkView]
+    let artifactCount: UInt32
 
     init(_ thread: ThreadPageView) {
         id = thread.id
@@ -947,7 +992,7 @@ struct ThreadHeader: Equatable {
         modelLabel = thread.modelLabel
         cwd = thread.cwd
         worktreePath = thread.worktreePath
-        context = thread.context
+        usage = thread.usage
         canFork = thread.canFork
         canMergeBack = thread.canMergeBack
         parentTitle = thread.parent?.title
@@ -957,6 +1002,10 @@ struct ThreadHeader: Equatable {
         hasItems = !thread.items.isEmpty
         working = thread.working
         findTotal = thread.find?.total
+        plan = thread.plan
+        tasks = thread.tasks
+        waitingChildren = thread.waitingChildren
+        artifactCount = thread.artifactCount
     }
 
     /// "Project · branch · model".
@@ -1014,6 +1063,7 @@ struct ViewUpdate {
     var usage: UsageView?
     var agentSessions: AgentSessionsView?
     var folderBrowser: FolderBrowserView?
+    var diagrams: [DiagramView]?
     /// The thread's rows changed (not only its header).
     var rowsChanged = false
     /// The transcript's lines, when the rows changed: built with the page,
@@ -1037,6 +1087,7 @@ struct ViewUpdate {
         if let v = later.usage { out.usage = v }
         if let v = later.agentSessions { out.agentSessions = v }
         if let v = later.folderBrowser { out.folderBrowser = v }
+        if let v = later.diagrams { out.diagrams = v }
         if let v = later.lines { out.lines = v }
         out.rowsChanged = rowsChanged || later.rowsChanged
         return out
@@ -1064,6 +1115,7 @@ struct ViewUpdate {
         usage = delta.usage
         agentSessions = delta.agentSessions
         folderBrowser = delta.folderBrowser
+        diagrams = delta.diagrams
     }
 }
 

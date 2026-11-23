@@ -24,6 +24,26 @@ pub struct ViewModel {
     pub agent_sessions: AgentSessionsView,
     /// The server folder picker (after `BrowseFolders`).
     pub folder_browser: FolderBrowserView,
+    /// Mermaid diagrams asked for with `LoadDiagram`.
+    pub diagrams: Vec<DiagramView>,
+}
+
+/// A Mermaid diagram the server draws.
+#[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct DiagramView {
+    /// The shell's key from `LoadDiagram`.
+    pub key: String,
+    /// The PNG, while the link is valid.
+    pub url: Option<String>,
+    /// Waiting for the server.
+    pub pending: bool,
+    /// The server could not draw it (or does not draw diagrams): show the source.
+    pub failed: bool,
+    /// Not connected: it is drawn once the server is back.
+    pub offline: bool,
+    /// Set when the diagram should be asked for again (`LoadDiagram`); it
+    /// changes with each connection.
+    pub load_key: Option<String>,
 }
 
 #[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
@@ -108,6 +128,24 @@ pub struct ConnectionView {
     pub offline: bool,
     /// An attempt is under way now (no countdown).
     pub attempting: bool,
+    pub companion: CompanionLookView,
+    pub activity: ActivityView,
+}
+
+#[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct CompanionLookView {
+    pub look: crate::companion::CompanionLook,
+    pub custom: bool,
+
+}
+
+#[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct ActivityView {
+    pub working: u32,
+    pub attention: u32,
+    /// The latest reaction: `finished`, `failed`, or empty.
+    pub beat: String,
+    pub beat_seq: u64,
 }
 
 #[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
@@ -120,6 +158,7 @@ pub struct EnvironmentView {
     pub active: bool,
     /// The server's own id (what its pushes and deep links name).
     pub server_id: String,
+    pub companion: CompanionLookView,
 }
 
 /// Settings → Remote Access: the connected server's iroh side.
@@ -163,8 +202,8 @@ pub struct SidebarView {
     /// `status` (by what each thread needs: `sections`) | `project`
     /// (under project headers: `projects`, `settled`, `snoozed`).
     pub grouping: String,
-    /// Inbox, Running, Hibernating, Archived (those with threads; Inbox
-    /// always), when grouped by status.
+    /// Inbox, Running, Inactive, Archived (only those with threads), when
+    /// grouped by status.
     pub sections: Vec<SidebarSectionView>,
     /// Every project; grouped by status, without their threads (for
     /// pickers), so `threads` and `earlier` are empty.
@@ -190,7 +229,7 @@ pub struct SidebarView {
 
 #[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
 pub struct SidebarSectionView {
-    /// `inbox` | `running` | `hibernating` | `archived`
+    /// `inbox` | `running` | `inactive` | `archived`
     pub kind: String,
     pub title: String,
     /// Every thread in the section, shown or not.
@@ -203,11 +242,26 @@ pub struct SidebarSectionView {
 }
 
 #[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct ProjectIconView {
+    pub kind: String,
+    pub text: String,
+    pub symbol: String,
+    pub color: String,
+    pub custom: bool,
+    pub file_path: Option<String>,
+    pub image_url: Option<String>,
+    pub project_id: String,
+    pub load_key: Option<String>,
+    pub saving: bool,
+}
+
+#[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
 pub struct SidebarProjectView {
     pub id: String,
     pub title: String,
     pub workspace_root: String,
-    pub monogram: String,
+    pub icon: ProjectIconView,
+    pub automatic_icon: ProjectIconView,
     pub expanded: bool,
     pub is_scratch: bool,
     pub pinned: bool,
@@ -222,6 +276,7 @@ pub struct SidebarProjectView {
 
 #[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
 pub struct ThreadRowView {
+    pub project_icon: ProjectIconView,
     pub id: String,
     pub project_id: String,
     pub project_title: String,
@@ -229,10 +284,14 @@ pub struct ThreadRowView {
     /// The model's short name, such as `Opus 4.7`.
     pub model_label: String,
     /// What the thread is doing, when that beats its age: `Needs you`,
-    /// `Question`, `Working 6m`, `Failed`; empty otherwise.
+    /// `Question`, `Working 6m`, `Planning 6m`, `Failed`; empty otherwise.
     pub status_label: String,
     /// `working` | `approval` | `failed` | `interrupted` | `completed` | `idle`
     pub status: String,
+    /// When the turn under way started (Unix ms; 0: none, or not known).
+    pub working_since_ms: i64,
+    /// What the thread waits on (status `approval`) is a question, not an approval.
+    pub question: bool,
     pub unread: bool,
     pub pinned: bool,
     pub settled: bool,
@@ -247,6 +306,15 @@ pub struct ThreadRowView {
     pub snoozed_until_ms: i64,
     /// `fork` for a fork of another thread; empty otherwise.
     pub relation: String,
+    /// The agent proposed a plan that waits to be carried out.
+    pub plan_ready: bool,
+    /// The thread is in plan mode (its turns plan rather than act); while
+    /// it works, `status_label` says `Planning`.
+    pub plan_mode: bool,
+    /// The thread's pull request (`#12`); empty when it has none.
+    pub pull_request: String,
+    /// `open` | `draft` | `merged` | `closed` (empty when not known).
+    pub pull_request_state: String,
 }
 
 #[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
@@ -271,6 +339,9 @@ pub struct ThreadPageView {
     pub cwd: String,
     pub model_label: String,
     pub provider_instance_id: String,
+    /// The thread's model selection (what a task scheduled from it starts with).
+    pub model_instance_id: String,
+    pub model: String,
     pub runtime_mode: String,
     pub interaction_mode: String,
     pub status: String,
@@ -286,6 +357,7 @@ pub struct ThreadPageView {
     /// When the turn under way started (Unix ms; 0 when none), for an
     /// elapsed time next to "Working".
     pub working_since_ms: i64,
+    pub working_activity: Option<WorkingActivityView>,
     pub checkpoints: Vec<CheckpointView>,
     pub find: Option<FindView>,
     /// The thread this one was forked from, or whose subagent it is.
@@ -296,6 +368,10 @@ pub struct ThreadPageView {
     pub can_fork: bool,
     /// How full the agent's context window is (when the provider says).
     pub context: Option<ContextUsageView>,
+    /// The thread's usage at a glance, for the header meter and its
+    /// details: the context window and its provider's limits. `None` when
+    /// neither is known.
+    pub usage: Option<SessionUsageView>,
     /// Messages waiting for the turn under way, in the order they run.
     pub queued: Vec<QueuedMessageView>,
     /// A stop held the queue: nothing starts until `ResumeQueue` or a new message.
@@ -303,11 +379,61 @@ pub struct ThreadPageView {
     /// The agent replied but work it started in the background goes on
     /// ("Waiting for 2 background agents"); empty when there is none.
     pub background: String,
+    /// Provider-reported background work for the open thread, in provider order.
+    pub background_tasks: Vec<BackgroundTaskView>,
     /// The last turn stopped on a usage limit: when it resets ("in 3h", or
     /// "now" once it has); empty when it isn't limited.
     pub limit_resets: String,
     /// What is set for the reset: `resume`, `snooze`, or empty.
     pub limit_plan: String,
+    pub plan: Option<PlanProgressView>,
+    pub tasks: Option<TaskProgressView>,
+    /// Subagents and side threads of this one that wait on you (an approval
+    /// or a question): a banner opens each.
+    pub waiting_children: Vec<ThreadLinkView>,
+    /// Number of distinct artifacts discovered or published in this thread.
+    pub artifact_count: u32,
+}
+
+/// The latest plan, with the Markdown blocks used by the transcript.
+#[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct PlanProgressView {
+    pub plan_id: String,
+    pub label: String,
+    pub blocks: std::sync::Arc<Vec<MarkdownBlock>>,
+    pub can_implement: bool,
+}
+
+/// How far the agent is through its to-do list.
+#[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct TaskProgressView {
+    pub done: u32,
+    pub total: u32,
+    /// The step in progress (or the next one); empty when all are done.
+    pub current: String,
+    /// `Tasks 2/5 · Write the tests`.
+    pub label: String,
+    pub previous_run: bool,
+    pub explanation: Option<String>,
+    pub todos: std::sync::Arc<Vec<TodoView>>,
+}
+
+/// What the current run is doing and the step the reader can inspect.
+#[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct WorkingActivityView {
+    /// `starting` or the kind of a live transcript item.
+    pub kind: Option<String>,
+    pub step_item_id: Option<String>,
+}
+
+#[derive(Facet, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct BackgroundTaskView {
+    pub id: String,
+    pub kind: String,
+    pub label: String,
+    pub status: String,
+    pub progress: Option<String>,
+    pub child_thread_id: Option<String>,
 }
 
 /// Another thread this one comes from.
@@ -328,8 +454,87 @@ pub struct ContextUsageView {
     pub percent: u32,
     /// `48k of 200k tokens` or `48k tokens`.
     pub label: String,
+    /// `152k left` or `Full`; empty when the window size isn't known.
+    pub remaining_label: String,
+    /// Share of input tokens served from prompt cache, 0–100 (0 when not known).
+    pub cache_hit_percent: u32,
+    /// `78%`; empty when not known.
+    pub cache_hit_label: String,
     /// Nearly full (80 % or more): the agent will compact soon.
     pub high: bool,
+    /// All but full (90 % or more).
+    pub critical: bool,
+    /// Where the agent compacts on its own, 0–100 of the window (0: not known).
+    pub compact_at_percent: u32,
+    /// The counts behind `used_tokens` the provider reported: `Input 41k`,
+    /// `Cached 30k`, `Output 6k`, `Reasoning 2k`, for a details popover.
+    pub breakdown: Vec<StatLineView>,
+    /// What the conversation has cost so far (`$1.24`); empty when not known.
+    pub cost: String,
+    /// The provider has `/compact`: `Compact` frees the window now.
+    pub can_compact: bool,
+}
+
+/// A named figure in a list of them.
+#[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct StatLineView {
+    pub label: String,
+    pub value: String,
+}
+
+/// One usage window of a provider account (`Session`, `Weekly`).
+#[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct LimitWindowView {
+    pub label: String,
+    /// Used, 0–100.
+    pub percent: u32,
+    /// When it refills (`in 3h`); empty when not known.
+    pub resets: String,
+    /// 75 % or more: worth showing by the composer.
+    pub high: bool,
+    /// How far through the window the period is, 0–100, for a pace tick
+    /// on its bar (0: not known).
+    pub elapsed_percent: u32,
+    /// Using it faster than time passes: `ahead`, `on` or `under` (within
+    /// 5 points is `on`); empty when the window's length isn't known.
+    pub pace: String,
+    /// When it refills, as the provider said (RFC 3339 UTC), for a local
+    /// clock time; empty when not known.
+    pub resets_at: String,
+}
+
+/// The open thread's usage: how full its context window is and how much of
+/// its provider account's limits is used.
+#[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct SessionUsageView {
+    /// The context window (the same as `ThreadPageView.context`).
+    pub context: Option<ContextUsageView>,
+    /// The windows of the provider the thread runs on, fullest first.
+    pub limits: Option<ProviderLimitsView>,
+    /// The fullest of those windows, for the meter when there is no context.
+    pub fullest: Option<LimitWindowView>,
+    /// A dot on the meter: `caution` (a window at 75 % or more), `danger`
+    /// (90 % or more), or empty.
+    pub limit_alert: String,
+    /// Why the limits can't be shown (`Could not read limits.`); empty when they can.
+    pub limits_notice: String,
+    /// When the limits were read (`5m`, `now`); empty when not known.
+    pub limits_checked: String,
+}
+
+/// A provider's usage windows.
+#[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct ProviderLimitsView {
+    pub instance_id: String,
+    pub provider: String,
+    pub windows: Vec<LimitWindowView>,
+    /// Where the account's usage is shown on the web (empty: nowhere known).
+    pub external_label: String,
+    pub external_url: String,
+    /// When the limits were last read (`now`, `5m`); empty when not known.
+    pub checked: String,
+    /// Why limits could not be read or are absent; empty when windows are present.
+    pub notice: String,
 }
 
 /// A message queued behind the turn under way.
@@ -408,6 +613,61 @@ pub struct ItemView {
     /// A `plan` row the agent proposed: `ImplementPlan` (with `plan_id`) carries it out.
     pub plan_id: String,
     pub can_implement: bool,
+    pub artifact_paths: Vec<String>,
+    /// A `plan` row a later plan replaced (shown dimmed).
+    pub superseded: bool,
+    /// The last reply of a finished turn: `ForkFromItem` forks from here.
+    pub can_fork_here: bool,
+    /// A step's verb in the tense of its status: "Reading", "Read", "Ran".
+    /// The shell shows it before `title` (what the step worked on).
+    pub verb: String,
+    /// What kind of step this is, for its icon: `read` | `image` | `search` |
+    /// `list` | `command` | `edit` | `web` | `fetch` | `mcp` | `skill` |
+    /// `agent` | `question` | `wait` | `tool` (empty: not a step).
+    pub icon: String,
+    /// The title is code (a command, a path, a pattern): set it monospaced.
+    pub mono: bool,
+    /// What else the step's line says: "lines 1–60", "in src · 14 matches".
+    pub subtitle: String,
+    /// A short mark at the line's end: "exit 101", "No matches", "1m 12s".
+    pub badge: String,
+    /// `failed` (shown as an error) | `neutral` | "" (plain).
+    pub badge_tone: String,
+    /// Opening the step shows more (output, a file, a diff, links, fields,
+    /// images); when false it is one plain line with no disclosure.
+    pub expandable: bool,
+    /// A tool's arguments by name, shown as a two-column list when opened.
+    pub fields: std::sync::Arc<Vec<FieldView>>,
+    /// A web search's results.
+    pub links: std::sync::Arc<Vec<LinkView>>,
+    /// On a group's first row: the images its steps viewed (at most six), shown
+    /// even while the group is folded.
+    pub group_images: Vec<ImageView>,
+    /// Populated when this row represents or created an artifact (MCP or Claude `Artifact`).
+    pub artifact_id: Option<String>,
+    pub artifact_title: String,
+    pub artifact_kind: String,
+    pub artifact_version: u32,
+    pub artifact_hosted_url: Option<String>,
+}
+
+/// One argument of a tool call.
+#[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct FieldView {
+    pub label: String,
+    pub value: String,
+    /// The value is code or a path: set it monospaced.
+    pub mono: bool,
+}
+
+/// One result of a web search.
+#[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct LinkView {
+    pub title: String,
+    pub url: String,
+    /// The site, as shown beside the title ("docs.rs").
+    pub host: String,
+    pub snippet: String,
 }
 
 #[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
@@ -436,8 +696,31 @@ pub struct MarkdownBlock {
     /// Table cells (inline markdown) for `table_row`.
     pub cells: Vec<String>,
     pub header: bool,
+    pub runs: Vec<MarkdownRun>,
+    pub cell_runs: Vec<Vec<MarkdownRun>>,
+    pub alignments: Vec<String>,
+    pub task_checked: Option<bool>,
+    pub continuation: bool,
+    pub quote_depth: u32,
+    pub fence_closed: bool,
     /// A finished code block's highlighting (empty: plain).
     pub spans: Vec<CodeSpan>,
+    /// Populated when this block is a previewable inline artifact (HTML/SVG/React/Mermaid).
+    pub artifact_id: Option<String>,
+    pub artifact_title: String,
+    pub artifact_kind: String,
+    pub artifact_version: u32,
+}
+
+#[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct MarkdownRun {
+    pub text: String,
+    pub bold: bool,
+    pub italic: bool,
+    pub strike: bool,
+    pub code: bool,
+    pub link: Option<String>,
+    pub workspace_link: Option<String>,
 }
 
 /// A piece of highlighted code: `plain` | `keyword` | `string` | `comment` |
@@ -459,6 +742,10 @@ pub struct RequestView {
     pub questions: Vec<QuestionView>,
     /// The change an edit approval would make, when the provider sent it.
     pub files: Vec<DiffFileView>,
+    /// The button that allows more than this call: "Allow for Thread" where
+    /// the server keeps the grant for the thread's later sessions (Claude,
+    /// Antigravity), else "Allow for Session".
+    pub session_label: String,
 }
 
 /// A question the agent asks, answered with its options.
@@ -469,12 +756,15 @@ pub struct QuestionView {
     pub header: String,
     pub question: String,
     pub multi_select: bool,
+    pub allow_custom_answer: bool,
+    pub required: bool,
     pub options: Vec<QuestionOptionView>,
 }
 
 #[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
 pub struct QuestionOptionView {
     pub label: String,
+    pub value: String,
     pub description: String,
 }
 
@@ -489,6 +779,10 @@ pub struct CheckpointView {
     pub additions: u32,
     pub deletions: u32,
     pub can_revert: bool,
+    /// The files the turn changed, for a card under it.
+    pub files: Vec<ChangedFileView>,
+    /// What `SelectDiffSource` takes to show this turn's diff (`turn:3`).
+    pub diff_source: String,
 }
 
 #[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
@@ -523,6 +817,11 @@ pub struct ComposerView {
     pub selected_model: Option<ModelOption>,
     pub efforts: Vec<ChoiceView>,
     pub selected_effort: Option<String>,
+    /// What the effort control is called: "Effort", or the model's own name
+    /// for it ("Thinking Level").
+    pub effort_label: String,
+    /// The model's other options: fast mode, context window, agent…
+    pub traits: Vec<TraitView>,
     pub runtime_modes: Vec<ChoiceView>,
     pub runtime_mode: String,
     pub interaction_mode: String,
@@ -555,6 +854,20 @@ pub struct ComposerView {
     /// Not connected, but what's sent waits in the outbox and goes once the
     /// connection is back (the connection banner says so).
     pub queues_offline: bool,
+    /// The selected provider's usage windows (account limits).
+    pub limits: Vec<LimitWindowView>,
+    /// Skills matching a `$word` being typed at the end of the draft (picked
+    /// with `PickSkill`); empty when none is being typed.
+    pub skills: Vec<SlashCommandView>,
+    /// Drafts put aside (`StashDraft`), newest first, as their first line.
+    pub stash: Vec<String>,
+    /// Stop was asked a while ago and the turn goes on: `ForceStop` ends it.
+    pub can_force_stop: bool,
+    /// Bumped when `/model` asks the shell to open the model picker.
+    pub model_picker_requested: u32,
+    /// A short chip by the model picker when a window is nearly used up
+    /// (`Weekly 92% · resets in 2d`); empty otherwise.
+    pub limits_chip: String,
 }
 
 #[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
@@ -583,6 +896,8 @@ pub struct ModelRowView {
     pub detail: String,
     pub favorite: bool,
     pub hidden: bool,
+    /// The model selected now (also when selected by one of its aliases).
+    pub chosen: bool,
 }
 
 #[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
@@ -590,11 +905,28 @@ pub struct ModelGroupView {
     pub instance_id: String,
     pub provider: String,
     pub status: String,
+    /// Why a provider that isn't ready can't be used (sign in…), else empty.
+    pub message: String,
     /// Not favorites (those are in `favorite_models`); hidden ones only with
     /// `show_hidden_models` or a search (and the selected one always).
     pub models: Vec<ModelRowView>,
     /// The provider's hidden models (for "Show N hidden").
     pub hidden_count: u32,
+}
+
+/// An option of the selected model besides its effort (`SetModelOption`).
+#[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct TraitView {
+    pub id: String,
+    pub label: String,
+    pub description: String,
+    /// `switch` (on or off) or `choice` (one of `choices`).
+    pub kind: String,
+    /// A switch that is on.
+    pub on: bool,
+    /// A choice's id as set (or the default).
+    pub value: String,
+    pub choices: Vec<ChoiceView>,
 }
 
 #[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
@@ -607,6 +939,11 @@ pub struct ChoiceView {
 pub struct SlashCommandView {
     pub name: String,
     pub description: String,
+    /// `builtin` (the app's own: `/model`, `/plan`, `/fork`, `/clear`),
+    /// `command` (the provider's) or `skill` (`$name`).
+    pub kind: String,
+    /// What the command takes after its name (`[model]`); empty for none.
+    pub hint: String,
 }
 
 #[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
@@ -621,12 +958,64 @@ pub struct MentionView {
 #[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
 pub struct PanelView {
     pub open: bool,
-    /// `diff` | `terminal` | `files` | `git`
+    /// `diff` | `terminal` | `files` | `git` | `artifacts`
     pub tab: String,
     pub diff: DiffPanelView,
     pub terminal: TerminalPanelView,
     pub files: FilesPanelView,
     pub git: GitPanelView,
+    pub artifacts: ArtifactsPanelView,
+}
+
+#[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct ArtifactsPanelView {
+    pub items: Vec<ArtifactSummaryView>,
+    pub active: Option<ActiveArtifactView>,
+}
+
+#[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct ArtifactSummaryView {
+    pub id: String,
+    pub title: String,
+    /// `html` | `svg` | `react` | `mermaid` | `markdown` | `code` | `hosted`
+    pub kind: String,
+    pub language: String,
+    pub latest_version: u32,
+    pub version_count: u32,
+    pub item_id: String,
+    pub path: Option<String>,
+    pub hosted_url: Option<String>,
+    pub streaming: bool,
+}
+
+#[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct ActiveArtifactView {
+    pub id: String,
+    pub title: String,
+    pub kind: String,
+    pub language: String,
+    pub version: u32,
+    pub versions: Vec<ArtifactVersionView>,
+    /// `preview` | `code`
+    pub mode: String,
+    pub source: String,
+    pub spans: Vec<CodeSpan>,
+    /// Signed server URL for multi-file bundles, React runtime previews, or vector Mermaid SVGs.
+    pub preview_url: Option<String>,
+    pub hosted_url: Option<String>,
+    pub path: Option<String>,
+    pub item_id: String,
+    pub loading: bool,
+    pub truncated: bool,
+    pub streaming: bool,
+    pub error: Option<String>,
+}
+
+#[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct ArtifactVersionView {
+    pub version: u32,
+    pub summary: String,
+    pub item_id: String,
 }
 
 #[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
@@ -721,6 +1110,7 @@ pub struct FilesPanelView {
     pub query: String,
     pub results: Vec<FileEntryView>,
     pub preview: Option<FilePreviewView>,
+    pub artifact_preview: Option<FilePreviewView>,
 }
 
 #[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
@@ -737,11 +1127,39 @@ pub struct FileEntryView {
 pub struct FilePreviewView {
     pub path: String,
     pub text: String,
+    pub image_url: Option<String>,
     /// The text highlighted for its file type (empty: plain).
     pub spans: Vec<CodeSpan>,
     pub truncated: bool,
     pub error: Option<String>,
     pub loading: bool,
+    /// Text that can be edited and saved back (`SaveFile`): whole, not an
+    /// image, not kept in Git LFS.
+    pub editable: bool,
+    /// The file's size ("2.6 KB"), once read.
+    pub size_label: Option<String>,
+    /// The file is kept in Git LFS.
+    pub lfs: Option<LfsView>,
+}
+
+/// A file kept in Git LFS, as its preview's card shows it.
+#[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct LfsView {
+    /// The object's SHA-256.
+    pub oid: String,
+    /// Its first 10 characters.
+    pub oid_short: String,
+    pub size_label: String,
+    /// `cached`, `missing`, `too-large`, `mismatch` or `unsupported`.
+    pub state: String,
+    /// "Stored locally", "Not downloaded", …
+    pub state_label: String,
+    /// What it means for the preview, or why fetching failed.
+    pub message: Option<String>,
+    /// Fetch is offered: the server doesn't have the object.
+    pub can_fetch: bool,
+    /// A fetch is under way.
+    pub fetching: bool,
 }
 
 #[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
@@ -762,6 +1180,29 @@ pub struct GitPanelView {
     pub progress: Vec<String>,
     pub error: Option<String>,
     pub has_remote: bool,
+    /// The repository's worktrees (with a branch checked out in each).
+    pub worktrees: Vec<WorktreeView>,
+    /// The project's scripts (`RunScript`).
+    pub scripts: Vec<ScriptView>,
+}
+
+#[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct WorktreeView {
+    pub path: String,
+    pub branch: String,
+    /// The open thread works here.
+    pub current: bool,
+    /// Threads that work in it, by title.
+    pub threads: Vec<String>,
+}
+
+#[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct ScriptView {
+    pub id: String,
+    pub name: String,
+    pub command: String,
+    /// `play` | `test` | `lint` | `configure` | `build` | `debug` | …
+    pub icon: String,
 }
 
 #[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
@@ -778,12 +1219,18 @@ pub struct PaletteView {
     pub query: String,
     pub items: Vec<PaletteItemView>,
     pub highlighted: u32,
+    /// `commands` | `files` | `content` (`SetPaletteMode`).
+    pub mode: String,
+    /// What the search field says when it is empty.
+    pub placeholder: String,
+    /// A file search is under way.
+    pub searching: bool,
 }
 
 #[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
 pub struct PaletteItemView {
     pub id: String,
-    /// `thread` | `project` | `action`
+    /// `thread` | `project` | `action` | `file` | `match`
     pub kind: String,
     pub title: String,
     pub subtitle: String,
@@ -796,17 +1243,28 @@ pub struct PaletteItemView {
 pub struct SettingsView {
     pub groups: Vec<SettingGroupView>,
     pub providers: Vec<ProviderView>,
+    /// Another Antigravity instance can be added (with an API key or Vertex).
+    pub can_add_antigravity: bool,
     pub keybindings: Vec<KeybindingView>,
     pub scheduled_tasks: Vec<ScheduledTaskView>,
+    /// The threads a scheduled task can post into, newest first, from every
+    /// project (the editor shows its project's): every live thread, whatever
+    /// the thread list's layout, and any thread a task is bound to. Empty
+    /// until the scheduled tasks are loaded (`LoadSettings("scheduled")`).
+    pub scheduled_thread_choices: Vec<ScheduledThreadChoiceView>,
     pub scheduled_time_zone: String,
     /// The webhook task whose deliveries are open, and the deliveries.
     pub webhook_deliveries_task: String,
     pub webhook_deliveries: Vec<WebhookDeliveryView>,
+    /// The task whose runs are open (`LoadScheduledRuns`), and its runs, newest first.
+    pub scheduled_runs_task: String,
+    pub scheduled_runs: Vec<ScheduledRunView>,
     pub archived: Vec<ThreadRowView>,
     pub storage: StorageView,
     pub diagnostics: DiagnosticsView,
     pub access: Vec<AccessEntryView>,
     pub projects: Vec<ProjectSettingsView>,
+    pub project_icon_files: ProjectIconFilesView,
     pub remote: RemoteAccessView,
 }
 
@@ -842,6 +1300,66 @@ pub struct ProviderView {
     /// The account's usage limits as last reported ("Session 45% · Weekly
     /// 97%, resets in 2d"); empty when the provider has said none.
     pub limits: String,
+    /// The server can sign this instance in (`StartProviderSignIn`).
+    pub can_authenticate: bool,
+    /// The server can install its runtime (`InstallProvider`).
+    pub can_install: bool,
+    pub signed_in: bool,
+    pub sign_in: ProviderSignInView,
+    pub install: ProviderInstallView,
+    /// Its settings, for an editor (`SaveProviderInstance`).
+    pub config: ProviderConfigView,
+}
+
+/// A provider's sign-in under way (or as it ended).
+#[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct ProviderSignInView {
+    /// `idle` | `starting` | `waiting` | `verifying` | `succeeded` | `failed` | `cancelled`.
+    pub phase: String,
+    pub message: String,
+    /// The page to sign in on, while it waits.
+    pub url: String,
+    /// The redirect URL from a browser on another device can be pasted
+    /// (`CompleteProviderSignIn`).
+    pub takes_redirect: bool,
+    pub busy: bool,
+}
+
+/// A provider's managed runtime.
+#[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct ProviderInstallView {
+    /// `idle` | `downloading` | `extracting` | `verifying` | `succeeded` | `failed` | `cancelled`.
+    pub phase: String,
+    pub message: String,
+    pub busy: bool,
+    /// How far a download is, in thousandths; 0 when unknown.
+    pub progress: u32,
+    /// "12 MB of 120 MB".
+    pub progress_label: String,
+    /// The release Domovoi installed (empty: none of its own).
+    pub installed_version: String,
+    /// The release offered.
+    pub offered_version: String,
+    pub update_available: bool,
+    pub can_remove: bool,
+}
+
+/// A provider instance's settings as its editor shows them.
+#[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct ProviderConfigView {
+    /// Domovoi has an editor for this driver's settings.
+    pub editable: bool,
+    /// The driver's built-in instance (it can't be removed).
+    pub built_in: bool,
+    pub display_name: String,
+    pub auth_method: String,
+    /// The sign-in methods this instance can use.
+    pub auth_methods: Vec<ChoiceView>,
+    /// A key is saved (it is never shown).
+    pub has_api_key: bool,
+    pub gcp_project: String,
+    pub gcp_location: String,
+    pub binary_path: String,
 }
 
 #[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
@@ -871,6 +1389,13 @@ pub struct ScheduledTaskView {
     pub run_at: String,
     pub thread_mode: String,
     pub thread_id: String,
+    /// The bound thread's title; empty when the task has no thread yet.
+    pub thread_title: String,
+    /// What its latest run is doing when that is still going ("Waiting in
+    /// its thread", "Running", "Needs you" on an approval); empty otherwise.
+    pub run_state: String,
+    /// The thread its latest run went to (a new-thread task's last one).
+    pub last_thread_id: String,
     pub workspace: String,
     pub base_branch: String,
     pub model_instance: String,
@@ -881,6 +1406,39 @@ pub struct ScheduledTaskView {
     pub last_error: String,
     /// A webhook task's URL (or its path, when the server has no public address).
     pub webhook_url: String,
+}
+
+/// A scheduled task's run, as its history lists it.
+#[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct ScheduledRunView {
+    /// When it started: how long ago, and the time.
+    pub started: String,
+    /// "On schedule", "Run now" or "Webhook".
+    pub trigger: String,
+    /// "Waiting in its thread", "Running", "Needs you", "Finished", "Stopped",
+    /// "Failed", "Skipped" or "Sent".
+    pub status: String,
+    pub failed: bool,
+    /// Why it failed; empty otherwise.
+    pub error: String,
+    pub thread_id: String,
+    pub thread_title: String,
+}
+
+/// A thread a scheduled task can be bound to.
+#[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct ScheduledThreadChoiceView {
+    pub id: String,
+    pub project_id: String,
+    pub title: String,
+    /// What it is doing (when that says more than its age) and when it was
+    /// last active, or "archived" for an archived bound thread.
+    pub detail: String,
+    /// The model its runs use (a bound task's runs follow the thread's).
+    pub model_label: String,
+    /// Its permissions (`approval-required` | `auto-accept-edits` |
+    /// `full-access`), which a bound task's runs follow too.
+    pub runtime_mode: String,
 }
 
 /// A webhook delivery as the task's log shows it.
@@ -935,6 +1493,28 @@ pub struct ProjectSettingsView {
     pub title: String,
     pub workspace_root: String,
     pub thread_count: u32,
+    /// The "No project" folder, where threads without a project go.
+    pub is_scratch: bool,
+    pub icon: ProjectIconView,
+    pub automatic_icon: ProjectIconView,
+}
+
+#[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct ProjectIconFilesView {
+    pub project_id: String,
+    pub revision: String,
+    pub loading: bool,
+    pub error: Option<String>,
+    pub truncated: bool,
+    pub files: Vec<ProjectIconFileView>,
+}
+
+#[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct ProjectIconFileView {
+    pub path: String,
+    pub url: Option<String>,
+    pub unavailable: bool,
+    pub refresh: bool,
 }
 
 // ---- pull requests / usage ----
@@ -993,22 +1573,118 @@ pub struct CheckView {
     pub url: String,
 }
 
+/// One slice of the token composition bar (`input`, `cached`, `cache_write`, `output`, `reasoning`).
+#[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct UsageSliceView {
+    pub kind: String,
+    pub label: String,
+    pub tokens: u64,
+    pub tokens_label: String,
+    pub percent: u32,
+}
+
+/// One provider's share of usage in the selected window, for filter chips and summary bars.
+#[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct UsageProviderSummaryView {
+    /// Raw provider key (`claude`, `codex`, `pi`, `antigravity`, …).
+    pub key: String,
+    /// Friendly display name (`Claude`, `Codex`, `Pi`, `Antigravity`, …).
+    pub label: String,
+    pub tokens: u64,
+    pub tokens_label: String,
+    pub share_percent: u32,
+    pub cost: String,
+}
+
+/// One provider's contribution inside a chart bucket.
+#[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct UsageProviderPointView {
+    pub provider_key: String,
+    pub provider: String,
+    pub tokens: u64,
+}
+
+/// One chronological slot of the usage trend chart (an hour for Today, a day otherwise).
+#[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct UsageSeriesPointView {
+    /// Stable slot key (`YYYY-MM-DD` or `HH:00`).
+    pub key: String,
+    /// Short axis label (`Nov 22`, `14:00`).
+    pub label: String,
+    /// Readable label for callouts and accessibility (`Nov 22, 2026`, `14:00–15:00`).
+    pub detail_label: String,
+    pub total_tokens: u64,
+    pub total_label: String,
+    pub cost: String,
+    pub by_provider: Vec<UsageProviderPointView>,
+}
+
 #[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
 pub struct UsageView {
     pub loading: bool,
+    pub error: Option<String>,
     pub range_label: String,
-    pub rows: Vec<UsageRowView>,
+    /// The span asked for (`LoadUsage`), in days: 1, 7, 30 or 90.
+    pub days: u32,
+    /// True when the series and rows are bucketed by hour (Today).
+    pub hourly: bool,
+    /// Compact total (`14.8M`).
     pub total_tokens: String,
+    /// Exact comma-grouped total (`14,823,901`), for tooltips and accessibility.
+    pub total_tokens_exact: String,
+    /// What the span cost (`$12.40`); empty when the server has no prices.
+    pub total_cost: String,
+    /// Cache read share of total input tokens, 0–100.
+    pub cache_hit_percent: u32,
+    /// `74%`; empty when there are no input tokens.
+    pub cache_hit_label: String,
+    /// Average tokens per active day (`2.1M/day`) or active hour (`620k/hr`).
+    pub daily_avg_tokens: String,
+    pub active_days: u32,
+    pub sessions: u64,
+    pub turns: u64,
+    /// Non-empty token categories for the stacked mix bar.
+    pub token_mix: Vec<UsageSliceView>,
+    /// Active provider filter key, or empty for all providers.
+    pub selected_provider: String,
+    /// Providers present in the loaded window (always unfiltered, so chips stay stable).
+    pub providers: Vec<UsageProviderSummaryView>,
+    /// Chronological, zero-filled series points for the activity bar chart.
+    pub series: Vec<UsageSeriesPointView>,
+    /// Activity rows sorted newest-first.
+    pub rows: Vec<UsageRowView>,
+    /// The span's totals by model, most tokens first.
+    pub by_model: Vec<UsageRowView>,
+    /// Every provider's account windows, as last reported.
+    pub limits: Vec<ProviderLimitsView>,
+    pub limits_refreshing: bool,
+    /// Non-empty scan warnings from partial/failed provider log sources.
+    pub source_notices: Vec<String>,
     pub notice: String,
 }
 
 #[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
 pub struct UsageRowView {
     pub day: String,
+    /// Short hour label (`14:00`) for hourly rows; empty for daily or by-model rows.
+    pub hour_label: String,
+    /// Raw provider key (`claude`, `codex`, `pi`, `antigravity`, …).
+    pub provider_key: String,
+    /// Friendly provider display name (`Claude`, `Codex`, …).
     pub provider: String,
     pub model: String,
     pub input: String,
     pub cached: String,
+    pub cache_write: String,
     pub output: String,
+    pub reasoning: String,
     pub total: String,
+    pub total_tokens: u64,
+    /// Share of the filtered total, 0–100.
+    pub share_percent: u32,
+    /// Cache hit share of this row's input tokens, 0–100.
+    pub cache_hit_percent: u32,
+    pub sessions: u64,
+    /// `$0.42`; empty when the server has no prices.
+    pub cost: String,
 }

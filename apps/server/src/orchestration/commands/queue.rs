@@ -208,6 +208,10 @@ impl Orchestrator {
         let (ordinal, instance) = (next.ordinal, &next.provider_instance_id);
         let at = now();
         let origin = Origin { provider_instance_id: Some(instance.as_str().to_owned()), ..Default::default() };
+        // A queued message can predate a question from the preceding run.
+        if !next.user_message_id.as_str().starts_with("async-answer:") {
+            self.close_message_questions(&thread.id, &outline.runtime_requests, &origin)?;
+        }
         // The conversation's provider thread for this instance, or a new one not
         // yet loaded (always, for a fresh-context run).
         let fresh = next.fresh_context == Some(true);

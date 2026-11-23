@@ -24,6 +24,8 @@ pub struct Session {
     pub last_sequence: u64,
     /// How many rows of history there are above the screen.
     history: usize,
+    /// A command to type once the terminal is up (a project script).
+    pub pending_input: Option<String>,
 }
 
 impl Session {
@@ -36,6 +38,7 @@ impl Session {
             status: "starting".into(),
             last_sequence: 0,
             history: 0,
+            pending_input: None,
         }
     }
 

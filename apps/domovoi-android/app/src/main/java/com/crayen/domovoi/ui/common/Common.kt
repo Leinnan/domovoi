@@ -25,6 +25,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -34,9 +35,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.crayen.domovoi.core.Core
 import com.crayen.domovoi.ui.theme.LocalTints
 import com.crayen.domovoi.ui.theme.Space
 import kotlinx.coroutines.flow.StateFlow
+
+/** The core, for composables deep in rows that are not handed it
+ *  (`DiagramPreview` asks it for the server's drawing). */
+val LocalCore = staticCompositionLocalOf<Core?> { null }
 
 /** Collects one slice of the core's view model. */
 @Composable
@@ -72,6 +78,7 @@ fun SourceBadge(source: String) {
         "Claude Code", "claude", "claudeAgent", "claude-code" -> "Claude" to tints.claude
         "Codex", "codex" -> "Codex" to tints.codex
         "Pi", "pi" -> "Pi" to tints.pi
+        "Antigravity", "antigravity" -> "Antigravity" to tints.antigravity
         else -> source.replaceFirstChar { it.uppercase() } to MaterialTheme.colorScheme.onSurfaceVariant
     }
     Surface(color = color.copy(alpha = 0.14f), shape = RoundedCornerShape(6.dp)) {
@@ -81,13 +88,14 @@ fun SourceBadge(source: String) {
 
 /** A section title in a list. */
 @Composable
-fun SectionHeader(text: String, modifier: Modifier = Modifier, icon: ImageVector? = null, tint: androidx.compose.ui.graphics.Color? = null, trailing: @Composable (() -> Unit)? = null) {
+fun SectionHeader(text: String, modifier: Modifier = Modifier, icon: ImageVector? = null, tint: androidx.compose.ui.graphics.Color? = null, leading: @Composable (() -> Unit)? = null, trailing: @Composable (() -> Unit)? = null) {
     androidx.compose.foundation.layout.Row(
         modifier.fillMaxWidth().padding(start = Space.l, end = Space.xs, top = Space.l, bottom = Space.xs),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(Space.s),
     ) {
         val color = tint ?: MaterialTheme.colorScheme.primary
+        leading?.invoke()
         icon?.let { Icon(it, null, tint = color, modifier = Modifier.size(16.dp)) }
         Text(text, style = MaterialTheme.typography.titleSmall, color = color, fontWeight = FontWeight.SemiBold, maxLines = 1, modifier = Modifier.weight(1f))
         trailing?.invoke()

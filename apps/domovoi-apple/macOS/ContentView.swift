@@ -1,10 +1,12 @@
 import App
+import AppKit
 import SwiftUI
 
 struct ContentView: View {
     @ObservedObject var core: Core
     @Environment(\.openSettings) private var openSettings
     @State private var addingServer = false
+    @StateObject private var companion = CompanionBrain()
 
     private var connection: ConnectionView { core.view.connection }
 
@@ -12,14 +14,24 @@ struct ContentView: View {
     private var showMain: Bool {
         switch connection.state {
         case "connected", "reconnecting": return true
-        case "connecting": return !connection.activeEnvironmentId.isEmpty && !connection.needsPairing
+        case "connecting", "disconnected": return !connection.activeEnvironmentId.isEmpty && !connection.needsPairing
         default: return false
         }
     }
 
     var body: some View {
         Group {
-            if showMain && !addingServer {
+            if core.keychainState == .unavailable {
+                ContentUnavailableView {
+                    Label("Keychain Access Needed", systemImage: "lock")
+                } description: {
+                    Text("Unlock your login keychain and authorize Domovoi to read its saved servers and device identity. If macOS asks for permission, choose Always Allow to keep that approval for future updates.")
+                } actions: {
+                    Button("Retry") { core.launch() }
+                }
+            } else if core.keychainState != .ready {
+                ProgressView("Checking Keychain access…")
+            } else if showMain && !addingServer {
                 MainView(core: core, addServer: { addingServer = true })
             } else {
                 ConnectView(core: core, cancel: showMain ? { addingServer = false } : nil)
@@ -34,6 +46,8 @@ struct ContentView: View {
                     .animation(.snappy, value: core.view.toast?.id)
             }
         }
+        .environmentObject(companion)
+        .modifier(CompanionWindow(brain: companion, connection: connection))
         .task { await Snapshots.run(core) { openSettings() } }
         .onAppear {
             if Snapshots.directory == nil { core.launch() }
@@ -48,8 +62,19 @@ struct MainView: View {
     @ObservedObject var core: Core
     var addServer: () -> Void = {}
     @State private var columns = NavigationSplitViewVisibility.all
+    /// The window's width, read from the window itself: the split view's own
+    /// width is no guide, it is laid out wider than the window when its
+    /// columns don't fit.
+    @State private var windowWidth: CGFloat = 0
+    /// The width the split view is laid out at.
+    @State private var splitWidth: CGFloat = 0
+    /// Set when the sidebar was hidden because the columns didn't fit: the
+    /// width they needed then, so the sidebar comes back once there is that
+    /// much room. A sidebar the user hid stays hidden.
+    @State private var sidebarHiddenNeeding: CGFloat?
 
     private var showsPanel: Bool { !["pull-requests", "usage"].contains(core.view.route) }
+    private var panelShown: Bool { core.view.panelOpen && showsPanel }
 
     var body: some View {
         #if DEBUG
@@ -59,17 +84,38 @@ struct MainView: View {
             SidebarPane(core: core)
                 .navigationSplitViewColumnWidth(min: 230, ideal: 280, max: 420)
         } detail: {
+            // No minimum width of its own: on macOS 26 the split view counts
+            // the sidebar (which the detail runs under) twice in the detail's
+            // minimum, so any floor here makes the columns wider than the
+            // window, centred and clipped on both sides. `fitColumns` hides
+            // the sidebar instead.
             DetailView(core: core)
-                .frame(minWidth: 460)
                 // The panel belongs to a thread (its diff, terminal, files):
                 // not shown over Pull Requests or Usage.
                 .inspector(isPresented: Binding(
-                    get: { core.view.panelOpen && showsPanel },
+                    get: { panelShown },
                     set: { open in if open != core.view.panelOpen { core.update(.togglePanel) } }
                 )) {
                     SidePanel(core: core)
-                        .inspectorColumnWidth(min: 300, ideal: 420, max: 900)
+                        .inspectorColumnWidth(min: 280, ideal: 420, max: 900)
                 }
+        }
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { splitWidth = $0; fitColumns() }
+        .background(WindowWidthReader { windowWidth = $0; fitColumns() })
+        .onChange(of: panelShown) { _, shown in
+            // The panel closed: the room it took is back, so try the sidebar
+            // again (it hides once more if that still doesn't fit).
+            if !shown, sidebarHiddenNeeding != nil {
+                sidebarHiddenNeeding = nil
+                columns = .all
+            }
+        }
+        .onChange(of: columns) { _, visibility in
+            // The sidebar shown again by hand while it was hidden for room:
+            // the latest ask wins, and the panel makes way.
+            guard visibility != .detailOnly, sidebarHiddenNeeding != nil else { return }
+            sidebarHiddenNeeding = nil
+            if panelShown { core.update(.togglePanel) }
         }
         .toolbar {
             ToolbarItem(placement: .navigation) {
@@ -100,6 +146,54 @@ struct MainView: View {
                 PaletteSheet(core: core, palette: palette)
             }
         }
+    }
+}
+
+extension MainView {
+    /// Hides the sidebar when the columns are laid out wider than the window
+    /// (the window doesn't grow to fit them), and shows it again once the
+    /// window is as wide as they needed.
+    private func fitColumns() {
+        guard windowWidth > 0, splitWidth > 0 else { return }
+        if columns != .detailOnly, splitWidth > windowWidth + 1 {
+            sidebarHiddenNeeding = splitWidth
+            columns = .detailOnly
+        } else if let needed = sidebarHiddenNeeding, windowWidth >= needed {
+            sidebarHiddenNeeding = nil
+            columns = .all
+        }
+    }
+}
+
+/// Reports its window's width now and whenever the window resizes.
+private struct WindowWidthReader: NSViewRepresentable {
+    let changed: (CGFloat) -> Void
+
+    func makeNSView(context: Context) -> ReaderView { ReaderView() }
+
+    func updateNSView(_ view: ReaderView, context: Context) { view.changed = changed }
+
+    final class ReaderView: NSView {
+        var changed: ((CGFloat) -> Void)?
+        private var observer: NSObjectProtocol?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            observer.map(NotificationCenter.default.removeObserver)
+            observer = nil
+            guard let window else { return }
+            observer = NotificationCenter.default.addObserver(forName: NSWindow.didResizeNotification, object: window, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.report() }
+            }
+            DispatchQueue.main.async { [weak self] in self?.report() }
+        }
+
+        private func report() {
+            guard let window else { return }
+            changed?(window.contentLayoutRect.width)
+        }
+
+        deinit { observer.map(NotificationCenter.default.removeObserver) }
     }
 }
 
@@ -143,34 +237,35 @@ struct EnvironmentMenu: View {
 
     private var connection: ConnectionView { core.view.connection }
 
+    @EnvironmentObject private var companion: CompanionBrain
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var location = MenuLocation()
+    @State private var openingMenu = false
+
     var body: some View {
-        Menu {
-            Section("Servers") {
-                ForEach(connection.environments, id: \.id) { env in
-                    Button {
-                        core.update(.selectEnvironment(id: env.id))
-                    } label: {
-                        Label("\(env.label) — \(env.detail)", systemImage: env.active ? "checkmark" : (env.remote ? "globe" : "desktopcomputer"))
-                    }
+        Button {
+            guard !openingMenu else { return }
+            if reduceMotion || companion.expression.mood == .offline {
+                showMenu()
+            } else {
+                companion.poke()
+                openingMenu = true
+                Task { @MainActor in
+                    defer { openingMenu = false }
+                    do { try await Task.sleep(for: .milliseconds(100)) }
+                    catch { return }
+                    showMenu()
                 }
-            }
-            if let active = connection.environments.first(where: { $0.active }) {
-                Button("Rename \(active.label)…") {
-                    newName = active.label
-                    renaming = active
-                }
-                Button("Forget \(active.label)…") { forgetting = active }
-            }
-            Divider()
-            Button("Add Server…", action: addServer)
-            if connection.state == "connected" {
-                Button("Disconnect") { core.update(.disconnect) }
             }
         } label: {
-            ConnectionBadge(connection: connection)
+            ToolbarCompanion(look: connection.companion.look, brain: companion)
+                .padding(4)
+                .contentShape(Rectangle())
         }
-        .menuStyle(.borderlessButton)
-        .fixedSize()
+        .buttonStyle(.plain)
+        .background(MenuAnchor(location: location))
+        .accessibilityLabel(connection.companionServerLabel)
+        .accessibilityValue(connection.companionVoiceOverValue(companion.expression.mood))
         .help([connection.serverUrl, "domovoi-server \(connection.serverVersion)", connection.remote && !connection.path.isEmpty ? "\(connection.rttMs) ms" : "", connection.hint].filter { !$0.isEmpty }.joined(separator: " · "))
         .alert("Rename Server", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
             TextField("Name", text: $newName)
@@ -181,68 +276,64 @@ struct EnvironmentMenu: View {
         }
         .forgettingServer($forgetting, core: core)
     }
-}
 
-struct ConnectionBadge: View {
-    let connection: ConnectionView
-
-    private var route: String {
-        guard connection.remote else { return "" }
-        if connection.path.isEmpty { return " · remote" }
-        // The round trip changes by the second: it's in the tooltip, so
-        // the toolbar item doesn't keep changing width.
-        return " · \(connection.path)"
+    private func showMenu() {
+        guard let anchor = location.anchor, anchor.window != nil else { return }
+        let menu = NSMenu()
+        menu.addItem(.sectionHeader(title: "Servers"))
+        for env in connection.environments {
+            let item = ServerMenuItem("\(env.label) — \(env.detail)") {
+                core.update(.selectEnvironment(id: env.id))
+            }
+            item.state = env.active ? .on : .off
+            item.image = NSImage(systemSymbolName: env.remote ? "globe" : "desktopcomputer", accessibilityDescription: nil)
+            menu.addItem(item)
+        }
+        if let active = connection.environments.first(where: { $0.active }) {
+            menu.addItem(ServerMenuItem("Rename \(active.label)…") {
+                newName = active.label
+                renaming = active
+            })
+            menu.addItem(ServerMenuItem("Forget \(active.label)…") { forgetting = active })
+        }
+        menu.addItem(.separator())
+        menu.addItem(ServerMenuItem("Add Server…", perform: addServer))
+        if connection.state == "connected" {
+            menu.addItem(ServerMenuItem("Disconnect") { core.update(.disconnect) })
+        }
+        menu.popUp(positioning: nil, at: CGPoint(x: anchor.bounds.minX, y: anchor.bounds.minY), in: anchor)
     }
 
-    private var label: String {
-        switch connection.state {
-        case "connected": return (connection.environmentLabel.isEmpty ? "Connected" : connection.environmentLabel) + route
-        case "reconnecting": return "Reconnecting…"
-        case "connecting": return "Connecting…"
-        case "pairing": return "Pairing…"
-        case "failed": return "Can't reach server"
-        default: return "Not connected"
-        }
+    @MainActor
+    private final class MenuLocation {
+        weak var anchor: NSView?
     }
 
-    private var color: Color {
-        switch connection.state {
-        case "connected": return Tint.success
-        case "reconnecting", "connecting", "pairing": return Tint.caution
-        case "failed": return Tint.danger
-        default: return .secondary
-        }
-    }
+    private struct MenuAnchor: NSViewRepresentable {
+        let location: MenuLocation
+        func makeNSView(context: Context) -> NSView { Anchor() }
+        func updateNSView(_ view: NSView, context: Context) { location.anchor = view }
 
-    /// A small dot (or a globe for a remote server) in `color`.
-    static func dot(_ color: NSColor, globe: Bool) -> NSImage {
-        if globe, let symbol = NSImage(systemSymbolName: "globe", accessibilityDescription: nil)?
-            .withSymbolConfiguration(.init(pointSize: 11, weight: .medium).applying(.init(paletteColors: [color]))) {
-            symbol.isTemplate = false
-            return symbol
+        private final class Anchor: NSView {
+            override func hitTest(_ point: NSPoint) -> NSView? { nil }
         }
-        let image = NSImage(size: NSSize(width: 8, height: 8), flipped: false) { rect in
-            color.setFill()
-            NSBezierPath(ovalIn: rect.insetBy(dx: 0.5, dy: 0.5)).fill()
-            return true
-        }
-        image.isTemplate = false
-        return image
-    }
-
-    var body: some View {
-        HStack(spacing: Space.tight) {
-            // A menu's label keeps only text and images, drawn in one
-            // colour: the dot is a coloured, non-template image.
-            Image(nsImage: Self.dot(NSColor(color), globe: connection.remote && connection.state == "connected"))
-            Text(label)
-        }
-        .font(TypeRole.meta.weight(.medium))
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Connection: \(label)")
     }
 }
 
+@MainActor
+private final class ServerMenuItem: NSMenuItem {
+    private let perform: () -> Void
+
+    init(_ title: String, perform: @escaping () -> Void) {
+        self.perform = perform
+        super.init(title: title, action: #selector(invoke), keyEquivalent: "")
+        target = self
+    }
+
+    required init(coder: NSCoder) { fatalError("Server menu items are built in code") }
+
+    @objc private func invoke() { perform() }
+}
 
 // MARK: - Connect
 
@@ -262,7 +353,7 @@ struct ConnectView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Space.l) {
             HStack(spacing: Space.m) {
-                Image(systemName: "terminal.fill").font(.system(size: 34)).foregroundStyle(.tint)
+                DomovoiMark(size: 42)
                 VStack(alignment: .leading) {
                     Text("Connect to a Domovoi server").font(.title2.bold())
                     Text("domovoi-server or any t3code-compatible environment").foregroundStyle(.secondary)

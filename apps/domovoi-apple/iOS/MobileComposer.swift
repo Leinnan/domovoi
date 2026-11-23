@@ -1,4 +1,5 @@
 import App
+import GameController
 import PhotosUI
 import SwiftUI
 import UniformTypeIdentifiers
@@ -28,6 +29,9 @@ struct MobileComposer: View {
     /// to it after Send, which would put it back in the box.
     @State private var justSent: String?
     @StateObject private var dictation = Dictation()
+    /// Where the caret is: ↑ on the first line and ↓ on the last recall
+    /// earlier messages.
+    @State private var selection: TextSelection?
     /// The text before dictation started: the transcript goes after it.
     @State private var dictationBase = ""
     @Namespace private var glass
@@ -41,8 +45,10 @@ struct MobileComposer: View {
                 .padding(.horizontal, Space.xs)
             if let mention = composer.mention, !mention.suggestions.isEmpty {
                 mentions(mention)
+            } else if !composer.skills.isEmpty {
+                commandChips(composer.skills, sigil: "$") { core.update(.pickSkill(name: $0)) }
             } else if !composer.slashCommands.isEmpty {
-                slashCommands(composer.slashCommands)
+                commandChips(composer.slashCommands, sigil: "/") { core.update(.pickSlashCommand(name: $0)) }
             }
             panel
         }
@@ -58,7 +64,7 @@ struct MobileComposer: View {
             draftSync?.cancel()
             // Right away while picking a mention or a / command (the lists
             // follow what's typed); otherwise once typing pauses.
-            if composer.mention != nil || !composer.slashCommands.isEmpty || value.last == "@" || value.hasPrefix("/") || value.isEmpty {
+            if composer.mention != nil || !composer.slashCommands.isEmpty || !composer.skills.isEmpty || value.last == "@" || value.last == "$" || value.hasPrefix("/") || value.isEmpty {
                 core.update(.setDraft(text: value))
             } else {
                 draftSync = Task {
@@ -73,7 +79,14 @@ struct MobileComposer: View {
             draftSync?.cancel()
             if text != composer.draft { core.update(.setDraft(text: text)) }
         }
-        .onChange(of: composer.draftRevision) { _, _ in text = composer.draft }
+        .onChange(of: composer.draftRevision) { _, _ in
+            text = composer.draft
+            selection = nil
+        }
+        // `/model` asks for the model picker.
+        .onChange(of: composer.modelPickerRequested) { old, new in
+            if new > old { options = .model }
+        }
         .onChange(of: core.view.threadId) { _, _ in text = composer.draft }
         .onChange(of: photos) { _, items in
             guard !items.isEmpty else { return }
@@ -125,14 +138,17 @@ struct MobileComposer: View {
         VStack(alignment: .leading, spacing: Space.s) {
             if !composer.attachments.isEmpty { attachments }
             HStack(alignment: .bottom, spacing: Space.xs) {
-                TextField(dictation.listening ? "Listening…" : (planning ? "Describe what to plan…" : composer.placeholder), text: $text, axis: .vertical)
+                TextField(dictation.listening ? "Listening…" : (planning ? "Describe what to plan…" : composer.placeholder), text: $text, selection: $selection, axis: .vertical)
                     .lineLimit(1...8)
+                    // One line centres on the mic; more lines grow from there.
+                    .frame(minHeight: 36, alignment: .leading)
                     .focused($focused)
+                    .onKeyPress(keys: [.upArrow, .downArrow, .return, .tab, .escape], action: composerKey)
                     .accessibilityLabel("Message")
                 micButton
+                    // Its glyph over the centre of Send / Stop below.
+                    .padding(.trailing, -Space.xs)
             }
-            .padding(.horizontal, Space.xs)
-            .padding(.top, Space.xs)
             if let problem = attachError ?? dictation.error {
                 HStack(alignment: .firstTextBaseline, spacing: Space.s) {
                     Label(problem, systemImage: "exclamationmark.triangle.fill")
@@ -152,10 +168,10 @@ struct MobileComposer: View {
             }
         }
         .padding(Space.m)
-        .glassPanel(in: RoundedRectangle(cornerRadius: Radius.bubble + 6, style: .continuous), tint: planning ? Tint.plan.opacity(0.35) : nil)
+        .glassPanel(in: RoundedRectangle(cornerRadius: Radius.panel, style: .continuous), tint: planning ? Tint.plan.opacity(0.35) : nil)
         .overlay {
             // Plan mode shows in the panel's edge, not only its chip.
-            RoundedRectangle(cornerRadius: Radius.bubble + 6, style: .continuous)
+            RoundedRectangle(cornerRadius: Radius.panel, style: .continuous)
                 .strokeBorder(Tint.plan.opacity(planning ? 0.55 : 0), lineWidth: 1)
                 .allowsHitTesting(false)
         }
@@ -200,6 +216,13 @@ struct MobileComposer: View {
             if UIPasteboard.general.hasImages {
                 Button(action: pasteImage) { Label("Paste Image", systemImage: "doc.on.clipboard") }
             }
+            Section {
+                StashMenuItems(stash: composer.stash, hasDraft: !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, stashDraft: {
+                    dictation.stop()
+                    syncDraft()
+                    core.update(.stashDraft)
+                }, update: { core.update($0) })
+            }
         } label: {
             Image(systemName: "plus")
                 .font(.body.weight(.semibold))
@@ -231,6 +254,15 @@ struct MobileComposer: View {
                     .keyboardShortcut(".", modifiers: .command)
                     .accessibilityLabel("Stop")
                 }
+                if composer.canForceStop {
+                    // The agent didn't stop when asked: end the turn anyway.
+                    Button("Force Stop") { core.update(.forceStop) }
+                        .font(.footnote.weight(.semibold))
+                        .buttonStyle(.glass)
+                        .tint(Tint.danger)
+                        .glassEffectID("force-stop", in: glass)
+                        .accessibilityHint("Ends the turn even though the agent hasn't stopped")
+                }
                 if composer.canSteer, typed {
                     // Into the turn under way, rather than after it.
                     Button(action: steer) {
@@ -261,7 +293,7 @@ struct MobileComposer: View {
                     .glassEffectID("send", in: glass)
                     // A hardware keyboard: Return is a new line in the field.
                     .keyboardShortcut(.return, modifiers: .command)
-                    .accessibilityLabel(composer.sending ? "Sending" : "Send")
+                    .accessibilityLabel(composer.sending ? "Sending" : (composer.canStop || composer.queuesOffline) ? "Queue message" : "Send")
                 }
             }
         }
@@ -280,7 +312,7 @@ struct MobileComposer: View {
                             }
                         }
                         .frame(width: 30, height: 30)
-                        .clipShape(RoundedRectangle(cornerRadius: Radius.chip - 2, style: .continuous))
+                        .clipShape(RoundedRectangle(cornerRadius: Radius.chip, style: .continuous))
                         .accessibilityHidden(true)
                         Text(a.name).lineLimit(1)
                         if a.uploading {
@@ -308,40 +340,123 @@ struct MobileComposer: View {
     }
 
     private func mentions(_ mention: MentionView) -> some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            GlassEffectContainer(spacing: Space.s) {
-                HStack(spacing: Space.s) {
-                    ForEach(Array(mention.suggestions.enumerated()), id: \.offset) { _, entry in
-                        Button { core.update(.pickMention(path: entry.path)) } label: {
-                            Label(entry.name, systemImage: entry.directory ? "folder" : "doc")
-                                .font(.caption)
-                                .padding(.horizontal, Space.m)
-                                .padding(.vertical, Space.s)
+        // The arrow keys' choice shows with a hardware keyboard only.
+        let keyboard = GCKeyboard.coalesced != nil
+        return ScrollViewReader { proxy in
+            ScrollView(.horizontal, showsIndicators: false) {
+                GlassEffectContainer(spacing: Space.s) {
+                    HStack(spacing: Space.s) {
+                        ForEach(Array(mention.suggestions.enumerated()), id: \.offset) { index, entry in
+                            Button { core.update(.pickMention(path: entry.path)) } label: {
+                                Label(entry.name, systemImage: entry.directory ? "folder" : "doc")
+                                    .font(.caption)
+                                    .padding(.horizontal, Space.m)
+                                    .padding(.vertical, Space.s)
+                            }
+                            .buttonStyle(.plain)
+                            .glassChip(selected: keyboard && index == Int(mention.highlighted))
+                            .id(index)
                         }
-                        .buttonStyle(.plain)
-                        .glassChip()
                     }
+                    .padding(.horizontal, Space.xs)
                 }
-                .padding(.horizontal, Space.xs)
+            }
+            .onChange(of: mention.highlighted) { _, h in
+                withAnimation(.snappy) { proxy.scrollTo(Int(h)) }
             }
         }
     }
 
-    /// Commands for a draft that is `/` and a word: a tap completes it.
-    private func slashCommands(_ commands: [SlashCommandView]) -> some View {
+    /// A hardware keyboard, as on the Mac: over the mention list ↑↓ choose,
+    /// ↩ or ⇥ insert, esc close; ⇥ or ↩ take the first command or skill;
+    /// with no list, ↑ on the first line and ↓ on the last bring back
+    /// earlier messages. Other keys type.
+    private func composerKey(_ press: KeyPress) -> KeyPress.Result {
+        guard press.modifiers.isEmpty else { return .ignored }
+        if let mention = composer.mention, !mention.suggestions.isEmpty {
+            switch press.key {
+            case .upArrow: core.update(.moveMention(delta: -1))
+            case .downArrow: core.update(.moveMention(delta: 1))
+            case .return, .tab:
+                // The text as typed first: the pick replaces its `@` word.
+                syncDraft()
+                core.update(.pickMention(path: ""))
+            case .escape: core.update(.dismissMention)
+            default: return .ignored
+            }
+            return .handled
+        }
+        if press.key == .return || press.key == .tab {
+            if let first = composer.skills.first {
+                syncDraft()
+                core.update(.pickSkill(name: first.name))
+                return .handled
+            }
+            if let first = composer.slashCommands.first {
+                syncDraft()
+                core.update(.pickSlashCommand(name: first.name))
+                return .handled
+            }
+            return .ignored
+        }
+        guard composer.slashCommands.isEmpty, composer.skills.isEmpty, core.view.threadId != nil else { return .ignored }
+        let (first, last) = caretLines
+        if press.key == .upArrow, first {
+            syncDraft()
+            core.update(.recallPrompt(delta: -1))
+            return .handled
+        }
+        if press.key == .downArrow, last {
+            syncDraft()
+            core.update(.recallPrompt(delta: 1))
+            return .handled
+        }
+        return .ignored
+    }
+
+    /// Whether the caret (no selection) is on the first and on the last
+    /// line of the text; lines as typed, not as wrapped.
+    private var caretLines: (first: Bool, last: Bool) {
+        let units = Array(text.utf16)
+        guard !units.isEmpty else { return (true, true) }
+        let caret: Int
+        switch selection?.indices {
+        // No selection known (the core just replaced the text): the end.
+        case nil: caret = units.count
+        case .selection(let range) where range.isEmpty:
+            // By offset: an index can be left over from the text before a change.
+            caret = min(max(0, range.lowerBound.utf16Offset(in: text)), units.count)
+        default: return (false, false)
+        }
+        return (!units[..<caret].contains(10), !units[caret...].contains(10))
+    }
+
+    /// The text as typed, to the core before an action that reads it.
+    private func syncDraft() {
+        draftSync?.cancel()
+        draftSync = nil
+        if text != composer.draft { core.update(.setDraft(text: text)) }
+    }
+
+    /// Commands for a draft that is `/` and a word, or skills for `$`: a tap completes it.
+    private func commandChips(_ commands: [SlashCommandView], sigil: String, pick: @escaping (String) -> Void) -> some View {
         ScrollView(.horizontal, showsIndicators: false) {
             GlassEffectContainer(spacing: Space.s) {
                 HStack(spacing: Space.s) {
                     ForEach(commands, id: \.name) { command in
-                        Button { core.update(.pickSlashCommand(name: command.name)) } label: {
-                            Text("/\(command.name)")
-                                .font(.caption.monospaced())
-                                .padding(.horizontal, Space.m)
-                                .padding(.vertical, Space.s)
+                        Button { pick(command.name) } label: {
+                            HStack(spacing: Space.xs) {
+                                if command.isBuiltin { Image(systemName: "app.badge").foregroundStyle(.secondary) }
+                                Text("\(sigil)\(command.name)").font(.caption.monospaced())
+                                if !command.hint.isEmpty { Text(command.hint).font(.caption.monospaced()).foregroundStyle(.secondary) }
+                            }
+                            .font(.caption)
+                            .padding(.horizontal, Space.m)
+                            .padding(.vertical, Space.s)
                         }
                         .buttonStyle(.plain)
                         .glassChip()
-                        .accessibilityLabel("Command \(command.name)")
+                        .accessibilityLabel("\(sigil == "$" ? "Skill" : "Command") \(command.name)\(command.isBuiltin ? ", built in" : "")")
                         .accessibilityHint(command.description)
                     }
                 }
@@ -460,55 +575,27 @@ struct ModeChips: View {
     /// Chips hidden past each edge: that edge fades, the other stays crisp.
     @State private var hiddenLeading = false
     @State private var hiddenTrailing = false
+    @State private var showingLimits = false
 
     private var planning: Bool { composer.interactionMode == "plan" }
     /// Large text: icons only, so the row still fits.
     private var compact: Bool { typeSize.isAccessibilitySize }
 
     var body: some View {
+        // Full labels when they fit; else Plan and Effort as icons only
+        // (Full access and the model keep theirs), scrolling if even that
+        // doesn't fit. Outside the scroll view: inside it, every row fits.
+        ViewThatFits(in: .horizontal) {
+            if !compact { row(condensed: false).fixedSize() }
+            scroller
+        }
+        // The row takes the room between + and Send, as the scroll view did.
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var scroller: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            GlassEffectContainer(spacing: Space.xs) {
-                HStack(spacing: Space.xs) {
-                    if composer.showsInteractionMode || planning {
-                        chip(selected: planning, tint: Tint.plan, action: togglePlan) {
-                            Image(systemName: "list.bullet.clipboard")
-                            if !compact { Text("Plan") }
-                        }
-                        .accessibilityLabel("Plan first")
-                        .accessibilityValue(planning ? "On" : "Off")
-                        .accessibilityAddTraits(planning ? .isSelected : [])
-                    }
-
-                    if !composer.efforts.isEmpty {
-                        let index = composer.efforts.firstIndex { $0.value == composer.selectedEffort } ?? -1
-                        chip(action: { open(.effort) }) {
-                            EffortMeter(levels: composer.efforts.count, selected: index)
-                            if !compact, index >= 0 { Text(composer.efforts[index].label) }
-                        }
-                        .accessibilityLabel("Effort")
-                        .accessibilityValue(index >= 0 ? composer.efforts[index].label : "Default")
-                    }
-
-                    let mode = composer.runtimeMode
-                    let label = composer.runtimeModes.first { $0.value == mode }?.label ?? mode
-                    chip(selected: mode == "full-access", tint: Tint.caution, action: { open(.permissions) }) {
-                        Image(systemName: ModeInfo.permissionIcon(mode))
-                        // Only the mode that needs noticing spells itself out.
-                        if !compact, mode == "full-access" { Text(ModeInfo.permissionShort(mode, label: label)) }
-                    }
-                    .accessibilityLabel("Permissions")
-                    .accessibilityValue(label)
-
-                    chip(action: { open(.model) }) {
-                        Image(systemName: "cpu")
-                        if !compact { Text(composer.selectedModel?.label ?? "Model").lineLimit(1) }
-                    }
-                    .accessibilityLabel("Model")
-                    .accessibilityValue(composer.selectedModel?.label ?? "None")
-                }
-                .padding(.vertical, Space.xxs)
-                .padding(.trailing, Space.l)
-            }
+            row(condensed: true)
         }
         // Clipped to the row (scrolled chips never draw beside the +
         // button), fading only at an edge with more chips past it.
@@ -529,13 +616,81 @@ struct ModeChips: View {
         }
     }
 
+    private func row(condensed: Bool) -> some View {
+        GlassEffectContainer(spacing: Space.xs) {
+            HStack(spacing: Space.xs) {
+                chips(condensed: condensed)
+            }
+            .padding(.vertical, Space.xxs)
+            .padding(.trailing, Space.s)
+        }
+    }
+
+    @ViewBuilder private func chips(condensed: Bool) -> some View {
+        if composer.showsInteractionMode || planning {
+            chip(selected: planning, tint: Tint.plan, action: togglePlan) {
+                Image(systemName: "list.bullet.clipboard")
+                if !condensed { Text("Plan") }
+            }
+            .accessibilityLabel("Plan first")
+            .accessibilityValue(planning ? "On" : "Off")
+            .accessibilityAddTraits(planning ? .isSelected : [])
+        }
+
+        if !composer.efforts.isEmpty {
+            let index = composer.efforts.firstIndex { $0.value == composer.selectedEffort } ?? -1
+            chip(action: { open(.effort) }) {
+                EffortMeter(levels: composer.efforts.count, selected: index)
+                if !condensed, index >= 0 { Text(composer.efforts[index].label) }
+            }
+            .accessibilityLabel("Effort")
+            .accessibilityValue(index >= 0 ? composer.efforts[index].label : "Default")
+        }
+
+        let mode = composer.runtimeMode
+        let label = composer.runtimeModes.first { $0.value == mode }?.label ?? mode
+        chip(selected: mode == "full-access", tint: Tint.caution, action: { open(.permissions) }) {
+            Image(systemName: ModeInfo.permissionIcon(mode))
+            // Only the mode that needs noticing spells itself out.
+            if !compact, mode == "full-access" { Text(ModeInfo.permissionShort(mode, label: label)) }
+        }
+        .accessibilityLabel("Permissions")
+        .accessibilityValue(label)
+
+        chip(action: { open(.model) }) {
+            Image(systemName: "cpu")
+            if !compact { Text(composer.selectedModel?.label ?? "Model").lineLimit(1) }
+        }
+        .accessibilityLabel("Model")
+        .accessibilityValue(composer.selectedModel?.label ?? "None")
+
+        if !composer.limitsChip.isEmpty {
+            // An account window nearly used up: which, and when it refills.
+            chip(action: { showingLimits = true }) {
+                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Tint.caution)
+                if !compact { Text(composer.limitsChip).lineLimit(1) }
+            }
+            .popover(isPresented: $showingLimits) {
+                VStack(alignment: .leading, spacing: Space.m) {
+                    OptionHeader("Usage Limits", "gauge.with.dots.needle.67percent")
+                    LimitWindowsList(windows: composer.limits)
+                }
+                .padding(Space.l)
+                .frame(width: 300)
+                .presentationCompactAdaptation(.popover)
+            }
+            .accessibilityLabel("Usage limits")
+            .accessibilityValue(composer.limitsChip)
+        }
+    }
+
     private func chip(selected: Bool = false, tint: Color? = nil, action: @escaping () -> Void, @ViewBuilder content: () -> some View) -> some View {
         Button(action: action) {
             HStack(spacing: Space.xs) { content() }
                 .font(.footnote.weight(.medium))
                 .foregroundStyle(selected ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
                 .padding(.horizontal, Space.m)
-                .frame(minHeight: 34)
+                .frame(minHeight: Size.chip)
                 .contentShape(Capsule())
         }
         .buttonStyle(.plain)

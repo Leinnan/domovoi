@@ -19,11 +19,9 @@ struct DiffScreen: View {
                 }
             }
             if diff.loading {
-                HStack { ProgressView(); Text("Loading changes…").foregroundStyle(.secondary) }
+                LoadingRow("Loading changes…")
             } else if let error = diff.error {
-                Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.red)
-            } else if diff.files.isEmpty {
-                ContentUnavailableView("No changes", systemImage: "checkmark.circle")
+                ErrorRow(error)
             }
             ForEach(diff.files, id: \.path) { file in
                 DisclosureGroup {
@@ -40,16 +38,16 @@ struct DiffScreen: View {
                     .defaultScrollAnchor(.leading)
                     .listRowInsets(EdgeInsets())
                 } label: {
-                    HStack {
-                        Text(file.path).font(.footnote.monospaced()).lineLimit(1).truncationMode(.head)
-                        Spacer()
-                        Text("+\(file.additions)").foregroundStyle(.green).font(.caption)
-                        Text("−\(file.deletions)").foregroundStyle(.red).font(.caption)
-                    }
+                    FileChangeRow(path: file.path, added: Int(file.additions), removed: Int(file.deletions))
                 }
             }
             if diff.truncated {
-                Text("Large diff: some files are not shown.").font(.caption).foregroundStyle(.secondary)
+                Text("Large diff: some files are not shown.").font(TypeRole.meta).foregroundStyle(.secondary)
+            }
+        }
+        .overlay {
+            if !diff.loading, diff.error == nil, diff.files.isEmpty {
+                ContentUnavailableView("No Changes", systemImage: "checkmark.circle", description: Text("Nothing here differs from the last commit."))
             }
         }
         .navigationTitle("Changes")
@@ -60,9 +58,21 @@ struct DiffScreen: View {
 }
 
 struct FilesScreen: View {
+    private struct Selection: Identifiable {
+        let id: String
+    }
+
     @ObservedObject var core: Core
     @State private var query = ""
-    @State private var previewing = false
+    @State private var previewing: Selection?
+    /// The preview has edits not saved: leaving it asks first.
+    @State private var editsUnsaved = false
+    /// The preview is in its editor, whose Save and Cancel take the bar.
+    @State private var previewEditing = false
+    @State private var confirmDiscard = false
+
+    /// A file to preview as soon as the screen shows (picked in the palette).
+    @MainActor static var reveal: String?
 
     private var files: FilesPanelView { core.view.panel.files }
 
@@ -75,20 +85,25 @@ struct FilesScreen: View {
                         core.update(.toggleDirectory(path: entry.path))
                     } else {
                         core.update(.openFile(path: entry.path))
-                        previewing = true
+                        previewing = Selection(id: entry.path)
                     }
                 } label: {
-                    HStack(spacing: 6) {
+                    HStack(spacing: Space.s) {
+                        // The chevron's column is kept for files too, so names line up.
                         if entry.directory {
-                            Image(systemName: entry.expanded ? "chevron.down" : "chevron.right").font(.caption2).foregroundStyle(.secondary).frame(width: 10)
+                            DisclosureChevron(open: entry.expanded)
+                        } else {
+                            Color.clear.frame(width: Size.chevron, height: 1)
                         }
                         Image(systemName: entry.directory ? "folder.fill" : "doc").foregroundStyle(entry.directory ? Color.accentColor : .secondary)
+                            .iconColumn(Size.rowIcon)
                         Text(query.isEmpty ? entry.name : entry.path)
                             .foregroundStyle(entry.ignored ? .secondary : .primary)
                             .lineLimit(1)
                             .truncationMode(.middle)
                     }
-                    .padding(.leading, query.isEmpty ? CGFloat(entry.depth) * 14 : 0)
+                    // The same step as the process tree's.
+                    .padding(.leading, query.isEmpty ? CGFloat(entry.depth) * Space.m : 0)
                 }
                 .contextMenu {
                     Button("Copy Path", systemImage: "doc.on.doc") { Platform.copy(entry.path) }
@@ -99,11 +114,15 @@ struct FilesScreen: View {
                     }
                 }
             }
-            if files.loading {
-                ProgressView()
-            } else if entries.isEmpty {
-                if query.isEmpty {
-                    ContentUnavailableView("No files", systemImage: "folder", description: Text(core.view.connection.state == "connected" ? "This folder is empty." : "Not connected to the server."))
+            // More coming into a tree already shown (a folder opening).
+            if files.loading, !entries.isEmpty { LoadingRow("Loading…") }
+        }
+        .overlay {
+            if (query.isEmpty ? files.entries : files.results).isEmpty {
+                if files.loading {
+                    ProgressView()
+                } else if query.isEmpty {
+                    ContentUnavailableView("No Files", systemImage: "folder", description: Text(core.view.connection.state == "connected" ? "This folder is empty." : "Not connected to the server."))
                 } else {
                     ContentUnavailableView.search(text: query)
                 }
@@ -114,56 +133,149 @@ struct FilesScreen: View {
         .onChange(of: query) { _, q in core.update(.setFileQuery(query: q)) }
         .navigationTitle((files.root as NSString).lastPathComponent)
         .navigationBarTitleDisplayMode(.inline)
-        .onAppear { core.update(.showPanel(tab: "files")) }
-        .sheet(isPresented: $previewing) {
-            NavigationStack {
-                FilePreviewScreen(preview: files.preview) { path in
-                    core.update(.appendToDraft(text: "@\(path) "))
-                    previewing = false
-                }
-                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { previewing = false } } }
+        .onAppear {
+            core.update(.showPanel(tab: "files"))
+            if let path = Self.reveal {
+                Self.reveal = nil
+                previewing = Selection(id: path)
             }
+        }
+        .sheet(item: $previewing, onDismiss: { previewEditing = false }) { selection in
+            NavigationStack {
+                FilePreviewScreen(core: core, path: selection.id, unsaved: $editsUnsaved, editing: $previewEditing) { path in
+                    core.update(.appendToDraft(text: "@\(path) "))
+                    previewing = nil
+                }
+                .toolbar {
+                    if !previewEditing {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Done") { if editsUnsaved { confirmDiscard = true } else { previewing = nil } }
+                        }
+                    }
+                }
+                .confirmationDialog("Discard your changes?", isPresented: $confirmDiscard, titleVisibility: .visible) {
+                    Button("Discard Changes", role: .destructive) {
+                        editsUnsaved = false
+                        previewing = nil
+                    }
+                } message: {
+                    Text("They haven't been saved.")
+                }
+            }
+            // A swipe down doesn't throw edits away either.
+            .interactiveDismissDisabled(editsUnsaved)
         }
     }
 }
 
 struct FilePreviewScreen: View {
-    let preview: FilePreviewView?
+    @ObservedObject var core: Core
+    let path: String
+    /// Edits not saved yet (the screen holding this one asks before leaving).
+    @Binding var unsaved: Bool
+    /// In the editor (the screen holding this one leaves the bar to it).
+    @Binding var editing: Bool
     /// Mentions the file in the open thread's message, when there is one.
     var addToMessage: ((String) -> Void)?
     /// Long lines wrap instead of scrolling sideways.
     @AppStorage("filePreviewWraps") private var wraps = false
+    /// The text being edited (`nil`: not editing), and what it started from.
+    @State private var editText: String?
+    @State private var editOriginal = ""
+    /// Text sent to be saved, until the preview shows it.
+    @State private var saving: String?
+    @State private var confirmDiscard = false
+    /// An image file's bytes once its preview loaded them (Share, Copy, Save).
+    @State private var imageFile: ImageFile?
+    @State private var notice: ImageNotice?
+
+    private var preview: FilePreviewView? {
+        guard let preview = core.view.panel.files.preview, preview.path == path else { return nil }
+        return preview
+    }
 
     var body: some View {
         Group {
-            if let preview {
-                if preview.loading {
-                    ProgressView()
-                } else if let error = preview.error {
+            if let preview, editText != nil {
+                FileEditor(
+                    text: Binding(get: { editText ?? "" }, set: { editText = $0 }),
+                    changed: editText != editOriginal,
+                    save: {
+                        saving = editText
+                        core.update(.saveFile(path: preview.path, text: editText ?? ""))
+                    },
+                    cancel: { if editText != editOriginal { confirmDiscard = true } else { stopEditing() } }
+                )
+            } else if let preview, !preview.loading {
+                if let error = preview.error {
                     ContentUnavailableView(error, systemImage: "doc.questionmark")
                 } else {
-                    ScrollView(wraps ? [.vertical] : [.vertical, .horizontal]) {
-                        Text(CodeHighlight.text(preview.spans, fallback: preview.text) + AttributedString(preview.truncated ? "\n…" : ""))
-                            .font(TypeRole.code)
-                            .textSelection(.enabled)
-                            .padding()
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                    VStack(spacing: 0) {
+                        if let lfs = preview.lfs {
+                            LfsCard(lfs: lfs) { core.update(.fetchLfsObject(path: preview.path)) }
+                                .padding(.horizontal, Space.s)
+                            Divider()
+                        }
+                        if let address = preview.imageUrl {
+                            FileImagePreview(address: address, path: preview.path, file: $imageFile)
+                        } else {
+                            ScrollView(wraps ? [.vertical] : [.vertical, .horizontal]) {
+                                Text(CodeHighlight.text(preview.spans, fallback: preview.text) + AttributedString(preview.truncated ? "\n…" : ""))
+                                    .font(TypeRole.code)
+                                    .textSelection(.enabled)
+                                    // The editor's inset, so the text doesn't move on Edit.
+                                    .padding(FileEditor.inset)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                            .defaultScrollAnchor(.topLeading)
+                        }
                     }
-                    .defaultScrollAnchor(.topLeading)
                 }
+            } else {
+                ProgressView()
             }
         }
-        .navigationTitle((preview?.path as NSString?)?.lastPathComponent ?? "File")
+        .imageNotice($notice)
+        .navigationTitle((path as NSString).lastPathComponent)
         .navigationBarTitleDisplayMode(.inline)
+        .onChange(of: editText) { _, text in
+            unsaved = text != nil && text != editOriginal
+            editing = text != nil
+        }
+        // Saved: the preview comes back with the new text.
+        .onChange(of: preview?.text) { _, text in
+            if let saved = saving, text == saved { stopEditing() }
+        }
+        .confirmationDialog("Discard your changes?", isPresented: $confirmDiscard, titleVisibility: .visible) {
+            Button("Discard Changes", role: .destructive) { stopEditing() }
+        }
         .toolbar {
-            if let preview, preview.error == nil {
+            if let preview, preview.editable, !preview.loading, preview.error == nil, editText == nil {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Edit", systemImage: "pencil") {
+                        editOriginal = preview.text
+                        editText = preview.text
+                    }
+                }
+            }
+            if let preview, !preview.loading, preview.error == nil, preview.imageUrl == nil, !preview.truncated,
+               ["html", "htm", "svg"].contains((preview.path as NSString).pathExtension.lowercased()) {
+                ToolbarItem(placement: .topBarTrailing) { HtmlArtifactButton(source: preview.text, title: preview.path) }
+            }
+            // Not while editing: Cancel takes that side of the bar.
+            if let preview, preview.error == nil, editText == nil {
                 ToolbarItem(placement: .topBarLeading) {
                     Menu {
-                        Toggle("Wrap Lines", systemImage: "text.word.spacing", isOn: $wraps)
                         Button("Copy Path", systemImage: "doc.on.doc") { Platform.copy(preview.path) }
-                        Button("Copy Text", systemImage: "doc.on.clipboard") { Platform.copy(preview.text) }
-                        ShareLink(item: preview.text, subject: Text((preview.path as NSString).lastPathComponent)) {
-                            Label("Share", systemImage: "square.and.arrow.up")
+                        if preview.imageUrl != nil, let imageFile {
+                            ImageActionItems(file: imageFile, name: (preview.path as NSString).lastPathComponent, preview: nil, notice: $notice)
+                        }
+                        if !preview.loading, preview.imageUrl == nil {
+                            Toggle("Wrap Lines", systemImage: "text.word.spacing", isOn: $wraps)
+                            Button("Copy Text", systemImage: "doc.on.clipboard") { Platform.copy(preview.text) }
+                            ShareLink(item: preview.text, subject: Text((preview.path as NSString).lastPathComponent)) {
+                                Label("Share", systemImage: "square.and.arrow.up")
+                            }
                         }
                         if let addToMessage {
                             Button("Ask About This File", systemImage: "text.bubble") { addToMessage(preview.path) }
@@ -173,6 +285,13 @@ struct FilePreviewScreen: View {
                 }
             }
         }
+    }
+
+    private func stopEditing() {
+        editText = nil
+        saving = nil
+        unsaved = false
+        editing = false
     }
 }
 
@@ -196,14 +315,7 @@ struct GitScreen: View {
 
     var body: some View {
         Form {
-            if git.loading {
-                HStack(spacing: 10) {
-                    ProgressView()
-                    Text("Reading the repository…").foregroundStyle(.secondary)
-                }
-            } else if !git.isRepo {
-                ContentUnavailableView("Not a git repository", systemImage: "arrow.triangle.branch")
-            } else {
+            if !git.loading, git.isRepo {
                 Section {
                     Menu {
                         ForEach(git.branches, id: \.self) { b in
@@ -217,7 +329,7 @@ struct GitScreen: View {
                         Button("New Branch…", systemImage: "plus") { showNewBranch = true }
                     } label: {
                         LabeledContent("Branch") {
-                            HStack(spacing: 4) {
+                            HStack(spacing: Space.xs) {
                                 Text(git.branch ?? "detached").lineLimit(1)
                                 Image(systemName: "chevron.up.chevron.down").font(.caption2)
                             }
@@ -242,12 +354,7 @@ struct GitScreen: View {
                         Text("Working tree clean").foregroundStyle(.secondary)
                     }
                     ForEach(git.changedFiles, id: \.path) { file in
-                        HStack {
-                            Text(file.path).font(.footnote.monospaced()).lineLimit(1).truncationMode(.head)
-                            Spacer()
-                            Text("+\(file.insertions)").foregroundStyle(Tint.success).font(.caption)
-                            Text("−\(file.deletions)").foregroundStyle(Tint.danger).font(.caption)
-                        }
+                        FileChangeRow(path: file.path, added: Int(file.insertions), removed: Int(file.deletions))
                     }
                 }
                 if hasChanges {
@@ -283,17 +390,23 @@ struct GitScreen: View {
                         }
                     }
                 }
+                WorktreesSection(git: git) { core.update($0) }
                 if git.busy || !git.progress.isEmpty || git.error != nil {
                     Section {
-                        if git.busy { ProgressView() }
+                        if git.busy { LoadingRow("Working…") }
                         ForEach(Array(git.progress.suffix(6).enumerated()), id: \.offset) { _, line in
-                            Text(line).font(.caption.monospaced()).foregroundStyle(.secondary)
+                            Text(line).font(TypeRole.monoSmall).foregroundStyle(.secondary)
                         }
-                        if let error = git.error {
-                            Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(Tint.danger)
-                        }
+                        if let error = git.error { ErrorRow(error) }
                     }
                 }
+            }
+        }
+        .overlay {
+            if git.loading {
+                ProgressView("Reading the repository…")
+            } else if !git.isRepo {
+                ContentUnavailableView("Not a Git Repository", systemImage: "arrow.triangle.branch", description: Text("This folder isn't tracked by git."))
             }
         }
         .navigationTitle("Git")
@@ -380,25 +493,32 @@ struct PullRequestsScreen: View {
     var body: some View {
         List {
             if let notice = prs.notice { Text(notice).font(.footnote).foregroundStyle(.secondary) }
-            if let error = prs.error { Label(error, systemImage: "exclamationmark.triangle").foregroundStyle(.red) }
+            if let error = prs.error { ErrorRow(error) }
             ForEach(prs.items, id: \.key) { pr in
                 Button {
                     core.update(.selectPullRequest(key: pr.key))
                     showing = true
                 } label: {
-                    VStack(alignment: .leading, spacing: 3) {
+                    VStack(alignment: .leading, spacing: Space.xxs) {
                         Text(pr.title).foregroundStyle(.primary).lineLimit(2)
-                        Text("\(pr.repository) #\(pr.number) · \(pr.author) · \(pr.age)").font(.caption).foregroundStyle(.secondary)
-                        HStack(spacing: 6) {
-                            Text(pr.draft ? "Draft" : pr.state.capitalized).font(.caption2.bold())
-                            if !pr.checks.isEmpty { Text("Checks: \(pr.checks)").font(.caption2).foregroundStyle(.secondary) }
+                        Text("\(pr.repository) #\(pr.number) · \(pr.author) · \(pr.age)").font(TypeRole.meta).foregroundStyle(.secondary)
+                        HStack(spacing: Space.tight) {
+                            Text(pr.draft ? "Draft" : pr.state.capitalized).font(TypeRole.metaSmall.bold())
+                            if !pr.checks.isEmpty { Text("Checks: \(pr.checks)").font(TypeRole.metaSmall).foregroundStyle(.secondary) }
                         }
                     }
                 }
             }
-            if prs.loading { ProgressView() }
-            if !prs.loading, prs.items.isEmpty, prs.error == nil {
-                ContentUnavailableView("No pull requests", systemImage: "arrow.triangle.pull")
+            if prs.loading, !prs.items.isEmpty { LoadingRow("Refreshing…") }
+        }
+        .overlay {
+            // Not over a notice (it says why there are none).
+            if prs.items.isEmpty, prs.error == nil, prs.notice == nil {
+                if prs.loading {
+                    ProgressView()
+                } else {
+                    ContentUnavailableView("No Pull Requests", systemImage: "arrow.triangle.pull", description: Text("Open pull requests on this project's repositories show up here."))
+                }
             }
         }
         .navigationTitle("Pull Requests")
@@ -408,7 +528,7 @@ struct PullRequestsScreen: View {
         .sheet(isPresented: $showing) {
             NavigationStack {
                 PullRequestDetailScreen(core: core, detail: prs.selected, busy: prs.busy)
-                    .toolbar { Button("Done") { showing = false } }
+                    .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showing = false } } }
             }
         }
         // A thread from a pull request: its composer, in the PR's worktree.
@@ -435,10 +555,10 @@ struct PullRequestDetailScreen: View {
     var body: some View {
         List {
             if let d = detail {
-                if d.loading { ProgressView() }
+                if d.loading { LoadingRow("Loading…") }
                 Section {
                     Text(d.title).font(.headline)
-                    Text("\(d.draft ? "Draft" : d.state.capitalized) · \(d.changedFiles) files · +\(d.additions) −\(d.deletions)").font(.caption).foregroundStyle(.secondary)
+                    Text("\(d.draft ? "Draft" : d.state.capitalized) · \(d.changedFiles) files · +\(d.additions) −\(d.deletions)").font(TypeRole.meta).foregroundStyle(.secondary)
                     if let url = URL(string: d.url) { Link("Open on GitHub", destination: url) }
                 }
                 Section {
@@ -469,7 +589,7 @@ struct PullRequestDetailScreen: View {
                         Button { core.update(.pullRequestAction(key: d.key, action: "reopen", mergeMethod: "")) } label: { Label("Reopen", systemImage: "arrow.uturn.backward.circle") }
                     }
                 } footer: {
-                    if busy { HStack(spacing: Space.s) { ProgressView(); Text("Working on it…") } }
+                    if busy { LoadingRow("Working on it…") }
                 }
                 .disabled(busy)
                 if !d.checks.isEmpty {
@@ -566,62 +686,80 @@ struct PullRequestDetailScreen: View {
 
 struct UsageScreen: View {
     @ObservedObject var core: Core
-    @State private var days: UInt32 = 7
 
     private var usage: UsageView { core.view.usage }
 
     var body: some View {
         List {
-            Picker("Range", selection: $days) {
-                Text("Today").tag(UInt32(1))
-                Text("7 days").tag(UInt32(7))
-                Text("30 days").tag(UInt32(30))
+            // In a section, so it sits on the list's inset like the rows.
+            Section {
+                Picker("Range", selection: Binding(get: { usage.days == 0 ? 7 : usage.days }, set: { core.update(.loadUsage(days: $0)) })) {
+                    ForEach(UsageSpan.days, id: \.0) { Text($0.1).tag($0.0) }
+                }
+                .pickerStyle(.segmented)
             }
-            .pickerStyle(.segmented)
             Section {
                 LabeledContent("Total tokens", value: usage.totalTokens)
+                if !usage.totalCost.isEmpty { LabeledContent("Cost", value: usage.totalCost) }
                 if !usage.rangeLabel.isEmpty { LabeledContent("Range", value: usage.rangeLabel) }
             } footer: {
                 if !usage.notice.isEmpty { Text(usage.notice) }
             }
+            // A row, not a full-screen state: the range and totals stay above it.
             if usage.loading && usage.rows.isEmpty {
-                ProgressView().frame(maxWidth: .infinity)
+                LoadingRow("Loading usage…")
             } else if usage.rows.isEmpty {
-                ContentUnavailableView("No usage yet", systemImage: "chart.bar", description: Text("Turns run in this range show up here."))
+                Text("No usage yet. Turns run in this range show up here.").font(TypeRole.meta).foregroundStyle(.secondary)
             }
-            Section("By day and model") {
-                ForEach(Array(usage.rows.enumerated()), id: \.offset) { _, row in
-                    VStack(alignment: .leading, spacing: 2) {
-                        HStack {
-                            Text(row.model).lineLimit(1)
-                            Spacer()
-                            Text(row.total).monospacedDigit()
-                        }
-                        Text("\(row.day) · \(row.provider) · in \(row.input) · cached \(row.cached) · out \(row.output)")
-                            .font(.caption2).foregroundStyle(.secondary)
-                    }
+            if !usage.byModel.isEmpty {
+                Section("By model") {
+                    ForEach(Array(usage.byModel.enumerated()), id: \.offset) { _, row in usageRow(row, byDay: false) }
+                }
+            }
+            if !usage.rows.isEmpty {
+                Section("By day and model") {
+                    ForEach(Array(usage.rows.enumerated()), id: \.offset) { _, row in usageRow(row, byDay: true) }
+                }
+            }
+            if !usage.limits.isEmpty {
+                Section("Limits") {
+                    ProviderLimitsSection(limits: usage.limits).padding(.vertical, Space.xs)
                 }
             }
             // Refreshing rows already there (the first load has its own spinner).
-            if usage.loading, !usage.rows.isEmpty { ProgressView() }
+            if usage.loading, !usage.rows.isEmpty { LoadingRow("Refreshing…") }
         }
         .navigationTitle("Usage")
         .navigationBarTitleDisplayMode(.inline)
-        .onAppear { core.update(.loadUsage(days: days)) }
-        .onChange(of: days) { _, d in core.update(.loadUsage(days: d)) }
+        .onAppear { core.update(.loadUsage(days: usage.days == 0 ? 7 : usage.days)) }
+    }
+
+    private func usageRow(_ row: UsageRowView, byDay: Bool) -> some View {
+        VStack(alignment: .leading, spacing: Space.xxs) {
+            HStack {
+                Text(row.model).lineLimit(1)
+                Spacer()
+                Text(row.total).monospacedDigit()
+                if !row.cost.isEmpty { Text(row.cost).monospacedDigit().foregroundStyle(.secondary) }
+            }
+            Text(([byDay ? row.day : "", row.provider, "in \(row.input)", "cached \(row.cached)", "out \(row.output)"]).filter { !$0.isEmpty }.joined(separator: " · "))
+                .font(TypeRole.metaSmall).foregroundStyle(.secondary)
+        }
     }
 }
 
 struct SettingsScreen: View {
     @ObservedObject var core: Core
+    @EnvironmentObject private var companion: CompanionBrain
     @State private var adding = false
     @State private var renaming: EnvironmentView?
     @State private var newName = ""
     @State private var notifications: UNAuthorizationStatus?
-    @State private var renamingProject: SidebarProjectView?
+    @State private var pickingProjectIcon: ProjectSettingsView?
+    @State private var renamingProject: ProjectSettingsView?
     @State private var projectName = ""
     @State private var forgetting: EnvironmentView?
-    @State private var removing: SidebarProjectView?
+    @State private var removing: ProjectSettingsView?
     @Environment(\.scenePhase) private var scenePhase
 
     private var connection: ConnectionView { core.view.connection }
@@ -652,6 +790,13 @@ struct SettingsScreen: View {
                 }
                 LabeledContent("Server", value: "domovoi-server \(connection.serverVersion)")
                 LabeledContent("Platform", value: connection.platform)
+                if !connection.activeEnvironmentId.isEmpty {
+                    NavigationLink(value: Screen.companion(connection.activeEnvironmentId)) {
+                        SettingsRow(title: "Companion") {
+                            CompanionView(look: connection.companion.look, brain: companion, size: 26)
+                        }
+                    }
+                }
             }
             Section {
                 ForEach(connection.environments, id: \.id) { env in
@@ -685,7 +830,7 @@ struct SettingsScreen: View {
                 HStack {
                     Text("Servers")
                     Spacer()
-                    if connection.environments.count > 1 { EditButton().font(.caption) }
+                    if connection.environments.count > 1 { EditButton().font(TypeRole.meta) }
                 }
             }
             if connection.state == "connected" {
@@ -699,10 +844,22 @@ struct SettingsScreen: View {
             }
             if connection.state == "connected" {
                 Section {
-                    ForEach(core.view.sidebar.projects, id: \.id) { project in
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(project.title)
-                            Text(project.workspaceRoot).font(.caption2).foregroundStyle(.secondary).lineLimit(1).truncationMode(.head)
+                    ForEach(core.view.settings.projects, id: \.id) { project in
+                        // A settings row's layout, with the icon a button and the
+                        // path cut at its start.
+                        HStack(spacing: Space.m) {
+                            Button { pickingProjectIcon = project } label: {
+                                ProjectIconTile(icon: project.icon, size: Size.listIcon, core: core)
+                                    .tapTarget()
+                            }
+                            .buttonStyle(.borderless)
+                            .disabled(project.icon.saving)
+                            .accessibilityLabel("Change icon for \(project.title)")
+                            .iconColumn(Size.listIcon)
+                            VStack(alignment: .leading, spacing: Space.xxs) {
+                                Text(project.title)
+                                Text(project.workspaceRoot).font(TypeRole.meta).foregroundStyle(.secondary).lineLimit(1).truncationMode(.head)
+                            }
                         }
                         .swipeActions {
                             Button("Remove", role: .destructive) { removing = project }
@@ -713,6 +870,7 @@ struct SettingsScreen: View {
                             .tint(.blue)
                         }
                         .contextMenu {
+                            Button("Change Icon…") { pickingProjectIcon = project }.disabled(project.icon.saving)
                             Button("Rename…") {
                                 projectName = project.title
                                 renamingProject = project
@@ -732,9 +890,9 @@ struct SettingsScreen: View {
                 Section("Archived Threads") {
                     ForEach(core.view.settings.archived, id: \.id) { thread in
                         HStack {
-                            VStack(alignment: .leading, spacing: 2) {
+                            VStack(alignment: .leading, spacing: Space.xxs) {
                                 Text(thread.title).lineLimit(2)
-                                Text(thread.age).font(.caption2).foregroundStyle(.secondary)
+                                Text(thread.age).font(TypeRole.meta).foregroundStyle(.secondary)
                             }
                             Spacer()
                             Button("Unarchive") { core.update(.archiveThread(threadId: thread.id, archived: false)) }
@@ -818,10 +976,13 @@ struct SettingsScreen: View {
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { Task { await readNotifications() } }
         }
+        .sheet(isPresented: Binding(get: { pickingProjectIcon != nil }, set: { if !$0 { pickingProjectIcon = nil } })) {
+            if let project = pickingProjectIcon { ProjectIconPicker(project: project, core: core) }
+        }
         .sheet(isPresented: $adding) {
             NavigationStack {
                 AddServerView(core: core)
-                    .toolbar { Button("Cancel") { adding = false } }
+                    .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { adding = false } } }
             }
         }
     }

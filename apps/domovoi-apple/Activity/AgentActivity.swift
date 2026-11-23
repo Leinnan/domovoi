@@ -17,15 +17,52 @@ enum AppGroup {
 /// A thread's turn on the Lock Screen and in the Dynamic Island.
 struct AgentActivityAttributes: ActivityAttributes {
     /// Keys match the server's `liveactivity` pushes (`push::activity_payload`).
+    /// All but the first three are optional: an older server sends only those.
     struct ContentState: Codable, Hashable {
-        /// `working` | `approval` | `completed` | `failed` | ...
+        /// `working` | `approval` | `completed` | `failed` | `interrupted` | `idle`
         var status: String
-        /// What an approval asks, or how the turn ended.
+        /// What an approval or a question asks, or how the turn ended.
         var detail: String
         /// When the turn started (Unix ms).
         var startedAtMs: Double
+        /// When it ended (Unix ms), once it has.
+        var endedAtMs: Double?
+        /// While waiting on the user: `approval` (answerable here) or `question` (in the app).
+        var request: String?
+        /// The latest step: `command` | `file_change` | `search` | `tool` | `subagent`.
+        var actionKind: String?
+        /// What it works on: the command, the file, the tool and its target.
+        var action: String?
+        var tasksDone: Int?
+        var tasksTotal: Int?
+        /// The task under way.
+        var taskCurrent: String?
+        /// The start of the turn's answer, once it finished.
+        var summary: String?
+        /// Why it failed.
+        var error: String?
 
         var startedAt: Date { Date(timeIntervalSince1970: startedAtMs / 1000) }
+        var endedAt: Date? { endedAtMs.map { Date(timeIntervalSince1970: $0 / 1000) } }
+        var isLive: Bool { status == "working" || status == "approval" }
+        var isQuestion: Bool { status == "approval" && request == "question" }
+        /// The approval can be answered with Allow and Decline.
+        var canAnswerHere: Bool { status == "approval" && request != "question" }
+        /// Tasks as a fraction, when the turn keeps a to-do list.
+        var taskFraction: Double? {
+            guard let done = tasksDone, let total = tasksTotal, total > 0 else { return nil }
+            return min(1, Double(done) / Double(total))
+        }
+
+        /// The state the app starts an activity with (the server's pushes fill in the rest).
+        static func starting(status: String, question: Bool, startedAtMs: Double) -> ContentState {
+            ContentState(
+                status: status,
+                detail: status == "approval" ? (question ? "Needs your answer" : "Needs your approval") : "",
+                startedAtMs: startedAtMs,
+                request: status == "approval" ? (question ? "question" : "approval") : nil
+            )
+        }
     }
 
     var threadId: String
@@ -33,6 +70,10 @@ struct AgentActivityAttributes: ActivityAttributes {
     var project: String
     /// The server's own id, so a tap opens the thread on the right server.
     var serverId: String?
+    /// The model's short name ("Opus 4.7"), when known.
+    var model: String?
+    /// The thread's branch, when it has one.
+    var branch: String?
 }
 #endif
 

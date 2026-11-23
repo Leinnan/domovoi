@@ -61,8 +61,20 @@ fn notify_transition(model: &mut Model, shell: &ThreadShell) -> Option<Cmd> {
     if previous == Some(status) || previous.is_none() {
         return None;
     }
+    if previous == Some(ShellStatus::Working) && crate::sidebar::is_live_thread(shell) {
+        let beat = match status {
+            ShellStatus::Completed | ShellStatus::Idle => "finished",
+            ShellStatus::Failed => "failed",
+            _ => "",
+        };
+        if !beat.is_empty() {
+            model.companion_beat = (beat.into(), model.companion_beat.1 + 1);
+        }
+    }
     let watching = model.focused && model.selected_thread.as_deref() == Some(id.as_str());
     let body = notice(previous, status)?;
+    // A turn that ended on a plan waits for the plan to be read and carried out.
+    let body = if body == "Finished" && shell.has_actionable_proposed_plan { "Plan ready" } else { body };
     if watching {
         return None;
     }
@@ -106,7 +118,8 @@ fn shell_chunk(model: &mut Model, item: Value) -> Vec<Cmd> {
     match item {
         // Identity-roots snapshots only refresh project identities (t3code ShellStream).
         ShellStreamItem::Snapshot { snapshot, resolved_repository_identity_roots: Some(_) } => {
-            for project in snapshot.projects {
+            for mut project in snapshot.projects {
+                crate::project_icons::shell_project(&mut model.project_icons, &mut project);
                 upsert_project(&mut model.projects, project);
             }
         }
@@ -114,8 +127,13 @@ fn shell_chunk(model: &mut Model, item: Value) -> Vec<Cmd> {
             model.from_cache = false;
             model.cache_dirty = true;
             model.projects = snapshot.projects;
+            for project in &mut model.projects {
+                crate::project_icons::shell_project(&mut model.project_icons, project);
+            }
+            crate::project_icons::prune(model);
             model.threads = snapshot.threads;
             // Where each thread stands now, so only a change from here notifies.
+            model.notified.clear();
             for thread in &model.threads {
                 model.notified.insert(thread.id.as_str().to_owned(), shell_status(thread));
             }
@@ -127,11 +145,15 @@ fn shell_chunk(model: &mut Model, item: Value) -> Vec<Cmd> {
                 cmds.push(update::refresh_context(model));
             }
         }
-        ShellStreamItem::ProjectUpdated { project, .. } => {
+        ShellStreamItem::ProjectUpdated { mut project, .. } => {
             model.cache_dirty = true;
+            crate::project_icons::shell_project(&mut model.project_icons, &mut project);
             upsert_project(&mut model.projects, *project);
         }
-        ShellStreamItem::ProjectRemoved { project_id, .. } => model.projects.retain(|p| p.id != project_id),
+        ShellStreamItem::ProjectRemoved { project_id, .. } => {
+            model.projects.retain(|p| p.id != project_id);
+            crate::project_icons::prune(model);
+        }
         ShellStreamItem::ThreadUpdated { location, thread, .. } => {
             model.cache_dirty = true;
             if location == ShellThreadLocation::Archive {
@@ -258,6 +280,24 @@ fn left_out(model: &mut Model, sequence: Option<u64>, why: &serde_json::Error) {
     }
 }
 
+/// Something for one thread that named another was left out: counted, and
+/// noted on the device's log (it means a bug, here or in the server).
+fn note_misrouted(model: &mut Model, tid: &str, what: &str) {
+    model.misrouted += 1;
+    eprintln!("domovoi core: left out {what} on the stream of thread {tid}");
+}
+
+/// Starts `tid`'s stream over from a snapshot, nothing held kept.
+fn reload_thread(model: &mut Model, tid: &str, why: &str) -> Vec<Cmd> {
+    note_misrouted(model, tid, why);
+    let stop = update::unsubscribe(model, &Route::Thread(tid.to_owned()));
+    model.thread = None;
+    model.thread_sequence = 0;
+    model.thread_gaps = 0;
+    model.changes.frame_is_wide();
+    vec![stop, update::subscribe_thread(model, tid)]
+}
+
 fn thread_chunk(model: &mut Model, tid: &str, item: Value) -> Vec<Cmd> {
     if model.selected_thread.as_deref() != Some(tid) {
         return vec![];
@@ -271,13 +311,25 @@ fn thread_chunk(model: &mut Model, tid: &str, item: Value) -> Vec<Cmd> {
             return vec![];
         }
     };
+    // What `tid`'s stream sends goes only into `tid`'s own records. Held
+    // records of another thread are not resumed into: the stream starts over
+    // from a snapshot of this one.
+    if model.thread.as_ref().is_some_and(|held| held.record.id.as_str() != tid) {
+        return reload_thread(model, tid, "the thread held was another one");
+    }
     match item {
         // A snapshot replaces the thread.
         ThreadStreamItem::Snapshot(snapshot) => {
+            let sequence = snapshot.snapshot_sequence;
+            let thread = Thread::from_snapshot(*snapshot);
+            if thread.record.id.as_str() != tid {
+                note_misrouted(model, tid, "a snapshot of another thread");
+                return vec![];
+            }
             model.changes.frame_is_wide();
             model.cache_dirty = true;
-            model.thread_sequence = snapshot.snapshot_sequence;
-            model.thread = Some(Thread::from_snapshot(*snapshot));
+            model.thread_sequence = sequence;
+            model.thread = Some(thread);
             model.thread_gaps = 0;
             model.thread_loading = false;
             // The server's copy of a thread being started is in: it shows itself now.
@@ -296,12 +348,21 @@ fn thread_chunk(model: &mut Model, tid: &str, item: Value) -> Vec<Cmd> {
         ThreadStreamItem::Synchronized => {
             model.changes.frame_is_wide();
             model.thread_loading = false;
-            vec![]
+            vec![update::request_asset_urls(model)]
         }
         ThreadStreamItem::Event { sequence, event } => {
+            if event.thread_id.as_str() != tid {
+                note_misrouted(model, tid, "an event of another thread");
+                return vec![];
+            }
             // What the event asks for besides its record, read before the
             // record goes into the thread.
-            let attachments = matches!(&event.body, EventBody::MessageUpdated(message) if !message.attachments.is_empty());
+            let attachments = match &event.body {
+                EventBody::MessageUpdated(message) => !message.attachments.is_empty(),
+                // A step that looked at an image (asked for once it is done).
+                EventBody::TurnItemUpdated(item) => *item.status() != domovoi_model::typed::TurnItemStatus::Running && !crate::tools::image_sources(item, "").is_empty(),
+                _ => false,
+            };
             let checkpoint = matches!(event.body, EventBody::CheckpointCaptured(_));
             let moved = matches!(event.body, EventBody::Thread { change: ThreadChange::MetadataUpdated, .. });
             // Only an event's reach is judged.
@@ -421,6 +482,11 @@ fn chunk(model: &mut Model, route: &Route, v: Value) -> Vec<Cmd> {
                     Ok(event) => model.panel.terminals[at].apply(&event),
                     Err(why) => model.left_out("a terminal's output", &why),
                 }
+                // The terminal is up: a script it was opened for starts now.
+                if let Some(input) = model.panel.terminals[at].pending_input.take() {
+                    let request = crate::requests::terminal_write(&thread_id.as_str().into(), terminal_id, &input);
+                    return vec![update::call(model, request, Route::Command("Run script".into()))];
+                }
             }
             vec![]
         }
@@ -438,12 +504,29 @@ fn chunk(model: &mut Model, route: &Route, v: Value) -> Vec<Cmd> {
             }
             vec![update::adopt_terminals(model)]
         }
+        Route::ProviderAuth(id) => {
+            if let Some(state) = read::<domovoi_model::typed::ProviderAuthState>(model, "a provider's sign-in", v) {
+                model.pages.provider_auth.insert(id.clone(), state);
+            }
+            vec![]
+        }
+        Route::ProviderInstall(id) => {
+            if let Some(state) = read::<domovoi_model::typed::ProviderInstallState>(model, "a provider's installation", v) {
+                model.pages.provider_install.insert(id.clone(), state);
+            }
+            vec![]
+        }
         Route::ScheduledTasks => {
             if let Some(list) = read::<ScheduledTaskList>(model, "the scheduled tasks", v) {
                 model.pages.scheduled = listed(model, "a scheduled task", list.tasks);
                 model.pages.scheduled_time_zone = list.time_zone.flatten().unwrap_or_default();
             }
-            vec![]
+            // A change to the list (a run started or ended): the runs as they are now.
+            let mut cmds = vec![update::call(model, crate::requests::scheduled_tasks_list_runs(None, None), Route::ScheduledRuns(None))];
+            if let Some(open) = model.pages.scheduled_runs.as_ref().map(|(id, _)| id.clone()) {
+                cmds.push(update::call(model, crate::requests::scheduled_tasks_list_runs(Some(&open), None), Route::ScheduledRuns(Some(open))));
+            }
+            cmds
         }
         Route::AuthAccess => {
             if let Some(event) = read(model, "who is signed in", v) {
@@ -521,6 +604,22 @@ fn exit_ok(model: &mut Model, route: Route, value: Value) -> Vec<Cmd> {
             update::outbox_done(model, &route);
             vec![]
         }
+        Route::ProjectIconChanged(id) => {
+            crate::project_icons::finish_save(model, &id, Ok(Project::deserialize(value).ok()));
+            vec![]
+        }
+        Route::ProjectIconAsset { .. } | Route::ProjectIconThumbnail { .. } => {
+            crate::project_icons::image_reply(model, &route, AssetCreateUrlResult::deserialize(value).ok());
+            vec![]
+        }
+        Route::ProjectIconFiles(request) => {
+            crate::project_icons::files_reply(model, &request, ProjectEntriesResult::deserialize(value).map_err(|_| "Could not read project images.".into()));
+            vec![]
+        }
+        Route::Diagram { key, request } => {
+            crate::diagrams::reply(model, &key, &request, AssetCreateUrlResult::deserialize(value).ok());
+            vec![]
+        }
         Route::ProjectCreated => {
             let id = project_made(model, value);
             vec![update::update(crate::Event::NewThread { project_id: id }, model)]
@@ -575,6 +674,40 @@ fn exit_ok(model: &mut Model, route: Route, value: Value) -> Vec<Cmd> {
             }
             vec![]
         }
+        Route::PaletteSearch(rev) => {
+            let Some(mode) = model.palette.as_ref().filter(|p| p.revision == rev).map(|p| p.mode.clone()) else { return vec![] };
+            let results: Vec<crate::view::PaletteItemView> = if mode == "files" {
+                read::<ProjectEntriesResult>(model, "the files found", value)
+                    .map(|found| found.entries)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|e| e.kind.as_str() == "file")
+                    .map(|e| {
+                        let (dir, name) = e.path.rsplit_once('/').unwrap_or(("", e.path.as_str()));
+                        crate::view::PaletteItemView { id: format!("file:{}", e.path), kind: "file".into(), title: name.to_owned(), subtitle: dir.to_owned(), shortcut: String::new() }
+                    })
+                    .collect()
+            } else {
+                read::<domovoi_model::typed::ProjectSearchContentsResult>(model, "the lines found", value)
+                    .map(|found| found.matches)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|m| crate::view::PaletteItemView {
+                        id: format!("match:{}:{}", m.path, m.line_number),
+                        kind: "match".into(),
+                        title: m.line_content.trim().chars().take(120).collect(),
+                        subtitle: format!("{}:{}", m.path, m.line_number),
+                        shortcut: String::new(),
+                    })
+                    .collect()
+            };
+            if let Some(p) = model.palette.as_mut() {
+                p.results = results;
+                p.searching = false;
+                p.highlighted = 0;
+            }
+            vec![]
+        }
         Route::FileSearch(rev) if rev == model.panel.files.revision => {
             model.panel.files.results = read::<ProjectEntriesResult>(model, "the files found", value).map(|found| found.entries).unwrap_or_default();
             vec![]
@@ -588,6 +721,9 @@ fn exit_ok(model: &mut Model, route: Route, value: Value) -> Vec<Cmd> {
         Route::AssetUrl(id) => {
             match read::<AssetCreateUrlResult>(model, "an attachment's address", value) {
                 Some(asset) => {
+                    if let Some(expires) = asset.expires_at.as_i64().filter(|expires| *expires > model.now_ms) {
+                        model.asset_url_expiries.insert(id.clone(), expires);
+                    }
                     model.asset_urls.insert(id, asset.relative_url);
                     vec![render()]
                 }
@@ -597,23 +733,127 @@ fn exit_ok(model: &mut Model, route: Route, value: Value) -> Vec<Cmd> {
                 }
             }
         }
-        Route::ReadFile(path) => {
-            if model.panel.files.preview.as_ref().is_some_and(|p| p.path == path) {
+        Route::ReadArtifactFile(request) => {
+            if model.panel.files.artifact_preview.as_ref().is_some_and(|read| read.request == request && read.current(model)) {
+                let file = read::<ProjectReadFileResult>(model, "an HTML artifact", value);
+                if let Some(read) = model.panel.files.artifact_preview.as_mut() {
+                    let preview = &mut read.preview;
+                    preview.loading = false;
+                    match file {
+                        Some(file) if file.exists != Some(false) => {
+                            preview.text = file.contents;
+                            preview.truncated = file.truncated;
+                        }
+                        Some(_) => preview.error = Some("The file does not exist.".into()),
+                        None => preview.error = Some("Could not read the HTML artifact.".into()),
+                    }
+                }
+            }
+            vec![]
+        }
+        Route::ReadPanelArtifactFile(request) => {
+            let mut extra = vec![];
+            if model.panel.artifacts.file_read.as_ref().is_some_and(|read| read.request == request && read.current(model)) {
+                let file = read::<ProjectReadFileResult>(model, "an artifact file", value);
+                let mut loaded_source: Option<(String, String)> = None;
+                if let Some(read) = model.panel.artifacts.file_read.as_mut() {
+                    let preview = &mut read.preview;
+                    preview.loading = false;
+                    match file {
+                        Some(file) if file.exists != Some(false) => {
+                            let lang = crate::highlight::language_for_path(&preview.path);
+                            preview.spans = crate::highlight::highlight(&file.contents, &lang);
+                            if !file.truncated && !file.contents.trim().is_empty() {
+                                loaded_source = Some((preview.path.clone(), file.contents.clone()));
+                            }
+                            preview.text = file.contents;
+                            preview.truncated = file.truncated;
+                        }
+                        Some(_) => preview.error = Some("The file does not exist.".into()),
+                        None => preview.error = Some("Could not read the artifact file.".into()),
+                    }
+                }
+                if let Some((path, contents)) = loaded_source
+                    && let Some(kind) = crate::artifacts::artifact_kind_for_path(&path)
+                    && matches!(kind, "react" | "mermaid")
+                    && let Some(tid) = model.selected_thread.clone()
+                    && let Some(active_id) = model.panel.artifacts.active_id.clone()
+                {
+                    let dark = model.panel.artifacts.dark;
+                    let version = model.panel.artifacts.active_version.unwrap_or(1);
+                    let req = if kind == "react" {
+                        crate::requests::artifact_react_preview(&contents, dark)
+                    } else {
+                        crate::requests::mermaid_diagram_svg(&contents, dark)
+                    };
+                    let url_req_id = update::uuid();
+                    model.panel.artifacts.preview_url = Some(crate::model::ArtifactPreviewUrl {
+                        request: url_req_id.clone(),
+                        thread: tid,
+                        artifact_id: active_id,
+                        version,
+                        dark,
+                        url: None,
+                        loading: true,
+                        error: None,
+                    });
+                    extra.push(update::call(model, req, Route::ArtifactPreviewUrl(url_req_id)));
+                }
+            }
+            extra
+        }
+        Route::ArtifactPreviewUrl(request) => {
+            if model.panel.artifacts.preview_url.as_ref().is_some_and(|p| p.request == request) {
+                let asset = read::<AssetCreateUrlResult>(model, "an artifact preview", value);
+                if let Some(p) = model.panel.artifacts.preview_url.as_mut() {
+                    p.loading = false;
+                    match asset {
+                        Some(asset) if !asset.relative_url.contains("missing") => {
+                            p.url = Some(asset.relative_url);
+                            p.error = None;
+                        }
+                        _ => {
+                            p.url = None;
+                        }
+                    }
+                }
+            }
+            vec![]
+        }
+        Route::ReadFile { path, request } => {
+            if model.panel.files.preview.as_ref().is_some_and(|p| p.request == request) {
                 model.panel.files.preview = Some(match read::<ProjectReadFileResult>(model, "a file", value) {
                     Some(file) => Preview {
-                        spans: crate::highlight::highlight(&file.contents, &crate::highlight::language_for_path(&path)),
+                        spans: if file.image_url.is_some() {
+                            vec![]
+                        } else {
+                            crate::highlight::highlight(&file.contents, &crate::highlight::language_for_path(&path))
+                        },
                         path,
+                        request,
                         text: file.contents,
+                        image_url: file.image_url,
                         truncated: file.truncated,
                         error: (file.exists == Some(false)).then(|| "The file does not exist.".into()),
                         loading: false,
+                        byte_length: file.byte_length,
+                        lfs: file.lfs,
+                        fetching: false,
+                        fetch_error: None,
                     },
-                    None => Preview { path, error: Some("This app can't read the server's answer.".into()), ..Default::default() },
+                    None => Preview { path, request, error: Some("This app can't read the server's answer.".into()), ..Default::default() },
                 });
             }
             vec![]
         }
-        Route::Diff(source) if source == model.panel.diff.source => {
+        // The object is on the server now (or its state changed): read the file again.
+        Route::FetchLfs { path, request } => {
+            if model.panel.files.preview.as_ref().is_some_and(|p| p.request == request && p.path == path) {
+                return vec![update::update(crate::app::Event::OpenFile { path }, model)];
+            }
+            vec![]
+        }
+        Route::Diff { source, of } if source == model.panel.diff.source && of == update::diff_owner(model, &source) => {
             // A thread's own diffs are one patch; a checkout's come by source.
             let (patch, truncated) = if source == "thread" || source.starts_with("turn:") {
                 (read::<ThreadTurnDiff>(model, "a diff", value).map(|diff| diff.diff).unwrap_or_default(), false)
@@ -630,6 +870,7 @@ fn exit_ok(model: &mut Model, route: Route, value: Value) -> Vec<Cmd> {
         Route::ListRefs(cwd) => {
             if model.composer.branches_cwd == cwd {
                 let refs = read::<VcsListRefsResult>(model, "the branches", value).map(|listed| listed.refs).unwrap_or_default();
+                model.composer.worktrees = refs.iter().filter(|r| r.is_remote != Some(true)).filter_map(|r| Some((r.name.clone(), r.worktree_path.clone()?))).collect();
                 model.composer.branches = refs.into_iter().filter(|r| r.is_remote != Some(true)).map(|r| r.name).collect();
             }
             vec![]
@@ -708,6 +949,42 @@ fn exit_ok(model: &mut Model, route: Route, value: Value) -> Vec<Cmd> {
             model.pages.pr_checks = read::<PullRequestChecksResult>(model, "a pull request's checks", value).flatten();
             vec![]
         }
+        Route::ScheduledRuns(task) => {
+            let runs = read::<ScheduledRuns>(model, "a scheduled task's runs", value).map(|list| list.runs).unwrap_or_default();
+            match task {
+                None => model.pages.scheduled_latest_runs = runs,
+                Some(task) if model.pages.scheduled_runs.as_ref().is_some_and(|(id, _)| *id == task) => model.pages.scheduled_runs = Some((task, runs)),
+                Some(_) => {}
+            }
+            vec![]
+        }
+        Route::ThreadPermissionsForgotten => {
+            #[derive(serde::Deserialize)]
+            struct Forgotten {
+                forgotten: usize,
+            }
+            let n = read::<Forgotten>(model, "the forgotten tools", value).map_or(0, |f| f.forgotten);
+            model.toast("success", match n {
+                0 => "This thread had no allowed tools to forget.".to_owned(),
+                1 => "Forgot 1 allowed tool: its agent asks again from its next start.".to_owned(),
+                n => format!("Forgot {n} allowed tools: its agent asks again from its next start."),
+            });
+            vec![]
+        }
+        Route::ScheduledRunNow(task) => vec![update::call(model, crate::requests::scheduled_tasks_list_runs(Some(&task), Some(1)), Route::ScheduledRunStarted(task))],
+        Route::ScheduledRunStarted(task) => {
+            let run = read::<ScheduledRuns>(model, "a scheduled task's run", value).and_then(|list| list.runs.into_iter().next());
+            let title = model.pages.scheduled.iter().find(|t| t.id.as_str() == task).map(|t| t.title.clone()).unwrap_or_default();
+            match run {
+                Some(run) if run.error.is_some() => model.toast("error", format!("{title}: {}", run.error.unwrap_or_default())),
+                Some(crate::model::ScheduledRun { thread_id: Some(thread), .. }) => {
+                    model.toast_with_action("success", format!("Started “{title}”."), "Open Thread", &format!("open:{thread}"));
+                }
+                // A server without run history: no thread to offer.
+                _ => model.toast("success", format!("Started “{title}”.")),
+            }
+            vec![]
+        }
         Route::WebhookDeliveries(task) => {
             #[derive(serde::Deserialize)]
             struct Listed {
@@ -722,12 +999,17 @@ fn exit_ok(model: &mut Model, route: Route, value: Value) -> Vec<Cmd> {
         }
         Route::Usage => {
             model.pages.usage_loading = false;
+            model.pages.usage_error = None;
             let usage = read::<UsageSummary>(model, "the usage summary", value);
             // Rows of a kind this build does not know are not in the totals.
             for _ in usage.iter().flat_map(|usage| usage.buckets.left_out()).filter(|sent| !sent.is_null()) {
                 model.left_out("a row of the usage summary", &"an element of a kind this version does not know");
             }
             model.pages.usage = usage;
+            vec![]
+        }
+        Route::UsageLimits => {
+            model.pages.usage_limits_refreshing = false;
             vec![]
         }
         Route::Archived => {
@@ -747,6 +1029,18 @@ fn exit_ok(model: &mut Model, route: Route, value: Value) -> Vec<Cmd> {
                 }
                 "Make project" => model.toast("success", "The thread's folder is now a project."),
                 "Create task" => model.toast("success", "Scheduled task created."),
+                "Create worktree" | "Remove worktree" => {
+                    model.toast("success", if label == "Create worktree" { "Worktree created." } else { "Worktree removed." });
+                    let cwd = model.panel.git.cwd.clone();
+                    if !cwd.is_empty() {
+                        return vec![update::call(model, crate::requests::vcs_list_refs(&cwd), Route::ListRefs(cwd))];
+                    }
+                }
+                "Save file" => model.toast("success", "Saved."),
+                "Save plan" => {
+                    let path = value.get("relativePath").and_then(Value::as_str).unwrap_or("the workspace").to_owned();
+                    model.toast("success", format!("Plan saved to {path}."));
+                }
                 _ => {}
             }
             vec![]
@@ -830,16 +1124,51 @@ fn exit_failed(model: &mut Model, route: Route, cause: &Value) -> Vec<Cmd> {
             }
         }
         Route::Attachments(_) => attachments_lost(model),
-        Route::Diff(_) => {
+        Route::Diff { source, of } => {
+            if *source != model.panel.diff.source || *of != update::diff_owner(model, source) {
+                return vec![];
+            }
             model.panel.diff.loading = false;
             model.panel.diff.set_patch("");
             model.panel.diff.error = Some(message);
             return vec![];
         }
-        Route::ReadFile(path) => {
-            if let Some(p) = model.panel.files.preview.as_mut().filter(|p| &p.path == path) {
+        Route::ReadArtifactFile(request) => {
+            if model.panel.files.artifact_preview.as_ref().is_some_and(|read| read.request == *request && read.current(model))
+                && let Some(read) = model.panel.files.artifact_preview.as_mut()
+            {
+                read.preview.loading = false;
+                read.preview.error = Some(message);
+            }
+            return vec![];
+        }
+        Route::ReadPanelArtifactFile(request) => {
+            if model.panel.artifacts.file_read.as_ref().is_some_and(|read| read.request == *request && read.current(model))
+                && let Some(read) = model.panel.artifacts.file_read.as_mut()
+            {
+                read.preview.loading = false;
+                read.preview.error = Some(message);
+            }
+            return vec![];
+        }
+        Route::ArtifactPreviewUrl(request) => {
+            if let Some(p) = model.panel.artifacts.preview_url.as_mut().filter(|p| p.request == *request) {
                 p.loading = false;
                 p.error = Some(message);
+            }
+            return vec![];
+        }
+        Route::ReadFile { request, .. } => {
+            if let Some(p) = model.panel.files.preview.as_mut().filter(|p| &p.request == request) {
+                p.loading = false;
+                p.error = Some(message);
+            }
+            return vec![];
+        }
+        Route::FetchLfs { request, .. } => {
+            if let Some(p) = model.panel.files.preview.as_mut().filter(|p| &p.request == request) {
+                p.fetching = false;
+                p.fetch_error = Some(message);
             }
             return vec![];
         }
@@ -851,8 +1180,31 @@ fn exit_failed(model: &mut Model, route: Route, cause: &Value) -> Vec<Cmd> {
             model.pages.prs_error = Some(message);
             return vec![];
         }
-        Route::Usage => model.pages.usage_loading = false,
+        Route::ProjectIconChanged(id) => crate::project_icons::finish_save(model, id, Err(())),
+        Route::ProjectIconAsset { .. } | Route::ProjectIconThumbnail { .. } => {
+            crate::project_icons::image_reply(model, &route, None);
+            return vec![];
+        }
+        Route::ProjectIconFiles(request) => {
+            crate::project_icons::files_reply(model, request, Err(message));
+            return vec![];
+        }
+        Route::Diagram { key, request } => {
+            crate::diagrams::reply(model, key, request, None);
+            return vec![];
+        }
+        Route::Usage => {
+            model.pages.usage_loading = false;
+            model.pages.usage_error = Some(message);
+            return vec![];
+        }
+        Route::UsageLimits => model.pages.usage_limits_refreshing = false,
         Route::Command(l) if l == "Pull" => model.panel.git.busy = false,
+        Route::PaletteSearch(_) => {
+            if let Some(p) = model.palette.as_mut() {
+                p.searching = false;
+            }
+        }
         Route::Command(l) if l == "Storage cleanup" || l == "Reclaim space" => model.pages.storage_busy = false,
         Route::GitAction(_) => model.panel.git.busy = false,
         Route::PullRequestAction { .. } | Route::PullRequestThread(_) => model.pages.pr_busy = None,
@@ -863,7 +1215,13 @@ fn exit_failed(model: &mut Model, route: Route, cause: &Value) -> Vec<Cmd> {
             model.asset_urls.remove(id);
             return vec![];
         }
-        Route::Mention(_) | Route::FileSearch(_) | Route::FindInThread(_) | Route::ListRefs(_) | Route::Archived => return vec![],
+        // Runs are Domovoi's own: a server without them answers nothing to show.
+        Route::Mention(_) | Route::FileSearch(_) | Route::FindInThread(_) | Route::ListRefs(_) | Route::Archived | Route::ScheduledRuns(_) => return vec![],
+        Route::ScheduledRunStarted(task) => {
+            let title = model.pages.scheduled.iter().find(|t| t.id.as_str() == task).map(|t| t.title.clone()).unwrap_or_default();
+            model.toast("success", format!("Started “{title}”."));
+            return vec![];
+        }
         Route::Thread(_) => model.thread_loading = false,
         _ => {}
     }
@@ -872,10 +1230,15 @@ fn exit_failed(model: &mut Model, route: Route, cause: &Value) -> Vec<Cmd> {
         Route::Launch(_) => "Start thread".into(),
         Route::Send(_) => "Send message".into(),
         Route::ProjectCreated => "Add project".into(),
+        Route::ProjectIconChanged(_) => "Change project icon".into(),
         Route::Attachments(_) => "Attach images".into(),
         Route::PullRequestAction { .. } => "Pull request".into(),
         Route::PullRequestThread(_) => "Check out the pull request".into(),
         Route::Settings => "Save setting".into(),
+        Route::ProviderAuth(_) => "Sign in".into(),
+        Route::ProviderInstall(_) => "Install".into(),
+        Route::ScheduledRunNow(_) => "Run task".into(),
+        Route::ThreadPermissionsForgotten => "Forget allowed tools".into(),
         _ => "Request".into(),
     };
     model.toast("error", format!("{label}: {message}"));
@@ -884,6 +1247,12 @@ fn exit_failed(model: &mut Model, route: Route, cause: &Value) -> Vec<Cmd> {
 
 /// Applies one reply. Renders nothing: the caller renders once for all the
 /// replies a socket frame carried.
+/// `scheduledTasks.listRuns`'s answer.
+#[derive(serde::Deserialize)]
+struct ScheduledRuns {
+    runs: Vec<crate::model::ScheduledRun>,
+}
+
 pub fn handle(model: &mut Model, reply: Reply) -> Cmd {
     match reply {
         Reply::Chunk { id, route, values } => {

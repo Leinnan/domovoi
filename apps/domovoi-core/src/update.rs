@@ -69,8 +69,11 @@ pub fn unsubscribe(model: &mut Model, route: &Route) -> Cmd {
     }
 }
 
-/// Asks for the URLs of the open thread's image attachments not asked yet.
+/// Asks for the URLs of images in the open thread.
 pub fn request_asset_urls(model: &mut Model) -> Cmd {
+    if model.connection != Connection::Connected {
+        return Command::done();
+    }
     let Some(thread) = model.thread.as_ref() else { return Command::done() };
     let wanted: Vec<ImageAttachment> = thread
         .messages
@@ -81,10 +84,29 @@ pub fn request_asset_urls(model: &mut Model) -> Cmd {
             _ => None,
         })
         .collect();
+    // Images the agent's steps looked at or made.
+    let thread_id = thread.record.id.as_str().to_owned();
+    let cwd = model.thread_cwd(&thread_id).unwrap_or_default();
+    let mut shown: Vec<(String, serde_json::Value)> = vec![];
+    for item in thread.visible_turn_item_refs() {
+        if *item.status() == domovoi_model::typed::TurnItemStatus::Running {
+            continue;
+        }
+        for source in crate::tools::image_sources(item, &cwd) {
+            let key = source.key(item.id().as_str());
+            if !model.asset_urls.contains_key(&key) && !shown.iter().any(|(k, _)| *k == key) {
+                shown.push((key, source.resource(&thread_id, item.id().as_str())));
+            }
+        }
+    }
     let mut cmds = vec![];
     for image in wanted {
         model.asset_urls.insert(image.id.clone(), String::new());
         cmds.push(call(model, requests::assets_create_url(&image), Route::AssetUrl(image.id)));
+    }
+    for (key, resource) in shown {
+        model.asset_urls.insert(key.clone(), String::new());
+        cmds.push(call(model, requests::assets_create_url_for(resource), Route::AssetUrl(key)));
     }
     Command::all(cmds)
 }
@@ -129,6 +151,15 @@ fn dispatch(model: &mut Model, command: impl Into<typed::Command>, label: &str) 
     send_outgoing(model, out)
 }
 
+/// The thread that asked `request_id`: the open one, when what it holds is
+/// its own and has the request. An answer goes to no other: a card tapped as
+/// the page moved to another thread is not that thread's to answer.
+fn request_thread(model: &Model, request_id: &str) -> Option<String> {
+    let tid = model.selected_thread.as_deref()?;
+    model.held_thread(tid)?.runtime_requests.get(request_id)?;
+    Some(tid.to_owned())
+}
+
 /// The user's answer to what an agent asked: a decision on an approval, or
 /// with `answers` what was chosen or typed for each question, by its id.
 fn respond(thread_id: &str, request_id: &str, decision: &str, answers: Option<Vec<(String, Vec<String>)>>) -> RuntimeRequestRespond {
@@ -147,6 +178,7 @@ fn respond(thread_id: &str, request_id: &str, decision: &str, answers: Option<Ve
 /// so whatever waits on one stops waiting (sends in the outbox go again).
 pub fn requests_lost(model: &mut Model) {
     model.rpc.reset();
+    model.asset_urls.retain(|_, url| !url.is_empty());
     model.socket_lost_flags();
 }
 
@@ -210,7 +242,8 @@ pub fn subscribe_thread(model: &mut Model, thread_id: &str) -> Cmd {
     }
     // Already showing it (a reconnect, or opened again from the recent ones):
     // only what happened since, with what is shown left on screen meanwhile.
-    let showing = model.thread.is_some() && model.selected_thread.as_deref() == Some(thread_id) && model.thread_sequence > 0;
+    // The cursor is resumed only into the thread it is the cursor of.
+    let showing = model.held_thread(thread_id).is_some() && model.thread_sequence > 0;
     model.thread_loading = !showing;
     let request = requests::orchestration_subscribe_thread(&thread_id.into(), showing.then_some(model.thread_sequence));
     call(model, request, route)
@@ -269,8 +302,115 @@ pub fn load_panel_tab(model: &mut Model) -> Cmd {
             }
             Command::done()
         }
+        "artifacts" => ensure_active_artifact_loaded(model),
         _ => Command::done(),
     }
+}
+
+fn ensure_active_artifact_loaded(model: &mut Model) -> Cmd {
+    let Some(tid) = model.selected_thread.clone() else { return Command::done() };
+    let collected = crate::present::collect_artifacts_for_model(model);
+    let valid = model.panel.artifacts.thread_id.as_deref() == Some(tid.as_str())
+        && model.panel.artifacts.active_id.as_deref().is_some_and(|id| {
+            collected.iter().any(|a| a.id == id) || id.starts_with("file:")
+        });
+    if !valid {
+        if let Some(first) = collected.first() {
+            model.panel.artifacts.thread_id = Some(tid);
+            model.panel.artifacts.active_id = Some(first.id.clone());
+            model.panel.artifacts.active_version = None;
+            if model.panel.artifacts.mode.is_empty() {
+                model.panel.artifacts.mode = "preview".into();
+            }
+        } else {
+            return Command::done();
+        }
+    }
+    load_active_artifact(model)
+}
+
+fn load_active_artifact(model: &mut Model) -> Cmd {
+    let Some(tid) = model.selected_thread.clone() else { return Command::done() };
+    let Some(active_id) = model.panel.artifacts.active_id.clone() else { return Command::done() };
+    let dark = model.panel.artifacts.dark;
+    let connected = model.connection == Connection::Connected;
+    let collected = crate::present::collect_artifacts_for_model(model);
+    let mut cmds = vec![];
+
+    let (kind, version, source, path) = if let Some(art) = collected.iter().find(|a| a.id == active_id) {
+        let Some(ver) = model
+            .panel
+            .artifacts
+            .active_version
+            .and_then(|n| art.versions.iter().find(|v| v.version == n))
+            .or_else(|| art.latest())
+        else {
+            return Command::done();
+        };
+        (art.kind.clone(), ver.version, ver.source.clone(), ver.path.clone().or_else(|| art.path.clone()))
+    } else if let Some(rel) = active_id.strip_prefix("file:") {
+        let kind = crate::artifacts::artifact_kind_for_path(rel).unwrap_or("html").to_owned();
+        (kind, 1, None, Some(rel.to_owned()))
+    } else {
+        return Command::done();
+    };
+
+    if source.is_none()
+        && let Some(rel_path) = path.as_deref()
+        && let Some(root) = model.active_cwd()
+    {
+        let request = uuid();
+        model.panel.artifacts.file_read = Some(crate::model::ArtifactRead {
+            request: request.clone(),
+            thread: tid.clone(),
+            root: root.clone(),
+            preview: crate::model::Preview {
+                path: rel_path.to_owned(),
+                loading: connected,
+                error: (!connected).then(|| "Connect to the server to preview this file.".into()),
+                ..Default::default()
+            },
+        });
+        if connected {
+            cmds.push(call(model, requests::projects_read_file(&root, rel_path), Route::ReadPanelArtifactFile(request)));
+        }
+    }
+
+    if connected {
+        let needs_url = !model.panel.artifacts.preview_url.as_ref().is_some_and(|u| {
+            u.matches(&tid, &active_id, version) && u.dark == dark && (u.loading || u.url.is_some())
+        });
+        if needs_url {
+            let url_req = if kind == "html" && source.is_none()
+                && let Some(rel_path) = path.as_deref()
+                && let Some(root) = model.active_cwd()
+            {
+                Some(requests::artifact_bundle(&root, rel_path))
+            } else if kind == "react" && let Some(src) = source.as_deref().filter(|s| !s.trim().is_empty()) {
+                Some(requests::artifact_react_preview(src, dark))
+            } else if kind == "mermaid" && let Some(src) = source.as_deref().filter(|s| !s.trim().is_empty()) {
+                Some(requests::mermaid_diagram_svg(src, dark))
+            } else {
+                None
+            };
+            if let Some(req) = url_req {
+                let request = uuid();
+                model.panel.artifacts.preview_url = Some(crate::model::ArtifactPreviewUrl {
+                    request: request.clone(),
+                    thread: tid,
+                    artifact_id: active_id,
+                    version,
+                    dark,
+                    url: None,
+                    loading: true,
+                    error: None,
+                });
+                cmds.push(call(model, req, Route::ArtifactPreviewUrl(request)));
+            }
+        }
+    }
+
+    Command::all(cmds)
 }
 
 fn list_dir(model: &mut Model, dir: &str) -> Cmd {
@@ -306,17 +446,28 @@ pub fn load_diff(model: &mut Model) -> Cmd {
     model.panel.diff.error = None;
     let thread = model.selected_thread.clone();
     let cwd = model.active_cwd().unwrap_or_default();
+    let route = Route::Diff { of: diff_owner(model, &source), source: source.clone() };
     match (source.as_str(), thread) {
         ("thread", Some(t)) => {
-            let to = model.thread.as_ref().map(|s| crate::present::checkpoints(s).last().map(|c| c.turn_count).unwrap_or(0)).unwrap_or(0);
-            call(model, requests::orchestration_get_full_thread_diff(&t.into(), to), Route::Diff(source))
+            let to = model.held_thread(&t).map(|s| crate::present::checkpoints(s).last().map(|c| c.turn_count).unwrap_or(0)).unwrap_or(0);
+            call(model, requests::orchestration_get_full_thread_diff(&t.into(), to), route)
         }
         (s, Some(t)) if s.starts_with("turn:") => {
             let n: u32 = s[5..].parse().unwrap_or(1);
-            call(model, requests::orchestration_get_turn_diff(&t.into(), n), Route::Diff(source))
+            call(model, requests::orchestration_get_turn_diff(&t.into(), n), route)
         }
-        ("branch", _) => call(model, requests::review_get_diff_preview(&cwd, DiffSource::BranchRange), Route::Diff(source)),
-        _ => call(model, requests::review_get_diff_preview(&cwd, DiffSource::WorkingTree), Route::Diff(source)),
+        ("branch", _) => call(model, requests::review_get_diff_preview(&cwd, DiffSource::BranchRange), route),
+        _ => call(model, requests::review_get_diff_preview(&cwd, DiffSource::WorkingTree), route),
+    }
+}
+
+/// Whose a diff of `source` is now: the open thread's (its own and its
+/// turns' diffs), or the checkout's the panel shows.
+pub fn diff_owner(model: &Model, source: &str) -> String {
+    if source == "thread" || source.starts_with("turn:") {
+        model.selected_thread.clone().unwrap_or_default()
+    } else {
+        model.active_cwd().unwrap_or_default()
     }
 }
 
@@ -404,17 +555,56 @@ fn provider_ready(model: &Model, instance: &str) -> bool {
     model.providers.iter().any(|p| p.instance_id.as_str() == instance && p.status == ServerProviderState::Ready)
 }
 
-/// The model a new message uses: the thread's, the composer's choice, the
-/// default from settings, or the first ready provider's default model.
+/// Whether model `m` answers to `slug`: its own, or one of its aliases (a
+/// thread saved on `antigravity-default` runs the model that carries it).
+pub fn answers_to(m: &ServerProviderModel, slug: &str) -> bool {
+    m.slug == slug || m.aliases.iter().flatten().any(|a| a == slug)
+}
+
+/// The listed model of `instance` that `slug` names (its own slug first,
+/// else an alias), with how the composer selects it: by `slug`, as saved.
+pub fn model_record<'a>(model: &'a Model, instance: &str, slug: &str) -> Option<(&'a ServerProviderModel, ModelOption)> {
+    let options = model_options(model);
+    let at = options.iter().position(|(m, o)| o.instance_id == instance && m.slug == slug).or_else(|| options.iter().position(|(m, o)| o.instance_id == instance && answers_to(m, slug)))?;
+    let (m, o) = options.into_iter().nth(at)?;
+    Some((m, ModelOption { model: slug.to_owned(), ..o }))
+}
+
+/// The sign-in and install streams of the providers that offer them (the
+/// providers page shows them).
+fn provider_setup_streams(model: &mut Model) -> Command<Effect, Event> {
+    let mut cmds = vec![];
+    let setups: Vec<(String, bool, bool)> = model
+        .providers
+        .iter()
+        .filter_map(|p| p.setup.as_ref().map(|s| (p.instance_id.as_str().to_owned(), s.can_authenticate, s.can_install)))
+        .collect();
+    for (id, auth, install) in setups {
+        if auth {
+            cmds.push(subscribe(model, requests::provider_auth_subscribe(&id), Route::ProviderAuth(id.clone())));
+        }
+        if install {
+            cmds.push(subscribe(model, requests::provider_install_subscribe(&id), Route::ProviderInstall(id.clone())));
+        }
+    }
+    Command::all(cmds)
+}
+
+/// The model a new message uses: the thread's, the composer's choice (while
+/// it is still listed), the default from settings, or the first ready
+/// provider's default model.
 pub fn current_model(model: &Model) -> Option<ModelOption> {
     let options = model_options(model);
-    let find = |instance: &str, slug: &str| options.iter().find(|(_, o)| o.instance_id == instance && o.model == slug).map(|(_, o)| o.clone());
+    let find = |instance: &str, slug: &str| model_record(model, instance, slug).map(|(_, o)| o);
     if let Some(t) = model.selected_thread.as_deref().and_then(|t| model.thread_shell(t)) {
         let (i, m) = (t.model_selection.instance_id.as_str(), t.model_selection.model.as_str());
         return find(i, m).or_else(|| Some(ModelOption { instance_id: i.into(), model: m.into(), label: m.into() }));
     }
-    if let Some(m) = &model.composer.model {
-        return Some(m.clone());
+    // A pick the provider no longer lists (signed out, another account) is no pick.
+    if let Some(m) = &model.composer.model
+        && let Some(o) = find(&m.instance_id, &m.model)
+    {
+        return Some(o);
     }
     if let Some(Some(d)) = model.settings.as_ref().map(|settings| &settings.default_model_selection)
         && let Some(o) = d.as_ref().and_then(|d| find(d.instance_id.as_str(), &d.model))
@@ -425,12 +615,29 @@ pub fn current_model(model: &Model) -> Option<ModelOption> {
     ready.iter().find(|(m, _)| m.is_default == Some(true)).or(ready.first()).map(|(_, o)| o.clone())
 }
 
-/// The effort option descriptor of a model (`effort` or `reasoningEffort`).
+/// The option descriptors of the model `opt` names.
+fn descriptors<'a>(model: &'a Model, opt: &ModelOption) -> &'a [ProviderOptionDescriptor] {
+    model_record(model, &opt.instance_id, &opt.model).and_then(|(m, _)| m.capabilities.as_ref()?.option_descriptors.as_deref()).unwrap_or_default()
+}
+
+/// Whether a descriptor is a reasoning select by its role (Antigravity's
+/// `thought_level`), not by one of the effort ids.
+fn reasoning_by_role(d: &ProviderOptionDescriptor) -> bool {
+    matches!(d, ProviderOptionDescriptor::Select(s) if s.role == Some(domovoi_model::typed::ProviderOptionRole::Reasoning)) && !matches!(d.id(), Some("effort" | "reasoningEffort"))
+}
+
+/// The effort option descriptor of a model: `effort` or `reasoningEffort`,
+/// else the select whose role is reasoning (a thinking level).
 pub fn effort_descriptor<'a>(model: &'a Model, opt: &ModelOption) -> Option<&'a ProviderOptionDescriptor> {
-    model_options(model)
-        .into_iter()
-        .find(|(_, o)| o == opt || (o.instance_id == opt.instance_id && o.model == opt.model))
-        .and_then(|(m, _)| m.capabilities.as_ref()?.option_descriptors.as_ref()?.iter().find(|d| matches!(d.id(), Some("effort" | "reasoningEffort"))))
+    let all = descriptors(model, opt);
+    all.iter().find(|d| matches!(d.id(), Some("effort" | "reasoningEffort"))).or_else(|| all.iter().find(|d| reasoning_by_role(d)))
+}
+
+/// Whether the model's effort can be left to the provider: a thinking level
+/// the server has not seen for this model (no current value, no default),
+/// shown as "Default" and not sent.
+pub fn effort_default_allowed(model: &Model, opt: &ModelOption) -> bool {
+    effort_descriptor(model, opt).is_some_and(|d| reasoning_by_role(d) && d.current_value().is_none() && !d.options().iter().any(|o| o.is_default == Some(true)))
 }
 
 /// The effort a model runs at here: the one picked for it in this thread (or
@@ -440,8 +647,15 @@ pub fn effort_descriptor<'a>(model: &'a Model, opt: &ModelOption) -> Option<&'a 
 pub fn current_effort(model: &Model, opt: &ModelOption) -> Option<String> {
     let d = effort_descriptor(model, opt)?;
     let offered = |v: &str| d.options().iter().any(|o| o.id == v);
-    if let Some(e) = model.composer.efforts.get(&effort_key(model, opt)).filter(|e| offered(e)) {
-        return Some(e.clone());
+    let defaultable = effort_default_allowed(model, opt);
+    if let Some(e) = model.composer.efforts.get(&effort_key(model, opt)) {
+        if offered(e) {
+            return Some(e.clone());
+        }
+        // "Default" picked: left to the provider.
+        if e.is_empty() && defaultable {
+            return None;
+        }
     }
     if let Some(t) = model.selected_thread.as_deref().and_then(|t| model.thread_shell(t))
         && t.model_selection.instance_id.as_str() == opt.instance_id
@@ -454,7 +668,11 @@ pub fn current_effort(model: &Model, opt: &ModelOption) -> Option<String> {
             return Some(v.clone());
         }
     }
-    d.options().iter().find(|o| o.is_default == Some(true)).or(d.options().first()).map(|o| o.id.clone())
+    if defaultable {
+        return None;
+    }
+    let current = d.current_value().filter(|v| reasoning_by_role(d) && offered(v));
+    current.map(str::to_owned).or_else(|| d.options().iter().find(|o| o.is_default == Some(true)).or(d.options().first()).map(|o| o.id.clone()))
 }
 
 /// Where an effort picked for `opt` is kept: per thread (or new thread in a
@@ -463,14 +681,47 @@ fn effort_key(model: &Model, opt: &ModelOption) -> String {
     format!("{}/{}/{}", model.draft_key(), opt.instance_id, opt.model)
 }
 
-/// The model as a command names it, with the effort chosen for it where it has one.
+/// The model's options other than effort (fast mode, context window…).
+pub fn trait_descriptors<'a>(model: &'a Model, opt: &ModelOption) -> Vec<&'a ProviderOptionDescriptor> {
+    let effort = effort_descriptor(model, opt).and_then(ProviderOptionDescriptor::id);
+    descriptors(model, opt)
+        .iter()
+        .filter(|d| matches!(d, ProviderOptionDescriptor::Select(_) | ProviderOptionDescriptor::Boolean(_)))
+        .filter(|d| !matches!(d.id(), Some("effort" | "reasoningEffort")) && d.id() != effort)
+        .collect()
+}
+
+/// Where a model option picked for `opt` is kept (beside its effort).
+fn trait_key(model: &Model, opt: &ModelOption, id: &str) -> String {
+    format!("{}#{id}", effort_key(model, opt))
+}
+
+/// A model option as picked here, or as the thread runs it (`None`: left
+/// to the provider's default).
+pub fn chosen_trait(model: &Model, opt: &ModelOption, d: &ProviderOptionDescriptor) -> Option<OptionValue> {
+    let id = d.id()?;
+    if let Some(v) = model.composer.efforts.get(&trait_key(model, opt, id)) {
+        return Some(match d {
+            ProviderOptionDescriptor::Boolean(_) => OptionValue::Switch(v == "true"),
+            _ => OptionValue::Choice(v.clone()),
+        });
+    }
+    let t = model.selected_thread.as_deref().and_then(|t| model.thread_shell(t))?;
+    (t.model_selection.instance_id.as_str() == opt.instance_id && t.model_selection.model == opt.model)
+        .then(|| t.model_selection.options.iter().flatten().find(|o| o.id == id).map(|o| o.value.clone()))
+        .flatten()
+}
+
+/// The model as a command names it, with the effort and options chosen for it.
 fn model_selection(model: &Model, opt: &ModelOption) -> ModelSelection {
     let effort = effort_descriptor(model, opt).and_then(ProviderOptionDescriptor::id).zip(current_effort(model, opt));
-    ModelSelection {
-        instance_id: opt.instance_id.as_str().into(),
-        model: opt.model.clone(),
-        options: effort.map(|(id, effort)| vec![OptionSelection { id: id.to_owned(), value: OptionValue::Choice(effort) }]),
+    let mut options: Vec<OptionSelection> = effort.map(|(id, effort)| OptionSelection { id: id.to_owned(), value: OptionValue::Choice(effort) }).into_iter().collect();
+    for d in trait_descriptors(model, opt) {
+        if let (Some(id), Some(value)) = (d.id(), chosen_trait(model, opt, d)) {
+            options.push(OptionSelection { id: id.to_owned(), value });
+        }
     }
+    ModelSelection { instance_id: opt.instance_id.as_str().into(), model: opt.model.clone(), options: (!options.is_empty()).then_some(options) }
 }
 
 /// The run a message can join now: the thread's running turn, when its
@@ -515,6 +766,91 @@ fn slash_typed(draft: &str) -> bool {
     draft.strip_prefix('/').is_some_and(|q| !q.contains(char::is_whitespace))
 }
 
+/// The `$word` being typed at the end of the draft (a skill), as where its
+/// `$` is and the word: at the start or after a space, and not money (`$5`).
+pub fn skill_query(draft: &str) -> Option<(usize, &str)> {
+    let start = draft.rfind('$')?;
+    let q = &draft[start + 1..];
+    let boundary = start == 0 || draft[..start].ends_with(char::is_whitespace);
+    let money = q.chars().next().is_some_and(|c| c.is_ascii_digit());
+    (boundary && !money && !q.contains(char::is_whitespace) && q.len() <= 80).then_some((start, q))
+}
+
+/// The app's own slash commands (t3code's `/model` and `/clear`, and
+/// `/plan` and `/fork`): what they take after their name, and what they do.
+pub const BUILTIN_COMMANDS: [(&str, &str, &str); 4] = [
+    ("model", "[model]", "Switch the model (or pick one)"),
+    ("plan", "", "Plan first: turn plan mode on or off"),
+    ("fork", "", "Fork this thread into a new one"),
+    ("clear", "[message]", "Start a fresh session; earlier messages stay visible"),
+];
+
+/// A draft that is one of the app's own commands: its name and what follows.
+fn builtin_in(draft: &str) -> Option<(&str, &str)> {
+    let rest = draft.trim().strip_prefix('/')?;
+    let (name, arg) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
+    BUILTIN_COMMANDS.iter().any(|(n, _, _)| *n == name).then(|| (name, arg.trim()))
+}
+
+/// Runs one of the app's own commands (`BUILTIN_COMMANDS`).
+fn run_builtin(model: &mut Model, name: &str, arg: &str) -> Cmd {
+    let clear_draft = |model: &mut Model| {
+        replace_draft(model, String::new());
+        model.changes.composer();
+    };
+    match name {
+        "model" if arg.is_empty() => {
+            clear_draft(model);
+            model.composer.model_picker_requested += 1;
+            render()
+        }
+        "model" => {
+            let found = model_options(model)
+                .into_iter()
+                .filter_map(|(m, opt)| {
+                    let provider = model.providers.iter().find(|p| p.instance_id.as_str() == opt.instance_id).and_then(|p| p.display_name.clone()).unwrap_or_default();
+                    crate::present::model_match_score(arg, &m.name, &m.slug, &provider).map(|score| (score, opt))
+                })
+                .min_by_key(|(score, _)| *score)
+                .map(|(_, opt)| opt);
+            let Some(opt) = found else {
+                model.toast("error", format!("No model matches “{arg}”."));
+                return render();
+            };
+            clear_draft(model);
+            update(Event::SelectModel { instance_id: opt.instance_id, model: opt.model }, model)
+        }
+        "plan" => {
+            clear_draft(model);
+            let mode = if composer_interaction_mode(model) == "plan" { "default" } else { "plan" };
+            update(Event::SetInteractionMode { mode: mode.into() }, model)
+        }
+        "fork" => {
+            let Some(tid) = model.selected_thread.clone() else {
+                model.toast("error", "Open a thread to fork it.");
+                return render();
+            };
+            clear_draft(model);
+            update(Event::ForkThread { thread_id: tid }, model)
+        }
+        "clear" => {
+            let Some(tid) = model.selected_thread.clone() else {
+                model.toast("error", "A new thread starts fresh already.");
+                return render();
+            };
+            let text = if arg.is_empty() { "Let's start fresh." } else { arg };
+            clear_draft(model);
+            let fresh = MessageDispatch {
+                fresh_context: Some(true),
+                model_selection: current_model(model).map(|opt| model_selection(model, &opt)),
+                ..MessageDispatch::new(command_id(), tid.as_str(), uuid(), text, Actor::User, CreationSource::Web)
+            };
+            dispatch(model, fresh, "Start fresh").and(render())
+        }
+        _ => Command::done(),
+    }
+}
+
 fn set_draft(model: &mut Model, text: String) -> Cmd {
     // Only the composer shows a draft.
     model.changes.composer();
@@ -522,7 +858,11 @@ fn set_draft(model: &mut Model, text: String) -> Cmd {
     let key = model.draft_key();
     // What the composer derives from the draft: whether it can be sent, and the slash menu.
     let before = model.composer.drafts.get(&key).map(String::as_str).unwrap_or_default();
-    let derived_moved = before.trim().is_empty() != text.trim().is_empty() || slash_typed(before) || slash_typed(&text);
+    let derived_moved = before.trim().is_empty() != text.trim().is_empty()
+        || slash_typed(before)
+        || slash_typed(&text)
+        || skill_query(before).is_some()
+        || skill_query(&text).is_some();
     model.composer.drafts.insert(key, text.clone());
     let at = text.rfind('@');
     if model.composer.mention_dismissed_at.is_some() && model.composer.mention_dismissed_at != at {
@@ -556,6 +896,14 @@ fn replace_draft(model: &mut Model, text: String) {
 /// Sends the draft: persists attachments first, then dispatches or launches.
 fn send_message(model: &mut Model) -> Cmd {
     let text = model.draft().trim().to_owned();
+    model.composer.recall = None;
+    // `/model x`, `/plan`, `/fork`, `/clear …` are the app's own, not the agent's.
+    if model.composer.attachments.is_empty()
+        && let Some((name, arg)) = builtin_in(&text)
+    {
+        let (name, arg) = (name.to_owned(), arg.to_owned());
+        return run_builtin(model, &name, &arg);
+    }
     if (text.is_empty() && model.composer.attachments.is_empty()) || model.composer.sending {
         return Command::done();
     }
@@ -700,15 +1048,12 @@ fn launch_title(text: &str) -> String {
 /// Opens the thread being started, before the server has it: nothing to
 /// subscribe to yet (`opened_launched` does once it is made).
 fn open_launching(model: &mut Model, thread_id: &str) {
-    model.keep_open_thread();
     model.route = "thread".into();
-    model.selected_thread = Some(thread_id.to_owned());
+    model.open_thread(Some(thread_id.to_owned()));
+    // Nothing of it to load yet: it shows the message on its way.
     model.thread = None;
     model.thread_sequence = 0;
-    model.thread_gaps = 0;
     model.thread_loading = false;
-    model.find = Default::default();
-    model.panel.diff = Default::default();
 }
 
 /// The server made the thread being started: its stream, and the visit an
@@ -817,6 +1162,14 @@ fn save_sidebar_layout(model: &Model) -> Cmd {
 }
 
 pub fn select_thread(model: &mut Model, thread_id: String) -> Cmd {
+    if model.selected_thread.as_deref() != Some(thread_id.as_str()) {
+        model.panel.files.artifact_preview = None;
+        model.panel.files.preview = None;
+        model.panel.artifacts.active_id = None;
+        model.panel.artifacts.active_version = None;
+        model.panel.artifacts.file_read = None;
+        model.panel.artifacts.preview_url = None;
+    }
     if model.selected_thread.as_deref() == Some(thread_id.as_str()) && model.route == "thread" {
         return render();
     }
@@ -830,17 +1183,7 @@ pub fn select_thread(model: &mut Model, thread_id: String) -> Cmd {
     }
     // The thread left is kept; one opened lately is shown at once, as it was,
     // and its stream resumes after what it had.
-    model.keep_open_thread();
-    let (thread, sequence) = match model.take_recent_thread(&thread_id) {
-        Some((thread, sequence)) => (Some(thread), sequence),
-        None => (None, 0),
-    };
-    model.selected_thread = Some(thread_id.clone());
-    model.thread = thread;
-    model.thread_sequence = sequence;
-    model.thread_gaps = 0;
-    model.find = Default::default();
-    model.panel.diff = Default::default();
+    model.open_thread(Some(thread_id.clone()));
     model.composer.mention = None;
     model.composer.attachments.clear();
     cmds.push(subscribe_thread(model, &thread_id));
@@ -898,13 +1241,7 @@ pub fn start_new_thread(model: &mut Model, project_id: Option<String>) -> Cmd {
         model.selected_project = model.projects.first().map(|p| p.id.as_str().to_owned());
     }
     model.route = "new-thread".into();
-    model.keep_open_thread();
-    model.selected_thread = None;
-    model.thread = None;
-    model.thread_sequence = 0;
-    model.thread_gaps = 0;
-    model.find = Default::default();
-    model.panel.diff = Default::default();
+    model.open_thread(None);
     model.composer.attachments.clear();
     model.composer.draft_revision += 1;
     cmds.push(refresh_context(model));
@@ -1002,8 +1339,37 @@ fn set_model_hidden(model: &mut Model, instance: String, slug: String, hidden: b
     })
 }
 
+/// Searches the open workspace for what the palette's files or content mode
+/// has typed.
+fn palette_search(model: &mut Model) -> Cmd {
+    let Some(cwd) = model.active_cwd() else { return Command::done() };
+    let Some(p) = model.palette.as_mut() else { return Command::done() };
+    let query = p.query.trim().to_owned();
+    let short = query.is_empty() || (p.mode == "content" && query.chars().count() < 2);
+    if !matches!(p.mode.as_str(), "files" | "content") || short {
+        p.results.clear();
+        p.searching = false;
+        return Command::done();
+    }
+    p.revision += 1;
+    p.searching = true;
+    let rev = p.revision;
+    let request = if p.mode == "files" { requests::projects_search_entries(&cwd, &query, 30) } else { requests::projects_search_contents(&cwd, &query, 50) };
+    call(model, request, Route::PaletteSearch(rev))
+}
+
 fn palette_command(model: &mut Model, id: &str) -> Cmd {
+    // Changing mode keeps the palette open.
+    match id {
+        "action:go-to-file" => return update(Event::SetPaletteMode { mode: "files".into() }, model),
+        "action:search-project" => return update(Event::SetPaletteMode { mode: "content".into() }, model),
+        _ => {}
+    }
     model.palette = None;
+    if let Some(path) = id.strip_prefix("file:").or_else(|| id.strip_prefix("match:").map(|m| m.rsplit_once(':').map_or(m, |(path, _)| path))) {
+        let path = path.to_owned();
+        return update(Event::ShowPanel { tab: "files".into() }, model).and(update(Event::OpenFile { path }, model));
+    }
     if let Some(t) = id.strip_prefix("thread:") {
         return select_thread(model, t.to_owned());
     }
@@ -1014,6 +1380,7 @@ fn palette_command(model: &mut Model, id: &str) -> Cmd {
         "action:new-thread" => start_new_thread(model, None),
         "action:toggle-panel" => update(Event::TogglePanel, model),
         "action:diff" => update(Event::ShowPanel { tab: "diff".into() }, model),
+        "action:artifacts" => update(Event::ShowPanel { tab: "artifacts".into() }, model),
         "action:terminal" => update(Event::ShowPanel { tab: "terminal".into() }, model),
         "action:files" => update(Event::ShowPanel { tab: "files".into() }, model),
         "action:git" => update(Event::ShowPanel { tab: "git".into() }, model),
@@ -1036,8 +1403,30 @@ fn palette_command(model: &mut Model, id: &str) -> Cmd {
     }
 }
 
+/// `plans/<slug>.md` from a plan's first heading or line.
+pub fn plan_file_name(markdown: &str) -> String {
+    let first = markdown.lines().map(|l| l.trim_start_matches('#').trim()).find(|l| !l.is_empty()).unwrap_or("plan");
+    let mut slug = String::new();
+    for c in first.chars().flat_map(char::to_lowercase) {
+        if c.is_alphanumeric() {
+            slug.push(c);
+        } else if !slug.ends_with('-') && !slug.is_empty() {
+            slug.push('-');
+        }
+        if slug.len() >= 48 {
+            break;
+        }
+    }
+    let slug = slug.trim_end_matches('-');
+    format!("plans/{}.md", if slug.is_empty() { "plan" } else { slug })
+}
+
 fn utc_day(ms: i64) -> String {
     iso_from_millis(ms)[..10].to_owned()
+}
+
+fn local_day(model: &Model, ms: i64) -> String {
+    utc_day(ms.saturating_add(i64::from(model.utc_offset_secs) * 1_000))
 }
 
 pub fn update(event: Event, model: &mut Model) -> Cmd {
@@ -1066,6 +1455,8 @@ pub fn update(event: Event, model: &mut Model) -> Cmd {
         Event::ForgetEnvironment { id } => crate::environments::forget(model, id),
         Event::SignedOut { id } => crate::environments::signed_out(model, id),
         Event::RenameEnvironment { id, label } => crate::environments::rename(model, id, label),
+        Event::SetCompanion { id, look } => crate::companion::save(model, &id, Some(look)),
+        Event::ResetCompanion { id } => crate::companion::save(model, &id, None),
         Event::MoveEnvironment { id, delta } => crate::environments::move_environment(model, id, delta),
         Event::TokenIssued { attempt, environment_id, res } => crate::environments::token_issued(model, attempt, environment_id, res),
         Event::FallbackTokenLoaded { attempt, environment_id, value } => crate::environments::fallback_token_loaded(model, attempt, environment_id, value),
@@ -1231,6 +1622,19 @@ pub fn update(event: Event, model: &mut Model) -> Cmd {
             }
             save = save.and(expire_outbox(model));
             let mut changed = model.composer.outbox.len() != pending;
+            let mut assets_expired = false;
+            model.asset_url_expiries.retain(|key, expires| {
+                if *expires > now_ms {
+                    return true;
+                }
+                model.asset_urls.remove(key);
+                assets_expired = true;
+                false
+            });
+            if assets_expired {
+                save = save.and(request_asset_urls(model));
+                changed = true;
+            }
             // A pairing link past its expiry is of no use: stop showing it.
             if model.pages.remote_link.as_ref().is_some_and(|link| crate::app::millis_from_iso(link.expires_at.as_str()) <= now_ms) {
                 model.pages.remote_link = None;
@@ -1254,6 +1658,11 @@ pub fn update(event: Event, model: &mut Model) -> Cmd {
             model.toast = model.toast_queue.pop_front();
             render()
         }
+        Event::ShowNotice { kind, message } => {
+            let kind = if matches!(kind.as_str(), "error" | "info" | "success") { kind } else { "info".to_owned() };
+            model.toast(&kind, message);
+            render()
+        }
         Event::ToastAction => {
             let action = model.toast.as_ref().map(|t| t.action.clone()).unwrap_or_default();
             model.toast = model.toast_queue.pop_front();
@@ -1262,6 +1671,7 @@ pub fn update(event: Event, model: &mut Model) -> Cmd {
                     let wake = ThreadUnsnooze { command_id: command_id(), thread_id: thread_id.into(), reason: Some(ByUser::User) };
                     dispatch(model, wake, "Wake thread").and(render())
                 }
+                Some(("open", thread_id)) => select_thread(model, thread_id.to_owned()),
                 Some(("unarchive", thread_id)) => {
                     let c = dispatch(model, ThreadUnarchive { command_id: command_id(), thread_id: thread_id.into() }, "Unarchive thread");
                     let refresh = call(model, requests::orchestration_get_archived_shell_snapshot(), Route::Archived);
@@ -1462,6 +1872,28 @@ pub fn update(event: Event, model: &mut Model) -> Cmd {
             }
             call(model, requests::projects_create_new(name.trim()), Route::ProjectCreated)
         }
+        Event::LoadProjectIcon { project_id } => crate::project_icons::load(model, project_id),
+        Event::LoadDiagram { key, source, dark } => crate::diagrams::load(model, key, source, dark),
+        Event::SearchProjectIconFiles { project_id, query } => crate::project_icons::search(model, project_id, query),
+        Event::LoadProjectIconThumbnail { project_id, path } => crate::project_icons::thumbnail(model, project_id, path),
+        Event::CloseProjectIconFiles { project_id } => crate::project_icons::close(model, &project_id),
+        Event::SetProjectIconFile { project_id, path } => crate::project_icons::save(model, project_id, None, Some(path)),
+        Event::SetProjectIcon { project_id, kind, text, symbol, color } => {
+            use domovoi_model::typed::{ProjectIcon, MonogramProjectIcon, EmojiProjectIcon, LucideProjectIcon};
+            use unicode_segmentation::UnicodeSegmentation;
+            let text = text.trim();
+            let color = if crate::present::PROJECT_COLORS.contains(&color.as_str()) { color.as_str().into() } else { return Command::done(); };
+            let icon = match kind.as_str() {
+                "" => None,
+                "monogram" if !text.is_empty() && text.graphemes(true).count() <= 2 && text.chars().next().is_some_and(char::is_alphanumeric) && text.encode_utf16().count() <= 32 && text.chars().all(|c| c.is_alphanumeric() || unicode_normalization::char::is_combining_mark(c) || matches!(c, '\u{200c}' | '\u{200d}')) =>
+                    Some(ProjectIcon::Monogram(MonogramProjectIcon { text: text.into(), color })),
+                "emoji" if text.graphemes(true).count() == 1 && text.encode_utf16().count() <= 32 => Some(ProjectIcon::Emoji(EmojiProjectIcon { emoji: text.into() })),
+                "symbol" if !symbol.is_empty() && symbol.len() <= 64 && symbol.split('-').all(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())) =>
+                    Some(ProjectIcon::Lucide(LucideProjectIcon { name: symbol, color, monogram: None, monogram_text: None })),
+                _ => return Command::done(),
+            };
+            crate::project_icons::save(model, project_id, icon, None)
+        }
         Event::RenameProject { project_id, title } => {
             let rename = ProjectChange::Rename { project: &project_id.into(), title: title.trim() };
             call(model, requests::projects_mutate(&uuid(), rename), Route::Command("Rename project".into()))
@@ -1522,20 +1954,22 @@ pub fn update(event: Event, model: &mut Model) -> Cmd {
 
         // ---- thread ----
         Event::Respond { request_id, decision } => {
-            let Some(tid) = model.selected_thread.clone() else { return Command::done() };
+            let Some(tid) = request_thread(model, &request_id) else { return Command::done() };
             dispatch(model, respond(&tid, &request_id, &decision, None), "Respond")
         }
         Event::RespondUserInput { request_id, answers } => {
-            let Some(tid) = model.selected_thread.clone() else { return Command::done() };
+            let Some(tid) = request_thread(model, &request_id) else { return Command::done() };
             let answers = answers.into_iter().filter(|a| !a.values.is_empty()).map(|a| (a.question_id, a.values)).collect();
             dispatch(model, respond(&tid, &request_id, "accept", Some(answers)), "Answer")
         }
         Event::DismissUserInput { request_id } => {
-            let Some(tid) = model.selected_thread.clone() else { return Command::done() };
+            let Some(tid) = request_thread(model, &request_id) else { return Command::done() };
             dispatch(model, ThreadUserInputDismiss { command_id: command_id(), thread_id: tid.into(), request_id: request_id.into() }, "Skip question")
         }
         Event::Interrupt => {
             let Some(tid) = model.selected_thread.clone() else { return Command::done() };
+            model.composer.stop_asked_ms = model.now_ms;
+            model.composer.stop_asked_run = model.thread_shell(&tid).and_then(|t| t.active_run_id.as_ref()).map(|r| r.as_str().to_owned()).unwrap_or_default();
             dispatch(model, ThreadStop { command_id: command_id(), thread_id: tid.into(), reason: None, stop_delegated_tasks: None }, "Stop")
         }
         Event::Steer => {
@@ -1597,6 +2031,27 @@ pub fn update(event: Event, model: &mut Model) -> Cmd {
             };
             dispatch(model, fork, "Fork thread")
         }
+        Event::ForkFromItem { item_id } => {
+            let Some(tid) = model.selected_thread.clone() else { return Command::done() };
+            let Some(run_id) = model.thread.as_ref().and_then(|t| t.turn_items.get(item_id.as_str())).and_then(|item| item.run_id().cloned()) else {
+                return Command::done();
+            };
+            let target = uuid();
+            model.open_when_created = Some(target.clone());
+            let title = model.thread_shell(&tid).map(|t| format!("{} (fork)", t.title));
+            let fork = ThreadFork {
+                created_by: Actor::User,
+                creation_source: CreationSource::Web,
+                command_id: command_id(),
+                source_thread_id: tid.into(),
+                target_thread_id: target.into(),
+                source_point: ForkSourcePoint::Run { run_id },
+                title,
+                side_chat: None,
+                created_at: Some(now(model)),
+            };
+            dispatch(model, fork, "Fork thread")
+        }
         Event::MergeBack => {
             let Some(tid) = model.selected_thread.clone() else { return Command::done() };
             let Some(parent) = model.thread_shell(&tid).and_then(|t| t.lineage.parent_thread_id.as_ref()).map(|parent| parent.as_str().to_owned()) else { return Command::done() };
@@ -1640,6 +2095,32 @@ pub fn update(event: Event, model: &mut Model) -> Cmd {
             cmds.push(dispatch(model, implement, "Implement plan"));
             Command::all(cmds).and(render())
         }
+        Event::SavePlan { item_id, path } => {
+            let Some(tid) = model.selected_thread.clone() else { return Command::done() };
+            let Some(cwd) = model.thread_cwd(&tid) else {
+                model.toast("error", "This thread has no folder to save to.");
+                return render();
+            };
+            let markdown = model.thread.as_ref().and_then(|t| t.turn_items.get(item_id.as_str())).and_then(|item| match item {
+                TurnItem::ProposedPlan(plan) => Some(plan.markdown.clone()),
+                _ => None,
+            });
+            let Some(markdown) = markdown else { return Command::done() };
+            let path = match path.trim().trim_start_matches('/') {
+                "" => plan_file_name(&markdown),
+                given => given.to_owned(),
+            };
+            let request = requests::projects_write_file(&cwd, &path, &markdown);
+            call(model, request, Route::Command("Save plan".into()))
+        }
+        Event::Compact => {
+            let Some(tid) = model.selected_thread.clone() else { return Command::done() };
+            let compact = MessageDispatch {
+                model_selection: current_model(model).map(|opt| model_selection(model, &opt)),
+                ..MessageDispatch::new(command_id(), tid.as_str(), uuid(), "/compact", Actor::User, CreationSource::Web)
+            };
+            dispatch(model, compact, "Compact context").and(render())
+        }
         Event::RegenerateTitle { thread_id } => {
             let regenerate = ThreadMetadataUpdate {
                 command_id: command_id(),
@@ -1661,6 +2142,12 @@ pub fn update(event: Event, model: &mut Model) -> Cmd {
             let scope = model.thread.as_ref().and_then(|s| crate::present::checkpoints(s).into_iter().find(|c| c.id == checkpoint_id)).map(|c| c.scope_id).unwrap_or_default();
             let rollback = CheckpointRollback { restore_files: Some(true), command_id: command_id(), thread_id: tid.into(), scope_id: scope.into(), checkpoint_id: checkpoint_id.into() };
             dispatch(model, rollback, "Revert")
+        }
+        Event::ForgetThreadPermissions { thread_id } => {
+            call(model, requests::orchestration_forget_thread_permissions(&thread_id), Route::ThreadPermissionsForgotten)
+        }
+        Event::SetThreadRuntimeMode { thread_id, mode } => {
+            dispatch(model, ThreadRuntimeModeSet { command_id: command_id(), thread_id: thread_id.into(), runtime_mode: mode.as_str().into() }, "Change permissions")
         }
         Event::SetRuntimeMode { mode } => match model.selected_thread.clone() {
             Some(tid) => dispatch(model, ThreadRuntimeModeSet { command_id: command_id(), thread_id: tid.into(), runtime_mode: mode.as_str().into() }, "Change permissions"),
@@ -1705,8 +2192,7 @@ pub fn update(event: Event, model: &mut Model) -> Cmd {
         // ---- composer ----
         Event::SetDraft { text } => set_draft(model, text),
         Event::SelectModel { instance_id, model: slug } => {
-            let opt = model_options(model).into_iter().map(|(_, o)| o).find(|o| o.instance_id == instance_id && o.model == slug);
-            let Some(opt) = opt else { return Command::done() };
+            let Some((_, opt)) = model_record(model, &instance_id, &slug) else { return Command::done() };
             model.composer.model_query.clear();
             model.composer.show_hidden_models = false;
             match model.selected_thread.clone() {
@@ -1741,6 +2227,21 @@ pub fn update(event: Event, model: &mut Model) -> Cmd {
                 Some(tid) => {
                     let set = ThreadModelSelectionSet { command_id: command_id(), thread_id: tid.into(), model_selection: model_selection(model, &opt) };
                     dispatch(model, set, "Change effort").and(render())
+                }
+                None => render(),
+            }
+        }
+        Event::SetModelOption { id, value } => {
+            let Some(opt) = current_model(model) else { return Command::done() };
+            if !trait_descriptors(model, &opt).iter().any(|d| d.id() == Some(id.as_str())) {
+                return Command::done();
+            }
+            let key = trait_key(model, &opt, &id);
+            model.composer.efforts.insert(key, value);
+            match model.selected_thread.clone() {
+                Some(tid) => {
+                    let set = ThreadModelSelectionSet { command_id: command_id(), thread_id: tid.into(), model_selection: model_selection(model, &opt) };
+                    dispatch(model, set, "Change model options").and(render())
                 }
                 None => render(),
             }
@@ -1781,7 +2282,77 @@ pub fn update(event: Event, model: &mut Model) -> Cmd {
         }
         Event::PickSlashCommand { name } => {
             model.composer.draft_revision += 1;
-            set_draft(model, format!("/{} ", name.trim_start_matches('/')))
+            let name = name.trim_start_matches('/');
+            // The app's own commands that take nothing run as soon as picked.
+            if matches!(name, "plan" | "fork") || (name == "model" && !model.draft().contains(' ')) {
+                return run_builtin(model, name, "");
+            }
+            set_draft(model, format!("/{name} "))
+        }
+        Event::PickSkill { name } => {
+            let draft = model.draft();
+            let Some(start) = skill_query(&draft).map(|(start, _)| start) else { return Command::done() };
+            model.composer.draft_revision += 1;
+            set_draft(model, format!("{}${} ", &draft[..start], name.trim_start_matches('$')))
+        }
+        Event::RecallPrompt { delta } => {
+            let Some(thread) = model.thread.as_ref() else { return Command::done() };
+            // The thread's own messages, latest first.
+            let sent: Vec<String> = thread.messages.iter().rev().filter(|m| m.role == MessageRole::User && !m.text.trim().is_empty()).map(|m| m.text.clone()).collect();
+            let (at, before) = model.composer.recall.clone().unwrap_or((0, model.draft()));
+            // Typing over a recalled message makes it the draft.
+            if at > 0 && sent.get(at - 1).is_some_and(|recalled| *recalled != model.draft()) {
+                model.composer.recall = None;
+                return Command::done();
+            }
+            let next = if delta < 0 { (at + 1).min(sent.len()) } else { at.saturating_sub(1) };
+            if next == at {
+                return Command::done();
+            }
+            let text = if next == 0 { before.clone() } else { sent[next - 1].clone() };
+            model.composer.recall = (next > 0).then_some((next, before));
+            replace_draft(model, text);
+            model.changes.composer();
+            render()
+        }
+        Event::StashDraft => {
+            let text = model.draft();
+            if text.trim().is_empty() {
+                return Command::done();
+            }
+            model.composer.stash.retain(|s| *s != text);
+            model.composer.stash.insert(0, text);
+            model.composer.stash.truncate(20);
+            replace_draft(model, String::new());
+            model.drafts_dirty = true;
+            model.toast("success", "Draft put aside. Find it under Stash.");
+            render()
+        }
+        Event::RestoreStash { index } => {
+            if (index as usize) >= model.composer.stash.len() {
+                return Command::done();
+            }
+            let text = model.composer.stash.remove(index as usize);
+            // What was typed goes aside in its place.
+            let current = model.draft();
+            if !current.trim().is_empty() {
+                model.composer.stash.insert(0, current);
+            }
+            replace_draft(model, text);
+            model.drafts_dirty = true;
+            render()
+        }
+        Event::DropStash { index } => {
+            if (index as usize) < model.composer.stash.len() {
+                model.composer.stash.remove(index as usize);
+                model.drafts_dirty = true;
+            }
+            render()
+        }
+        Event::ForceStop => {
+            let Some(tid) = model.selected_thread.clone() else { return Command::done() };
+            model.composer.stop_asked_run.clear();
+            call(model, requests::orchestration_force_stop_thread(&tid.as_str().into()), Route::Command("Force stop".into())).and(render())
         }
         Event::DismissMention => {
             model.composer.mention_dismissed_at = model.draft().rfind('@');
@@ -1902,10 +2473,124 @@ pub fn update(event: Event, model: &mut Model) -> Cmd {
             }
             list_dir(model, &path).and(render())
         }
+        Event::OpenArtifactFile { thread_id, path } => {
+            if model.selected_thread.as_deref() != Some(thread_id.as_str()) {
+                return Command::done();
+            }
+            let Some(root) = model.active_cwd() else { return Command::done() };
+            let Some(path) = crate::artifacts::workspace_html_path(&root, &path) else { return Command::done() };
+            let request = uuid();
+            let connected = model.connection == Connection::Connected;
+            model.panel.files.artifact_preview = Some(crate::model::ArtifactRead {
+                request: request.clone(), thread: thread_id, root: root.clone(),
+                preview: crate::model::Preview {
+                    path: path.clone(), loading: connected,
+                    error: (!connected).then(|| "Connect to the server to preview this file.".into()),
+                    ..Default::default()
+                },
+            });
+            if connected {
+                call(model, requests::projects_read_file(&root, &path), Route::ReadArtifactFile(request)).and(render())
+            } else {
+                render()
+            }
+        }
+        Event::CloseArtifactFile => {
+            model.panel.files.artifact_preview = None;
+            render()
+        }
+        Event::OpenArtifact { thread_id, artifact_id, version, dark } => {
+            if model.selected_thread.as_deref() != Some(thread_id.as_str()) {
+                return Command::done();
+            }
+            model.panel.open = true;
+            model.panel.tab = "artifacts".into();
+            model.panel.artifacts.thread_id = Some(thread_id);
+            model.panel.artifacts.active_id = Some(artifact_id);
+            model.panel.artifacts.active_version = version;
+            model.panel.artifacts.dark = dark;
+            if model.panel.artifacts.mode.is_empty() {
+                model.panel.artifacts.mode = "preview".into();
+            }
+            load_active_artifact(model).and(render())
+        }
+        Event::OpenArtifactWorkspacePath { thread_id, path, dark } => {
+            if model.selected_thread.as_deref() != Some(thread_id.as_str()) {
+                return Command::done();
+            }
+            let Some(root) = model.active_cwd() else { return Command::done() };
+            let Some(rel) = crate::artifacts::workspace_artifact_path(&root, &path) else { return Command::done() };
+            let collected = crate::present::collect_artifacts_for_model(model);
+            let artifact_id = collected
+                .iter()
+                .find(|a| a.path.as_deref() == Some(rel.as_str()))
+                .map(|a| a.id.clone())
+                .unwrap_or_else(|| format!("file:{rel}"));
+            update(Event::OpenArtifact { thread_id, artifact_id, version: None, dark }, model)
+        }
+        Event::SelectArtifactVersion { version, dark } => {
+            model.panel.artifacts.active_version = Some(version);
+            model.panel.artifacts.dark = dark;
+            load_active_artifact(model).and(render())
+        }
+        Event::SetArtifactViewMode { mode } => {
+            model.panel.artifacts.mode = if mode == "code" { "code" } else { "preview" }.into();
+            render()
+        }
+        Event::CloseArtifact => {
+            model.panel.artifacts.active_id = None;
+            model.panel.artifacts.active_version = None;
+            model.panel.artifacts.file_read = None;
+            model.panel.artifacts.preview_url = None;
+            render()
+        }
+        Event::RefreshArtifactPreview { dark } => {
+            model.panel.artifacts.dark = dark;
+            model.panel.artifacts.preview_url = None;
+            load_active_artifact(model).and(render())
+        }
+        Event::AskAboutArtifact { artifact_id, prompt } => {
+            let collected = crate::present::collect_artifacts_for_model(model);
+            let title = collected
+                .iter()
+                .find(|a| a.id == artifact_id)
+                .map(|a| a.title.as_str())
+                .unwrap_or("artifact");
+            let text = if prompt.trim().is_empty() {
+                format!("Update artifact \"{title}\": ")
+            } else {
+                format!("Regarding artifact \"{title}\": {}", prompt.trim())
+            };
+            let key = model.draft_key();
+            let cur = model.composer.drafts.get(&key).cloned().unwrap_or_default();
+            let next = if cur.trim().is_empty() { text } else { format!("{}\n\n{text}", cur.trim_end()) };
+            replace_draft(model, next);
+            render()
+        }
+        Event::SaveFile { path, text } => {
+            let cwd = model.panel.files.root.clone();
+            if cwd.is_empty() || path.is_empty() {
+                return Command::done();
+            }
+            call(model, requests::projects_write_file(&cwd, &path, &text), Route::Command("Save file".into())).and(update(Event::OpenFile { path }, model))
+        }
         Event::OpenFile { path } => {
             let cwd = model.panel.files.root.clone();
-            model.panel.files.preview = Some(crate::model::Preview { path: path.clone(), loading: true, ..Default::default() });
-            call(model, requests::projects_read_file(&cwd, &path), Route::ReadFile(path)).and(render())
+            let request = uuid();
+            model.panel.files.preview = Some(crate::model::Preview {
+                path: path.clone(), request: request.clone(), loading: true, ..Default::default()
+            });
+            call(model, requests::projects_preview_file(&cwd, &path), Route::ReadFile { path, request }).and(render())
+        }
+        Event::FetchLfsObject { path } => {
+            let cwd = model.panel.files.root.clone();
+            let Some(preview) = model.panel.files.preview.as_mut().filter(|p| p.path == path && p.lfs.is_some() && !p.fetching) else {
+                return Command::done();
+            };
+            preview.fetching = true;
+            preview.fetch_error = None;
+            let request = preview.request.clone();
+            call(model, requests::projects_fetch_lfs_object(&cwd, &path), Route::FetchLfs { path, request }).and(render())
         }
         Event::SetFileQuery { query } => {
             model.panel.files.query = query.clone();
@@ -1917,6 +2602,35 @@ pub fn update(event: Event, model: &mut Model) -> Cmd {
             let rev = model.panel.files.revision;
             let cwd = model.panel.files.root.clone();
             call(model, requests::projects_search_entries(&cwd, &query, 50), Route::FileSearch(rev)).and(render())
+        }
+        Event::CreateWorktree { base, branch } => {
+            let cwd = model.panel.git.cwd.clone();
+            if cwd.is_empty() || base.trim().is_empty() {
+                return Command::done();
+            }
+            let branch = branch.trim().to_owned();
+            let request = requests::vcs_create_worktree(&cwd, base.trim(), (!branch.is_empty()).then_some(branch.as_str()));
+            call(model, request, Route::Command("Create worktree".into()))
+        }
+        Event::RemoveWorktree { path, force } => {
+            let cwd = model.panel.git.cwd.clone();
+            if cwd.is_empty() || path == cwd {
+                model.toast("error", "This thread works in that worktree.");
+                return render();
+            }
+            call(model, requests::vcs_remove_worktree(&cwd, &path, force), Route::Command("Remove worktree".into()))
+        }
+        Event::RunScript { id } => {
+            let project = model.selected_thread.as_deref().and_then(|t| model.thread_shell(t)).map(|t| t.project_id.as_str().to_owned()).or_else(|| model.selected_project.clone());
+            let Some(script) = project.and_then(|p| model.project(&p)).and_then(|p| p.scripts.iter().find(|s| s.id == id)).cloned() else { return Command::done() };
+            let opened = new_terminal(model);
+            if let Some(session) = model.panel.active_terminal.clone().and_then(|active| model.panel.terminals.iter_mut().find(|t| t.id == active)) {
+                session.label = script.name.clone();
+                session.pending_input = Some(format!("{}\r", script.command));
+            }
+            model.panel.open = true;
+            model.panel.tab = "terminal".into();
+            opened.and(render())
         }
         Event::RefreshGit => {
             let cwd = model.panel.git.cwd.clone();
@@ -1970,6 +2684,16 @@ pub fn update(event: Event, model: &mut Model) -> Cmd {
                 p.query = query;
                 p.highlighted = 0;
             }
+            palette_search(model).and(render())
+        }
+        Event::SetPaletteMode { mode } => {
+            if let Some(p) = model.palette.as_mut() {
+                p.mode = if matches!(mode.as_str(), "files" | "content") { mode } else { String::new() };
+                p.query.clear();
+                p.results.clear();
+                p.highlighted = 0;
+                p.searching = false;
+            }
             render()
         }
         Event::MovePalette { delta } => {
@@ -1994,7 +2718,8 @@ pub fn update(event: Event, model: &mut Model) -> Cmd {
 
         // ---- settings ----
         Event::LoadSettings { section } => match section.as_str() {
-            "providers" | "general" => call(model, requests::server_refresh_providers(false), Route::Command("Refresh providers".into())),
+            "providers" => call(model, requests::server_refresh_providers(false), Route::Command("Refresh providers".into())).and(provider_setup_streams(model)),
+            "general" => call(model, requests::server_refresh_providers(false), Route::Command("Refresh providers".into())),
             "scheduled" => subscribe(model, requests::scheduled_tasks_subscribe(), Route::ScheduledTasks),
             "archived" => call(model, requests::orchestration_get_archived_shell_snapshot(), Route::Archived),
             "storage" => {
@@ -2017,6 +2742,46 @@ pub fn update(event: Event, model: &mut Model) -> Cmd {
             setting_patch(model, &key, number.map_or(Typed::Text(value), Typed::Number))
         }
         Event::RefreshProviders => call(model, requests::server_refresh_providers(true), Route::Command("Refresh providers".into())),
+        Event::StartProviderSignIn { instance_id } => {
+            let watch = subscribe(model, requests::provider_auth_subscribe(&instance_id), Route::ProviderAuth(instance_id.clone()));
+            watch.and(call(model, requests::provider_auth_start(&instance_id), Route::Command("Sign in".into())))
+        }
+        Event::CompleteProviderSignIn { instance_id, callback_url } => {
+            let Some(flow) = model.pages.provider_auth.get(&instance_id).filter(|a| a.busy()).and_then(|a| a.flow_id.clone()) else {
+                model.toast("error", "No sign-in is under way here. Start it again.");
+                return render();
+            };
+            call(model, requests::provider_auth_complete(&instance_id, &flow, callback_url.trim()), Route::Command("Sign in".into()))
+        }
+        Event::CancelProviderSignIn { instance_id } => {
+            let Some(flow) = model.pages.provider_auth.get(&instance_id).and_then(|a| a.flow_id.clone()) else { return render() };
+            call(model, requests::provider_auth_cancel(&instance_id, &flow), Route::Command("Cancel sign-in".into()))
+        }
+        Event::InstallProvider { instance_id } => {
+            let watch = subscribe(model, requests::provider_install_subscribe(&instance_id), Route::ProviderInstall(instance_id.clone()));
+            watch.and(call(model, requests::provider_install_start(&instance_id), Route::Command("Install".into())))
+        }
+        Event::CancelProviderInstall { instance_id } => {
+            let Some(op) = model.pages.provider_install.get(&instance_id).and_then(|i| i.operation_id.clone()) else { return render() };
+            call(model, requests::provider_install_cancel(&instance_id, &op), Route::Command("Cancel install".into()))
+        }
+        Event::RemoveProviderInstall { instance_id } => call(model, requests::provider_install_remove(&instance_id), Route::Command("Remove runtime".into())),
+        Event::SaveProviderInstance { edit } => {
+            // A new instance is named after its driver, numbered past the ones there are.
+            let id = if edit.instance_id.trim().is_empty() {
+                let taken = |id: &str| {
+                    model.providers.iter().any(|p| p.instance_id.as_str() == id)
+                        || model.settings.as_ref().and_then(|s| s.provider_instances.as_ref()).is_some_and(|i| i.contains_key(&ProviderInstanceId::from(id)))
+                };
+                (2..).map(|n| format!("{}-{n}", edit.driver)).find(|id| !taken(id)).unwrap_or_default()
+            } else {
+                edit.instance_id.clone()
+            };
+            let existing = model.settings.as_ref().and_then(|s| s.provider_instances.as_ref()).and_then(|i| i.get(&ProviderInstanceId::from(id.as_str())));
+            let request = requests::server_upsert_provider_instance(&id, &edit, existing);
+            call(model, request, Route::Settings).and(call(model, requests::server_refresh_providers(true), Route::Command("Refresh providers".into())))
+        }
+        Event::RemoveProviderInstance { instance_id } => call(model, requests::server_remove_provider_instance(&instance_id), Route::Settings),
         Event::RunStorageCleanup => {
             model.pages.storage_busy = true;
             call(model, requests::server_run_storage_cleanup(), Route::Command("Storage cleanup".into())).and(render())
@@ -2026,7 +2791,7 @@ pub fn update(event: Event, model: &mut Model) -> Cmd {
             call(model, requests::server_reclaim_database_space(), Route::Command("Reclaim space".into())).and(render())
         }
         Event::SetScheduledEnabled { id, enabled } => call(model, requests::scheduled_tasks_set_enabled(&id.into(), enabled), Route::Command("Scheduled task".into())),
-        Event::RunScheduledNow { id } => call(model, requests::scheduled_tasks_run_now(&id.into()), Route::Command("Run task".into())),
+        Event::RunScheduledNow { id } => call(model, requests::scheduled_tasks_run_now(&id.as_str().into()), Route::ScheduledRunNow(id)),
         Event::DeleteScheduled { id } => call(model, requests::scheduled_tasks_delete(&id.into()), Route::Command("Delete task".into())),
         Event::CreateScheduled { name, prompt, project_id, interval_minutes } => {
             let Some(opt) = current_model(model) else {
@@ -2064,7 +2829,9 @@ pub fn update(event: Event, model: &mut Model) -> Cmd {
             } else {
                 WorkspaceStrategy::Root { branch: None }
             };
-            let bound = matches!(task.thread_mode.as_str(), "continue" | "fresh_session") && !task.thread_id.is_empty();
+            // One thread without one chosen: the server binds the thread its first run starts.
+            let one_thread = matches!(task.thread_mode.as_str(), "continue" | "fresh_session");
+            let bound = one_thread && !task.thread_id.is_empty();
             let edited = EditedScheduledTask {
                 id: (!task.id.is_empty()).then_some(task.id.as_str()),
                 title: &task.name,
@@ -2072,7 +2839,7 @@ pub fn update(event: Event, model: &mut Model) -> Cmd {
                 enabled: task.enabled,
                 schedule: &schedule,
                 project: &task.project_id.as_str().into(),
-                thread_mode: if bound { &task.thread_mode } else { "new_thread" },
+                thread_mode: if one_thread { &task.thread_mode } else { "new_thread" },
                 thread_id: bound.then_some(task.thread_id.as_str()),
                 workspace: &workspace,
                 model_selection: &selection,
@@ -2083,6 +2850,15 @@ pub fn update(event: Event, model: &mut Model) -> Cmd {
             call(model, requests::scheduled_tasks_save(edited), Route::Command(label.into()))
         }
         Event::RotateWebhookToken { id } => call(model, requests::scheduled_tasks_rotate_webhook_token(&id.into()), Route::Command("New webhook URL".into())),
+        // No task: the open runs close.
+        Event::LoadScheduledRuns { id } if id.is_empty() => {
+            model.pages.scheduled_runs = None;
+            render()
+        }
+        Event::LoadScheduledRuns { id } => {
+            model.pages.scheduled_runs = Some((id.clone(), vec![]));
+            call(model, requests::scheduled_tasks_list_runs(Some(&id), None), Route::ScheduledRuns(Some(id))).and(render())
+        }
         Event::LoadWebhookDeliveries { id } => {
             model.pages.webhook_deliveries = Some((id.clone(), vec![]));
             call(model, requests::scheduled_tasks_list_webhook_deliveries(&id.as_str().into()), Route::WebhookDeliveries(id)).and(render())
@@ -2142,11 +2918,27 @@ pub fn update(event: Event, model: &mut Model) -> Cmd {
             a.and(b).and(render())
         }
         Event::LoadUsage { days } => {
-            model.pages.usage_days = days.max(1);
+            let days = days.max(1);
+            model.pages.usage_days = days;
             model.pages.usage_loading = true;
-            let until = utc_day(model.now_ms);
-            let since = utc_day(model.now_ms - (days.max(1) as i64 - 1) * 86_400_000);
-            call(model, requests::server_get_usage_summary(&since, &until), Route::Usage).and(render())
+            model.pages.usage_error = None;
+            let until = local_day(model, model.now_ms);
+            let since = local_day(model, model.now_ms - (days as i64 - 1) * 86_400_000);
+            let tz = if model.time_zone.is_empty() { "UTC" } else { model.time_zone.as_str() };
+            call(model, requests::server_get_usage_summary(&since, &until, tz, days == 1), Route::Usage).and(render())
+        }
+        Event::FilterUsageProvider { provider } => {
+            model.pages.usage_provider_filter = provider;
+            render()
+        }
+        Event::RefreshUsageLimits => {
+            model.pages.usage_limits_refreshing = true;
+            call(model, requests::server_refresh_providers(true), Route::UsageLimits).and(render())
+        }
+        Event::SetTimeZone { iana, utc_offset_secs } => {
+            model.time_zone = iana;
+            model.utc_offset_secs = utc_offset_secs;
+            Command::done()
         }
     }
 }

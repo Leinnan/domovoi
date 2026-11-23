@@ -311,7 +311,10 @@ pub fn sync(env: &ScanEnv, store: &Store, seen: &mut Seen) -> usize {
     let mut next = HashMap::new();
     for (path, size, mtime) in files {
         let changed = seen.files.get(&path) != Some(&(size, mtime));
-        if changed && seen.primed {
+        // A session this server runs (its transcript is named by the session
+        // id) grows with every turn, and import never writes into its thread.
+        let ours = || path.file_stem().and_then(|s| s.to_str()).is_some_and(|id| agent_sessions::native_thread_owned(store, "claudeAgent", id));
+        if changed && seen.primed && !ours() {
             match path.parent().and_then(|p| claude_by_dir.get(p)) {
                 Some(&i) => {
                     dirty.insert(i);

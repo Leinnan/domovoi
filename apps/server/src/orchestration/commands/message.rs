@@ -14,7 +14,7 @@ use domovoi_model::typed::command::MessageDispatch;
 use domovoi_model::typed::{
     Actor, AppThread, ChatAttachment, CheckpointScope, CheckpointScopeKind, CommandId, ContextHandoff, ContextTransfer, ContextTransferId,
     ContextTransferResolution, ContextTransferStatus, ContextTransferType, ConversationMessage, CreationSource, DispatchMode, EventBody,
-    ExecutionNode, HandoffStatus, HandoffStrategy, InputIntent, MessageId, MessageRole, NodeKind, NodeStatus, PlanArtifact, PlanStatus,
+    ExecutionNode, HandoffStatus, HandoffStrategy, InputIntent, InteractionMode, MessageId, MessageRole, NodeKind, NodeStatus, PlanArtifact, PlanStatus,
     ProviderInstanceId, ProviderThread, ProviderThreadFork, ProviderThreadId, ProviderTurn, ProviderTurnStatus, Run, RunAttempt, RunAttemptReason,
     RunAttemptStatus, RunId, RunOrdinalRange, RunStatus, ScheduledTaskId, Thread, ThreadChange, ThreadId, Timestamp, TitleRegeneration, TurnItem, TurnItemStatus,
 };
@@ -293,6 +293,10 @@ fn completed(mut plan: PlanArtifact) -> PlanArtifact {
 
 impl Orchestrator {
     pub(super) fn message_dispatch(&self, c: &MessageDispatch) -> Result<DispatchResult, Refusal> {
+        self.message_dispatch_inner(c, false)
+    }
+
+    pub(super) fn message_dispatch_inner(&self, c: &MessageDispatch, answering_question: bool) -> Result<DispatchResult, Refusal> {
         let (thread_id, command_id) = (&c.thread_id, &c.command_id);
         let tid = thread_id.as_str();
         let mut thread = self.thread(thread_id)?;
@@ -303,6 +307,9 @@ impl Orchestrator {
         // Every event of the command is written on behalf of the provider the
         // thread had when the command arrived.
         let origin = Self::origin(command_id, Some(&thread.provider_instance_id));
+        if !answering_question {
+            self.close_message_questions(thread_id, &outline.runtime_requests, &origin)?;
+        }
         let mut emit = |body: EventBody| -> Result<(), Refusal> {
             last = Some(self.store.append_event(tid, body, &origin)?.sequence);
             Ok(())
@@ -361,6 +368,15 @@ impl Orchestrator {
                 emit(plan)?;
             } else {
                 self.store.append_event(named.thread_id.as_str(), plan, &origin)?;
+            }
+            // Implementing is not planning: out of plan mode before the run
+            // starts, in this same command. A client's own mode change sent
+            // beside it can arrive after the run has read the thread.
+            if thread.interaction_mode == InteractionMode::Plan {
+                thread.interaction_mode = InteractionMode::Default;
+                thread.updated_at = at.clone();
+                emit(thread_event(ThreadChange::InteractionModeUpdated, &thread))?;
+                self.send_effect(Effect::RuntimeModeChanged { thread_id: tid.to_owned() });
             }
         }
 

@@ -10,8 +10,9 @@ struct DomovoiApp: App {
         // One window: the app's state (selection, panel, composer) is one.
         Window("Domovoi", id: "main") {
             ContentView(core: core)
-                // The columns' own minimums set the real floor (sidebar and
-                // panel can be hidden).
+                .environment(\.core, core)
+                // Room for the thread and the panel; `MainView` hides the
+                // sidebar when all three columns don't fit.
                 .frame(minWidth: 720, minHeight: 560)
                 // `domovoi://connect?…` links, from a browser or another app.
                 .onOpenURL { url in
@@ -66,6 +67,8 @@ struct DomovoiApp: App {
                     .keyboardShortcut("j")
                 Button("Show Diff") { core.update(.showPanel(tab: "diff")) }
                     .keyboardShortcut("d", modifiers: [.command, .shift])
+                Button("Show Artifacts") { core.update(.showPanel(tab: "artifacts")) }
+                    .keyboardShortcut("a", modifiers: [.command, .shift])
                 Button("Show Terminal") {
                     TerminalFocus.requested = true
                     core.update(.showPanel(tab: "terminal"))
@@ -77,7 +80,14 @@ struct DomovoiApp: App {
                 Button("Show Git") { core.update(.showPanel(tab: "git")) }
                     .keyboardShortcut("g", modifiers: [.command, .option])
             }
+            // Nothing here prints: ⌘P is Go to File, as in editors.
+            CommandGroup(replacing: .printItem) {}
             CommandMenu("Go") {
+                Button("Go to File…") { openPalette("files") }
+                    .keyboardShortcut("p")
+                Button("Search in Project…") { openPalette("content") }
+                    .keyboardShortcut("f", modifiers: [.command, .shift])
+                Divider()
                 Button("Pull Requests") { core.update(.showRoute(route: "pull-requests")) }
                 Button("Usage") { core.update(.showRoute(route: "usage")) }
                 Divider()
@@ -88,6 +98,12 @@ struct DomovoiApp: App {
         Settings {
             SettingsWindow(core: core)
         }
+    }
+
+    /// The palette, open on going to a file or searching the project.
+    private func openPalette(_ mode: String) {
+        if core.view.palette == nil { core.update(.openPalette) }
+        core.update(.setPaletteMode(mode: mode))
     }
 }
 

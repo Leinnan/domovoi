@@ -200,6 +200,7 @@ pub async fn generate<A: DeserializeOwned>(req: Request<'_, A>) -> Result<A, Tex
         "claudeAgent" => run_claude(&run, &cwd, timeout).await,
         "codex" => run_codex(&run, &cwd, &scratch, timeout).await,
         "pi" => run_pi(&run, &cwd, timeout).await,
+        "antigravity" => run_antigravity(&run, &instance, timeout).await,
         other => Err(error(op, format!("Text generation with {other} is not supported by this server."))),
     };
     let _ = std::fs::remove_dir_all(&scratch);
@@ -630,4 +631,175 @@ mod tests {
         let unset: ServerSettings = serde_json::from_value(json!({})).unwrap();
         assert_eq!(model_for(&unset, Writer::Text).model, None);
     }
+}
+
+/// How long Antigravity may take to write an answer.
+const ANTIGRAVITY_TIMEOUT: Duration = Duration::from_secs(180);
+const ANTIGRAVITY_MAX_OUTPUT: usize = 128_000;
+
+/// Whether Antigravity instance `id` can generate text (t3code
+/// `isAntigravityTextGenerationAvailable`): not when its profile has hooks or
+/// MCP servers, which could run before a tool request can be refused.
+pub fn antigravity_available(id: &str) -> bool {
+    let config = crate::antigravity::profile(id).home.join("config");
+    ["hooks.json", "mcp_config.json"].iter().all(|name| {
+        let path = config.join(name);
+        let Ok(meta) = std::fs::metadata(&path) else { return true };
+        if !meta.is_file() || meta.len() > 64_000 {
+            return false;
+        }
+        let key = if *name == "hooks.json" { "hooks" } else { "mcpServers" };
+        let parsed = std::fs::read_to_string(&path).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok());
+        parsed.as_ref().and_then(|v| v.get(key).unwrap_or(v).as_object()).is_some_and(serde_json::Map::is_empty)
+    })
+}
+
+/// Whether a scratch folder holds only the empty skill folders the agent makes itself.
+fn only_runtime_folders(root: &std::path::Path) -> bool {
+    let Ok(root) = std::fs::canonicalize(root) else { return false };
+    let allowed = [root.join(".agents"), root.join(".agents/skills"), root.join(".gemini"), root.join(".gemini/skills")];
+    let mut dirs = vec![root];
+    while let Some(dir) = dirs.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else { return false };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let real_dir = std::fs::symlink_metadata(&path).is_ok_and(|m| m.is_dir());
+            if !allowed.contains(&path) || !real_dir {
+                return false;
+            }
+            dirs.push(path);
+        }
+    }
+    true
+}
+
+/// Antigravity's writer (t3code `AntigravityTextGeneration`): a fresh agent
+/// in an empty folder, told to use only its input; any tool call, request
+/// or file it writes fails the answer.
+async fn run_antigravity(req: &Run<'_>, instance: &str, timeout: Duration) -> Result<Value, TextGenerationError> {
+    use crate::antigravity::{self as ag, launch};
+    use crate::jsonrpc::Incoming;
+    let op = req.operation;
+    if !antigravity_available(instance) {
+        return Err(error(op, "Antigravity text generation is unavailable for profiles with global hooks or MCP configuration. Select another system model."));
+    }
+    let scratch = std::env::temp_dir().join(format!("domovoi-antigravity-text-{}", crate::util::new_uuid()));
+    std::fs::create_dir_all(&scratch).map_err(|e| error(op, format!("Could not create a working folder: {e}")))?;
+    let cwd = scratch.to_string_lossy().into_owned();
+    let mut l = launch::start(instance, &cwd, vec![], |_, _| {}).await.map_err(|e| error(op, e))?;
+    let mut session_id = None;
+    let answer = tokio::time::timeout(timeout.min(ANTIGRAVITY_TIMEOUT), async {
+        l.authenticate().await.map_err(|e| e.message())?;
+        let session = l.rpc.request("session/new", json!({ "cwd": cwd, "mcpServers": [] })).await.map_err(|e| if launch::sign_in_required(&e) { ag::SIGN_IN_REQUIRED.to_owned() } else { "Antigravity text generation failed.".to_owned() })?;
+        let id = session["sessionId"].as_str().filter(|id| uuid::Uuid::parse_str(id).is_ok_and(|u| u.get_version_num() == 4)).ok_or("Antigravity returned an invalid text helper session ID.")?.to_owned();
+        session_id = Some(id.clone());
+        let options = session["configOptions"].clone();
+        if let Some(mode) = options.as_array().and_then(|o| o.iter().find(|o| o["category"] == "mode" && o["type"] == "select")).filter(|m| m["currentValue"] != "default") {
+            let _ = l.rpc.request("session/set_config_option", json!({ "sessionId": id, "configId": mode["id"], "value": "default" })).await;
+        } else if session["modes"]["currentModeId"].as_str().is_some_and(|m| m != "default") {
+            let _ = l.rpc.request("session/set_mode", json!({ "sessionId": id, "modeId": "default" })).await;
+        }
+        match ag::acp::choose_model(&options, &req.model, Some(ag::DEFAULT_CHAT_MODEL)) {
+            ag::acp::ModelChoice::Keep => {}
+            ag::acp::ModelChoice::Set(model) | ag::acp::ModelChoice::SetUnlisted(model) => {
+                let config_id = ag::acp::model_option(&options).and_then(|o| o["id"].as_str()).unwrap_or("model").to_owned();
+                l.rpc.request("session/set_config_option", json!({ "sessionId": id, "configId": config_id, "value": model })).await.map_err(|_| "Could not select the Antigravity model for text generation.".to_owned())?;
+            }
+            ag::acp::ModelChoice::Unavailable(_) => return Err("Could not select the Antigravity model for text generation.".to_owned()),
+        }
+        let prompt = format!(
+            "Use only the input below. Do not use tools, read or write files, run commands, or ask questions.\nReturn only the requested JSON object.\n\n{}\n\nAnswer with only a JSON object (no prose, no code fence) that matches this JSON schema:\n{}",
+            req.prompt, req.schema
+        );
+        let rpc = l.rpc.clone();
+        let (done_tx, mut done) = tokio::sync::oneshot::channel();
+        let prompt_id = id.clone();
+        tokio::spawn(async move {
+            let _ = done_tx.send(rpc.request("session/prompt", json!({ "sessionId": prompt_id, "prompt": [{ "type": "text", "text": prompt }] })).await);
+        });
+        let mut text = String::new();
+        let mut rejected: Option<String> = None;
+        // What the agent sends before its answer; `false` when it exited.
+        let rpc = l.rpc.clone();
+        let take = |ev: Incoming, text: &mut String, rejected: &mut Option<String>| -> Result<Option<(Value, bool)>, ()> {
+            match ev {
+                Incoming::Closed => Err(()),
+                Incoming::Notification { method, params } if method == "session/update" => {
+                    let u = &params["update"];
+                    match u["sessionUpdate"].as_str() {
+                        Some("tool_call" | "tool_call_update") => *rejected = rejected.take().or(Some("Antigravity attempted tool work during text generation.".into())),
+                        Some("agent_message_chunk") if params["sessionId"] == id.as_str() && u["content"]["type"] == "text" => {
+                            let chunk = u["content"]["text"].as_str().unwrap_or_default();
+                            if text.len() + chunk.len() > ANTIGRAVITY_MAX_OUTPUT {
+                                *rejected = rejected.take().or(Some("Antigravity text generation exceeded the output limit.".into()));
+                            } else {
+                                text.push_str(chunk);
+                            }
+                        }
+                        _ => {}
+                    }
+                    Ok(None)
+                }
+                Incoming::Notification { .. } => Ok(None),
+                Incoming::Request { id: rid, method, .. } => {
+                    *rejected = rejected.take().or(Some("Antigravity text generation requested a tool or user input.".into()));
+                    Ok(Some((rid, method == "session/request_permission")))
+                }
+            }
+        };
+        let refuse = |(rid, permission): (Value, bool)| {
+            let rpc = rpc.clone();
+            async move {
+                if permission {
+                    let _ = rpc.respond(rid, json!({ "outcome": { "outcome": "cancelled" } })).await;
+                } else {
+                    let _ = rpc.respond_error(rid, -32601, "Tools and user input are disabled for text generation.").await;
+                }
+            }
+        };
+        let answer = loop {
+            tokio::select! {
+                answer = &mut done => {
+                    // The reader passed on what came before the answer first: take it in.
+                    while let Ok(ev) = l.events.try_recv() {
+                        if let Ok(Some(request)) = take(ev, &mut text, &mut rejected) {
+                            refuse(request).await;
+                        }
+                    }
+                    break answer;
+                }
+                ev = l.events.recv() => match ev.map(|ev| take(ev, &mut text, &mut rejected)) {
+                    None | Some(Err(())) => return Err("Antigravity exited before answering.".to_owned()),
+                    Some(Ok(Some(request))) => refuse(request).await,
+                    Some(Ok(None)) => {}
+                },
+            }
+        };
+        if let Some(reason) = rejected {
+            return Err(reason);
+        }
+        match answer {
+            Ok(Ok(r)) if r["stopReason"] == "cancelled" => Err("Antigravity text generation was cancelled.".to_owned()),
+            Ok(Ok(_)) => Ok(text.trim().to_owned()),
+            Ok(Err(e)) if launch::sign_in_required(&e) => Err(ag::SIGN_IN_REQUIRED.to_owned()),
+            _ => Err("Antigravity text generation failed.".to_owned()),
+        }
+    })
+    .await;
+    l.kill().await;
+    ag::remove_session_files(&l.profile, session_id.as_deref(), &cwd);
+    let clean = only_runtime_folders(&scratch);
+    let _ = std::fs::remove_dir_all(&scratch);
+    let text = match answer {
+        Ok(Ok(text)) => text,
+        Ok(Err(detail)) => return Err(error(op, detail)),
+        Err(_) => return Err(error(op, "Antigravity text generation timed out.")),
+    };
+    if !clean {
+        return Err(error(op, "Antigravity wrote files during text generation."));
+    }
+    if text.is_empty() {
+        return Err(error(op, "Antigravity returned empty text generation output."));
+    }
+    parse_json_text(&text).ok_or_else(|| error(op, "Antigravity's answer was not the JSON object asked for."))
 }

@@ -3,7 +3,9 @@ package com.crayen.domovoi.core
 import com.crayen.domovoi.app.AgentSessionsView
 import com.crayen.domovoi.app.ComposerView
 import com.crayen.domovoi.app.ConnectionView
+import com.crayen.domovoi.app.DiagramView
 import com.crayen.domovoi.app.FolderBrowserView
+import com.crayen.domovoi.app.PaletteView
 import com.crayen.domovoi.app.PanelView
 import com.crayen.domovoi.app.PullRequestsView
 import com.crayen.domovoi.app.SettingsView
@@ -42,6 +44,8 @@ class LiveView(first: ViewDelta) {
     private val _usage = MutableStateFlow(requireNotNull(first.usage) { FIRST })
     private val _agentSessions = MutableStateFlow(requireNotNull(first.agentSessions) { FIRST })
     private val _folderBrowser = MutableStateFlow(requireNotNull(first.folderBrowser) { FIRST })
+    private val _palette = MutableStateFlow(first.palette?.palette)
+    private val _diagrams = MutableStateFlow(first.diagrams ?: emptyList())
 
     val connection: StateFlow<ConnectionView> = _connection.asStateFlow()
     val toast: StateFlow<ToastView?> = _toast.asStateFlow()
@@ -64,6 +68,12 @@ class LiveView(first: ViewDelta) {
     val agentSessions: StateFlow<AgentSessionsView> = _agentSessions.asStateFlow()
     val folderBrowser: StateFlow<FolderBrowserView> = _folderBrowser.asStateFlow()
 
+    /** The command palette, while it is open. */
+    val palette: StateFlow<PaletteView?> = _palette.asStateFlow()
+
+    /** Mermaid diagrams the server draws (`DiagramPreview`). */
+    val diagrams: StateFlow<List<DiagramView>> = _diagrams.asStateFlow()
+
     /** Applies one delta (on the renders dispatcher, one at a time, in order). */
     fun apply(delta: ViewDelta) {
         delta.connection?.let { _connection.value = it }
@@ -85,6 +95,8 @@ class LiveView(first: ViewDelta) {
         delta.usage?.let { _usage.value = it }
         delta.agentSessions?.let { _agentSessions.value = it }
         delta.folderBrowser?.let { _folderBrowser.value = it }
+        delta.palette?.let { _palette.value = it.palette }
+        delta.diagrams?.let { _diagrams.value = it }
     }
 
     /** The core was replaced: its next delta is a whole view, not a patch

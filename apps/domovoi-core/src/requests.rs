@@ -102,6 +102,11 @@ pub fn orchestration_subscribe_thread(thread: &ThreadId, after_sequence: Option<
     built("orchestration.subscribeThread", payload)
 }
 
+/// Domovoi's own: forgets what a thread's "Allow for Thread" answers allowed.
+pub fn orchestration_forget_thread_permissions(thread_id: &str) -> Request {
+    built("orchestration.forgetThreadPermissions", json!({ "threadId": thread_id }))
+}
+
 pub fn orchestration_get_archived_shell_snapshot() -> Request {
     bare("orchestration.getArchivedShellSnapshot")
 }
@@ -114,6 +119,11 @@ pub fn orchestration_get_full_thread_diff(thread: &ThreadId, to_turn_count: u32)
 /// What a thread's turn `turn` changed.
 pub fn orchestration_get_turn_diff(thread: &ThreadId, turn: u32) -> Request {
     built("orchestration.getTurnDiff", json!({ "threadId": thread, "fromTurnCount": turn.saturating_sub(1), "toTurnCount": turn }))
+}
+
+/// Ends a thread's turn even when its agent doesn't stop (kills its process).
+pub fn orchestration_force_stop_thread(thread: &ThreadId) -> Request {
+    built("orchestration.forceStopThread", json!({ "threadId": thread }))
 }
 
 pub fn orchestration_search_threads(query: &str, limit: u32) -> Request {
@@ -190,6 +200,74 @@ pub fn server_update_settings(patch: SettingsPatch) -> Request {
     built("server.updateSettings", json!({ "patch": patch }))
 }
 
+// ---- provider setup (sign-in, managed install, instances) ----
+
+pub fn provider_auth_subscribe(instance: &str) -> Request {
+    built("provider.auth.subscribe", json!({ "instanceId": instance }))
+}
+
+pub fn provider_auth_start(instance: &str) -> Request {
+    built("provider.auth.start", json!({ "instanceId": instance }))
+}
+
+pub fn provider_auth_complete(instance: &str, flow_id: &str, callback_url: &str) -> Request {
+    built("provider.auth.complete", json!({ "instanceId": instance, "flowId": flow_id, "callbackUrl": callback_url }))
+}
+
+pub fn provider_auth_cancel(instance: &str, flow_id: &str) -> Request {
+    built("provider.auth.cancel", json!({ "instanceId": instance, "flowId": flow_id }))
+}
+
+pub fn provider_install_subscribe(instance: &str) -> Request {
+    built("provider.install.subscribe", json!({ "instanceId": instance }))
+}
+
+pub fn provider_install_start(instance: &str) -> Request {
+    built("provider.install.start", json!({ "instanceId": instance }))
+}
+
+pub fn provider_install_cancel(instance: &str, operation_id: &str) -> Request {
+    built("provider.install.cancel", json!({ "instanceId": instance, "operationId": operation_id }))
+}
+
+pub fn provider_install_remove(instance: &str) -> Request {
+    built("provider.install.remove", json!({ "instanceId": instance }))
+}
+
+/// `server.updateSettings` creating or replacing provider instance `id` with
+/// `edit`. What the editor doesn't show stays as `existing` has it (the
+/// instance's environment, accent color, other config keys); an empty key
+/// keeps the saved one (which settings show as a mark, never the key).
+pub fn server_upsert_provider_instance(id: &str, edit: &crate::app::ProviderInstanceEdit, existing: Option<&domovoi_model::typed::ProviderInstanceConfig>) -> Request {
+    let mut instance = existing.map(|c| json!(c)).unwrap_or_else(|| json!({}));
+    instance["driver"] = json!(edit.driver);
+    instance["enabled"] = json!(edit.enabled);
+    if edit.display_name.trim().is_empty() {
+        if let Some(fields) = instance.as_object_mut() {
+            fields.remove("displayName");
+        }
+    } else {
+        instance["displayName"] = json!(edit.display_name.trim());
+    }
+    if !instance["config"].is_object() {
+        instance["config"] = json!({});
+    }
+    let config = &mut instance["config"];
+    config["authMethod"] = json!(edit.auth_method);
+    config["gcpProject"] = json!(edit.gcp_project.trim());
+    config["gcpLocation"] = json!(edit.gcp_location.trim());
+    config["binaryPath"] = json!(edit.binary_path.trim());
+    if !edit.api_key.trim().is_empty() {
+        config["apiKey"] = json!(edit.api_key.trim());
+    }
+    built("server.updateSettings", json!({ "patch": {}, "providerInstanceMutation": { "operation": "upsert", "instanceId": id, "instance": instance } }))
+}
+
+/// `server.updateSettings` removing provider instance `id`.
+pub fn server_remove_provider_instance(id: &str) -> Request {
+    built("server.updateSettings", json!({ "patch": {}, "providerInstanceMutation": { "operation": "remove", "instanceId": id } }))
+}
+
 /// The providers' statuses again; `fresh` has the server probe them anew.
 pub fn server_refresh_providers(fresh: bool) -> Request {
     built("server.refreshProviders", if fresh { json!({ "fresh": true }) } else { json!({}) })
@@ -227,9 +305,14 @@ pub fn server_get_host_resources() -> Request {
     bare("server.getHostResources")
 }
 
-/// Usage by day, from `since_day` to `until_day` (`YYYY-MM-DD`, UTC).
-pub fn server_get_usage_summary(since_day: &str, until_day: &str) -> Request {
-    built("server.getUsageSummary", json!({ "sinceDay": since_day, "untilDay": until_day, "timeZone": "UTC" }))
+/// Usage by day (or by hour when `hourly`), from `since_day` to `until_day` (`YYYY-MM-DD`).
+pub fn server_get_usage_summary(since_day: &str, until_day: &str, time_zone: &str, hourly: bool) -> Request {
+    let tz = if time_zone.is_empty() { "UTC" } else { time_zone };
+    let mut body = json!({ "sinceDay": since_day, "untilDay": until_day, "timeZone": tz });
+    if hourly {
+        body["resolution"] = json!("hour");
+    }
+    built("server.getUsageSummary", body)
 }
 
 // ---- projects and folders ----
@@ -238,6 +321,7 @@ pub fn server_get_usage_summary(since_day: &str, until_day: &str) -> Request {
 pub enum ProjectChange<'a> {
     /// A project for a folder that is there already.
     Create { project: &'a ProjectId, title: &'a str, workspace_root: &'a str },
+    SetIcon { project: &'a ProjectId, icon: Option<domovoi_model::typed::ProjectIcon>, path: Option<String> },
     Rename { project: &'a ProjectId, title: &'a str },
     Delete { project: &'a ProjectId },
 }
@@ -249,6 +333,7 @@ pub fn projects_mutate(command_id: &str, change: ProjectChange) -> Request {
             "type": "project.create", "commandId": command_id, "projectId": project, "title": title,
             "workspaceRoot": workspace_root, "createWorkspaceRootIfMissing": false, "defaultModelSelection": null,
         }),
+        ProjectChange::SetIcon { project, icon, path } => json!({ "type": "project.update", "commandId": command_id, "projectId": project, "projectIcon": icon, "faviconPath": path }),
         ProjectChange::Rename { project, title } => json!({ "type": "project.update", "commandId": command_id, "projectId": project, "title": title }),
         ProjectChange::Delete { project } => json!({ "type": "project.delete", "commandId": command_id, "projectId": project }),
     };
@@ -276,8 +361,60 @@ pub fn projects_search_entries(cwd: &str, query: &str, limit: u32) -> Request {
     built("projects.searchEntries", json!({ "cwd": cwd, "query": query, "limit": limit }))
 }
 
+/// Lines of the workspace's files that contain `query` (as text, any case).
+pub fn projects_search_contents(cwd: &str, query: &str, limit: u32) -> Request {
+    built("projects.searchContents", json!({ "cwd": cwd, "query": query, "limit": limit, "caseSensitive": false, "wholeWord": false, "useRegex": false }))
+}
+
+pub fn project_icon_files(cwd: &str, query: &str) -> Request {
+    built("projects.searchEntries", json!({ "cwd": cwd, "query": query, "limit": 50, "kind": "file", "imageOnly": true }))
+}
+
+pub fn project_favicon(cwd: &str) -> Request {
+    built("assets.createUrl", json!({ "resource": { "_tag": "project-favicon", "cwd": cwd } }))
+}
+
+pub fn project_icon_thumbnail(cwd: &str, path: &str) -> Request {
+    built("assets.createUrl", json!({ "resource": { "_tag": "draft-workspace-file", "cwd": cwd, "path": path } }))
+}
+
+/// A Mermaid diagram drawn by the server (Domovoi's own resource).
+pub fn mermaid_diagram(source: &str, dark: bool) -> Request {
+    built("assets.createUrl", json!({ "resource": { "_tag": "mermaid-diagram", "source": source, "theme": if dark { "dark" } else { "light" } } }))
+}
+
+/// A Mermaid diagram drawn as vector SVG by the server for the Artifact viewer.
+pub fn mermaid_diagram_svg(source: &str, dark: bool) -> Request {
+    built("assets.createUrl", json!({ "resource": { "_tag": "mermaid-diagram-svg", "source": source, "theme": if dark { "dark" } else { "light" } } }))
+}
+
+/// A signed multi-file workspace bundle URL for an HTML artifact.
+pub fn artifact_bundle(cwd: &str, path: &str) -> Request {
+    built("assets.createUrl", json!({ "resource": { "_tag": "artifact-bundle", "cwd": cwd, "path": path } }))
+}
+
+/// A signed offline React/JSX runtime preview URL hosted by the server.
+pub fn artifact_react_preview(source: &str, dark: bool) -> Request {
+    built("assets.createUrl", json!({ "resource": { "_tag": "artifact-react", "source": source, "theme": if dark { "dark" } else { "light" } } }))
+}
+
 pub fn projects_read_file(cwd: &str, relative_path: &str) -> Request {
     built("projects.readFile", json!({ "cwd": cwd, "relativePath": relative_path }))
+}
+
+/// Writes `contents` to a file of the workspace (made or replaced).
+pub fn projects_write_file(cwd: &str, relative_path: &str, contents: &str) -> Request {
+    built("projects.writeFile", json!({ "cwd": cwd, "relativePath": relative_path, "contents": contents }))
+}
+
+pub fn projects_preview_file(cwd: &str, relative_path: &str) -> Request {
+    built("projects.readFile", json!({ "cwd": cwd, "relativePath": relative_path, "previewImages": true }))
+}
+
+/// Domovoi's own: downloads a Git LFS file's object into the server's
+/// repository cache.
+pub fn projects_fetch_lfs_object(cwd: &str, relative_path: &str) -> Request {
+    built("projects.fetchLfsObject", json!({ "cwd": cwd, "relativePath": relative_path }))
 }
 
 pub fn filesystem_browse(partial_path: &str) -> Request {
@@ -298,6 +435,11 @@ pub fn agent_sessions_import(project: &ProjectId, workspace_root: &str) -> Reque
 /// A URL to show an attached image from.
 pub fn assets_create_url(image: &ImageAttachment) -> Request {
     let resource = json!({ "_tag": "attachment", "attachmentId": image.id, "fileName": image.name, "mimeType": image.mime_type, "disposition": "inline" });
+    built("assets.createUrl", json!({ "resource": resource }))
+}
+
+/// A URL to show an image a tool call looked at (`media-file`, `tool-output-image`).
+pub fn assets_create_url_for(resource: Value) -> Request {
     built("assets.createUrl", json!({ "resource": resource }))
 }
 
@@ -337,6 +479,19 @@ pub fn vcs_refresh_status(cwd: &str) -> Request {
 /// The local branches of the folder `cwd`.
 pub fn vcs_list_refs(cwd: &str) -> Request {
     built("vcs.listRefs", json!({ "cwd": cwd, "limit": 100, "refKind": "local" }))
+}
+
+/// A new worktree from `base`, on a new branch `branch` (when given).
+pub fn vcs_create_worktree(cwd: &str, base: &str, branch: Option<&str>) -> Request {
+    let mut payload = json!({ "cwd": cwd, "refName": base });
+    if let Some(branch) = branch {
+        payload["newRefName"] = json!(branch);
+    }
+    built("vcs.createWorktree", payload)
+}
+
+pub fn vcs_remove_worktree(cwd: &str, path: &str, force: bool) -> Request {
+    built("vcs.removeWorktree", json!({ "cwd": cwd, "path": path, "force": force }))
 }
 
 pub fn vcs_pull(cwd: &str) -> Request {
@@ -502,6 +657,18 @@ pub fn scheduled_tasks_rotate_webhook_token(task: &ScheduledTaskId) -> Request {
     built("scheduledTasks.rotateWebhookToken", json!({ "id": task }))
 }
 
+/// Domovoi's own: a task's last runs (`limit`, newest first), or every task's latest.
+pub fn scheduled_tasks_list_runs(task: Option<&str>, limit: Option<u32>) -> Request {
+    let mut payload = json!({});
+    if let Some(task) = task {
+        payload["id"] = json!(task);
+    }
+    if let Some(limit) = limit {
+        payload["limit"] = json!(limit);
+    }
+    built("scheduledTasks.listRuns", payload)
+}
+
 pub fn scheduled_tasks_list_webhook_deliveries(task: &ScheduledTaskId) -> Request {
     built("scheduledTasks.listWebhookDeliveries", json!({ "id": task, "acceptAnyOutcome": true }))
 }
@@ -553,6 +720,17 @@ mod tests {
 
     fn sent(request: &Request) -> Value {
         json!({ "method": request.method(), "payload": request.payload() })
+    }
+
+    #[test]
+    fn project_icons_encode_overrides_and_explicit_reset() {
+        use domovoi_model::typed::{ProjectIcon, MonogramProjectIcon};
+        let project = ProjectId::from("p1");
+        let icon = ProjectIcon::Monogram(MonogramProjectIcon { text: "A2".into(), color: "blue".into() });
+        assert_eq!(sent(&projects_mutate("c1", ProjectChange::SetIcon { project: &project, icon: Some(icon), path: None })),
+            json!({ "method": "projects.mutate", "payload": { "type": "project.update", "commandId": "c1", "projectId": "p1", "projectIcon": { "kind": "monogram", "text": "A2", "color": "blue" }, "faviconPath": null } }));
+        assert_eq!(sent(&projects_mutate("c2", ProjectChange::SetIcon { project: &project, icon: None, path: None }))["payload"],
+            json!({ "type": "project.update", "commandId": "c2", "projectId": "p1", "projectIcon": null, "faviconPath": null }));
     }
 
     /// A settings record with nothing set changes nothing, and one with a

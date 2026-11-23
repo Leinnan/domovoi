@@ -576,14 +576,19 @@ async fn mutate(ctx: Arc<ConnCtx>, m: ProjectMutation) -> Result<ProjectRecord, 
             Ok(ProjectRecord::from(&shell))
         }
         ProjectMutation::Update { command_id, project_id, changes } => {
-            let mut p = store
-                .get_project(&project_id)
-                .map_err(|e| mutation_error(&command_id, e.to_string()))?
-                .ok_or_else(|| mutation_error(&command_id, "Unknown project."))?;
-            apply_project_update(&mut p, changes).map_err(|m| mutation_error(&command_id, m))?;
-            p.updated_at = domovoi_contracts::iso_now();
-            store.update_project(p.clone(), Some(&command_id)).map_err(|e| mutation_error(&command_id, e.to_string()))?;
-            Ok(ProjectRecord::from(&p))
+            // Read and apply the patch under the writer so simultaneous icon and title edits compose.
+            store.db().batch(|| -> Result<_, crate::store::StoreError> {
+                let mut project = store.get_project(&project_id)?
+                    .ok_or_else(|| crate::store::StoreError::Invalid("Unknown project.".into()))?;
+                let reset_icon = changes.project_icon == Some(None) && changes.favicon_path == Some(None);
+                apply_project_update(&mut project, changes).map_err(crate::store::StoreError::Invalid)?;
+                if reset_icon && crate::managed::is_scratch_root(&project.workspace_root) {
+                    project.project_icon = Some(crate::project_icons::scratch_default());
+                }
+                project.updated_at = domovoi_contracts::iso_now();
+                store.update_project(project.clone(), Some(&command_id))?;
+                Ok(ProjectRecord::from(&project))
+            }).map_err(|e| mutation_error(&command_id, e.to_string()))
         }
         ProjectMutation::Delete { command_id, project_id } => {
             let project = store

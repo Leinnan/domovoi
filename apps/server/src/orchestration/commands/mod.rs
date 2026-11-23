@@ -63,7 +63,7 @@ pub enum Effect {
     RespondToRequest { thread_id: String, request_id: String, decision: String, answers: Option<Answers> },
     /// Interrupt the active run.
     Interrupt { thread_id: String, run_id: String },
-    /// Runtime mode changed; live sessions should apply it.
+    /// The runtime or interaction mode changed; live sessions should apply it.
     RuntimeModeChanged { thread_id: String },
     /// Restore files to a checkpoint and roll the run(s) back.
     Rollback { thread_id: String, checkpoint_id: String, restore_files: bool, command_id: String },
@@ -72,6 +72,11 @@ pub enum Effect {
     Steer { thread_id: String, run_id: String, message_id: String },
     /// Close a deleted thread's terminals.
     CloseTerminals { thread_id: String },
+    /// Delete what a deleted thread leaves behind elsewhere: the scheduled
+    /// tasks bound to it and the tools its answers allowed.
+    DeleteThreadTasks { thread_id: String },
+    /// Point the scheduled tasks bound to a thread at the project it moved to.
+    MoveThreadTasks { thread_id: String, project_id: String },
     /// A thread settled: stop its stop-on-settle scripts, run the settle script.
     ThreadSettled { thread_id: String },
     /// Write the thread's title with the text generation model (`request_id`
@@ -94,6 +99,8 @@ impl Effect {
             | Effect::Rollback { thread_id, .. }
             | Effect::Steer { thread_id, .. }
             | Effect::CloseTerminals { thread_id }
+            | Effect::DeleteThreadTasks { thread_id }
+            | Effect::MoveThreadTasks { thread_id, .. }
             | Effect::ThreadSettled { thread_id }
             | Effect::GenerateTitle { thread_id, .. }
             | Effect::NameBranch { thread_id }
@@ -329,8 +336,8 @@ impl Orchestrator {
             Command::QueuedRunStart(c) => self.queued_start(c),
             Command::QueueResume(c) => self.queue_resume(c),
             Command::QueuedMessagePromoteToSteer(c) => self.promote_to_steer(c),
-            Command::RuntimeRequestRespond(c) => self.respond(&c.thread_id, &c.request_id, Some(c)),
-            Command::ThreadUserInputDismiss(c) => self.respond(&c.thread_id, &c.request_id, None),
+            Command::RuntimeRequestRespond(c) => self.respond(&c.thread_id, &c.request_id, Some(c), &c.command_id),
+            Command::ThreadUserInputDismiss(c) => self.respond(&c.thread_id, &c.request_id, None, &c.command_id),
             Command::ThreadStop(c) => self.interrupt(&c.thread_id, &c.command_id, false),
             Command::RunInterrupt(c) => self.interrupt(&c.thread_id, &c.command_id, c.hold_queue == Some(true)),
             Command::CheckpointRollback(c) => self.rollback(c),

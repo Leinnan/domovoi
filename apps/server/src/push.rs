@@ -24,7 +24,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use domovoi_contracts::time_fmt::{iso_from_millis, now_millis};
-use domovoi_model::typed::{RuntimeRequestKind, ShellStatus, ThreadShell, TurnItem, UserInputQuestion, notice, shell_status};
+use domovoi_model::typed::{
+    LiveProgress, RuntimeRequestKind, SUMMARY_CHARS, ShellStatus, ThreadShell, TurnItem, UserInputQuestion, first_line_clipped, live_progress, notice, shell_status,
+};
 
 const PRODUCTION: &str = "https://api.push.apple.com";
 const SANDBOX: &str = "https://api.sandbox.push.apple.com";
@@ -182,20 +184,27 @@ impl Apns {
 
     /// One request to one APNs host.
     async fn send(&self, device: &str, sandbox: bool, payload: &Value, collapse_id: &str) -> Result<(), SendError> {
-        self.post(device, sandbox, payload, "alert", &self.topic, Some(collapse_id)).await
+        self.post(device, sandbox, payload, "alert", &self.topic, Some(collapse_id), 10).await
     }
 
     /// An update to a Live Activity (`liveactivity` pushes go to the app's
-    /// topic plus `.push-type.liveactivity`).
-    pub async fn send_live(&self, token: &str, sandbox: bool, payload: &Value) -> Result<(), String> {
+    /// topic plus `.push-type.liveactivity`). `priority` is APNs': 10 shows at
+    /// once and counts against the activity's budget, 5 is sent when the
+    /// phone sees fit and does not.
+    pub async fn send_live(&self, token: &str, sandbox: bool, payload: &Value, priority: u8) -> Result<(), SendError> {
         if now_millis() < *locked(&self.paused_until) {
-            return Err("paused after APNs asked to slow down".into());
+            return Err(SendError::Other("paused after APNs asked to slow down".into()));
         }
         let topic = format!("{}.push-type.liveactivity", self.topic);
-        self.post(token, sandbox, payload, "liveactivity", &topic, None).await.map_err(describe)
+        let result = self.post(token, sandbox, payload, "liveactivity", &topic, None, priority).await;
+        if let Err(SendError::Throttled(_)) = &result {
+            *locked(&self.paused_until) = now_millis() + THROTTLE_PAUSE.as_millis() as i64;
+        }
+        result
     }
 
-    async fn post(&self, device: &str, sandbox: bool, payload: &Value, push_type: &str, topic: &str, collapse_id: Option<&str>) -> Result<(), SendError> {
+    #[expect(clippy::too_many_arguments, reason = "one APNs request's headers")]
+    async fn post(&self, device: &str, sandbox: bool, payload: &Value, push_type: &str, topic: &str, collapse_id: Option<&str>, priority: u8) -> Result<(), SendError> {
         let base = if sandbox { &self.sandbox_base } else { &self.production_base };
         let jwt = self.jwt().map_err(SendError::Other)?;
         let mut req = self
@@ -204,7 +213,7 @@ impl Apns {
             .header("authorization", format!("bearer {jwt}"))
             .header("apns-topic", topic)
             .header("apns-push-type", push_type)
-            .header("apns-priority", "10");
+            .header("apns-priority", priority.to_string());
         if let Some(id) = collapse_id {
             req = req.header("apns-collapse-id", collapse(id).as_ref());
         }
@@ -387,11 +396,17 @@ pub struct ActivityToken {
 /// activities when it comes back.
 static ACTIVITIES: std::sync::LazyLock<Mutex<HashMap<String, Vec<ActivityToken>>>> = std::sync::LazyLock::new(Default::default);
 
+/// What each thread's activities were last sent, and when (wall-clock ms).
+static LAST_PUSHED: std::sync::LazyLock<Mutex<HashMap<String, (LiveState, i64)>>> = std::sync::LazyLock::new(Default::default);
+
 pub fn register_activity(thread_id: &str, token: &str, sandbox: bool) {
     let mut all = locked(&ACTIVITIES);
     let list = all.entry(thread_id.to_owned()).or_default();
     list.retain(|t| t.token != token);
     list.push(ActivityToken { token: token.to_owned(), sandbox });
+    // A new activity has seen only what the app put in it: the next look at
+    // the thread sends it everything.
+    locked(&LAST_PUSHED).remove(thread_id);
 }
 
 pub fn unregister_activity(token: &str) {
@@ -408,24 +423,117 @@ fn activity_tokens(thread_id: &str) -> Vec<ActivityToken> {
 
 /// How long a finished activity stays on the Lock Screen.
 const ACTIVITY_LINGER_S: i64 = 15 * 60;
+/// When an activity no one has updated for this long says it may be out of date.
+const ACTIVITY_STALE_S: i64 = 30 * 60;
+/// Progress alone (a new step, a task done) is pushed at most this often per
+/// thread; a change of status goes at once.
+const PROGRESS_INTERVAL_MS: i64 = 15_000;
 
-/// A Live Activity update for a thread's status (the app's
-/// `AgentActivityAttributes.ContentState`); an activity ends with the
-/// thread's turn.
-pub fn activity_payload(status: &str, detail: &str, started_ms: i64, now_ms: i64) -> Value {
-    let ended = !matches!(status, "working" | "approval");
+/// What a thread's Live Activity shows: the app's
+/// `AgentActivityAttributes.ContentState`, key for key.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct LiveState {
+    /// `working` | `approval` | `completed` | `failed` | `interrupted` | `idle`.
+    pub status: &'static str,
+    /// What an approval or a question asks, or how the turn ended.
+    pub detail: String,
+    pub started_ms: i64,
+    pub ended_ms: Option<i64>,
+    /// While waiting on the user: `approval` (answerable from the activity) or `question`.
+    pub request: Option<&'static str>,
+    pub progress: LiveProgress,
+    /// Why the turn failed.
+    pub error: Option<String>,
+}
+
+impl LiveState {
+    pub fn ended(&self) -> bool {
+        !matches!(self.status, "working" | "approval")
+    }
+
+    /// What it says with alerts private: what kind of thing happens, how far
+    /// it got, never what it is about.
+    fn private(mut self) -> LiveState {
+        self.progress.action = None;
+        self.progress.summary = None;
+        if let Some(tasks) = self.progress.tasks.as_mut() {
+            tasks.current.clear();
+        }
+        self.error = None;
+        self
+    }
+}
+
+/// A Live Activity update; the activity ends with the thread's turn. `alert`
+/// lights the phone up (the turn has just started waiting on the user).
+pub fn activity_payload(live: &LiveState, now_ms: i64, alert: bool) -> Value {
+    let ended = live.ended();
+    let mut state = json!({ "status": live.status, "detail": live.detail, "startedAtMs": live.started_ms as f64 });
+    let mut put = |key: &str, value: Value| state[key] = value;
+    if let Some(at) = live.ended_ms {
+        put("endedAtMs", json!(at as f64));
+    }
+    if let Some(request) = live.request {
+        put("request", json!(request));
+    }
+    if let Some(kind) = live.progress.action_kind {
+        put("actionKind", json!(kind));
+    }
+    if let Some(action) = &live.progress.action {
+        put("action", json!(action));
+    }
+    if let Some(tasks) = &live.progress.tasks {
+        put("tasksDone", json!(tasks.done));
+        put("tasksTotal", json!(tasks.total));
+        if !tasks.current.is_empty() {
+            put("taskCurrent", json!(tasks.current));
+        }
+    }
+    if let Some(summary) = &live.progress.summary {
+        put("summary", json!(summary));
+    }
+    if let Some(error) = &live.error {
+        put("error", json!(error));
+    }
     let mut aps = json!({
         "timestamp": now_ms / 1000,
         "event": if ended { "end" } else { "update" },
-        "content-state": { "status": status, "detail": detail, "startedAtMs": started_ms as f64 },
+        "content-state": state,
     });
     if ended {
         aps["dismissal-date"] = json!(now_ms / 1000 + ACTIVITY_LINGER_S);
+    } else {
+        aps["stale-date"] = json!(now_ms / 1000 + ACTIVITY_STALE_S);
     }
-    if status == "approval" {
-        aps["alert"] = json!({ "title": "Needs your approval", "body": detail });
+    if alert && live.status == "approval" {
+        let title = if live.request == Some("question") { "Needs your answer" } else { "Needs your approval" };
+        aps["alert"] = json!({ "title": title, "body": live.detail });
     }
     json!({ "aps": aps })
+}
+
+/// Whether an activity gets `next` now (and at which APNs priority), later
+/// (in this many ms), or not at all, given what it was last sent and when.
+#[derive(Debug, PartialEq, Eq)]
+pub enum NextPush {
+    Now(u8),
+    Later(i64),
+    Skip,
+}
+
+pub fn next_push(last: Option<&(LiveState, i64)>, next: &LiveState, now_ms: i64) -> NextPush {
+    let Some((prev, at)) = last else {
+        return NextPush::Now(if next.status == "working" { 5 } else { 10 });
+    };
+    if prev.status != next.status {
+        // Waiting on the user, or the end: shown at once. Back to work: no hurry.
+        return NextPush::Now(if next.status == "working" { 5 } else { 10 });
+    }
+    if prev == next {
+        return NextPush::Skip;
+    }
+    let wait = at + PROGRESS_INTERVAL_MS - now_ms;
+    if wait > 0 { NextPush::Later(wait) } else { NextPush::Now(5) }
 }
 
 /// The most of a request's prompt an approval alert shows.
@@ -474,9 +582,12 @@ pub fn spawn(state: SharedState, apns: Apns) {
         let mut dirty: HashSet<String> = HashSet::new();
         // When the current burst of events is looked at; `None` when idle.
         let mut due: Option<tokio::time::Instant> = None;
+        // Threads whose activity progress was held back, and when to send it.
+        let mut held: HashMap<String, tokio::time::Instant> = HashMap::new();
         loop {
+            let next = due.into_iter().chain(held.values().copied()).min();
             let wait = async {
-                match due {
+                match next {
                     Some(at) => tokio::time::sleep_until(at).await,
                     None => std::future::pending().await,
                 }
@@ -499,9 +610,23 @@ pub fn spawn(state: SharedState, apns: Apns) {
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
                 },
                 () = wait => {
-                    due = None;
-                    for thread_id in std::mem::take(&mut dirty) {
-                        check(&state, &apns, &sends, &mut statuses, &thread_id);
+                    let now = tokio::time::Instant::now();
+                    let mut look = HashSet::new();
+                    if due.is_some_and(|at| at <= now) {
+                        due = None;
+                        look = std::mem::take(&mut dirty);
+                    }
+                    held.retain(|thread_id, at| {
+                        let ready = *at <= now;
+                        if ready {
+                            look.insert(thread_id.clone());
+                        }
+                        !ready
+                    });
+                    for thread_id in look {
+                        if let Some(later) = check(&state, &apns, &sends, &mut statuses, &thread_id) {
+                            held.insert(thread_id, now + later);
+                        }
                     }
                 }
             }
@@ -509,41 +634,112 @@ pub fn spawn(state: SharedState, apns: Apns) {
     });
 }
 
-/// Pushes a status change to the thread's Live Activities, ending them when
-/// its turn is over.
-fn update_activities(state: &SharedState, apns: &Arc<Apns>, shell: &ThreadShell, thread_id: &str, status: ShellStatus) {
+/// Brings the thread's Live Activities up to date, ending them when its turn
+/// is over. Progress is held back to one push per [`PROGRESS_INTERVAL_MS`];
+/// the answer is when to look again for what was held back.
+fn update_activities(state: &SharedState, apns: &Arc<Apns>, shell: &ThreadShell, thread_id: &str, status: ShellStatus) -> Option<Duration> {
     let tokens = activity_tokens(thread_id);
     if tokens.is_empty() {
-        return;
+        return None;
     }
-    let detail = match status {
-        ShellStatus::Approval if !apns.private_alerts => {
-            shell.pending_runtime_request.as_ref().and_then(|r| request_prompt(state, thread_id, r.id.as_str())).unwrap_or_default()
-        }
-        ShellStatus::Approval => "Needs your approval".into(),
-        ShellStatus::Failed => "Failed".into(),
-        ShellStatus::Working => String::new(),
-        _ => "Finished".into(),
+    let now = now_millis();
+    let last = locked(&LAST_PUSHED).get(thread_id).cloned();
+    // Within the interval with the same status, nothing new can go yet: the
+    // thread's items are not even read.
+    if let Some((prev, at)) = &last
+        && prev.status == status.as_str()
+        && now - at < PROGRESS_INTERVAL_MS
+    {
+        return Some(Duration::from_millis((at + PROGRESS_INTERVAL_MS - now) as u64));
+    }
+    let live = live_state(state, shell, thread_id, status, last.as_ref().map(|(l, _)| l), now, apns.private_alerts);
+    let priority = match next_push(last.as_ref(), &live, now) {
+        NextPush::Now(priority) => priority,
+        NextPush::Later(ms) => return Some(Duration::from_millis(ms as u64)),
+        NextPush::Skip => return None,
     };
-    let started = shell.activity_run_started_at.as_ref().and_then(|at| at.as_ref());
-    let started = started.and_then(|at| domovoi_contracts::time_fmt::millis_from_iso(at.as_str())).unwrap_or_else(now_millis);
-    let payload = activity_payload(status.as_str(), &detail, started, now_millis());
-    if payload["aps"]["event"] == "end" {
+    // Only a move into waiting lights the phone up: an activity registered
+    // while the app was open has nothing to tell it.
+    let alert = last.as_ref().is_some_and(|(prev, _)| prev.status != live.status);
+    let payload = activity_payload(&live, now, alert);
+    if live.ended() {
+        locked(&LAST_PUSHED).remove(thread_id);
         for t in &tokens {
             unregister_activity(&t.token);
         }
+    } else {
+        locked(&LAST_PUSHED).insert(thread_id.to_owned(), (live, now));
     }
     for t in tokens {
         let (apns, payload, thread_id) = (apns.clone(), payload.clone(), thread_id.to_owned());
         tokio::spawn(async move {
-            match apns.send_live(&t.token, t.sandbox, &payload).await {
-                Ok(()) => tracing::info!(thread = %thread_id, "live activity updated"),
-                Err(e) => {
-                    tracing::warn!(thread = %thread_id, "live activity update failed: {e}");
+            match apns.send_live(&t.token, t.sandbox, &payload, priority).await {
+                Ok(()) => tracing::info!(thread = %thread_id, priority, "live activity updated"),
+                // The activity is over (or its token was never this host's).
+                Err(e @ (SendError::Gone(_) | SendError::WrongHost)) => {
+                    tracing::info!(thread = %thread_id, "live activity token dropped ({})", describe(e));
                     unregister_activity(&t.token);
                 }
+                // Kept: the next change is sent again.
+                Err(e) => tracing::warn!(thread = %thread_id, "live activity update failed: {}", describe(e)),
             }
         });
+    }
+    None
+}
+
+/// What the thread's activity should show now. `last` is what it was last
+/// sent, whose start time stands in when the thread has none; `private`
+/// leaves out what the thread is about.
+fn live_state(state: &SharedState, shell: &ThreadShell, thread_id: &str, status: ShellStatus, last: Option<&LiveState>, now: i64, private: bool) -> LiveState {
+    let at = |t: &Option<Option<domovoi_model::typed::Timestamp>>| t.as_ref().and_then(Option::as_ref).and_then(|at| domovoi_contracts::time_fmt::millis_from_iso(at.as_str()));
+    let started = at(&shell.activity_run_started_at).or_else(|| at(&shell.latest_run_started_at)).or(last.map(|l| l.started_ms)).unwrap_or(now);
+    let pending = shell.pending_runtime_request.as_ref().filter(|_| status == ShellStatus::Approval);
+    let question = pending.is_some_and(|p| p.kind == RuntimeRequestKind::UserInput);
+    let items = state.store.records::<TurnItem>(thread_id).unwrap_or_default();
+    let asked = pending.and_then(|p| items.iter().find(|item| request_of(item) == Some(p.id.as_str())));
+    let detail = match status {
+        ShellStatus::Approval => {
+            let text = asked.and_then(|item| match &**item {
+                TurnItem::ApprovalRequest(a) => a.prompt.as_deref().or(a.reason.as_deref()).and_then(|p| first_line_clipped(p, SUMMARY_CHARS)),
+                TurnItem::UserInputRequest(q) => q.questions.first().and_then(|q| first_line_clipped(&q.question, SUMMARY_CHARS)),
+                _ => None,
+            });
+            let fallback = if question { "Needs your answer" } else { "Needs your approval" };
+            if private { fallback.into() } else { text.unwrap_or_else(|| fallback.into()) }
+        }
+        ShellStatus::Working => String::new(),
+        ShellStatus::Failed => "Failed".into(),
+        ShellStatus::Interrupted => "Stopped".into(),
+        _ => "Finished".into(),
+    };
+    let ended = !matches!(status, ShellStatus::Working | ShellStatus::Approval);
+    let run = shell.active_run_id.as_ref().or(shell.latest_run_id.as_ref());
+    let mut progress = live_progress(items.iter().map(|item| &**item), run);
+    if !(ended && status == ShellStatus::Completed) {
+        progress.summary = None;
+    }
+    let error = (status == ShellStatus::Failed)
+        .then(|| shell.last_error.as_ref().and_then(Option::as_deref).and_then(|e| first_line_clipped(e, SUMMARY_CHARS)))
+        .flatten();
+    let live = LiveState {
+        status: status.as_str(),
+        detail,
+        started_ms: started,
+        ended_ms: ended.then(|| at(&shell.latest_run_completed_at).unwrap_or(now)),
+        request: pending.map(|_| if question { "question" } else { "approval" }),
+        progress,
+        error,
+    };
+    if private { live.private() } else { live }
+}
+
+/// The request a turn item asks the user to answer.
+fn request_of(item: &TurnItem) -> Option<&str> {
+    match item {
+        TurnItem::ApprovalRequest(asked) => Some(asked.request_id.as_str()),
+        TurnItem::UserInputRequest(asked) => Some(asked.request_id.as_str()),
+        _ => None,
     }
 }
 
@@ -558,11 +754,7 @@ fn request_prompt(state: &SharedState, thread_id: &str, request_id: &str) -> Opt
 /// The turn item that shows the request `request_id`: an approval, or questions.
 fn request_item(state: &SharedState, thread_id: &str, request_id: &str) -> Option<Arc<TurnItem>> {
     let items = state.store.records::<TurnItem>(thread_id).ok()?;
-    items.into_iter().find(|item| match &**item {
-        TurnItem::ApprovalRequest(asked) => asked.request_id.as_str() == request_id,
-        TurnItem::UserInputRequest(asked) => asked.request_id.as_str() == request_id,
-        _ => false,
-    })
+    items.into_iter().find(|item| request_of(item) == Some(request_id))
 }
 
 /// A pending question answered by typing: exactly one question, without
@@ -597,18 +789,18 @@ fn seed(state: &SharedState) -> HashMap<String, ShellStatus> {
 }
 
 /// Compares a thread's status with the last one seen and pushes the change,
-/// if it deserves one, to every device whose app is closed. Sending happens
-/// on its own tasks, so a slow APNs never holds up the event stream.
-fn check(state: &SharedState, apns: &Arc<Apns>, sends: &Arc<tokio::sync::Semaphore>, statuses: &mut HashMap<String, ShellStatus>, thread_id: &str) {
-    let Ok(Some(shell)) = crate::orchestration::projection::thread_shell(&state.store, thread_id) else { return };
+/// if it deserves one, to every device whose app is closed, and brings the
+/// thread's Live Activities up to date. Sending happens on its own tasks, so
+/// a slow APNs never holds up the event stream. The answer is when to look
+/// again, for activity progress held back.
+fn check(state: &SharedState, apns: &Arc<Apns>, sends: &Arc<tokio::sync::Semaphore>, statuses: &mut HashMap<String, ShellStatus>, thread_id: &str) -> Option<Duration> {
+    let Ok(Some(shell)) = crate::orchestration::projection::thread_shell(&state.store, thread_id) else { return None };
     let status = shell_status(&shell);
     let previous = statuses.insert(thread_id.to_owned(), status);
     // A thread created after startup starts as `idle`, so its first run counts.
     let previous = previous.unwrap_or(ShellStatus::Idle);
-    if previous != status {
-        update_activities(state, apns, &shell, thread_id, status);
-    }
-    let Some(body) = notice(Some(previous), status) else { return };
+    let later = update_activities(state, apns, &shell, thread_id, status);
+    let Some(body) = notice(Some(previous), status) else { return later };
     let title = if apns.private_alerts { state.environment.label.clone() } else { shell.title.clone() };
     let waiting = statuses.values().filter(|s| **s == ShellStatus::Approval).count();
     let mut alert = payload(&state.environment.environment_id, thread_id, &title, body, waiting);
@@ -649,6 +841,7 @@ fn check(state: &SharedState, apns: &Arc<Apns>, sends: &Arc<tokio::sync::Semapho
             }
         });
     }
+    later
 }
 
 #[cfg(test)]
@@ -696,12 +889,17 @@ mod tests {
     fn tokens_and_payloads() {
         assert!(valid_token(&"ab".repeat(32)));
         assert!(!valid_token("xyz"));
-        let live = activity_payload("working", "", 1_000, 5_000);
+        let working = LiveState { status: "working", started_ms: 1_000, ..LiveState::default() };
+        let live = activity_payload(&working, 5_000, false);
         assert_eq!((live["aps"]["event"].as_str(), live["aps"]["content-state"]["status"].as_str()), (Some("update"), Some("working")));
         assert_eq!(live["aps"]["content-state"]["startedAtMs"], 1000.0);
         assert!(live["aps"]["dismissal-date"].is_null());
-        let done = activity_payload("completed", "Finished", 1_000, 5_000);
+        assert_eq!(live["aps"]["stale-date"].as_i64(), Some(5 + ACTIVITY_STALE_S));
+        assert!(live["aps"]["content-state"]["action"].is_null(), "what is not known is left out");
+        let done = LiveState { status: "completed", detail: "Finished".into(), started_ms: 1_000, ended_ms: Some(4_000), ..LiveState::default() };
+        let done = activity_payload(&done, 5_000, false);
         assert_eq!((done["aps"]["event"].as_str(), done["aps"]["dismissal-date"].as_i64()), (Some("end"), Some(5 + ACTIVITY_LINGER_S)));
+        assert_eq!(done["aps"]["content-state"]["endedAtMs"], 4000.0);
         register_activity("tA", "tok1", true);
         register_activity("tA", "tok1", true);
         assert_eq!(activity_tokens("tA").len(), 1, "registering twice keeps one");
@@ -713,6 +911,58 @@ mod tests {
         let body = approval["aps"]["alert"]["body"].as_str().unwrap();
         assert!(body.starts_with("Needs your approval: cargo test") && body.ends_with('…') && body.chars().count() < 200, "{body}");
         assert_eq!(approval_payload(payload("env", "t1", "T", "Needs your approval", 1), "rq", None)["aps"]["alert"]["body"], "Needs your approval");
+    }
+
+    fn progressing() -> LiveState {
+        LiveState {
+            status: "working",
+            started_ms: 1_000,
+            progress: LiveProgress {
+                action_kind: Some("command"),
+                action: Some("cargo test".into()),
+                tasks: Some(domovoi_model::typed::TaskCount { done: 2, total: 5, current: "Fix the parser".into() }),
+                summary: None,
+            },
+            ..LiveState::default()
+        }
+    }
+
+    #[test]
+    fn activities_carry_progress_and_keep_it_private_when_asked() {
+        let p = activity_payload(&progressing(), 5_000, false);
+        let state = &p["aps"]["content-state"];
+        assert_eq!((state["actionKind"].as_str(), state["action"].as_str()), (Some("command"), Some("cargo test")));
+        assert_eq!((state["tasksDone"].as_u64(), state["tasksTotal"].as_u64(), state["taskCurrent"].as_str()), (Some(2), Some(5), Some("Fix the parser")));
+        let private = activity_payload(&progressing().private(), 5_000, false);
+        let state = &private["aps"]["content-state"];
+        assert_eq!(state["actionKind"], "command", "the kind of step still shows");
+        assert!(state["action"].is_null() && state["taskCurrent"].is_null(), "{state}");
+        assert_eq!(state["tasksTotal"], 5);
+
+        let question = LiveState { status: "approval", detail: "What should the branch be called?".into(), request: Some("question"), ..progressing() };
+        let asked = activity_payload(&question, 5_000, true);
+        assert_eq!(asked["aps"]["content-state"]["request"], "question");
+        assert_eq!(asked["aps"]["alert"]["title"], "Needs your answer");
+        assert!(activity_payload(&question, 5_000, false)["aps"]["alert"].is_null(), "no alert unless the status just changed");
+
+        let summary = LiveState { status: "completed", progress: LiveProgress { summary: Some(domovoi_model::typed::clip_chars(&"ż".repeat(4000), SUMMARY_CHARS)), ..progressing().progress }, ..progressing() };
+        assert!(activity_payload(&summary, 5_000, false).to_string().len() < 4096, "clipped text stays inside APNs' limit");
+    }
+
+    #[test]
+    fn progress_is_held_back_but_a_status_change_is_not() {
+        let working = progressing();
+        assert_eq!(next_push(None, &working, 0), NextPush::Now(5));
+        let last = (working.clone(), 10_000);
+        assert_eq!(next_push(Some(&last), &working, 11_000), NextPush::Skip, "nothing new");
+        let moved = LiveState { progress: LiveProgress { action: Some("cargo build".into()), ..working.progress.clone() }, ..working.clone() };
+        assert_eq!(next_push(Some(&last), &moved, 11_000), NextPush::Later(PROGRESS_INTERVAL_MS - 1_000));
+        assert_eq!(next_push(Some(&last), &moved, 10_000 + PROGRESS_INTERVAL_MS), NextPush::Now(5));
+        let approval = LiveState { status: "approval", ..working.clone() };
+        assert_eq!(next_push(Some(&last), &approval, 11_000), NextPush::Now(10), "waiting on the user goes at once");
+        let done = LiveState { status: "completed", ..working.clone() };
+        assert_eq!(next_push(Some(&last), &done, 11_000), NextPush::Now(10));
+        assert_eq!(next_push(Some(&(approval, 10_000)), &working, 11_000), NextPush::Now(5), "back to work: no hurry");
     }
 
     #[test]

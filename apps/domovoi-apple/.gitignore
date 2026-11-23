@@ -1,6 +1,7 @@
 generated/
 build/
 Domovoi.xcodeproj/
+DomovoiMacRelease.xcodeproj/
 macOS/Info.plist
 iOS/Info.plist
 iOS/DomovoiIOS.entitlements

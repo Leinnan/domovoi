@@ -8,6 +8,8 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.UnfoldMore
+import com.crayen.domovoi.app.TraitView
 import androidx.compose.material.icons.outlined.StarOutline
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.outlined.VisibilityOff
@@ -82,8 +84,8 @@ fun ComposerOptionsSheet(core: Core, focus: ComposerOption, onDismiss: () -> Uni
         val index = when (focus) {
             ComposerOption.Plan -> 0
             ComposerOption.Effort -> 1
-            ComposerOption.Permissions -> 2
-            ComposerOption.Model -> 3
+            ComposerOption.Permissions -> 3
+            ComposerOption.Model -> 4
         }
         list.scrollToItem(index)
     }
@@ -105,7 +107,7 @@ fun ComposerOptionsSheet(core: Core, focus: ComposerOption, onDismiss: () -> Uni
             item("effort") {
                 if (composer.efforts.isNotEmpty()) {
                     Column(Modifier.padding(horizontal = Space.l, vertical = Space.s), verticalArrangement = Arrangement.spacedBy(Space.s)) {
-                        Header("Reasoning effort")
+                        Header(if (composer.effortLabel.isEmpty() || composer.effortLabel == "Effort") "Reasoning effort" else composer.effortLabel)
                         androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(Space.s)) {
                             composer.efforts.forEach { effort ->
                                 androidx.compose.material3.FilterChip(
@@ -115,6 +117,15 @@ fun ComposerOptionsSheet(core: Core, focus: ComposerOption, onDismiss: () -> Uni
                                 )
                             }
                         }
+                    }
+                }
+            }
+            // The model's other options (fast mode, context window, agent…).
+            item("traits") {
+                if (composer.traits.isNotEmpty()) {
+                    Column(Modifier.padding(vertical = Space.s)) {
+                        Header("Model options", Modifier.padding(horizontal = Space.l))
+                        composer.traits.forEach { t -> TraitRow(t) { value -> core.update(Event.SetModelOption(t.id, value)) } }
                     }
                 }
             }
@@ -158,6 +169,45 @@ fun ComposerOptionsSheet(core: Core, focus: ComposerOption, onDismiss: () -> Uni
     }
 }
 
+/** A model option: a switch, or a choice that opens its list. */
+@Composable
+private fun TraitRow(t: TraitView, set: (String) -> Unit) {
+    var picking by remember { mutableStateOf(false) }
+    val description: (@Composable () -> Unit)? = t.description.takeIf { it.isNotEmpty() }?.let { { Text(it) } }
+    when (t.kind) {
+        "switch" -> ListItem(
+            headlineContent = { Text(t.label) },
+            supportingContent = description,
+            trailingContent = { Switch(checked = t.on, onCheckedChange = { set(if (it) "true" else "false") }) },
+            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+            modifier = Modifier.clickable { set(if (t.on) "false" else "true") },
+        )
+        else -> Box {
+            ListItem(
+                headlineContent = { Text(t.label) },
+                supportingContent = description,
+                trailingContent = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(t.choices.firstOrNull { it.value == t.value }?.label ?: t.value, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+                        Icon(Icons.Outlined.UnfoldMore, null, modifier = Modifier.size(18.dp()))
+                    }
+                },
+                colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                modifier = Modifier.clickable(enabled = t.choices.isNotEmpty()) { picking = true },
+            )
+            DropdownMenu(expanded = picking, onDismissRequest = { picking = false }, modifier = Modifier.align(Alignment.CenterEnd)) {
+                t.choices.forEach { choice ->
+                    DropdownMenuItem(
+                        text = { Text(choice.label) },
+                        trailingIcon = { if (choice.value == t.value) Icon(Icons.Filled.Check, "Selected") },
+                        onClick = { picking = false; set(choice.value) },
+                    )
+                }
+            }
+        }
+    }
+}
+
 /** Favorites first, then the other models by provider; "Show N hidden" under a provider with hidden models. */
 private fun LazyListScope.modelItems(
     composer: com.crayen.domovoi.app.ComposerView,
@@ -174,6 +224,13 @@ private fun LazyListScope.modelItems(
     }
     for (group in composer.modelGroups) {
         item("g/${group.instanceId}") { GroupHeader(group.provider, group.status) }
+        // A provider that isn't ready says why (it may list no models at all).
+        if (group.message.isNotEmpty()) {
+            item("w/${group.instanceId}") {
+                Text(group.message, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = Space.l, vertical = Space.xs))
+            }
+        }
         for (row in group.models) {
             item("m/${row.option.instanceId}/${row.option.model}") { ModelRow(row, selected, update, pick) }
         }
@@ -210,7 +267,8 @@ private fun ModelRow(
     update: (Event) -> Unit,
     pick: (String, String) -> Unit,
 ) {
-    val on = selected == (row.option.instanceId to row.option.model)
+    // The core marks the chosen row (also one chosen by an alias).
+    val on = row.chosen || selected == (row.option.instanceId to row.option.model)
     val haptics = LocalHapticFeedback.current
     var menu by remember { mutableStateOf(false) }
     val favorite = { value: Boolean -> update(Event.SetModelFavorite(row.option.instanceId, row.option.model, value)) }

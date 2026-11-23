@@ -5,13 +5,16 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -21,6 +24,31 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.outlined.AccountTree
+import androidx.compose.material.icons.outlined.BugReport
+import androidx.compose.material.icons.outlined.Build
+import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.DeleteForever
+import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.material.icons.outlined.PlayCircle
+import androidx.compose.material.icons.outlined.Rule
+import androidx.compose.material.icons.outlined.Science
+import androidx.compose.material.icons.outlined.Tune
+import androidx.compose.material3.SheetValue
+import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.TextFieldValue
+import com.crayen.domovoi.app.FilePreviewView
+import com.crayen.domovoi.app.LfsView
+import androidx.compose.material.icons.outlined.CloudDownload
+import com.crayen.domovoi.app.WorktreeView
+import kotlinx.coroutines.launch
 import androidx.compose.material.icons.automirrored.outlined.CallSplit
 import androidx.compose.material.icons.automirrored.outlined.InsertDriveFile
 import androidx.compose.material.icons.outlined.Add
@@ -69,14 +97,20 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.material.icons.automirrored.outlined.OpenInNew
+import com.crayen.domovoi.app.UsageRowView
+import com.crayen.domovoi.ui.common.LimitWindowRow
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil3.compose.SubcomposeAsyncImage
 import com.crayen.domovoi.app.Event
 import com.crayen.domovoi.app.FileEntryView
 import com.crayen.domovoi.core.Core
+import com.crayen.domovoi.ui.common.HtmlArtifactButton
 import com.crayen.domovoi.ui.common.EmptyState
 import com.crayen.domovoi.ui.common.MarkdownBlocks
 import com.crayen.domovoi.ui.common.SectionHeader
@@ -152,6 +186,10 @@ fun FilesScreen(core: Core, onBack: (() -> Unit)?) {
     var query by rememberSaveable { mutableStateOf(files.query) }
     var previewing by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(Unit) { core.update(Event.ShowPanel("files")) }
+    // A file opened elsewhere (the palette's Go to file or a search match): show it.
+    LaunchedEffect(files.preview?.path, files.preview?.loading) {
+        files.preview?.takeIf { it.loading }?.let { previewing = it.path }
+    }
     ToolScaffold("Files", onBack) { padding ->
         Column(Modifier.fillMaxSize().padding(top = padding.calculateTopPadding())) {
             OutlinedTextField(
@@ -169,24 +207,141 @@ fun FilesScreen(core: Core, onBack: (() -> Unit)?) {
         }
     }
     files.preview?.takeIf { it.path == previewing }?.let { preview ->
-        ModalBottomSheet(onDismissRequest = { previewing = null }) {
-            Column(Modifier.padding(horizontal = Space.l)) {
-                Text(preview.path, fontFamily = Mono, style = MaterialTheme.typography.titleSmall, maxLines = 2)
-                Spacer(Modifier.height(Space.s))
-                when {
-                    preview.loading -> CircularProgressIndicator()
-                    preview.error != null -> Text(preview.error!!, color = MaterialTheme.colorScheme.error)
-                    else -> SelectionContainer {
-                        Text(
-                            highlighted(preview.spans, preview.text), fontFamily = Mono, fontSize = 12.sp, lineHeight = 16.sp, softWrap = false,
-                            modifier = Modifier.verticalScroll(rememberScrollState()).horizontalScroll(rememberScrollState()),
-                        )
+        FilePreviewSheet(
+            preview,
+            save = { text -> core.update(Event.SaveFile(preview.path, text)) },
+            fetchLfs = { core.update(Event.FetchLfsObject(preview.path)) },
+        ) { previewing = null }
+    }
+}
+
+/**
+ * A file's preview; an editable one has Edit, which turns it into a monospace
+ * editor with Save and Cancel. Leaving with unsaved changes asks first.
+ */
+@Composable
+private fun FilePreviewSheet(preview: FilePreviewView, save: (String) -> Unit, fetchLfs: () -> Unit, onDismiss: () -> Unit) {
+    val imageUrl = preview.imageUrl
+    var editing by remember(preview.path) { mutableStateOf<TextFieldValue?>(null) }
+    var askDiscard by remember { mutableStateOf(false) }
+    // The sheet was being closed when it asked: discarding closes it too.
+    var closeAfterDiscard by remember { mutableStateOf(false) }
+    val dirty = editing?.let { it.text != preview.text } == true
+    val currentDirty by rememberUpdatedState(dirty)
+    val scope = rememberCoroutineScope()
+    val sheet = rememberModalBottomSheetState(confirmValueChange = { value ->
+        if (value == SheetValue.Hidden && currentDirty) { closeAfterDiscard = true; askDiscard = true; false } else true
+    })
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheet) {
+        Column(Modifier.padding(horizontal = Space.l)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Space.s)) {
+                Text(preview.path, fontFamily = Mono, style = MaterialTheme.typography.titleSmall, maxLines = 2, modifier = Modifier.weight(1f))
+                preview.sizeLabel?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                val edit = editing
+                if (edit != null) {
+                    TextButton(onClick = { if (dirty) { closeAfterDiscard = false; askDiscard = true } else editing = null }) { Text("Cancel") }
+                    Button(onClick = { save(edit.text); editing = null }, enabled = dirty) { Text("Save") }
+                } else if (preview.editable && !preview.loading && preview.error == null) {
+                    FilledTonalButton(onClick = {
+                        editing = TextFieldValue(preview.text)
+                        scope.launch { sheet.expand() }
+                    }) {
+                        Icon(Icons.Outlined.Edit, null, modifier = Modifier.size(18.dp)); Spacer(Modifier.width(Space.xs)); Text("Edit")
                     }
                 }
-                if (preview.truncated) Text("Showing the start of the file.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Spacer(Modifier.height(Space.xl))
+            }
+            if (editing == null && !preview.loading && preview.error == null && imageUrl == null && !preview.truncated &&
+                preview.path.substringAfterLast('.').lowercase() in setOf("html", "htm", "svg")
+            ) HtmlArtifactButton(preview.text, preview.path)
+            Spacer(Modifier.height(Space.s))
+            val lfs = preview.lfs
+            if (lfs != null && !preview.loading && preview.error == null && editing == null) {
+                LfsCard(lfs, fetchLfs)
+                Spacer(Modifier.height(Space.s))
+            }
+            val edit = editing
+            when {
+                edit != null -> OutlinedTextField(
+                    value = edit, onValueChange = { editing = it },
+                    textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = Mono, fontSize = 12.sp, lineHeight = 16.sp),
+                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false, keyboardType = KeyboardType.Ascii),
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 240.dp, max = 520.dp),
+                )
+                preview.loading -> CircularProgressIndicator()
+                preview.error != null -> Text(preview.error!!, color = MaterialTheme.colorScheme.error)
+                imageUrl != null -> SubcomposeAsyncImage(
+                    model = imageUrl,
+                    contentDescription = preview.path,
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 120.dp, max = 420.dp),
+                    loading = {
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            CircularProgressIndicator()
+                        }
+                    },
+                    error = {
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            Text("Couldn’t load image preview.", color = MaterialTheme.colorScheme.error)
+                        }
+                    },
+                )
+                else -> SelectionContainer {
+                    Text(
+                        highlighted(preview.spans, preview.text), fontFamily = Mono, fontSize = 12.sp, lineHeight = 16.sp, softWrap = false,
+                        modifier = Modifier.verticalScroll(rememberScrollState()).horizontalScroll(rememberScrollState()),
+                    )
+                }
+            }
+            if (preview.truncated && editing == null) Text("Showing the start of the file.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.height(Space.xl))
+        }
+    }
+    if (askDiscard) {
+        AlertDialog(
+            onDismissRequest = { askDiscard = false },
+            title = { Text("Discard your changes?") },
+            text = { Text("The edits to ${preview.path.substringAfterLast('/')} haven't been saved.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    askDiscard = false
+                    editing = null
+                    if (closeAfterDiscard) onDismiss()
+                }) { Text("Discard", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = { TextButton(onClick = { askDiscard = false }) { Text("Keep editing") } },
+        )
+    }
+}
+
+/** A file kept in Git LFS: whether the server has its object, its size and id, and Fetch when it isn't there. */
+@Composable
+private fun LfsCard(lfs: LfsView, fetch: () -> Unit) {
+    val tints = LocalTints.current
+    val tint = when (lfs.state) {
+        "cached" -> tints.success
+        "missing" -> tints.caution
+        else -> MaterialTheme.colorScheme.error
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(Space.xs), modifier = Modifier.fillMaxWidth()) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Space.s)) {
+            Text(
+                "Git LFS", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.background(MaterialTheme.colorScheme.primary.copy(alpha = 0.15f), RoundedCornerShape(50)).padding(horizontal = Space.s, vertical = 2.dp),
+            )
+            Text(lfs.stateLabel, style = MaterialTheme.typography.labelMedium, color = tint)
+            Text(
+                "${lfs.sizeLabel} · ${lfs.oidShort}", fontFamily = Mono, style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, modifier = Modifier.weight(1f),
+            )
+            if (lfs.fetching) {
+                CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+            } else if (lfs.canFetch) {
+                FilledTonalButton(onClick = fetch) {
+                    Icon(Icons.Outlined.CloudDownload, null, modifier = Modifier.size(18.dp)); Spacer(Modifier.width(Space.xs)); Text("Fetch")
+                }
             }
         }
+        lfs.message?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
     }
 }
 
@@ -212,7 +367,7 @@ private fun FileRow(entry: FileEntryView, flat: Boolean, onClick: () -> Unit) {
 
 /** Branch, changes, commit, push, pull and pull requests (`GitScreen`). */
 @Composable
-fun GitScreen(core: Core, onBack: (() -> Unit)?) {
+fun GitScreen(core: Core, onBack: (() -> Unit)?, openTerminal: () -> Unit = {}) {
     val panel by core.view.panel.watch()
     val git = panel.git
     val uri = LocalUriHandler.current
@@ -220,6 +375,8 @@ fun GitScreen(core: Core, onBack: (() -> Unit)?) {
     var branchMenu by remember { mutableStateOf(false) }
     var newBranch by remember { mutableStateOf(false) }
     var confirming by remember { mutableStateOf<String?>(null) }
+    var removing by remember { mutableStateOf<Pair<WorktreeView, Boolean>?>(null) }
+    var newWorktree by remember { mutableStateOf(false) }
     val hasChanges = git.changedFiles.isNotEmpty()
     val hasMessage = message.isNotBlank()
     val canPush = git.hasRemote && (git.ahead > 0u || !git.hasUpstream)
@@ -297,6 +454,29 @@ fun GitScreen(core: Core, onBack: (() -> Unit)?) {
                                 if (git.pullRequest == null) OutlinedButton(onClick = { run("create_pr") }, enabled = !git.busy && git.branch != null) { Text("Create PR") }
                             }
                         }
+                        if (git.scripts.isNotEmpty()) {
+                            SectionHeader("Scripts")
+                            git.scripts.forEach { script ->
+                                ListItem(
+                                    headlineContent = { Text(script.name) },
+                                    supportingContent = { Text(script.command, fontFamily = Mono, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                                    leadingContent = { Icon(scriptIcon(script.icon), null) },
+                                    trailingContent = {
+                                        IconButton(onClick = { core.update(Event.RunScript(script.id)); openTerminal() }) {
+                                            Icon(Icons.Filled.PlayArrow, "Run ${script.name}", tint = MaterialTheme.colorScheme.primary)
+                                        }
+                                    },
+                                    modifier = Modifier.clickable(onClickLabel = "Run") { core.update(Event.RunScript(script.id)); openTerminal() },
+                                )
+                            }
+                        }
+                        SectionHeader("Worktrees", trailing = {
+                            TextButton(onClick = { newWorktree = true }, enabled = !git.busy && git.branches.isNotEmpty()) {
+                                Icon(Icons.Outlined.Add, null, modifier = Modifier.size(18.dp)); Text("New worktree…")
+                            }
+                        })
+                        if (git.worktrees.isEmpty()) Text("No other worktrees", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = Space.l, vertical = Space.s))
+                        git.worktrees.forEach { wt -> WorktreeRow(wt, enabled = !git.busy) { force -> removing = wt to force } }
                         if (git.busy || git.progress.isNotEmpty() || git.error != null) {
                             Column(Modifier.padding(Space.l), verticalArrangement = Arrangement.spacedBy(Space.xs)) {
                                 if (git.busy) LinearProgressIndicator(Modifier.fillMaxWidth())
@@ -325,12 +505,128 @@ fun GitScreen(core: Core, onBack: (() -> Unit)?) {
             dismissButton = { TextButton(onClick = { confirming = null }) { Text("Cancel") } },
         )
     }
+    removing?.let { (wt, force) ->
+        AlertDialog(
+            onDismissRequest = { removing = null },
+            title = { Text(if (force) "Force remove this worktree?" else "Remove this worktree?") },
+            text = {
+                Text(
+                    (if (force) "Its folder is deleted, uncommitted changes and all. " else "Its folder is deleted; a worktree with changes is kept. ") +
+                        (if (wt.branch.isNotEmpty()) "The branch ${wt.branch} stays." else "") +
+                        if (wt.threads.isNotEmpty()) " ${wt.threads.size} thread${if (wt.threads.size == 1) "" else "s"} work${if (wt.threads.size == 1) "s" else ""} there." else "",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { removing = null; core.update(Event.RemoveWorktree(wt.path, force)) }) {
+                    Text(if (force) "Force remove" else "Remove", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = { TextButton(onClick = { removing = null }) { Text("Cancel") } },
+        )
+    }
+    if (newWorktree) {
+        NewWorktreeDialog(git.branches, git.branch, onDismiss = { newWorktree = false }) { base, branch ->
+            newWorktree = false
+            core.update(Event.CreateWorktree(base, branch))
+        }
+    }
     if (newBranch) {
         com.crayen.domovoi.ui.threads.NameDialog(title = "New branch", label = "Name", confirm = "Create", onDismiss = { newBranch = false }) {
             newBranch = false
             core.update(Event.CreateBranch(it))
         }
     }
+}
+
+/** A script's icon by its kind. */
+private fun scriptIcon(icon: String) = when (icon) {
+    "test" -> Icons.Outlined.Science
+    "lint" -> Icons.Outlined.Rule
+    "build" -> Icons.Outlined.Build
+    "debug" -> Icons.Outlined.BugReport
+    "configure" -> Icons.Outlined.Tune
+    else -> Icons.Outlined.PlayCircle
+}
+
+/** A worktree: its branch, folder and threads; the menu removes it (or forces it). */
+@Composable
+private fun WorktreeRow(wt: WorktreeView, enabled: Boolean, remove: (force: Boolean) -> Unit) {
+    var menu by remember { mutableStateOf(false) }
+    ListItem(
+        headlineContent = {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Space.s)) {
+                Text(wt.branch.ifEmpty { "detached" }, fontFamily = Mono, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                if (wt.current) {
+                    Surface(color = MaterialTheme.colorScheme.secondaryContainer, shape = MaterialTheme.shapes.small) {
+                        Text("This thread", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSecondaryContainer, modifier = Modifier.padding(horizontal = Space.xs))
+                    }
+                }
+            }
+        },
+        supportingContent = {
+            Column {
+                Text(wt.path, fontFamily = Mono, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.StartEllipsis)
+                val n = wt.threads.size
+                Text(if (n == 0) "No threads" else "$n thread${if (n == 1) "" else "s"}: ${wt.threads.joinToString(", ")}", maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall)
+            }
+        },
+        leadingContent = { Icon(Icons.Outlined.AccountTree, null) },
+        trailingContent = {
+            Box {
+                IconButton(onClick = { menu = true }, enabled = enabled) { Icon(Icons.Outlined.MoreVert, "Worktree actions") }
+                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                    DropdownMenuItem(text = { Text("Remove") }, leadingIcon = { Icon(Icons.Outlined.Delete, null) }, enabled = !wt.current, onClick = { menu = false; remove(false) })
+                    DropdownMenuItem(
+                        text = { Text("Force remove", color = MaterialTheme.colorScheme.error) },
+                        leadingIcon = { Icon(Icons.Outlined.DeleteForever, null, tint = MaterialTheme.colorScheme.error) },
+                        enabled = !wt.current,
+                        onClick = { menu = false; remove(true) },
+                    )
+                }
+            }
+        },
+    )
+}
+
+/** A new worktree: the branch it starts from and the branch it creates. */
+@Composable
+private fun NewWorktreeDialog(branches: List<String>, current: String?, onDismiss: () -> Unit, create: (String, String) -> Unit) {
+    var base by rememberSaveable { mutableStateOf(current?.takeIf { it in branches } ?: branches.firstOrNull().orEmpty()) }
+    var name by rememberSaveable { mutableStateOf("") }
+    var picking by remember { mutableStateOf(false) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("New worktree") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(Space.m)) {
+                Box {
+                    OutlinedButton(onClick = { picking = true }, modifier = Modifier.fillMaxWidth()) {
+                        Text("From ", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(base.ifEmpty { "Pick a branch" }, fontFamily = Mono, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                        Icon(Icons.Outlined.UnfoldMore, null, modifier = Modifier.size(18.dp))
+                    }
+                    DropdownMenu(expanded = picking, onDismissRequest = { picking = false }) {
+                        branches.forEach { b ->
+                            DropdownMenuItem(
+                                text = { Text(b, fontFamily = Mono) },
+                                trailingIcon = { if (b == base) Icon(Icons.Filled.Check, null) },
+                                onClick = { picking = false; base = b },
+                            )
+                        }
+                    }
+                }
+                OutlinedTextField(
+                    value = name, onValueChange = { name = it },
+                    label = { Text("New branch") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        },
+        confirmButton = { TextButton(onClick = { create(base, name.trim()) }, enabled = base.isNotEmpty() && name.isNotBlank()) { Text("Create") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
 }
 
 // ---- pull requests ----
@@ -470,44 +766,86 @@ private fun ReviewDialog(onDismiss: () -> Unit, submit: (String, String) -> Unit
 @Composable
 fun UsageScreen(core: Core) {
     val usage by core.view.usage.watch()
-    var days by rememberSaveable { mutableIntStateOf(7) }
-    LaunchedEffect(days) { core.update(Event.LoadUsage(days.toUInt())) }
+    val uri = LocalUriHandler.current
+    // The span the core has (`LoadUsage` sets it); a week the first time.
+    LaunchedEffect(Unit) { core.update(Event.LoadUsage(if (usage.days > 0u) usage.days else 7u)) }
     ToolScaffold("Usage", onBack = null) { padding ->
         LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = Space.xl)) {
             item("range") {
-                val ranges = listOf(1 to "Today", 7 to "7 days", 30 to "30 days")
+                val ranges = listOf(1u to "Today", 7u to "7 days", 30u to "30 days", 90u to "90 days")
                 SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(horizontal = Space.l, vertical = Space.s)) {
                     ranges.forEachIndexed { i, (d, label) ->
-                        SegmentedButton(selected = days == d, onClick = { days = d }, shape = SegmentedButtonDefaults.itemShape(i, ranges.size)) { Text(label) }
+                        SegmentedButton(
+                            selected = usage.days == d, onClick = { if (usage.days != d) core.update(Event.LoadUsage(d)) },
+                            shape = SegmentedButtonDefaults.itemShape(i, ranges.size),
+                        ) { Text(label, maxLines = 1) }
                     }
                 }
             }
             item("total") {
                 Surface(color = MaterialTheme.colorScheme.primaryContainer, shape = MaterialTheme.shapes.large, modifier = Modifier.fillMaxWidth().padding(Space.l)) {
-                    Column(Modifier.padding(Space.l)) {
-                        Text(usage.rangeLabel.ifEmpty { "Total" }, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onPrimaryContainer)
-                        Text(usage.totalTokens.ifEmpty { "—" }, style = MaterialTheme.typography.displaySmall, color = MaterialTheme.colorScheme.onPrimaryContainer)
-                        Text("tokens", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                    Row(Modifier.padding(Space.l), verticalAlignment = Alignment.Bottom) {
+                        Column(Modifier.weight(1f)) {
+                            Text(usage.rangeLabel.ifEmpty { "Total" }, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                            Text(usage.totalTokens.ifEmpty { "—" }, style = MaterialTheme.typography.displaySmall, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                            Text("tokens", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                        }
+                        if (usage.totalCost.isNotEmpty()) {
+                            Column(horizontalAlignment = Alignment.End) {
+                                Text(usage.totalCost, style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.onPrimaryContainer, fontWeight = FontWeight.SemiBold)
+                                Text("cost", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                            }
+                        }
                     }
                 }
             }
             if (usage.loading) item("loading") { LinearProgressIndicator(Modifier.fillMaxWidth().padding(horizontal = Space.l)) }
             if (usage.notice.isNotEmpty()) item("notice") { Text(usage.notice, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = Space.l)) }
+            if (usage.limits.any { it.windows.isNotEmpty() }) {
+                item("limits") { SectionHeader("Limits") }
+                usage.limits.filter { it.windows.isNotEmpty() }.forEach { provider ->
+                    item("limits/${provider.instanceId}") {
+                        Column(Modifier.fillMaxWidth().padding(horizontal = Space.l, vertical = Space.s), verticalArrangement = Arrangement.spacedBy(Space.m)) {
+                            Text(provider.provider, style = MaterialTheme.typography.titleSmall)
+                            provider.windows.forEach { LimitWindowRow(it) }
+                            if (provider.externalUrl.isNotEmpty()) {
+                                TextButton(onClick = { runCatching { uri.openUri(provider.externalUrl) } }, contentPadding = PaddingValues(0.dp)) {
+                                    Text(provider.externalLabel.ifEmpty { "Usage on the web" })
+                                    Icon(Icons.AutoMirrored.Outlined.OpenInNew, null, modifier = Modifier.padding(start = Space.xs).size(16.dp))
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if (usage.byModel.isNotEmpty()) {
+                item("by-model") { SectionHeader("By model") }
+                usage.byModel.forEachIndexed { i, row -> item("model/$i") { UsageRow(row) } }
+            }
             var lastDay = ""
             usage.rows.forEachIndexed { i, row ->
                 if (row.day != lastDay) {
                     lastDay = row.day
                     item("day/$i") { SectionHeader(row.day) }
                 }
-                item("row/$i") {
-                    ListItem(
-                        headlineContent = { Text(row.model) },
-                        supportingContent = { Text("${row.provider} · in ${row.input} · cached ${row.cached} · out ${row.output}", maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                        trailingContent = { Text(row.total, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold) },
-                        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-                    )
-                }
+                item("row/$i") { UsageRow(row) }
             }
         }
     }
+}
+
+/** A model's tokens (and cost, when the server has prices). */
+@Composable
+private fun UsageRow(row: UsageRowView) {
+    ListItem(
+        headlineContent = { Text(row.model) },
+        supportingContent = { Text("${row.provider} · in ${row.input} · cached ${row.cached} · out ${row.output}", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+        trailingContent = {
+            Column(horizontalAlignment = Alignment.End) {
+                Text(row.total, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                if (row.cost.isNotEmpty()) Text(row.cost, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        },
+        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+    )
 }

@@ -1454,6 +1454,130 @@
    "note": "a fresh session in the bound thread"
   },
   {
+   "tag": "orchestration.launchThread",
+   "payload": {
+    "commandId": "l-thread-archived-later",
+    "creationSource": "web",
+    "threadId": "thread-archived-later",
+    "projectId": "$PROJECT",
+    "title": "Archived later",
+    "modelSelection": {
+     "instanceId": "claudeAgent",
+     "model": "claude-haiku-5-5"
+    },
+    "runtimeMode": "approval-required",
+    "interactionMode": "default",
+    "workspaceStrategy": {
+     "type": "root"
+    }
+   },
+   "note": "setup: a thread without a turn"
+  },
+  {
+   "tag": "scheduledTasks.upsert",
+   "payload": {
+    "title": "Bound",
+    "prompt": "Any news?",
+    "enabled": true,
+    "schedule": {
+     "type": "interval",
+     "everyMs": 600000
+    },
+    "projectId": "$PROJECT",
+    "workspaceStrategy": {
+     "type": "root"
+    },
+    "modelSelection": {
+     "instanceId": "claudeAgent",
+     "model": "claude-haiku-5-5"
+    },
+    "runtimeMode": "approval-required",
+    "interactionMode": "default",
+    "id": "task-archived-later",
+    "threadId": "thread-archived-later"
+   },
+   "note": "setup: a task bound to it"
+  },
+  {
+   "tag": "orchestration.dispatchCommand",
+   "payload": {
+    "type": "thread.archive",
+    "commandId": "arch-later",
+    "threadId": "thread-archived-later"
+   },
+   "note": "setup: its thread archived after the save"
+  },
+  {
+   "tag": "scheduledTasks.runNow",
+   "payload": {
+    "id": "task-archived-later"
+   },
+   "note": "a thread archived after the save: the run fails and says why, nothing is posted"
+  },
+  {
+   "tag": "orchestration.launchThread",
+   "payload": {
+    "commandId": "l-thread-deleted-later",
+    "creationSource": "web",
+    "threadId": "thread-deleted-later",
+    "projectId": "$PROJECT",
+    "title": "Deleted later",
+    "modelSelection": {
+     "instanceId": "claudeAgent",
+     "model": "claude-haiku-5-5"
+    },
+    "runtimeMode": "approval-required",
+    "interactionMode": "default",
+    "workspaceStrategy": {
+     "type": "root"
+    }
+   },
+   "note": "setup: a thread without a turn"
+  },
+  {
+   "tag": "scheduledTasks.upsert",
+   "payload": {
+    "title": "Bound",
+    "prompt": "Any news?",
+    "enabled": true,
+    "schedule": {
+     "type": "interval",
+     "everyMs": 600000
+    },
+    "projectId": "$PROJECT",
+    "workspaceStrategy": {
+     "type": "root"
+    },
+    "modelSelection": {
+     "instanceId": "claudeAgent",
+     "model": "claude-haiku-5-5"
+    },
+    "runtimeMode": "approval-required",
+    "interactionMode": "default",
+    "id": "task-deleted-later",
+    "threadId": "thread-deleted-later"
+   },
+   "note": "setup: a task bound to it"
+  },
+  {
+   "tag": "orchestration.dispatchCommand",
+   "payload": {
+    "type": "thread.delete",
+    "commandId": "del-later",
+    "threadId": "thread-deleted-later"
+   },
+   "note": "setup: its thread deleted after the save"
+  },
+  {
+   "tag": "scheduledTasks.runNow",
+   "payload": {
+    "id": "task-deleted-later"
+   },
+   "expect": "failure",
+   "error": "ScheduledTaskError",
+   "note": "a thread deleted after the save took its task along"
+  },
+  {
    "tag": "scheduledTasks.runNow",
    "payload": {
     "id": "scheduled-task:cmd-fixed"
@@ -1498,6 +1622,29 @@
    "expect": "failure",
    "error": "ScheduledTaskError",
    "note": "no such task"
+  },
+  {
+   "tag": "scheduledTasks.listRuns",
+   "payload": {
+    "id": "task-here"
+   },
+   "note": "a task's runs, newest first, as they are now in its thread (Domovoi's own method, not in t3code's schemas)",
+   "skip_schema": true
+  },
+  {
+   "tag": "scheduledTasks.listRuns",
+   "payload": {},
+   "note": "every task's latest run (not in t3code's schemas)",
+   "skip_schema": true
+  },
+  {
+   "tag": "scheduledTasks.listRuns",
+   "payload": {
+    "id": "no-such-task",
+    "limit": 5
+   },
+   "note": "a task that is not there has none (not in t3code's schemas)",
+   "skip_schema": true
   },
   {
    "tag": "scheduledTasks.subscribe",
@@ -1640,6 +1787,14 @@
    "expect": "failure",
    "error": "ScheduledTaskError",
    "note": "a deleted task"
+  },
+  {
+   "tag": "orchestration.forgetThreadPermissions",
+   "payload": {
+    "threadId": "$THREAD"
+   },
+   "note": "the tools a thread's answers allowed are forgotten: none here (Domovoi's own method, not in t3code's schemas)",
+   "skip_schema": true
   },
   {
    "tag": "scheduledTasks.subscribe",

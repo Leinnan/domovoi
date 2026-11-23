@@ -110,7 +110,7 @@ pub fn claude() -> Vec<ServerProviderSkill> {
     CLAUDE_SKILLS.read().unwrap_or_else(|e| e.into_inner()).clone()
 }
 
-fn agent_home() -> PathBuf {
+pub(crate) fn agent_home() -> PathBuf {
     std::env::var_os("DOMOVOI_AGENT_SESSIONS_HOME").filter(|v| !v.is_empty()).map(PathBuf::from).unwrap_or_else(crate::util::home_dir)
 }
 

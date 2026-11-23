@@ -86,8 +86,10 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.crayen.domovoi.app.Event
+import com.crayen.domovoi.app.ScheduledTaskView
 import com.crayen.domovoi.app.SettingFieldView
 import com.crayen.domovoi.core.Core
+import com.crayen.domovoi.ui.common.ProjectIconTile
 import com.crayen.domovoi.ui.common.EmptyState
 import com.crayen.domovoi.ui.common.SectionHeader
 import com.crayen.domovoi.ui.common.copyText
@@ -124,6 +126,7 @@ fun SettingsScreen(core: Core, nav: Navigator) {
     val context = LocalContext.current
     var renamingEnv by remember { mutableStateOf<com.crayen.domovoi.app.EnvironmentView?>(null) }
     var forgetting by remember { mutableStateOf<com.crayen.domovoi.app.EnvironmentView?>(null) }
+    var pickingProject by remember(connection.activeEnvironmentId) { mutableStateOf<String?>(null) }
     var renamingProject by remember { mutableStateOf<com.crayen.domovoi.app.ProjectSettingsView?>(null) }
     var removing by remember { mutableStateOf<com.crayen.domovoi.app.ProjectSettingsView?>(null) }
     LaunchedEffect(connection.state) { if (connection.state == "connected") { core.update(Event.LoadRemoteAccess); core.update(Event.LoadSettings("archived")) } }
@@ -184,11 +187,12 @@ fun SettingsScreen(core: Core, nav: Navigator) {
                 ListItem(
                     headlineContent = { Text(project.title) },
                     supportingContent = { Text("${project.workspaceRoot} · ${project.threadCount} threads", maxLines = 1, overflow = TextOverflow.StartEllipsis) },
-                    leadingContent = { Icon(Icons.Outlined.Folder, null) },
+                    leadingContent = { ProjectIconTile(project.icon, core) },
                     trailingContent = {
                         Box {
                             IconButton(onClick = { menu = true }) { Icon(Icons.Outlined.MoreVert, "Actions for ${project.title}") }
                             DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                                DropdownMenuItem(text = { Text("Change Icon…") }, enabled = !project.icon.saving && connection.state == "connected", onClick = { menu = false; pickingProject = project.id })
                                 DropdownMenuItem(text = { Text("Rename…") }, onClick = { menu = false; renamingProject = project })
                                 DropdownMenuItem(text = { Text("Remove", color = MaterialTheme.colorScheme.error) }, onClick = { menu = false; removing = project })
                             }
@@ -229,6 +233,9 @@ fun SettingsScreen(core: Core, nav: Navigator) {
                 )
             }
         }
+    }
+    settings.projects.firstOrNull { it.id == pickingProject }?.let { project ->
+        ProjectIconPicker(project, settings.projectIconFiles, core, connection.state == "connected") { pickingProject = null }
     }
     renamingEnv?.let { env ->
         NameDialog("Rename server", "Name", "Rename", env.label, onDismiss = { renamingEnv = null }) { renamingEnv = null; core.update(Event.RenameEnvironment(env.id, it)) }
@@ -315,7 +322,9 @@ fun ServerSettingsScreen(core: Core, onBack: () -> Unit) {
 fun ProvidersScreen(core: Core, onBack: () -> Unit) {
     val settings by core.view.settings.watch()
     val tints = LocalTints.current
+    var editing by remember { mutableStateOf<ProviderEditing?>(null) }
     LaunchedEffect(Unit) { core.update(Event.LoadSettings("providers")) }
+    editing?.let { ProviderEditorSheet(it, { e -> core.update(e) }) { editing = null } }
     ToolScaffold("Providers", onBack, actions = { TextButton(onClick = { core.update(Event.RefreshProviders) }) { Text("Check again") } }) { padding ->
         LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = Space.xxl)) {
             if (settings.providers.isEmpty()) item("none") { EmptyState(Icons.Outlined.Memory, "No providers yet") }
@@ -330,6 +339,10 @@ fun ProvidersScreen(core: Core, onBack: () -> Unit) {
                     trailingContent = { Text(p.status, color = if (ok) tints.success else tints.caution, style = MaterialTheme.typography.labelLarge) },
                     colors = ListItemDefaults.colors(containerColor = clear),
                 )
+                ProviderSetup(p, { core.update(it) }) { editing = it }
+            }
+            if (settings.canAddAntigravity) item("add") {
+                TextButton(onClick = { editing = newAntigravity() }, modifier = Modifier.padding(horizontal = Space.l)) { Text("Add Antigravity account") }
             }
             item("fields") {
                 settings.groups.forEach { group ->
@@ -342,20 +355,20 @@ fun ProvidersScreen(core: Core, onBack: () -> Unit) {
 }
 
 @Composable
-fun ScheduledTasksScreen(core: Core, onBack: () -> Unit) {
+fun ScheduledTasksScreen(core: Core, onBack: () -> Unit, openThread: (String) -> Unit) {
     val settings by core.view.settings.watch()
-    val sidebar by core.view.sidebar.watch()
-    val composer by core.view.composer.watch()
     val context = androidx.compose.ui.platform.LocalContext.current
     var editing by remember { mutableStateOf<com.crayen.domovoi.app.ScheduledTaskEdit?>(null) }
     var deleting by remember { mutableStateOf<com.crayen.domovoi.app.ScheduledTaskView?>(null) }
     var rotating by remember { mutableStateOf<com.crayen.domovoi.app.ScheduledTaskView?>(null) }
     LaunchedEffect(Unit) { core.update(Event.LoadSettings("scheduled")) }
-    val projects = sidebar.projects.filter { !it.isScratch }
+    // "No project" can hold tasks too; a new one starts in a real project when there is one.
+    val projects = settings.projects
+    val firstProject = (projects.firstOrNull { !it.isScratch } ?: projects.firstOrNull())?.id.orEmpty()
     ToolScaffold(
         "Scheduled tasks", onBack,
         floatingActionButton = {
-            ExtendedFloatingActionButton(onClick = { editing = newScheduledTask(projects.firstOrNull()?.id.orEmpty()) }, icon = { Icon(Icons.Outlined.Add, null) }, text = { Text("New task") })
+            ExtendedFloatingActionButton(onClick = { editing = newScheduledTask(firstProject) }, icon = { Icon(Icons.Outlined.Add, null) }, text = { Text("New task") })
         },
     ) { padding ->
         LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = 96.dp)) {
@@ -369,8 +382,9 @@ fun ScheduledTasksScreen(core: Core, onBack: () -> Unit) {
                         headlineContent = { Text(task.name) },
                         supportingContent = {
                             Column {
-                                Text(listOf(task.schedule, task.projectTitle, if (task.nextRun.isNotEmpty() && !webhook) "next ${task.nextRun}" else null, task.lastRun).filterNotNull().filter { it.isNotEmpty() }.joinToString(" · "))
-                                if (task.lastError.isNotEmpty()) Text(task.lastError, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall, maxLines = 2)
+                                Text(listOf(task.schedule, task.projectTitle, scheduledDestination(task), if (task.nextRun.isNotEmpty() && !webhook) "next ${task.nextRun}" else null, task.lastRun).filterNotNull().filter { it.isNotEmpty() }.joinToString(" · "))
+                                if (task.runState.isNotEmpty()) Text(task.runState, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodySmall)
+                                else if (task.lastError.isNotEmpty()) Text(task.lastError, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall, maxLines = 2)
                             }
                         },
                         trailingContent = {
@@ -380,6 +394,10 @@ fun ScheduledTasksScreen(core: Core, onBack: () -> Unit) {
                                     IconButton(onClick = { menu = true }) { Icon(Icons.Outlined.MoreVert, "Actions for ${task.name}") }
                                     DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                                         DropdownMenuItem(text = { Text("Edit") }, leadingIcon = { Icon(Icons.Outlined.Tune, null) }, onClick = { menu = false; editing = editedScheduledTask(task) })
+                                        val thread = task.threadId.ifEmpty { task.lastThreadId }
+                                        if (thread.isNotEmpty()) DropdownMenuItem(text = { Text("Open thread") }, onClick = { menu = false; openThread(thread) })
+                                        val showing = settings.scheduledRunsTask == task.id
+                                        DropdownMenuItem(text = { Text(if (showing) "Hide runs" else "Runs") }, onClick = { menu = false; core.update(Event.LoadScheduledRuns(if (showing) "" else task.id)) })
                                         if (!webhook) DropdownMenuItem(text = { Text("Run now") }, leadingIcon = { Icon(Icons.Outlined.PlayArrow, null) }, onClick = { menu = false; core.update(Event.RunScheduledNow(task.id)) })
                                         if (webhook) {
                                             DropdownMenuItem(text = { Text("Copy URL") }, leadingIcon = { Icon(Icons.Outlined.ContentCopy, null) }, onClick = { menu = false; copyText(context, task.webhookUrl) })
@@ -393,6 +411,17 @@ fun ScheduledTasksScreen(core: Core, onBack: () -> Unit) {
                         },
                         colors = ListItemDefaults.colors(containerColor = clear),
                     )
+                    if (settings.scheduledRunsTask == task.id) {
+                        if (settings.scheduledRuns.isEmpty()) Text("No runs yet.", style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(horizontal = Space.l, vertical = Space.xs))
+                        settings.scheduledRuns.forEach { r ->
+                            Text(
+                                listOf(r.status, r.trigger, r.started, r.error.ifEmpty { r.threadTitle }).filter { it.isNotEmpty() }.joinToString(" · "),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (r.failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.fillMaxWidth().clickable(enabled = r.threadId.isNotEmpty()) { openThread(r.threadId) }.padding(horizontal = Space.l, vertical = 2.dp),
+                            )
+                        }
+                    }
                     if (webhook) {
                         Text(task.webhookUrl, style = MaterialTheme.typography.bodySmall, maxLines = 1, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = Space.l))
                         if (settings.webhookDeliveriesTask == task.id) {
@@ -406,18 +435,7 @@ fun ScheduledTasksScreen(core: Core, onBack: () -> Unit) {
             }
         }
     }
-    editing?.let { draft ->
-        ScheduledTaskEditorSheet(
-            start = draft,
-            projects = projects.map { it.id to it.title },
-            threadsOf = { id -> projects.firstOrNull { it.id == id }?.let { p -> (p.threads + p.earlier).map { it.id to it.title } }.orEmpty() },
-            models = composer.modelGroups.flatMap { g -> g.models.map { "${it.option.instanceId}|${it.option.model}" to "${g.provider} · ${it.name}" } },
-            onDismiss = { editing = null },
-        ) { task ->
-            editing = null
-            core.update(Event.SaveScheduled(task))
-        }
-    }
+    editing?.let { draft -> ScheduledTaskEditorFor(core, draft) { editing = null } }
     deleting?.let { task ->
         AlertDialog(
             onDismissRequest = { deleting = null },
@@ -547,5 +565,36 @@ fun QrCode(text: String, modifier: Modifier = Modifier) {
     }
     Surface(color = Color.White, shape = MaterialTheme.shapes.medium, modifier = modifier) {
         Image(bitmap.asImageBitmap(), contentDescription = "Pairing QR code", modifier = Modifier.padding(Space.m))
+    }
+}
+
+/** Where a scheduled task's runs go, for its row. */
+private fun scheduledDestination(task: ScheduledTaskView): String = when {
+    task.threadMode == "new_thread" -> "new thread each run"
+    task.threadId.isEmpty() -> "the thread its first run starts"
+    else -> {
+        val title = if (task.threadTitle.isEmpty()) "a thread not on this device" else "“${task.threadTitle}”"
+        if (task.threadMode == "fresh_session") "in $title, fresh session" else "in $title"
+    }
+}
+
+/** The editor for `draft`, its choices from the core's views; saving closes it. */
+@Composable
+fun ScheduledTaskEditorFor(core: Core, draft: com.crayen.domovoi.app.ScheduledTaskEdit, onDismiss: () -> Unit) {
+    val settings by core.view.settings.watch()
+    val composer by core.view.composer.watch()
+    ScheduledTaskEditorSheet(
+        start = draft,
+        projects = settings.projects.map { it.id to it.title },
+        threadsOf = { id -> settings.scheduledThreadChoices.filter { it.projectId == id } },
+        isScratch = { id -> settings.projects.any { it.id == id && it.isScratch } },
+        // Favorites are left out of the groups: listed first here.
+        models = composer.favoriteModels.map { "${it.option.instanceId}|${it.option.model}" to "\u2605 ${if (it.detail.isEmpty()) it.option.label else "${it.detail} · ${it.name}"}" } +
+            composer.modelGroups.flatMap { g -> g.models.map { "${it.option.instanceId}|${it.option.model}" to "${g.provider} · ${it.name}" } },
+        onDismiss = onDismiss,
+    ) { task, threadMode ->
+        onDismiss()
+        if (threadMode != null) core.update(Event.SetThreadRuntimeMode(task.threadId, threadMode))
+        core.update(Event.SaveScheduled(task))
     }
 }

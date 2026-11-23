@@ -14,7 +14,7 @@ use std::collections::HashMap;
 const MAX_FRAME_BYTES: usize = 256 * 1024 * 1024;
 
 /// Where a request's replies go.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Route {
     // Subscriptions
     Config,
@@ -25,6 +25,10 @@ pub enum Route {
     Terminal { thread_id: String, terminal_id: String },
     TerminalMetadata,
     ScheduledTasks,
+    /// A provider instance's sign-in (`provider.auth.subscribe`) and managed
+    /// install (`provider.install.subscribe`), by instance id.
+    ProviderAuth(String),
+    ProviderInstall(String),
     AuthAccess,
     DatabaseStorage,
     GitAction(String),
@@ -35,6 +39,12 @@ pub enum Route {
     /// `message.dispatch` from the composer, by command id.
     Send(String),
     ProjectCreated,
+    ProjectIconChanged(String),
+    ProjectIconAsset { project_id: String, request: String },
+    ProjectIconFiles(String),
+    ProjectIconThumbnail { path: String, request: String },
+    /// `assets.createUrl` for a Mermaid diagram, by the shell's key.
+    Diagram { key: String, request: String },
     AgentScan,
     /// `project.create` for an import, then its sessions.
     ImportProject { path: String, project_id: String },
@@ -44,9 +54,20 @@ pub enum Route {
     FindInThread(u32),
     Mention(u32),
     FileSearch(u32),
+    /// A palette search (`files` or `content`), by its revision.
+    PaletteSearch(u32),
     ListEntries(String),
-    ReadFile(String),
-    Diff(String),
+    ReadFile { path: String, request: String },
+    /// `projects.fetchLfsObject` for the open preview (its `request`).
+    FetchLfs { path: String, request: String },
+    ReadArtifactFile(String),
+    /// Active artifact workspace file read (for `panel.artifacts.file_read`).
+    ReadPanelArtifactFile(String),
+    /// `assets.createUrl` for an active artifact preview (multi-file bundle, React runtime, Mermaid SVG).
+    ArtifactPreviewUrl(String),
+    /// A diff for the panel, by its source, and whose it is (`diff_owner`):
+    /// an answer for a thread or checkout since left is not shown.
+    Diff { source: String, of: String },
     ListRefs(String),
     Attachments(Vec<String>),
     /// `assets.createUrl` for an attachment, by attachment id.
@@ -64,9 +85,17 @@ pub enum Route {
     /// A pull request checked out in a worktree for a new thread.
     PullRequestThread(String),
     Usage,
+    UsageLimits,
     Archived,
     /// A webhook task's deliveries, by task id.
     WebhookDeliveries(String),
+    /// Scheduled tasks' runs: one task's, or (`None`) every task's latest.
+    ScheduledRuns(Option<String>),
+    /// A scheduled task run by hand, then the run it started (to open its thread).
+    ScheduledRunNow(String),
+    ScheduledRunStarted(String),
+    /// A thread's allowed tools forgotten (`orchestration.forgetThreadPermissions`).
+    ThreadPermissionsForgotten,
 }
 
 #[derive(Debug, Default)]

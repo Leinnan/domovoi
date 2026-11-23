@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Domovoi
+Comment=Native cross-platform desktop client for your coding agents
+Exec=domovoi-desktop %u
+Icon=domovoi
+Terminal=false
+Categories=Development;IDE;
+Keywords=ai;coding;agents;claude;codex;domovoi;
+MimeType=x-scheme-handler/domovoi;
+# Matches the app id the window sets (src/main.rs), so the window gets this icon.
+StartupWMClass=domovoi

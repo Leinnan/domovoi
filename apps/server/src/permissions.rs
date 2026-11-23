@@ -35,9 +35,16 @@ fn settings_patch_permissions(patch: &Value) -> Vec<&'static str> {
 pub fn required_permissions(method: &str, payload: &Value) -> Option<Vec<&'static str>> {
     match method {
         "server.retryResourceTelemetry" => return Some(vec!["environment:maintain", "diagnostics:read"]),
+        // Domovoi's own method, beside t3code's table: a scheduled task's runs.
+        "scheduledTasks.listRuns" => return Some(vec!["orchestration:read"]),
+        "artifacts.list" | "artifacts.read" => return Some(vec!["orchestration:read"]),
+        // Domovoi's own: git-lfs fetches with the repository's remote and
+        // credentials, and writes its object cache.
+        "projects.fetchLfsObject" => return Some(vec!["source-control:write"]),
+        "orchestration.forgetThreadPermissions" => return Some(vec!["orchestration:operate"]),
         "assets.createUrl" => {
             let r = &payload["resource"];
-            let fs = matches!(r["_tag"].as_str(), Some("workspace-file" | "media-file" | "draft-workspace-file"))
+            let fs = matches!(r["_tag"].as_str(), Some("workspace-file" | "media-file" | "draft-workspace-file" | "artifact-bundle"))
                 || (r["_tag"] == "native-app-icon" && r["app"]["_tag"] == "app-path");
             return Some(vec![if fs { "filesystem:read" } else { "orchestration:read" }]);
         }
@@ -144,6 +151,11 @@ mod tests {
         let e = json!(check("projects.readFile", &none, &read_only).unwrap_err());
         assert_eq!(e["requiredScope"], "orchestration:read", "legacy parent for older clients");
         assert_eq!(e["requiredPermission"], "filesystem:read");
+        // Reading a Git LFS file is not enough to fetch its object.
+        let readers = vec!["orchestration:read".to_owned(), "filesystem:read".to_owned()];
+        assert!(check("projects.readFile", &none, &readers).is_ok());
+        let e = json!(check("projects.fetchLfsObject", &none, &readers).unwrap_err());
+        assert_eq!(e["requiredPermission"], "source-control:write");
         assert_eq!(
             json!(check("no.such.method", &none, &read_only).unwrap_err()),
             json!({ "_tag": "EnvironmentAuthorizationError", "message": "RPC method no.such.method has no declared authorization scope.", "requiredScope": "orchestration:operate" })

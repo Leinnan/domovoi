@@ -149,6 +149,14 @@ impl ProviderOptionDescriptor {
         }
     }
 
+    /// The choice a select option is set to, when the provider says.
+    pub fn current_value(&self) -> Option<&str> {
+        match self {
+            Self::Select(option) => option.current_value.as_deref(),
+            Self::Boolean(_) | Self::Other(_) => None,
+        }
+    }
+
     /// The choices of a select option; no other option has any.
     pub fn options(&self) -> &[ProviderOptionChoice] {
         match self {

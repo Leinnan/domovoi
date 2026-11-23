@@ -1897,7 +1897,7 @@ fn message_events(thread_id: &str, index: usize, m: &ThreadMessage) -> [EventBod
 }
 
 /// Whether another thread already holds this native session.
-fn native_thread_owned(store: &Store, driver: &str, native_id: &str) -> bool {
+pub(crate) fn native_thread_owned(store: &Store, driver: &str, native_id: &str) -> bool {
     store
         .db()
         .with(|c| {

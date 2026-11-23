@@ -12,12 +12,25 @@ struct PaletteSheet: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: Space.s) {
-                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                TextField("Search threads, projects and actions", text: $query)
+                if palette.searchesFiles {
+                    // Back to the command list (Esc too).
+                    Button { core.update(.setPaletteMode(mode: "commands")) } label: {
+                        Label(palette.modeTitle, systemImage: "chevron.left")
+                            .font(.callout.weight(.medium))
+                            .padding(.horizontal, Space.s)
+                            .padding(.vertical, Space.xxs)
+                            .background(.fill.tertiary, in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .help("Back to commands (esc)")
+                } else {
+                    Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                }
+                TextField(palette.prompt, text: $query)
                     .textFieldStyle(.plain)
                     .font(.title3)
                     .focused($focused)
-                    .onChange(of: query) { _, q in core.update(.setPaletteQuery(query: q)) }
+                    .onChange(of: query) { _, q in if q != palette.query { core.update(.setPaletteQuery(query: q)) } }
                     .onSubmit { core.update(.runPaletteItem(id: "")) }
                     .onKeyPress(.upArrow) {
                         core.update(.movePalette(delta: -1))
@@ -27,12 +40,21 @@ struct PaletteSheet: View {
                         core.update(.movePalette(delta: 1))
                         return .handled
                     }
+                if palette.searching { ProgressView().controlSize(.small) }
             }
             .padding(Space.m + Space.xxs)
             Divider()
             if palette.items.isEmpty {
-                ContentUnavailableView.search(text: query)
-                    .frame(maxHeight: .infinity)
+                Group {
+                    if palette.searching {
+                        ProgressView()
+                    } else if palette.searchesFiles, query.isEmpty {
+                        ContentUnavailableView(palette.prompt, systemImage: palette.mode == "files" ? "doc" : "text.magnifyingglass")
+                    } else {
+                        ContentUnavailableView.search(text: query)
+                    }
+                }
+                .frame(maxHeight: .infinity)
             } else {
             ScrollViewReader { proxy in
                 ScrollView {
@@ -40,11 +62,12 @@ struct PaletteSheet: View {
                         ForEach(Array(palette.items.enumerated()), id: \.element.id) { index, item in
                             Button { core.update(.runPaletteItem(id: item.id)) } label: {
                                 HStack(spacing: Space.s + Space.xxs) {
-                                    Image(systemName: icon(item.kind)).frame(width: 18).foregroundStyle(.secondary)
+                                    Image(systemName: item.symbol).frame(width: 18).foregroundStyle(.secondary)
                                     VStack(alignment: .leading, spacing: Space.xxs / 2) {
                                         Text(item.title).lineLimit(1)
+                                            .font(item.kind == "match" ? TypeRole.mono : .body)
                                         if !item.subtitle.isEmpty {
-                                            Text(item.subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                                            Text(item.subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.head)
                                         }
                                     }
                                     Spacer()
@@ -71,34 +94,14 @@ struct PaletteSheet: View {
             query = palette.query
             focused = true
         }
-        .onExitCommand { core.update(.closePalette) }
-    }
-
-    private func icon(_ kind: String) -> String {
-        switch kind {
-        case "thread": return "bubble.left"
-        case "project": return "folder"
-        default: return "bolt"
+        // A new mode starts with an empty field (the core cleared its query).
+        .onChange(of: palette.mode) { _, _ in
+            query = palette.query
+            focused = true
         }
-    }
-}
-
-/// A shortcut such as "⌘⇧K" drawn as keys.
-struct KeyCaps: View {
-    let shortcut: String
-
-    var body: some View {
-        HStack(spacing: Space.xxs) {
-            ForEach(Array(shortcut.enumerated()), id: \.offset) { _, key in
-                Text(String(key))
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(.secondary)
-                    .frame(minWidth: 18, minHeight: 18)
-                    .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: Space.xs, style: .continuous))
-            }
+        .onExitCommand {
+            if palette.searchesFiles { core.update(.setPaletteMode(mode: "commands")) } else { core.update(.closePalette) }
         }
-        .accessibilityElement()
-        .accessibilityLabel(shortcut)
     }
 }
 
@@ -155,12 +158,13 @@ struct PullRequestsPage: View {
                         } else {
                             Text(pr.title).font(.title2.bold())
                             HStack {
-                                Text(pr.state.capitalized)
+                                Text(pr.draft ? "Draft" : pr.state.capitalized)
                                 Text("+\(pr.additions) −\(pr.deletions) in ^[\(Int(pr.changedFiles)) file](inflect: true)").foregroundStyle(.secondary)
                                 Spacer()
                                 if let url = URL(string: pr.url) { Link("Open on the web", destination: url) }
                             }
                             .font(.callout)
+                            PullRequestActions(core: core, detail: pr, busy: prs.busy)
                             if !pr.checks.isEmpty {
                                 GroupBox("Checks") {
                                     VStack(alignment: .leading, spacing: Space.xs) {
@@ -195,6 +199,201 @@ struct PullRequestsPage: View {
     }
 }
 
+/// What can be done to the selected pull request: start a thread on it,
+/// merge, review, comment, and change its state.
+struct PullRequestActions: View {
+    @ObservedObject var core: Core
+    let detail: PullRequestDetailView
+    let busy: Bool
+    @State private var merging: String?
+    @State private var closing = false
+    /// The review or comment being written.
+    @State private var writing: PullRequestNote?
+
+    private var open: Bool { detail.state.lowercased() == "open" }
+    private var closed: Bool { detail.state.lowercased() == "closed" }
+
+    var body: some View {
+        // A narrow column keeps the titles of the first button only.
+        ViewThatFits(in: .horizontal) {
+            row(compact: false)
+            row(compact: true)
+        }
+        .disabled(busy)
+        .confirmationDialog(
+            "Merge #\(detail.number)?",
+            isPresented: Binding(get: { merging != nil }, set: { if !$0 { merging = nil } }),
+            titleVisibility: .visible,
+            presenting: merging
+        ) { method in
+            Button(mergeButton(method)) { core.update(.pullRequestAction(key: detail.key, action: "merge", mergeMethod: method)) }
+        } message: { _ in
+            Text("This merges #\(detail.number)\(detail.base.isEmpty ? "" : " into \(detail.base)") on GitHub.")
+        }
+        // Others see a closed pull request (and get told): ask first.
+        .confirmationDialog("Close #\(detail.number) without merging?", isPresented: $closing, titleVisibility: .visible) {
+            Button("Close Pull Request", role: .destructive) { act("close") }
+        } message: {
+            Text("It can be reopened later.")
+        }
+        .sheet(item: $writing) { note in
+            PullRequestNoteSheet(note: note, number: detail.number) { text in
+                if let verdict = note.verdict {
+                    core.update(.reviewPullRequest(key: detail.key, verdict: verdict, body: text))
+                } else {
+                    core.update(.commentOnPullRequest(key: detail.key, body: text))
+                }
+            }
+        }
+    }
+
+    private func row(compact: Bool) -> some View {
+        HStack(spacing: Space.s) {
+            Button { core.update(.startPullRequestThread(key: detail.key)) } label: {
+                Label("Start a Thread on It", systemImage: "bubble.left.and.text.bubble.right")
+            }
+            .buttonStyle(.borderedProminent)
+            .labelStyle(.titleAndIcon)
+            .help("Check the pull request out in a worktree and start a thread there")
+            if open, !detail.draft {
+                Menu {
+                    Button("Create a Merge Commit…") { merging = "merge" }
+                    Button("Squash and Merge…") { merging = "squash" }
+                    Button("Rebase and Merge…") { merging = "rebase" }
+                } label: { Label("Merge", systemImage: "arrow.triangle.merge") }
+                .fixedSize()
+                .help("Merge on GitHub")
+            }
+            if open {
+                Menu {
+                    Button("Approve…") { writing = PullRequestNote(verdict: "approve") }
+                    Button("Request Changes…") { writing = PullRequestNote(verdict: "request-changes") }
+                    Button("Comment…") { writing = PullRequestNote(verdict: "comment") }
+                } label: { Label("Review", systemImage: "checkmark.seal") }
+                .fixedSize()
+                .help("Approve, request changes or comment as a review")
+            }
+            Button { writing = PullRequestNote(verdict: nil) } label: { Label("Comment…", systemImage: "text.bubble") }
+                .help("Comment on the pull request")
+            if open || closed {
+                Menu {
+                    if open, detail.draft {
+                        Button("Ready for Review") { act("ready") }
+                    } else if open {
+                        Button("Convert to Draft") { act("draft") }
+                    }
+                    if open {
+                        Divider()
+                        Button("Close Pull Request…", role: .destructive) { closing = true }
+                    } else {
+                        Button("Reopen") { act("reopen") }
+                    }
+                } label: { Label("More", systemImage: "ellipsis.circle") }
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help("More actions")
+            }
+            if busy { ProgressView().controlSize(.small) }
+        }
+        .labelStyle(CompactLabelStyle(compact: compact))
+        .fixedSize()
+    }
+
+    private func act(_ action: String) {
+        core.update(.pullRequestAction(key: detail.key, action: action, mergeMethod: ""))
+    }
+
+    private func mergeButton(_ method: String) -> String {
+        switch method {
+        case "squash": "Squash and Merge"
+        case "rebase": "Rebase and Merge"
+        default: "Create a Merge Commit"
+        }
+    }
+}
+
+private struct CompactLabelStyle: LabelStyle {
+    let compact: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        if compact {
+            configuration.icon
+        } else {
+            HStack(spacing: Space.xs) {
+                configuration.icon
+                configuration.title
+            }
+        }
+    }
+}
+
+/// A review (`verdict` set) or a plain comment, being written.
+struct PullRequestNote: Identifiable {
+    let id = UUID()
+    let verdict: String?
+}
+
+private struct PullRequestNoteSheet: View {
+    let note: PullRequestNote
+    let number: UInt32
+    let submit: (String) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var text = ""
+    @FocusState private var focused: Bool
+
+    /// Only an approval may go without a summary.
+    private var canSubmit: Bool {
+        note.verdict == "approve" || !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Space.m) {
+            Text("\(title) #\(number)").font(.headline)
+            TextEditor(text: $text)
+                .font(.body)
+                .focused($focused)
+                .scrollContentBackground(.hidden)
+                .padding(Space.xs)
+                .background(.fill.quaternary, in: RoundedRectangle(cornerRadius: Radius.chip, style: .continuous))
+                .frame(minHeight: 160)
+                .overlay(alignment: .topLeading) {
+                    if text.isEmpty {
+                        Text(note.verdict == "approve" ? "Summary (optional)" : (note.verdict == nil ? "Comment" : "Summary"))
+                            .foregroundStyle(.tertiary)
+                            .padding(Space.xs + 5)
+                            .allowsHitTesting(false)
+                    }
+                }
+            HStack {
+                Spacer()
+                Button("Cancel", role: .cancel) { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                // ⌘↩: a plain ↩ is a new line in the text.
+                Button(note.verdict == nil ? "Post" : "Submit") {
+                    submit(text)
+                    dismiss()
+                }
+                .keyboardShortcut(.return, modifiers: .command)
+                .buttonStyle(.borderedProminent)
+                .disabled(!canSubmit)
+                .help("⌘↩")
+            }
+        }
+        .padding(Space.l)
+        .frame(width: 480)
+        .onAppear { focused = true }
+    }
+
+    private var title: String {
+        switch note.verdict {
+        case "approve": "Approve"
+        case "request-changes": "Request Changes on"
+        case "comment": "Review"
+        default: "Comment on"
+        }
+    }
+}
+
 struct ChecksBadge: View {
     let state: String
 
@@ -214,45 +413,73 @@ struct ChecksBadge: View {
 struct UsagePage: View {
     @ObservedObject var core: Core
 
-    /// The chosen range in days; the view model only has its label.
-    @State private var days = 7
-
     private var usage: UsageView { core.view.usage }
+    /// Prices known: the tables get a cost column.
+    private var priced: Bool { !usage.totalCost.isEmpty || usage.rows.contains { !$0.cost.isEmpty } }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Space.m) {
-            HStack {
-                Picker("Range", selection: Binding(get: { days }, set: {
-                    days = $0
-                    core.update(.loadUsage(days: UInt32($0)))
-                })) {
-                    Text("Today").tag(1)
-                    Text("7 days").tag(7)
-                    Text("30 days").tag(30)
+        ScrollView {
+            VStack(alignment: .leading, spacing: Space.l) {
+                HStack {
+                    Picker("Range", selection: Binding(get: { usage.days == 0 ? 7 : usage.days }, set: { core.update(.loadUsage(days: $0)) })) {
+                        ForEach(UsageSpan.days, id: \.0) { Text($0.1).tag($0.0) }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .frame(maxWidth: 360)
+                    Spacer()
+                    VStack(alignment: .trailing, spacing: Space.xxs) {
+                        Text("\(usage.totalTokens) tokens").font(.title3.monospacedDigit().bold())
+                        if !usage.totalCost.isEmpty {
+                            Text(usage.totalCost).font(.callout.monospacedDigit()).foregroundStyle(.secondary)
+                        }
+                    }
                 }
-                .pickerStyle(.segmented)
-                .frame(maxWidth: 280)
-                Spacer()
-                Text("\(usage.totalTokens) tokens").font(.title3.monospacedDigit().bold())
-            }
-            if !usage.rangeLabel.isEmpty { Text(usage.rangeLabel).foregroundStyle(.secondary) }
-            if usage.loading {
-                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                Table(usage.rows) {
-                    TableColumn("Day", value: \.day)
-                    TableColumn("Provider", value: \.provider)
-                    TableColumn("Model", value: \.model)
-                    TableColumn("Input", value: \.input)
-                    TableColumn("Cached", value: \.cached)
-                    TableColumn("Output", value: \.output)
-                    TableColumn("Total", value: \.total)
+                if !usage.rangeLabel.isEmpty { Text(usage.rangeLabel).foregroundStyle(.secondary) }
+                if usage.loading, usage.rows.isEmpty {
+                    ProgressView().frame(maxWidth: .infinity, minHeight: 200)
+                } else if usage.rows.isEmpty {
+                    ContentUnavailableView("No usage yet", systemImage: "chart.bar", description: Text("Turns run in this range show up here."))
+                } else {
+                    if !usage.byModel.isEmpty {
+                        GroupBox("By model") { table(usage.byModel, byDay: false).frame(height: tableHeight(usage.byModel.count)) }
+                    }
+                    GroupBox("By day") { table(usage.rows, byDay: true).frame(height: tableHeight(usage.rows.count, max: 360)) }
                 }
+                if !usage.limits.isEmpty {
+                    GroupBox("Limits") {
+                        ProviderLimitsSection(limits: usage.limits)
+                            .padding(Space.s)
+                            .frame(maxWidth: 520, alignment: .leading)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+                if !usage.notice.isEmpty { Text(usage.notice).font(.caption).foregroundStyle(.secondary) }
             }
-            if !usage.notice.isEmpty { Text(usage.notice).font(.caption).foregroundStyle(.secondary) }
+            .padding(Space.xl)
         }
-        .padding(Space.xl)
         .navigationTitle("Usage")
+        .toolbar {
+            if usage.loading, !usage.rows.isEmpty { ToolbarItem { ProgressView().controlSize(.small) } }
+        }
+    }
+
+    /// Rows fit without the table scrolling inside the page, up to `max`.
+    private func tableHeight(_ rows: Int, max: CGFloat = 280) -> CGFloat {
+        min(CGFloat(rows + 1) * 24 + 8, max)
+    }
+
+    private func table(_ rows: [UsageRowView], byDay: Bool) -> some View {
+        Table(rows) {
+            if byDay { TableColumn("Day", value: \.day) }
+            TableColumn("Provider", value: \.provider)
+            TableColumn("Model", value: \.model)
+            TableColumn("Input") { Text($0.input).monospacedDigit() }
+            TableColumn("Cached") { Text($0.cached).monospacedDigit() }
+            TableColumn("Output") { Text($0.output).monospacedDigit() }
+            TableColumn("Total") { Text($0.total).monospacedDigit() }
+            if priced { TableColumn("Cost") { Text($0.cost).monospacedDigit() } }
+        }
     }
 }
 

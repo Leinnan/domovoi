@@ -30,7 +30,8 @@ pub fn save_drafts(model: &mut Model) -> Cmd {
     model.drafts_dirty = false;
     let drafts: BTreeMap<&str, &str> = model.composer.drafts.iter().filter(|(_, v)| !v.trim().is_empty()).map(|(k, v)| (k.as_str(), v.as_str())).collect();
     let thread = if model.route == "thread" { model.selected_thread.as_deref() } else { None };
-    let kept = KeptDrafts { drafts, thread };
+    let stash = model.composer.stash.iter().map(String::as_str).collect();
+    let kept = KeptDrafts { drafts, thread, stash };
     store(StoreOperation::Save { key: drafts_key(&id), value: serde_json::to_string(&kept).expect("plain data serializes") })
 }
 
@@ -40,6 +41,7 @@ pub fn save_drafts(model: &mut Model) -> Cmd {
 struct KeptDrafts<'a> {
     drafts: BTreeMap<&'a str, &'a str>,
     thread: Option<&'a str>,
+    stash: Vec<&'a str>,
 }
 
 /// Saved drafts are back: what isn't typed already goes in, and the thread
@@ -55,11 +57,14 @@ pub fn drafts_loaded(model: &mut Model, environment_id: String, value: Option<St
             *current = text;
         }
     }
+    if model.composer.stash.is_empty() {
+        model.composer.stash = saved.stash;
+    }
     model.composer.draft_revision += 1;
     if model.selected_thread.is_none() && (model.route.is_empty() || model.route == "new-thread")
         && let Some(thread) = saved.thread
     {
-        model.selected_thread = Some(thread);
+        model.open_thread(Some(thread));
         model.route = "thread".into();
     }
     render()
@@ -72,6 +77,8 @@ struct SavedDrafts {
     drafts: HashMap<String, String>,
     #[serde(default)]
     thread: Option<String>,
+    #[serde(default)]
+    stash: Vec<String>,
 }
 
 /// How often a changed thread list is saved for offline use (and on suspend).
@@ -121,10 +128,12 @@ pub fn save_cache(model: &mut Model) -> Cmd {
     model.cache_dirty = false;
     model.cache_saved_ms = model.now_ms;
     // The open thread goes in as its projection, the form the server sends it
-    // in, encoded once: its size decides whether it goes in at all.
+    // in, encoded once: its size decides whether it goes in at all. Only the
+    // selected thread's own records go in, as the thread they are.
     let thread = model
-        .thread
-        .as_ref()
+        .selected_thread
+        .as_deref()
+        .and_then(|id| model.held_thread(id))
         .and_then(|thread| serde_json::to_string(&thread.projection()).ok())
         .filter(|text| text.len() <= CACHED_THREAD_MAX);
     let copy = OfflineCopy { version: 1, saved_at: model.now_ms, projects: &model.projects, threads: &model.threads, thread: None };

@@ -33,7 +33,10 @@ import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.KeyboardArrowUp
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Terminal
+import androidx.compose.material.icons.outlined.VerticalAlignBottom
 import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.AssistChip
+import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
@@ -57,6 +60,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -82,6 +88,7 @@ import com.crayen.domovoi.ui.common.watch
 import com.crayen.domovoi.ui.theme.Mono
 import com.crayen.domovoi.ui.theme.Space
 import com.crayen.domovoi.ui.tools.ToolScaffold
+import kotlin.math.roundToInt
 
 /** xterm's 256-colour palette (16 ANSI, 6×6×6 cube, 24 greys) and true colour (`TerminalColors.swift`). */
 fun terminalColor(value: Int): Color? {
@@ -151,6 +158,7 @@ fun TerminalScreen(core: Core, onBack: (() -> Unit)?) {
         if (ctrl) ctrl = false
     }
     val currentSend by rememberUpdatedState(sendKey)
+    val cellHeight by rememberUpdatedState(cell.height)
 
     LaunchedEffect(Unit) { core.update(Event.ShowPanel("terminal")) }
     LaunchedEffect(viewport, cell, screen?.id) {
@@ -190,7 +198,38 @@ fun TerminalScreen(core: Core, onBack: (() -> Unit)?) {
             Box(
                 Modifier.weight(1f).fillMaxWidth().background(TerminalBackground)
                     .onSizeChanged { viewport = it }
-                    .pointerInput(Unit) { detectTransformGestures { _, _, zoom, _ -> if (zoom != 1f) scale = (scale * zoom).coerceIn(0.6f, 2f) } },
+                    // Pinch: text size. Drag: through the scrollback, a line per cell
+                    // height (finger down goes back into the history).
+                    .pointerInput(Unit) {
+                        var carry = 0f
+                        detectTransformGestures { _, pan, zoom, _ ->
+                            if (zoom != 1f) {
+                                scale = (scale * zoom).coerceIn(0.6f, 2f)
+                                return@detectTransformGestures
+                            }
+                            val h = cellHeight.toFloat()
+                            if (h <= 0f || pan.y == 0f) return@detectTransformGestures
+                            carry += pan.y
+                            val lines = (carry / h).toInt()
+                            if (lines != 0) {
+                                carry -= lines * h
+                                core.update(Event.TerminalScroll(lines))
+                            }
+                        }
+                    }
+                    // A mouse wheel or trackpad: three lines a notch.
+                    .pointerInput(Unit) {
+                        awaitPointerEventScope {
+                            while (true) {
+                                val event = awaitPointerEvent()
+                                if (event.type != PointerEventType.Scroll) continue
+                                val dy = event.changes.sumOf { it.scrollDelta.y.toDouble() }.toFloat()
+                                val lines = -(dy * 3).roundToInt()
+                                if (lines != 0) core.update(Event.TerminalScroll(lines))
+                                event.changes.forEach { it.consume() }
+                            }
+                        }
+                    },
             ) {
                 if (screen == null) {
                     EmptyState(Icons.Outlined.Terminal, "No terminal", "Open one to run commands on the server.") {
@@ -203,7 +242,7 @@ fun TerminalScreen(core: Core, onBack: (() -> Unit)?) {
                                 Text(line(l), fontFamily = Mono, fontSize = fontSize, lineHeight = fontSize, softWrap = false, maxLines = 1, style = TextStyle(color = TerminalForeground))
                             }
                         }
-                        if (screen.cursorVisible && !screen.exited) {
+                        if (screen.cursorVisible && !screen.exited && screen.scrollbackOffset == 0u) {
                             with(density) {
                                 Box(
                                     Modifier.offset(x = (screen.cursorCol.toInt() * cell.width).toDp(), y = (screen.cursorRow.toInt() * cell.height).toDp())
@@ -229,6 +268,18 @@ fun TerminalScreen(core: Core, onBack: (() -> Unit)?) {
                     },
                     modifier = Modifier.fillMaxSize(),
                 )
+                // Looking back through the history: the way down to the live screen.
+                screen?.takeIf { it.scrollbackOffset > 0u }?.let { s ->
+                    AssistChip(
+                        onClick = { core.update(Event.TerminalScroll(-s.scrollbackOffset.toInt())) },
+                        label = { Text("${s.scrollbackOffset} lines back") },
+                        leadingIcon = { Icon(Icons.Outlined.VerticalAlignBottom, null, modifier = Modifier.size(16.dp)) },
+                        colors = AssistChipDefaults.assistChipColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
+                        modifier = Modifier.align(Alignment.BottomCenter)
+                            .padding(bottom = if (s.exited) 48.dp else Space.s)
+                            .semantics { contentDescription = "Back to the live screen" },
+                    )
+                }
             }
             ExtraKeys(
                 ctrl = ctrl,

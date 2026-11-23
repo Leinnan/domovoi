@@ -83,7 +83,16 @@ impl CodexServer {
             "clientInfo": { "name": "T3 Code", "title": "T3 Code", "version": domovoi_contracts::environment::SERVER_VERSION },
         })).await.map_err(|e| format!("codex initialize failed: {e}"))?;
         rpc.notify("initialized", None).await.map_err(|e| e.to_string())?;
-        Ok(Arc::new(CodexServer { rpc, routes, loaded: Mutex::new(HashSet::new()) }))
+        let server = Arc::new(CodexServer { rpc, routes, loaded: Mutex::new(HashSet::new()) });
+        // The account's limits now, before a turn reports any.
+        let s = server.clone();
+        tokio::spawn(async move { s.read_limits().await });
+        Ok(server)
+    }
+
+    /// Reads the account's limits (`account/rateLimits/read`).
+    pub async fn read_limits(&self) {
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(10), crate::providers::codex::read_limits(&self.rpc)).await;
     }
 
     /// `feedback/upload` for a native thread; returns the feedback id.
@@ -633,7 +642,7 @@ fn record_item(turn: &mut Turn, item: &Value, completed: bool, texts: &mut HashM
                 })
                 .collect();
             // The patch itself, so an approval can show what it would change.
-            turn.item(&id, Work::FileChange { file_name, changes: ops, texts: None, patch: change_patch(&changes) }, status);
+            turn.item(&id, Work::FileChange { file_name, changes: ops, texts: None, patch: change_patch(&changes), error: None }, status);
         }
         "reasoning" => {
             let text: Vec<String> = item["summary"].as_array().map(|s| s.iter().filter_map(|x| x.as_str().map(str::to_owned).or_else(|| x["text"].as_str().map(str::to_owned))).collect()).unwrap_or_default();
@@ -654,7 +663,7 @@ fn record_item(turn: &mut Turn, item: &Value, completed: bool, texts: &mut HashM
                     patterns.push(query.to_owned());
                 }
             }
-            turn.item(&id, Work::WebSearch { patterns }, status);
+            turn.item(&id, Work::WebSearch { patterns, results: None }, status);
         }
         "mcpToolCall" => {
             let name = format!("mcp__{}__{}", item["server"].as_str().unwrap_or("mcp"), item["tool"].as_str().unwrap_or("tool"));
@@ -666,11 +675,32 @@ fn record_item(turn: &mut Turn, item: &Value, completed: bool, texts: &mut HashM
             let viewed_image_path = item["path"].as_str().filter(|p| !p.is_empty()).map(str::to_owned);
             turn.item(&id, Work::Tool { name: "view_image".into(), input: json!({ "path": item["path"] }), output: None, viewed_image_path }, status);
         }
+        "imageGeneration" => {
+            let viewed_image_path = item["savedPath"].as_str().filter(|path| !path.is_empty()).map(str::to_owned);
+            let input = json!({ "savedPath": item["savedPath"], "revisedPrompt": item["revisedPrompt"] });
+            turn.item(&id, Work::Tool { name: "imageGeneration".into(), input, output: None, viewed_image_path }, status);
+        }
+        "sleep" => {
+            turn.item(&id, Work::Tool { name: "sleep".into(), input: json!({ "durationMs": item["durationMs"] }), output: None, viewed_image_path: None }, status);
+        }
         "contextCompaction" => turn.item(&id, Work::Compaction { before_token_count: None }, status),
         other => {
             let name = item["tool"].as_str().or(item["name"].as_str()).unwrap_or(other).to_owned();
-            turn.item(&id, Work::Tool { name, input: item.clone(), output: None, viewed_image_path: None }, status);
+            turn.item(&id, Work::Tool { name, input: without_inline_data(item), output: None, viewed_image_path: None }, status);
         }
+    }
+}
+
+const INLINE_DATA_MAX: usize = 64 * 1024;
+
+/// Omit large inline base64 data while preserving ordinary tool text.
+fn without_inline_data(value: &Value) -> Value {
+    match value {
+        Value::String(s) if s.len() > INLINE_DATA_MAX
+            && s.bytes().all(|b| b.is_ascii_alphanumeric() || b"+/-_=".contains(&b)) => Value::String(format!("[{} bytes left out]", s.len())),
+        Value::Array(items) => Value::Array(items.iter().map(without_inline_data).collect()),
+        Value::Object(map) => Value::Object(map.iter().map(|(k, v)| (k.clone(), without_inline_data(v))).collect()),
+        other => other.clone(),
     }
 }
 

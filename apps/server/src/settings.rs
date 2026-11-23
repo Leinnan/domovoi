@@ -147,6 +147,11 @@ fn remove_at(document: &mut Map<String, Value>, path: &serde_path_to_error::Path
 }
 
 impl Settings {
+    /// Reads an optional boolean flag stored in unknown/extension settings keys.
+    pub fn unknown_bool(&self, key: &str) -> bool {
+        self.unknown.get(key).and_then(Value::as_bool).unwrap_or(false)
+    }
+
     /// The settings a document holds. The record reads as much of it as fits:
     /// a value that does not, however deep, is left to `unknown` (with the
     /// list or entry it makes unreadable), and the record has the default there.

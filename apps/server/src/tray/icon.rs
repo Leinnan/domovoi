@@ -1,12 +1,13 @@
-//! The status bar icon: the domovoi's hood and two eyes (the app icon's face,
-//! tools/icons.py) with a mark for the state, drawn at start (no image assets).
-//! The face sits low and to the left so the mark has the top-right corner.
-//! The glyph is black or white to match the bar, with a green dot when a
-//! device is connected and a red exclamation mark on an error. macOS gets a
-//! template image (which the system tints) while there is no mark to colour.
+//! The status bar icon: the domovoi's peaked Hearth Hood and two ember eyes
+//! (the app icon's silhouette from tools/icons.py) with a mark for the state,
+//! drawn at start (no image assets). The face sits low and to the left so the
+//! mark has the top-right corner. The glyph is black or white to match the bar,
+//! with a green dot when a device is connected and a red exclamation mark on an
+//! error. macOS gets a template image (which the system tints) while there is
+//! no mark to colour.
 
 use super::model::IconKind;
-use tiny_skia::{Color, FillRule, LineCap, LineJoin, Paint, PathBuilder, Pixmap, Stroke, Transform};
+use tiny_skia::{Color, FillRule, LineCap, Paint, PathBuilder, Pixmap, Stroke, Transform};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Style {
@@ -29,26 +30,41 @@ pub fn render(kind: IconKind, style: Style, size: u32) -> Vec<u8> {
     let mut glyph = Paint::default();
     glyph.set_color_rgba8(r, g, b, glyph_alpha);
     glyph.anti_alias = true;
-    let stroke = Stroke { width: 4.0, line_cap: LineCap::Round, line_join: LineJoin::Round, ..Default::default() };
 
-    // The hood: the top of a circle around the eyes, from 185° to 355°
-    // (clockwise, 0° = right), in two cubic pieces.
-    let (cx, cy, radius) = (18.5_f32, 31.5_f32, 15.0_f32);
-    let at = |degrees: f32| (cx + radius * degrees.to_radians().cos(), cy + radius * degrees.to_radians().sin());
+    // The sculpted peaked Hearth Hood (same silhouette as tools/icons.py),
+    // mapped onto the low-left of the 44-unit grid (scale 0.0455, centered at
+    // x = 18.0) so the top-right stays clear for the connected/error badge.
+    let map = |x: f32, y: f32| (18.0 + (x - 512.0) * 0.0455, 25.0 + (y - 472.0) * 0.0455);
     let mut hood = PathBuilder::new();
-    let (x, y) = at(185.0);
+    let (x, y) = map(512.0, 204.0);
     hood.move_to(x, y);
-    for (from, to) in [(185.0_f32, 270.0_f32), (270.0, 355.0)] {
-        let k = 4.0 / 3.0 * ((to - from).to_radians() / 4.0).tan() * radius;
-        let ((x0, y0), (x3, y3)) = (at(from), at(to));
-        let (a0, a3) = (from.to_radians(), to.to_radians());
-        hood.cubic_to(x0 - k * a0.sin(), y0 + k * a0.cos(), x3 + k * a3.sin(), y3 - k * a3.cos(), x3, y3);
+    for (p1, p2, p3) in [
+        ((554.0, 204.0), (636.0, 254.0), (718.0, 352.0)),
+        ((792.0, 440.0), (844.0, 552.0), (858.0, 666.0)),
+        ((864.0, 708.0), (832.0, 742.0), (792.0, 738.0)),
+        ((758.0, 734.0), (738.0, 710.0), (730.0, 672.0)),
+        ((714.0, 596.0), (682.0, 518.0), (634.0, 452.0)),
+        ((590.0, 392.0), (544.0, 358.0), (512.0, 358.0)),
+        ((480.0, 358.0), (434.0, 392.0), (390.0, 452.0)),
+        ((342.0, 518.0), (310.0, 596.0), (294.0, 672.0)),
+        ((286.0, 710.0), (266.0, 734.0), (232.0, 738.0)),
+        ((192.0, 742.0), (160.0, 708.0), (166.0, 666.0)),
+        ((180.0, 552.0), (232.0, 440.0), (306.0, 352.0)),
+        ((388.0, 254.0), (470.0, 204.0), (512.0, 204.0)),
+    ] {
+        let (x1, y1) = map(p1.0, p1.1);
+        let (x2, y2) = map(p2.0, p2.1);
+        let (x3, y3) = map(p3.0, p3.1);
+        hood.cubic_to(x1, y1, x2, y2, x3, y3);
     }
+    hood.close();
     if let Some(path) = hood.finish() {
-        pixmap.stroke_path(&path, &glyph, &stroke, scale, None);
+        pixmap.fill_path(&path, &glyph, FillRule::Winding, scale, None);
     }
-    for eye_x in [13.3, 23.7] {
-        if let Some(eye) = PathBuilder::from_circle(eye_x, 31.0, 3.4) {
+    // Two soft vertical-oval ember eyes matching the app icon's proportions.
+    for (cx_src, cy_src) in [(404.0_f32, 622.0_f32), (620.0, 622.0)] {
+        let (cx, cy) = map(cx_src, cy_src);
+        if let Some(eye) = tiny_skia::Rect::from_xywh(cx - 2.9, cy - 3.6, 5.8, 7.2).and_then(PathBuilder::from_oval) {
             pixmap.fill_path(&eye, &glyph, FillRule::Winding, scale, None);
         }
     }
