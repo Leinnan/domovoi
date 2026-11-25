@@ -143,6 +143,7 @@ fn number(terminal_id: &str) -> Option<u64> {
 }
 
 /// The name of signal `n`.
+#[cfg(unix)]
 fn signal_name(n: i32) -> String {
     match n {
         1 => "SIGHUP".into(),
@@ -166,6 +167,24 @@ fn exit_status(status: std::io::Result<std::process::ExitStatus>) -> Value {
             json!({ "exitCode": s.code(), "signal": signal })
         }
         Err(_) => json!({ "exitCode": null, "signal": null }),
+    }
+}
+
+/// `command` run by the platform's shell: `sh -c`, or `cmd.exe /C` on
+/// Windows (`/S`: the quotes around it are taken off and the rest is run as
+/// written).
+fn shell(command: &str) -> tokio::process::Command {
+    #[cfg(windows)]
+    {
+        let mut c = crate::process::command(std::env::var_os("ComSpec").unwrap_or_else(|| "cmd.exe".into()));
+        c.args(["/D", "/S", "/C"]).raw_arg(format!("\"{command}\""));
+        c
+    }
+    #[cfg(not(windows))]
+    {
+        let mut c = crate::process::command("/bin/sh");
+        c.arg("-c").arg(command);
+        c
     }
 }
 
@@ -207,9 +226,7 @@ impl Terminals {
             None => self.default_cwd.clone(),
         };
         let mut cmd = if self.shell_commands && args.is_empty() {
-            let mut c = crate::process::command("/bin/sh");
-            c.arg("-c").arg(command);
-            c
+            shell(command)
         } else {
             let mut c = crate::process::command(command);
             c.args(&args);
@@ -229,6 +246,8 @@ impl Terminals {
         }
         cmd.current_dir(&cwd).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped());
         let mut child = cmd.spawn().map_err(|e| Refused(format!("Could not start terminal command '{command}': {e}")))?;
+        // Killing the command ends what it started too (Windows; a shell's children).
+        let tree = crate::process::Tree::of(child.id());
         let limit = params["outputByteLimit"].as_u64().map_or(DEFAULT_OUTPUT_LIMIT, |l| usize::try_from(l).unwrap_or(usize::MAX)).min(MAX_OUTPUT_LIMIT);
         let (exit_tx, exited) = tokio::sync::watch::channel(None);
         let kill = Arc::new(tokio::sync::Notify::new());
@@ -263,10 +282,12 @@ impl Terminals {
             let status = tokio::select! {
                 s = child.wait() => s,
                 () = kill.notified() => {
+                    tree.kill();
                     let _ = child.start_kill();
                     child.wait().await
                 }
             };
+            drop(tree);
             let _ = tokio::time::timeout(DRAIN_GRACE, async {
                 let _ = out.await;
                 let _ = err.await;
@@ -379,6 +400,21 @@ mod tests {
         assert_eq!(b.text(), "bcd", "a cut inside é drops what's left of it");
     }
 
+    #[tokio::test]
+    #[cfg(windows)]
+    async fn a_windows_command_runs_through_cmd() {
+        let dir = std::env::temp_dir().join(format!("domovoi-acp-term-{}", crate::util::new_uuid()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let terms = Terminals::new(&dir, vec![("FROM_INSTANCE".into(), "yes".into())], true);
+        let made = terms.create(&json!({ "sessionId": "s", "command": "echo %FROM_INSTANCE% %FROM_REQUEST%& exit /b 3", "env": [{ "name": "FROM_REQUEST", "value": "too" }] })).unwrap();
+        let ask = json!({ "sessionId": "s", "terminalId": made["terminalId"].as_str().unwrap() });
+        assert_eq!(terms.wait_for_exit(&ask).await.unwrap(), json!({ "exitCode": 3, "signal": null }));
+        assert!(terms.output(&ask).unwrap()["output"].as_str().unwrap().contains("yes too"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // POSIX shell syntax; `a_windows_command_runs_through_cmd` is its Windows twin.
+    #[cfg(unix)]
     #[tokio::test]
     async fn a_command_runs_and_is_read_waited_for_killed_and_released() {
         let dir = std::env::temp_dir().join(format!("domovoi-acp-term-{}", crate::util::new_uuid()));

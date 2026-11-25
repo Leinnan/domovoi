@@ -141,7 +141,7 @@ pub const CODEX_TOOL: Tool = Tool { program: "codex", label: "Codex", env: "DOMO
 /// shell's at startup), then where CLIs usually live.
 pub(crate) fn search_dirs() -> Vec<PathBuf> {
     let path = std::env::var("PATH").unwrap_or_default();
-    let known = crate::shell_env::well_known_dirs(&crate::util::home_dir()).join(":");
+    let known = crate::shell_env::well_known_dirs(&crate::util::home_dir()).join(crate::shell_env::SEPARATOR);
     std::env::split_paths(&crate::shell_env::merge(&[&path, &known])).collect()
 }
 
@@ -151,8 +151,59 @@ pub(crate) fn is_executable(p: &Path) -> bool {
         use std::os::unix::fs::PermissionsExt;
         p.metadata().is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
     }
+    // Windows runs a file by its extension: a program, or a batch file
+    // (npm's `claude.cmd`, `codex.cmd`).
     #[cfg(not(unix))]
-    p.is_file()
+    {
+        p.is_file() && p.extension().and_then(|e| e.to_str()).is_some_and(|e| RUNNABLE_EXTENSIONS.iter().any(|r| r.eq_ignore_ascii_case(e)))
+    }
+}
+
+/// What Windows starts a command by, in `PATHEXT`'s default order. Script
+/// hosts (`.js`, `.vbs`) are left out: a process can't be started from them.
+#[cfg(not(unix))]
+const RUNNABLE_EXTENSIONS: [&str; 4] = ["com", "exe", "bat", "cmd"];
+
+/// `p` if it can be run. On Windows, also `p` with each runnable extension
+/// added, the way a shell looks a command name up (`claude` finds `claude.cmd`).
+pub(crate) fn runnable(p: &Path) -> Option<PathBuf> {
+    if is_executable(p) {
+        return Some(p.to_owned());
+    }
+    #[cfg(not(unix))]
+    for ext in RUNNABLE_EXTENSIONS {
+        let mut with = p.as_os_str().to_owned();
+        with.push(".");
+        with.push(ext);
+        let with = PathBuf::from(with);
+        if is_executable(&with) {
+            return Some(with);
+        }
+    }
+    None
+}
+
+/// The first of `dirs` that has a program called `name`.
+pub(crate) fn find_in(dirs: &[PathBuf], name: &str) -> Option<PathBuf> {
+    dirs.iter().find_map(|d| runnable(&d.join(name)))
+}
+
+/// Whether `s` names a path rather than a command to look up.
+fn is_path(s: &str) -> bool {
+    s.contains('/') || cfg!(windows) && s.contains('\\')
+}
+
+/// The real file behind `p`. Windows answers `\\?\C:\…`, which batch files
+/// and some CLIs don't take, so that prefix is dropped where it can be.
+pub(crate) fn resolve(p: PathBuf) -> PathBuf {
+    let real = std::fs::canonicalize(&p).unwrap_or(p);
+    #[cfg(windows)]
+    if let Some(rest) = real.to_str().and_then(|s| s.strip_prefix(r"\\?\"))
+        && !rest.starts_with(r"UNC\")
+    {
+        return PathBuf::from(rest);
+    }
+    real
 }
 
 /// Where a tool is: its env override, else the first match in the search
@@ -163,18 +214,19 @@ pub fn executable(tool: Tool) -> Result<PathBuf, String> {
 }
 
 pub(crate) fn executable_in(tool: Tool, overridden: Option<String>, dirs: &[PathBuf]) -> Result<PathBuf, String> {
-    let resolve = |p: PathBuf| std::fs::canonicalize(&p).unwrap_or(p);
     if let Some(given) = overridden {
         let given = expand_home(given.trim());
-        if given.contains('/') {
-            let p = PathBuf::from(&given);
-            return if is_executable(&p) { Ok(resolve(p)) } else { Err(format!("{} was not found at {given} ({} names it).", tool.label, tool.env)) };
+        if is_path(&given) {
+            return match runnable(Path::new(&given)) {
+                Some(p) => Ok(resolve(p)),
+                None => Err(format!("{} was not found at {given} ({} names it).", tool.label, tool.env)),
+            };
         }
-        if let Some(p) = dirs.iter().map(|d| d.join(&given)).find(|p| is_executable(p)) {
+        if let Some(p) = find_in(dirs, &given) {
             return Ok(resolve(p));
         }
     }
-    if let Some(p) = dirs.iter().map(|d| d.join(tool.program)).find(|p| is_executable(p)) {
+    if let Some(p) = find_in(dirs, tool.program) {
         return Ok(resolve(p));
     }
     let home = crate::util::home_dir();
@@ -1033,6 +1085,7 @@ mod tests {
         d
     }
 
+    #[cfg(unix)]
     fn fake(dir: &Path, name: &str) -> PathBuf {
         use std::os::unix::fs::PermissionsExt;
         let p = dir.join(name);
@@ -1042,6 +1095,23 @@ mod tests {
     }
 
     #[test]
+    #[cfg(windows)]
+    fn windows_finds_a_batch_file_shim_by_its_name() {
+        let (a, b) = (scratch(), scratch());
+        // Not runnable: no extension Windows starts.
+        std::fs::write(a.join("claude"), "#!/bin/sh").unwrap();
+        std::fs::write(b.join("claude.cmd"), "@echo 1.0.0").unwrap();
+        let found = executable_in(CLAUDE_TOOL, None, &[a.clone(), b.clone()]).unwrap();
+        assert_eq!(found.file_name().unwrap(), "claude.cmd");
+        assert!(!found.to_string_lossy().starts_with(r"\\?\"), "a plain path: {}", found.display());
+        let given = b.join("claude");
+        assert_eq!(executable_in(CLAUDE_TOOL, Some(given.display().to_string()), &[]).unwrap().file_name().unwrap(), "claude.cmd", "an override without its extension");
+        assert_eq!(find_in(&[a.clone(), b.clone()], "claude.cmd").unwrap(), b.join("claude.cmd"));
+        let _ = (std::fs::remove_dir_all(a), std::fs::remove_dir_all(b));
+    }
+
+    #[test]
+    #[cfg(unix)]
     fn executables_are_found_in_order_and_resolved() {
         let (a, b) = (scratch(), scratch());
         std::fs::write(a.join("claude"), "not executable").unwrap();

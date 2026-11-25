@@ -4,7 +4,8 @@
 Every user-facing `Event` the core takes (`apps/domovoi-core/src/app.rs`, the
 variants before the first `#[serde(skip)]`) and every field of the view model
 (`apps/domovoi-core/src/view.rs`) should be used by each client: macOS, iOS,
-Android and the Iced desktop app. A name a client never mentions is a feature
+Android, the Iced desktop app and the WinUI app for Windows (in progress, see
+`WIP_CLIENTS`). A name a client never mentions is a feature
 it lacks. Differences that are on purpose are listed, with the reason, in
 `tools/parity-allowlist.toml`. The check fails on any other gap, and on an
 allowlist entry that no longer holds, so the list stays true.
@@ -34,7 +35,12 @@ CLIENTS = {
     "ios": ("swift", [APPLE / "Common", APPLE / "iOS", APPLE / "Activity", APPLE / "Widgets", APPLE / "ShareExtension"]),
     "android": ("kotlin", [APPS / "domovoi-android" / "app" / "src" / "main"]),
     "desktop": ("rust", [APPS / "domovoi-iced" / "src"]),
+    "windows": ("rust", [APPS / "domovoi-windows" / "src"]),
 }
+# Clients still being built (docs/windows.md, milestones): in `--matrix` and
+# counted, but their gaps don't fail the check yet. Drop one from here once it
+# reaches the others, and the check holds it to them.
+WIP_CLIENTS = {"windows"}
 EXTENSIONS = {"swift": ".swift", "kotlin": ".kt", "rust": ".rs"}
 # Fixtures: they build views and send events to draw a screen, not as a feature.
 SKIP_FILES = {"Snapshots.swift", "IOSSnapshots.swift", "ui_tests.rs"}
@@ -124,6 +130,8 @@ def main():
         if "*" in allowed:
             allowed = set(names)
         for c in names:
+            if c in WIP_CLIENTS:
+                continue
             if counts[c] == 0 and c not in allowed:
                 problems.append(f"{kind} {name}: missing in {c}")
             elif counts[c] > 0 and c in allowed and "*" not in (entry or {}).get("missing", []):
@@ -135,6 +143,9 @@ def main():
 
     for p in problems:
         print(p)
+    for c in sorted(WIP_CLIENTS):
+        used = sum(1 for _, _, counts in rows if counts[c] > 0)
+        print(f"parity: {c} is in progress: {used} of {len(rows)} events and fields so far")
     total = len(rows)
     if problems:
         print(f"parity: {len(problems)} gap(s) across {total} events and fields (tools/parity-allowlist.toml lists the intended ones)")

@@ -161,12 +161,12 @@ fn active_artifact_view<'a>(app: &'a App, art: &'a ActiveArtifactView) -> Elemen
     if art.versions.len() > 1 {
         for v in &art.versions {
             let active = v.version == art.version;
-            subbar = subbar.push(
-                button(text(format!("v{}", v.version)).size(TEXT_CAPTION))
-                    .padding([2.0, TIGHT])
-                    .style(w::chip_style(active))
-                    .on_press(core(Event::SelectArtifactVersion { version: v.version, dark: app.is_dark() })),
-            );
+            let chip = button(text(format!("v{}", v.version)).size(TEXT_CAPTION))
+                .padding([2.0, TIGHT])
+                .style(w::chip_style(active))
+                .on_press(core(Event::SelectArtifactVersion { version: v.version, dark: app.is_dark() }));
+            // What changed in this version, from the message that made it.
+            subbar = subbar.push(w::with_tooltip(chip, &v.summary));
         }
     }
     subbar = subbar.push(Space::new().width(Length::Fill));

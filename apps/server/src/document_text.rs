@@ -792,6 +792,7 @@ mod tests {
     }
 
     /// A stand-in worker: a shell script answering as told.
+    #[cfg(unix)]
     fn script(dir: &Path, body: &str) -> PathBuf {
         use std::os::unix::fs::PermissionsExt;
         let p = dir.join(format!("worker-{}.sh", crate::util::new_uuid()));
@@ -800,6 +801,7 @@ mod tests {
         p
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn the_child_writes_a_sidecar_once_and_failures_are_remembered() {
         let dir = std::env::temp_dir().join(format!("domovoi-doctext-{}", crate::util::new_uuid()));
@@ -838,6 +840,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn a_hung_child_is_killed() {
         let dir = std::env::temp_dir().join(format!("domovoi-doctext-hang-{}", crate::util::new_uuid()));

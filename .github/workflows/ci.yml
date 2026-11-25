@@ -114,3 +114,37 @@ jobs:
         run: just check
       - name: Tests
         run: DOMOVOI_NODE="$(command -v node)" cargo test --workspace --no-fail-fast
+
+  windows:
+    name: Workspace on Windows (WinUI app, server, host)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    env:
+      # Git for Windows converts line endings by default; the tests' own
+      # repositories expect files written byte for byte.
+      GIT_CONFIG_COUNT: "1"
+      GIT_CONFIG_KEY_0: core.autocrlf
+      GIT_CONFIG_VALUE_0: "false"
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          lfs: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - uses: extractions/setup-just@v3
+      # windows-reactor-setup downloads the Windows App SDK runtime on the first build.
+      - name: Build with no warning, and the lint gate
+        run: just windows-check
+      - name: Client parity
+        run: just parity
+      - name: Unit tests (WinUI app, host, launcher, Iced app, server)
+        run: just windows-test
+      - name: Server integration tests that run on Windows
+        run: just windows-test-server

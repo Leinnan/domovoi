@@ -1,0 +1,57 @@
+# Domovoi's Windows installers (`just windows-installers`): the full MSI (the
+# WinUI app, the Iced app, the server) and the server-only MSI, with their
+# SHA256SUMS. On a tag, or by hand. With the WINDOWS_CERT_PFX (base64) and
+# WINDOWS_CERT_PASSWORD secrets the programs and MSIs are signed; without
+# them they are not.
+name: Windows installers
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+jobs:
+  installers:
+    name: MSIs (x64)
+    runs-on: windows-latest
+    env:
+      # A step's `if` can't read secrets: whether one is set, for the step below.
+      HAS_CERT: ${{ secrets.WINDOWS_CERT_PFX != '' }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          lfs: true
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target/windows-package"
+      - uses: extractions/setup-just@v3
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "9.0.x"
+      - name: The pinned WiX
+        run: dotnet tool restore
+      - name: Signing certificate
+        if: env.HAS_CERT == 'true'
+        shell: pwsh
+        env:
+          WINDOWS_CERT_PFX: ${{ secrets.WINDOWS_CERT_PFX }}
+          WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+        run: |
+          $pfx = Join-Path $env:RUNNER_TEMP "signing.pfx"
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WINDOWS_CERT_PFX))
+          $password = ConvertTo-SecureString $env:WINDOWS_CERT_PASSWORD -AsPlainText -Force
+          $cert = Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Password $password
+          Remove-Item $pfx
+          "DOMOVOI_SIGN_CERT_THUMBPRINT=$($cert.Thumbprint)" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          "DOMOVOI_SIGN_TIMESTAMP_URL=http://timestamp.digicert.com" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+      - name: Build, validate and smoke-test the MSIs
+        shell: bash
+        run: just windows-installers
+      - uses: actions/upload-artifact@v4
+        with:
+          name: domovoi-windows-installers
+          path: |
+            dist/windows/*.msi
+            dist/windows/SHA256SUMS
+          if-no-files-found: error

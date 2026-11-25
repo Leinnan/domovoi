@@ -1,10 +1,16 @@
-# domovoi: the Rust server, the Crux client core and the macOS and iPhone apps.
-# `just` lists the recipes. Packaging needs Xcode, xcodegen and boltffi
-# (`cargo install boltffi_cli`); the Mac builds are Apple silicon only
-# (Rust target aarch64-apple-darwin).
+# domovoi: the Rust server, the Crux client core, the macOS, iPhone, Android
+# and Windows apps. `just` lists the recipes. Apple packaging needs Xcode,
+# xcodegen and boltffi (`cargo install boltffi_cli`); the Mac builds are Apple
+# silicon only (Rust target aarch64-apple-darwin). Windows: docs/windows.md
+# (`just windows-doctor` checks the tools).
 
 set shell := ["bash", "-euo", "pipefail", "-c"]
+# On Windows, `bash` in PATH is WSL's (C:\Windows\system32\bash.exe), which has
+# none of the Windows toolchain, so point Windows at Git for Windows' bash.
+set windows-shell := ["C:/Program Files/Git/bin/bash.exe", "-euo", "pipefail", "-c"]
 
+# Python 3 is `python` on Windows (`python3` there is the Store's stand-in).
+python := if os_family() == "windows" { "python" } else { "python3" }
 version := `sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1`
 mac := "apps/domovoi-apple"
 derived := mac / "build"
@@ -14,7 +20,7 @@ port := "13774"
 sim := "iPhone 17 Pro"
 ios_bundle := "com.crayen.domovoi"
 droid := "apps/domovoi-android"
-android_sdk := env("ANDROID_HOME", env("HOME") / "Library/Android/sdk")
+android_sdk := env("ANDROID_HOME", env("HOME", "") / "Library/Android/sdk")
 android_ndk := android_sdk / "ndk/29.0.13846066"
 android_jdk := env("JAVA_HOME", "/Applications/Android Studio.app/Contents/jbr/Contents/Home")
 adb := android_sdk / "platform-tools/adb"
@@ -90,7 +96,7 @@ live provider filter="":
 
 # Every client uses every core event and view field, bar tools/parity-allowlist.toml (`--matrix` prints counts)
 parity *args:
-    python3 tools/parity.py {{args}}
+    {{python}} tools/parity.py {{args}}
 
 # Build everything and fail on any compiler warning or lint-gate finding
 check: lfs-check parity
@@ -311,12 +317,12 @@ mac-package: lfs-check mac-release
 
 # The Mac apps' executables segment by segment, against their budgets (tools/size-report.py)
 size-report:
-    python3 tools/size-report.py "{{dist}}/Domovoi.app={{client_budget}}" "{{dist}}/Domovoi Server.app={{server_budget}}"
+    {{python}} tools/size-report.py "{{dist}}/Domovoi.app={{client_budget}}" "{{dist}}/Domovoi Server.app={{server_budget}}"
 
 # The server's code by crate: a release build that keeps its symbols, in its own target folder
 size-crates n="30":
     CARGO_PROFILE_RELEASE_STRIP=none cargo build -q --release -p domovoi-server --target aarch64-apple-darwin --target-dir target/size
-    python3 tools/size-report.py --crates {{n}} target/size/aarch64-apple-darwin/release/domovoi-server
+    {{python}} tools/size-report.py --crates {{n}} target/size/aarch64-apple-darwin/release/domovoi-server
 
 # Tell Launch Services about a freshly built app. xcodebuild rewrites what's
 # inside the bundle but not the bundle folder's date, which is what the icon
@@ -471,6 +477,7 @@ tray-app out=dist release="true" target="":
     echo "$app"
 
 # App and server, ready to hand out
+[macos]
 package: mac-package server-package
     cd {{dist}} && shasum -a 256 *.zip *.dmg *.tar.gz > SHA256SUMS
     @cat {{dist}}/SHA256SUMS
@@ -478,7 +485,7 @@ package: mac-package server-package
 # Redraw the app icons (tools/icons.py); `export` also renders PNGs and the server's Windows .ico (needs Xcode 26 and Pillow),
 # which are kept in Git LFS
 icons *args:
-    python3 tools/icons.py {{args}}
+    {{python}} tools/icons.py {{args}}
     @case " {{args}} " in *" export "*) "{{just_executable()}}" --justfile "{{justfile()}}" lfs-check ;; esac
 
 # Remove build products (keeps the Rust cache)
@@ -543,3 +550,107 @@ desktop-package: lfs-check
         echo "{{dist}}/domovoi-desktop-{{version}}-windows.exe"
         ;;
     esac
+
+# --- Windows (WinUI app, server, installers; docs/windows.md) ---
+# Native Windows only: MSVC, the Windows SDK, Git for Windows (this file's
+# shell), pwsh 7 and the .NET SDK (WiX, pinned in .config/dotnet-tools.json).
+
+# Git for Windows turns on line-ending conversion for every repository; tests
+# that make repositories expect files written byte for byte.
+windows_test_env := "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.autocrlf GIT_CONFIG_VALUE_0=false"
+
+# Check the tools the Windows recipes need, and restore the pinned WiX
+[windows]
+windows-doctor:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    status=0
+    have() { if command -v "$1" >/dev/null 2>&1; then echo "ok    $1 ($2)"; else echo "MISSING $1: $3"; status=1; fi; }
+    have cargo "$(cargo --version 2>/dev/null)" "install Rust (https://rustup.rs) with the MSVC toolchain"
+    have cygpath "Git for Windows' usr/bin" "put C:/Program Files/Git/usr/bin on PATH (just runs scripts through it)"
+    have git-lfs "$(git lfs version 2>/dev/null | head -1)" "install Git LFS, then: git lfs install && git lfs pull"
+    have {{python}} "$({{python}} --version 2>&1)" "install Python 3 (parity check, test fakes)"
+    have pwsh "$(pwsh -v 2>/dev/null)" "install PowerShell 7 (winget install Microsoft.PowerShell)"
+    have dotnet "$(dotnet --version 2>/dev/null)" "install the .NET SDK (winget install Microsoft.DotNet.SDK.9)"
+    if rustup target list --installed 2>/dev/null | grep -q x86_64-pc-windows-msvc; then echo "ok    target x86_64-pc-windows-msvc"; else echo "MISSING the x86_64-pc-windows-msvc target: rustup target add x86_64-pc-windows-msvc"; status=1; fi
+    kits="$(printenv 'ProgramFiles(x86)' || echo 'C:/Program Files (x86)')/Windows Kits/10/bin"
+    if ls "$kits"/*/x64/rc.exe >/dev/null 2>&1; then echo "ok    rc.exe (Windows SDK: the executables' icons)"; else echo "MISSING rc.exe: install the Windows SDK (Visual Studio Installer, Desktop development with C++)"; status=1; fi
+    if dotnet tool restore >/dev/null 2>&1; then echo "ok    wix $(dotnet tool run wix -- --version 2>/dev/null) (pinned)"; else echo "MISSING the pinned WiX: dotnet tool restore failed"; status=1; fi
+    exit $status
+
+# Build the WinUI app (debug, or `release=true`); its runtime is staged beside it
+[windows]
+windows-build release="false":
+    cargo build -p domovoi-windows {{ if release == "true" { "--release" } else { "" } }}
+    @echo "target/{{ if release == "true" { "release" } else { "debug" } }}/Domovoi.exe"
+
+# Run the WinUI app (debug build); extra arguments go to it (a domovoi:// link)
+[windows]
+windows-run *args:
+    cargo run -p domovoi-windows -- {{args}}
+
+# Build the workspace and its tests on Windows with no warning, then the lint gate `check` runs
+[windows]
+windows-check:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    for cmd in "cargo build --workspace" "cargo test --workspace --no-run"; do
+      out=$($cmd 2>&1) || { echo "$out"; exit 1; }
+      if grep -E -A6 '^(warning|error)' <<<"$out"; then exit 1; fi
+    done
+    cargo clippy -q --workspace --lib --bins -- -A clippy::all       -D clippy::unwrap_used -D clippy::await_holding_lock -D clippy::large_enum_variant       -D clippy::disallowed_methods -D clippy::disallowed_types -D clippy::disallowed_macros       -D unfulfilled_lint_expectations
+
+# Unit tests of the Windows app, the shared host, the launcher, the server and the Iced app
+[windows]
+windows-test:
+    {{windows_test_env}} cargo test -p domovoi-windows -p domovoi-desktop-host -p domovoi-server-launcher -p domovoi-iced
+    {{windows_test_env}} cargo test -p domovoi-server --bins
+
+# The server's integration tests that pass on Windows (provider_turns and rpc_calls are not there yet: docs/windows.md)
+[windows]
+windows-test-server:
+    {{windows_test_env}} cargo test -p domovoi-server --test config_wire --test document_text --test golden_replay --test managed_policy --test ops --test pairing_permissions --test peer_links --test preview --test push --test remote_access --test webpush
+
+# Start the WinUI app against a running server with a fresh pairing code; fails unless it connects
+[windows]
+windows-smoke url=("http://127.0.0.1:" + port) home=home: (windows-build "false")
+    code=$(cargo run -q -p domovoi-server -- --home-dir {{home}} --port {{port}} pair | grep -o 'token=[A-Z0-9-]*' | cut -d= -f2); \
+    DOMOVOI_STORE=memory DOMOVOI_SMOKE=1 DOMOVOI_SERVER={{url}} DOMOVOI_PAIRING="$code" timeout 60 target/debug/Domovoi.exe
+
+# The server and its launcher (release) as a zip in dist/, for a machine that takes no installer
+[windows]
+windows-server-package: lfs-check
+    RUSTFLAGS="-C target-feature=+crt-static" cargo build --release -p domovoi-server -p domovoi-server-launcher --target-dir target/windows-package
+    mkdir -p {{dist}}/windows
+    rm -f "{{dist}}/windows/domovoi-server-{{version}}-windows-x64.zip"
+    cd target/windows-package/release && pwsh -NoProfile -Command "Compress-Archive -Force -Path domovoi-server.exe, domovoi-server-launcher.exe -DestinationPath '../../../{{dist}}/windows/domovoi-server-{{version}}-windows-x64.zip'"
+    @echo "{{dist}}/windows/domovoi-server-{{version}}-windows-x64.zip"
+
+# The full MSI (WinUI app, Iced app, server) in dist/windows (packaging/windows/package.ps1; `-NoSmoke` skips starting what it built)
+[windows]
+windows-package *args: lfs-check
+    pwsh -NoProfile -File packaging/windows/package.ps1 -Flavor full {{args}}
+
+# The server-only MSI in dist/windows
+[windows]
+windows-package-server *args: lfs-check
+    pwsh -NoProfile -File packaging/windows/package.ps1 -Flavor server {{args}}
+
+# Both MSIs and their SHA256SUMS in dist/windows; DOMOVOI_SIGN_CERT_THUMBPRINT signs them
+[windows]
+windows-installers *args: lfs-check
+    pwsh -NoProfile -File packaging/windows/package.ps1 -Flavor both {{args}}
+
+# Install the built full MSI for this user (`flavor=server` for the server's), with a log in target/
+[windows]
+windows-install flavor="full":
+    pwsh -NoProfile -File packaging/windows/install.ps1 -Action install -Flavor {{flavor}}
+
+# Uninstall what windows-install installed
+[windows]
+windows-uninstall flavor="full":
+    pwsh -NoProfile -File packaging/windows/install.ps1 -Action uninstall -Flavor {{flavor}}
+
+# Installers, ready to hand out
+[windows]
+package: windows-installers

@@ -946,7 +946,8 @@ mod attachment_tests {
         assert_eq!(files.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(), ["notes.md", "spec.pdf", "big.txt"]);
         let text = with_attached_files("Summarize these", &files);
         assert!(text.starts_with("Summarize these\n\n<attached_files>"));
-        assert!(text.contains(&format!("Attached file \"spec.pdf\": \"{}\"", dir.join("pending-b-pdf.pdf").display())));
+        // The path as a JSON string: on Windows its backslashes are escaped.
+        assert!(text.contains(&format!("Attached file \"spec.pdf\": {}", serde_json::to_string(&dir.join("pending-b-pdf.pdf").to_string_lossy()).unwrap())));
         assert!(text.contains("~~~~\n# Notes\nuse ```rust```\n~~~~"), "inlined with a fence it doesn't contain");
         assert!(!text.contains("%PDF") && !text.contains("xxxx"), "binaries and big files are only named");
         assert!(with_attached_files("", &files).starts_with(ATTACHMENT_ONLY_PROMPT));
@@ -955,7 +956,7 @@ mod attachment_tests {
         let sidecar = crate::document_text::sidecar(&dir.join("pending-b-pdf.pdf"));
         std::fs::write(&sidecar, "## Page 1\nHello").unwrap();
         let text = with_attached_files("Summarize these", &files);
-        assert!(text.contains(&format!("(text extracted to: \"{}\")", sidecar.display())), "{text}");
+        assert!(text.contains(&format!("(text extracted to: {})", serde_json::to_string(&sidecar.to_string_lossy()).unwrap())), "{text}");
         let _ = std::fs::remove_dir_all(&u);
     }
 

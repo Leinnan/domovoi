@@ -1231,7 +1231,7 @@ pub fn import_next(model: &mut Model) -> Cmd {
                 .iter()
                 .find(|c| c.path == path)
                 .map(|c| c.title.clone())
-                .unwrap_or_else(|| path.trim_end_matches('/').rsplit('/').next().unwrap_or(&path).to_owned());
+                .unwrap_or_else(|| crate::tools::file_name(&path).to_owned());
             let project_id = uuid();
             let create = ProjectChange::Create { project: &ProjectId::from(project_id.as_str()), title: &title, workspace_root: &path };
             call(model, requests::projects_mutate(&uuid(), create), Route::ImportProject { path, project_id })
@@ -1880,11 +1880,11 @@ pub fn update(event: Event, model: &mut Model) -> Cmd {
             c
         }
         Event::AddProject { path } => {
-            let path = path.trim_end_matches('/').to_owned();
+            let path = path.trim().trim_end_matches(['/', '\\']).to_owned();
             if path.is_empty() {
                 return Command::done();
             }
-            let title = path.rsplit('/').next().unwrap_or(&path).to_owned();
+            let title = crate::tools::file_name(&path).to_owned();
             let create = ProjectChange::Create { project: &ProjectId::from(uuid()), title: &title, workspace_root: &path };
             call(model, requests::projects_mutate(&uuid(), create), Route::ProjectCreated)
         }

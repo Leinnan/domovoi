@@ -1540,7 +1540,6 @@ fn start_in(name: &str, scripted: bool) -> Server {
 
 /// A server with more variables in its environment (kept for its restarts).
 fn start_with_env(name: &str, scripted: bool, env: &[(&str, &str)]) -> Server {
-    use std::os::unix::fs::PermissionsExt;
     let dir = std::env::temp_dir().join(format!("domovoi-provider-turns-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     for d in ["w", "out"] {
@@ -1555,7 +1554,15 @@ fn start_with_env(name: &str, scripted: bool, env: &[(&str, &str)]) -> Server {
     for (name, script) in [("claude", FAKE_CLAUDE), ("codex", FAKE_CODEX), ("opencode", FAKE_OPENCODE), ("pi", FAKE_PI), ("acp-agent", FAKE_ACP), ("agy", FAKE_AGY), ("grok", FAKE_ACP_CLI), ("kiro-cli", FAKE_ACP_CLI), ("fx", FAKE_ACP_CLI), ("devin", FAKE_ACP_CLI)] {
         let path = dir.join(name);
         std::fs::write(&path, script).unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        // Windows runs no shebang: `claude.cmd` beside it starts Python on
+        // it, and the server finds `claude` as `claude.cmd`.
+        #[cfg(windows)]
+        std::fs::write(dir.join(format!("{name}.cmd")), format!("@python \"%~dp0{name}\" %*\r\n")).unwrap();
     }
     // A free port can be taken by another test's server before this one
     // binds it; such a server exits at once, so try another.
@@ -1602,7 +1609,13 @@ fn spawn_in(dir: PathBuf, port: u16) -> Option<Server> {
     let (claude, codex, path) = if live {
         (live::binary("DOMOVOI_CLAUDE_BINARY", "claude"), live::binary("DOMOVOI_CODEX_BINARY", "codex"), std::env::var("PATH").unwrap_or_default())
     } else {
-        (dir.join("claude"), if scripted { dir.join("codex") } else { PathBuf::from("/usr/bin/false") }, "/usr/bin:/bin:/usr/sbin:/sbin".to_owned())
+        // Windows: the system's PATH, for git and the Python the fakes run on.
+        let (false_exe, path) = if cfg!(windows) {
+            (dir.join("missing").join("false.exe"), std::env::var("PATH").unwrap_or_default())
+        } else {
+            (PathBuf::from("/usr/bin/false"), "/usr/bin:/bin:/usr/sbin:/sbin".to_owned())
+        };
+        (dir.join("claude"), if scripted { dir.join("codex") } else { false_exe }, path)
     };
     let mut child = isolated_git(Command::new(server_bin()))
         .env("DOMOVOI_NO_SESSION_IMPORT", "1")
@@ -4800,6 +4813,7 @@ async fn antigravity_reports_limits_skills_titles_and_batches() {
 
 /// A stand-in for Google's Antigravity release channel: this platform's
 /// manifest, naming a `.tar.gz` that holds the scripted `agy` as `antigravity`.
+#[cfg(unix)]
 async fn fake_releases(dir: &std::path::Path) -> String {
     use sha2::Digest as _;
     let stage = dir.join("release");
@@ -4843,6 +4857,8 @@ async fn fake_releases(dir: &std::path::Path) -> String {
 /// Domovoi installs Antigravity from the release channel: downloaded,
 /// checked, proved by starting it, then what instances run; not removed
 /// while a session runs from it; removed once none does.
+// The release is a tarball of a script; Windows' is a bare `agy.exe`.
+#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread")]
 async fn antigravity_is_installed_from_googles_release_channel() {
     let dir = std::env::temp_dir().join(format!("domovoi-ag-releases-{}", std::process::id()));

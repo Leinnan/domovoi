@@ -1,0 +1,17 @@
+[package]
+name = "domovoi-server-launcher"
+description = "Windows: starts the domovoi-server.exe beside it with no console window, and with --supervise starts it again after a failure"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "domovoi-server-launcher"
+path = "src/main.rs"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading"] }
+
+[build-dependencies]
+# The executable's icon: the server's (build.rs).
+winresource = { version = "0.1.34", default-features = false }

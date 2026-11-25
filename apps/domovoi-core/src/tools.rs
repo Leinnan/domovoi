@@ -39,10 +39,11 @@ fn tense(running: bool, now: &str, done: &str) -> String {
     if running { now } else { done }.to_owned()
 }
 
-/// The last part of a path.
+/// The last part of a path, on the server's platform: a Windows server's
+/// paths have backslashes.
 pub(crate) fn file_name(path: &str) -> &str {
-    let trimmed = path.trim_end_matches('/');
-    trimmed.rsplit('/').next().filter(|n| !n.is_empty()).unwrap_or(trimmed)
+    let trimmed = path.trim_end_matches(['/', '\\']);
+    trimmed.rsplit(['/', '\\']).next().filter(|n| !n.is_empty()).unwrap_or(trimmed)
 }
 
 /// `path` relative to `cwd` when inside it.
@@ -1238,6 +1239,14 @@ pub(crate) fn image_sources(item: &TurnItem, cwd: &str) -> Vec<ImageSource> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_file_name_is_found_in_a_windows_servers_paths_too() {
+        assert_eq!(file_name("/home/me/work/"), "work");
+        assert_eq!(file_name(r"C:\Users\me\work"), "work");
+        assert_eq!(file_name(r"C:\Users\me\work\"), "work");
+        assert_eq!(file_name("README.md"), "README.md");
+    }
 
     fn item(body: Value) -> TurnItem {
         let mut v = json!({

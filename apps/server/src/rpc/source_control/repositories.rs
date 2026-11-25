@@ -1170,6 +1170,8 @@ mod tests {
         assert_eq!(redact_url_credentials("fatal: 'https://a:b@h/x' not found"), "fatal: https://h/x not found");
     }
 
+    // Unix paths.
+    #[cfg(unix)]
     #[test]
     fn resolves_paths_lexically() {
         assert_eq!(resolve_path("/a/b/../c/./d"), PathBuf::from("/a/c/d"));

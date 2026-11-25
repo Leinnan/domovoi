@@ -171,16 +171,53 @@ impl Default for Terminals {
 }
 
 /// The user's shell; without `$SHELL` (a service, a container) the first
-/// one that exists. Windows: `%COMSPEC%` (cmd.exe).
+/// one that exists. Windows: `DOMOVOI_SHELL`, else PowerShell 7 (`pwsh`),
+/// else Windows PowerShell, else `%COMSPEC%` (cmd.exe).
 fn shell() -> String {
     if cfg!(windows) {
-        return std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".into());
+        if let Some(s) = std::env::var("DOMOVOI_SHELL").ok().filter(|s| !s.trim().is_empty()) {
+            return s;
+        }
+        let dirs = crate::providers::search_dirs();
+        return ["pwsh", "powershell"]
+            .into_iter()
+            .find_map(|name| crate::providers::find_in(&dirs, name))
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|| std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".into()));
     }
     std::env::var("SHELL")
         .ok()
         .filter(|s| !s.is_empty() && std::path::Path::new(s).exists())
         .or_else(|| ["/bin/zsh", "/bin/bash", "/bin/sh"].into_iter().find(|s| std::path::Path::new(s).exists()).map(str::to_owned))
         .unwrap_or_else(|| "/bin/sh".into())
+}
+
+/// The PTY's output, with ConPTY's first cursor position query (`ESC[6n`,
+/// sent before the shell starts) answered as top left and left out. Later
+/// queries are the shell's own and go to the client.
+#[cfg(windows)]
+struct AnswerCursorQuery {
+    inner: Box<dyn Read + Send>,
+    input: Option<std::sync::mpsc::Sender<Vec<u8>>>,
+}
+
+#[cfg(windows)]
+impl Read for AnswerCursorQuery {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        const QUERY: &[u8] = b"\x1b[6n";
+        loop {
+            let n = self.inner.read(buf)?;
+            let Some(input) = &self.input else { return Ok(n) };
+            let Some(at) = buf[..n].windows(QUERY.len()).position(|w| w == QUERY) else { return Ok(n) };
+            let _ = input.send(b"\x1b[1;1R".to_vec());
+            self.input = None;
+            buf.copy_within(at + QUERY.len()..n, at);
+            let left = n - QUERY.len();
+            if left > 0 {
+                return Ok(left);
+            }
+        }
+    }
 }
 
 /// Starts the thread that writes a session's input to its PTY. It ends when
@@ -241,6 +278,10 @@ impl Terminals {
         let reader = pair.master.try_clone_reader().map_err(|e| TerminalError(e.to_string()))?;
         let writer = pair.master.take_writer().map_err(|e| TerminalError(e.to_string()))?;
         let input = spawn_writer(writer);
+        // ConPTY starts by asking where the cursor is (`ESC[6n`) and starts
+        // the shell only once it is told; the clients' emulators don't answer.
+        #[cfg(windows)]
+        let reader: Box<dyn Read + Send> = Box::new(AnswerCursorQuery { inner: reader, input: Some(input.clone()) });
         let (events, rx) = broadcast::channel(1024);
         let label = format!("Terminal {}", terminal_id.trim_start_matches("term-"));
         let session = Session {
@@ -397,11 +438,13 @@ mod tests {
         let (snap, mut rx) = t.open("th", "term-1", dir.to_str().unwrap(), &HashMap::new()).unwrap();
         assert_eq!(snap.status, TerminalSessionStatus::Running);
         assert_eq!(snap.label, "Terminal 1");
-        t.write("th", "term-1", "echo domovoi-$((40+2))\n").unwrap();
+        // PowerShell on Windows (the default there), a POSIX shell elsewhere.
+        let line = if cfg!(windows) { "echo \"domovoi-$(40+2)\"\r" } else { "echo domovoi-$((40+2))\n" };
+        t.write("th", "term-1", line).unwrap();
         let mut seen = String::new();
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
         while !seen.contains("domovoi-42") {
-            let ev = tokio::time::timeout_at(deadline, rx.recv()).await.expect("output in time").unwrap();
+            let ev = tokio::time::timeout_at(deadline, rx.recv()).await.unwrap_or_else(|_| panic!("output in time; so far: {seen:?}")).unwrap();
             if let TerminalAttachEvent::Output { data, .. } = ev {
                 seen.push_str(&data);
             }

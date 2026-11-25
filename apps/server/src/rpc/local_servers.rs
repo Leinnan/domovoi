@@ -9,11 +9,14 @@
 //! redirect. Scans repeat every 3 seconds and a subscriber hears only changes.
 //! Stopping signals the listener's process group (SIGTERM, then SIGKILL after
 //! 3 seconds), and only for a listed server whose group holds neither this
-//! server, its ancestors, nor its direct children.
+//! server, its ancestors, nor its direct children. Windows has no process
+//! groups: there the listener and what it started are ended, under the same
+//! rule.
 //!
 //! Limits:
-//! - listeners are read with `lsof` (macOS and Linux); t3code's `/proc/net/tcp`
-//!   walk for hosts without lsof and its Windows `netstat` path are not ported;
+//! - listeners are read with `lsof` (macOS and Linux) or the IP Helper table
+//!   (Windows); t3code's `/proc/net/tcp` walk for hosts without lsof is not
+//!   ported;
 //! - configured `https:` URLs are not probed (no TLS client here), so they are
 //!   listed only through an owned listener on the same port;
 //! - Domovoi's Claude adapter does not yet export `T3CODE_THREAD_ID` to its tool
@@ -34,6 +37,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::broadcast;
 
 const POLL_INTERVAL: Duration = Duration::from_secs(3);
+#[cfg(not(windows))]
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
 const WEB_PROBE_TIMEOUT: Duration = Duration::from_secs(1);
 const WEB_PROBE_CACHE_TTL: Duration = Duration::from_secs(15);
@@ -44,6 +48,7 @@ const STOP_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const PREVIEW_URL_MAX_LENGTH: usize = 2_048;
 const CONFIGURED_LOCAL_SERVER_URLS_MAX_ITEMS: usize = 32;
 const AGENT_THREAD_ENV: &str = "T3CODE_THREAD_ID";
+#[cfg(any(not(windows), test))]
 const LSOF_LOCAL_HOST_TOKENS: &[&str] = &["localhost", "127.0.0.1", "0.0.0.0", "::1", "*", "[::]", "[::1]"];
 
 /// Wakes subscribers right after a stop, so the server leaves now rather than on the next poll.
@@ -101,6 +106,7 @@ pub struct Listener {
     pub port: u16,
 }
 
+#[cfg(any(not(windows), test))]
 fn port_from_lsof_name(name: &str) -> Option<u16> {
     let first = name.split(' ').next()?.trim();
     let (host, port) = first.rsplit_once(':')?;
@@ -110,6 +116,7 @@ fn port_from_lsof_name(name: &str) -> Option<u16> {
     port.parse::<u16>().ok().filter(|p| *p > 0)
 }
 
+#[cfg(any(not(windows), test))]
 /// Loopback or wildcard listeners in `lsof -F pcn` output, in output order.
 pub fn parse_lsof(raw: &str) -> Vec<Listener> {
     let (mut pid, mut name) = (None, None);
@@ -141,6 +148,7 @@ pub struct ProcessRow {
     pub pgid: i32,
 }
 
+#[cfg(any(not(windows), test))]
 /// `ps -A -o pid=,ppid=,pgid=`.
 pub fn parse_process_table(raw: &str) -> HashMap<i32, ProcessRow> {
     raw.lines()
@@ -171,6 +179,7 @@ pub fn stoppable_process_group(table: &HashMap<i32, ProcessRow>, pid: i32, serve
     (!shared).then_some(group)
 }
 
+#[cfg(any(not(windows), test))]
 /// macOS `ps -E -ww -o pid=,command=`: argv followed by the launch environment.
 pub fn parse_ps_environment_threads(raw: &str) -> HashMap<u32, Option<String>> {
     let prefix = format!("{AGENT_THREAD_ENV}=");
@@ -191,6 +200,7 @@ pub fn parse_proc_environ_thread(raw: &str) -> Option<String> {
     raw.split('\0').find_map(|e| e.strip_prefix(prefix.as_str())).map(|v| v.trim().to_owned()).filter(|v| !v.is_empty())
 }
 
+#[cfg(not(windows))]
 async fn run(cmd: &str, args: &[&str]) -> Option<String> {
     let child = crate::process::command(cmd).args(args).kill_on_drop(true).output();
     let out = tokio::time::timeout(COMMAND_TIMEOUT, child).await.ok()?.ok()?;
@@ -199,23 +209,119 @@ async fn run(cmd: &str, args: &[&str]) -> Option<String> {
 }
 
 async fn process_table() -> Option<HashMap<i32, ProcessRow>> {
+    #[cfg(windows)]
+    return tokio::task::spawn_blocking(windows::process_table).await.ok().flatten();
+    #[cfg(not(windows))]
     run("ps", &["-A", "-o", "pid=,ppid=,pgid="]).await.map(|s| parse_process_table(&s))
+}
+
+/// What stopping `pid` ends on Windows: it and its descendants, children
+/// first. `None` when `pid` is this server, one of its ancestors, or a direct
+/// child of it (agent CLIs and terminal shells), as [`stoppable_process_group`]
+/// rules on Unix.
+#[cfg(any(windows, test))]
+pub fn stoppable_tree(table: &HashMap<i32, ProcessRow>, pid: i32, server_pid: i32) -> Option<Vec<i32>> {
+    let row = table.get(&pid)?;
+    if pid == server_pid || row.ppid == server_pid {
+        return None;
+    }
+    let mut seen = std::collections::HashSet::from([server_pid]);
+    let mut ancestor = table.get(&server_pid).map(|r| r.ppid);
+    while let Some(p) = ancestor.filter(|p| *p > 0 && seen.insert(*p)) {
+        if p == pid {
+            return None;
+        }
+        ancestor = table.get(&p).map(|r| r.ppid);
+    }
+    let mut children: HashMap<i32, Vec<i32>> = HashMap::new();
+    for r in table.values() {
+        children.entry(r.ppid).or_default().push(r.pid);
+    }
+    // Depth first, then reversed: every child comes before its parent.
+    let (mut order, mut stack, mut visited) = (vec![], vec![pid], std::collections::HashSet::new());
+    while let Some(p) = stack.pop() {
+        if p == server_pid || !visited.insert(p) {
+            continue;
+        }
+        order.push(p);
+        stack.extend(children.get(&p).into_iter().flatten().copied());
+    }
+    order.reverse();
+    Some(order)
+}
+
+/// The process table, listeners and launch environments, from sysinfo and
+/// the IP Helper API (Windows has no `ps` or `lsof`).
+#[cfg(windows)]
+mod windows {
+    use super::{Listener, ProcessRow};
+    use std::collections::HashMap;
+    use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
+
+    /// Every process, each its own group.
+    pub fn process_table() -> Option<HashMap<i32, ProcessRow>> {
+        let mut sys = System::new().ok()?;
+        sys.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::nothing());
+        let rows = sys.processes().values().map(|p| {
+            let pid = p.pid().as_u32() as i32;
+            (pid, ProcessRow { pid, ppid: p.parent().map_or(0, |x| x.as_u32() as i32), pgid: pid })
+        });
+        Some(rows.collect())
+    }
+
+    /// Loopback and wildcard TCP listeners, with their processes' names.
+    pub fn listeners() -> Vec<Listener> {
+        let ports = crate::win::local_tcp_listeners();
+        let pids: Vec<Pid> = ports.iter().map(|(_, pid)| Pid::from_u32(*pid)).collect();
+        let names: HashMap<u32, String> = System::new()
+            .map(|mut sys| {
+                sys.refresh_processes_specifics(ProcessesToUpdate::Some(&pids), true, ProcessRefreshKind::nothing());
+                sys.processes().values().map(|p| (p.pid().as_u32(), p.name().to_string_lossy().into_owned())).collect()
+            })
+            .unwrap_or_default();
+        ports
+            .into_iter()
+            .filter(|(port, _)| *port > 0)
+            .map(|(port, pid)| Listener { pid: (pid > 0).then_some(pid), process_name: names.get(&pid).cloned(), port })
+            .collect()
+    }
+
+    /// The agent thread in each process's launch environment.
+    pub fn agent_threads(pids: &[u32]) -> HashMap<u32, Option<String>> {
+        let Ok(mut sys) = System::new() else { return HashMap::new() };
+        let wanted: Vec<Pid> = pids.iter().copied().map(Pid::from_u32).collect();
+        sys.refresh_processes_specifics(ProcessesToUpdate::Some(&wanted), true, ProcessRefreshKind::nothing().with_environ(UpdateKind::Always));
+        pids.iter()
+            .map(|pid| {
+                let env = sys.process(Pid::from_u32(*pid)).map(|p| p.environ().iter().map(|e| e.to_string_lossy()).collect::<Vec<_>>().join("\0")).unwrap_or_default();
+                (*pid, super::parse_proc_environ_thread(&env))
+            })
+            .collect()
+    }
 }
 
 async fn agent_threads(pids: &[u32]) -> HashMap<u32, Option<String>> {
     if pids.is_empty() {
         return HashMap::new();
     }
-    if cfg!(target_os = "linux") {
-        let mut out = HashMap::new();
-        for pid in pids {
-            let raw = tokio::fs::read(format!("/proc/{pid}/environ")).await.unwrap_or_default();
-            out.insert(*pid, parse_proc_environ_thread(&String::from_utf8_lossy(&raw)));
-        }
-        return out;
+    #[cfg(windows)]
+    {
+        let pids = pids.to_vec();
+        tokio::task::spawn_blocking(move || windows::agent_threads(&pids)).await.unwrap_or_default()
     }
-    let list = pids.iter().map(u32::to_string).collect::<Vec<_>>().join(",");
-    run("ps", &["-E", "-ww", "-o", "pid=,command=", "-p", &list]).await.map(|s| parse_ps_environment_threads(&s)).unwrap_or_default()
+    #[cfg(not(windows))]
+    {
+        if cfg!(target_os = "linux") {
+            let mut out = HashMap::new();
+            for pid in pids {
+                let raw = tokio::fs::read(format!("/proc/{pid}/environ")).await.unwrap_or_default();
+                out.insert(*pid, parse_proc_environ_thread(&String::from_utf8_lossy(&raw)));
+            }
+            return out;
+        }
+        let list = pids.iter().map(u32::to_string).collect::<Vec<_>>().join(",");
+        run("ps", &["-E", "-ww", "-o", "pid=,command=", "-p", &list]).await.map(|s| parse_ps_environment_threads(&s)).unwrap_or_default()
+    }
 }
 
 // ---- scanning ----
@@ -438,8 +544,13 @@ impl Scanner {
 
     /// One scan, projected for `configured_urls` (already normalized).
     pub async fn scan(&mut self, state: &AppState, configured_urls: &[String]) -> Vec<LocalServer> {
-        let lsof = if cfg!(unix) { run("lsof", &["-iTCP", "-sTCP:LISTEN", "-P", "-n", "-F", "pcn"]).await } else { None };
-        let listeners = lsof.as_deref().map(parse_lsof).unwrap_or_default();
+        #[cfg(windows)]
+        let listeners = tokio::task::spawn_blocking(windows::listeners).await.unwrap_or_default();
+        #[cfg(not(windows))]
+        let listeners = {
+            let lsof = if cfg!(unix) { run("lsof", &["-iTCP", "-sTCP:LISTEN", "-P", "-n", "-F", "pcn"]).await } else { None };
+            lsof.as_deref().map(parse_lsof).unwrap_or_default()
+        };
         let mut pids: Vec<u32> = listeners.iter().filter_map(|l| l.pid).collect();
         pids.sort_unstable();
         pids.dedup();
@@ -532,7 +643,7 @@ fn signal_group(group: i32, signal: i32) -> Result<bool, Failure> {
 }
 
 async fn stop(state: &AppState, input: StopInput) -> Result<(), Failure> {
-    if !cfg!(unix) {
+    if !cfg!(unix) && !cfg!(windows) {
         return Err(Failure::not_stopped(StopLocalServerReason::Unsupported, None));
     }
     // The pid comes from a client, so only a server this scan attributes to a thread is signaled.
@@ -571,7 +682,27 @@ async fn stop_listed(pid: i32) -> Result<(), Failure> {
     signal_group(group, libc::SIGKILL).map(|_| ())
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+async fn stop_listed(pid: i32) -> Result<(), Failure> {
+    let table = process_table().await.ok_or_else(|| Failure::not_stopped(StopLocalServerReason::SignalFailed, Some("the process table could not be read".into())))?;
+    // It exited after the scan, so there is nothing left to stop.
+    if !table.contains_key(&pid) {
+        return Ok(());
+    }
+    let tree = stoppable_tree(&table, pid, std::process::id() as i32).ok_or_else(|| Failure::not_stopped(StopLocalServerReason::SharedGroup, None))?;
+    // Windows has no polite stop for another console process: they end now.
+    for p in tree {
+        if let Err(e) = crate::win::terminate_process(p as u32)
+            && p == pid
+            && crate::win::process_alive(p as u32)
+        {
+            return Err(Failure::not_stopped(StopLocalServerReason::SignalFailed, Some(e.to_string())));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(any(unix, windows)))]
 async fn stop_listed(_pid: i32) -> Result<(), Failure> {
     Err(Failure::not_stopped(StopLocalServerReason::Unsupported, None))
 }
@@ -670,5 +801,19 @@ mod tests {
         // The server's own group.
         assert_eq!(stoppable_process_group(&table, 10, 20), None);
         assert_eq!(stoppable_process_group(&table, 999, 20), None);
+    }
+
+    #[test]
+    fn a_windows_stop_ends_the_listener_and_what_it_started_but_never_the_server() {
+        // explorer 10 > domovoi-server 20 > pwsh 30 > npm 40 > node 41, 42
+        let table = parse_process_table("10 1 10\n20 10 20\n30 20 30\n40 30 40\n41 40 41\n42 40 42\n");
+        let mut tree = stoppable_tree(&table, 40, 20).expect("the dev server's own tree");
+        assert_eq!(tree.pop(), Some(40), "the listener ends last, after its children");
+        tree.sort_unstable();
+        assert_eq!(tree, [41, 42]);
+        assert_eq!(stoppable_tree(&table, 30, 20), None, "a terminal shell, the server's own child");
+        assert_eq!(stoppable_tree(&table, 20, 20), None, "the server");
+        assert_eq!(stoppable_tree(&table, 10, 20), None, "what started the server");
+        assert_eq!(stoppable_tree(&table, 999, 20), None);
     }
 }

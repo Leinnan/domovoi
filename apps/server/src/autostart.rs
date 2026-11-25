@@ -8,7 +8,9 @@
 //! - macOS, a bare binary: a LaunchAgent in `~/Library/LaunchAgents` (launchd
 //!   loads it at the next login; turning it on does not start a second
 //!   server now).
-//! - Windows: a value under `HKCU\…\CurrentVersion\Run`.
+//! - Windows: a value under `HKCU\…\CurrentVersion\Run`, which starts
+//!   `domovoi-server-launcher.exe` when it is beside this executable (the
+//!   installer puts it there), so no console window opens.
 //! - Linux: a desktop entry in `~/.config/autostart`.
 //!
 //! The entry runs this executable with `--tray --no-startup-code` and the
@@ -38,7 +40,11 @@ impl Entry {
         for relay in relays {
             args.extend(["--relay".to_owned(), relay.clone()]);
         }
-        Ok(Entry { exe: std::env::current_exe()?, args })
+        let exe = std::env::current_exe()?;
+        // Started at sign-in by the launcher, so no console window opens.
+        #[cfg(windows)]
+        let exe = launcher_beside(&exe).unwrap_or(exe);
+        Ok(Entry { exe, args })
     }
 
     /// Why a login could not run this, if it could not: on macOS, a program
@@ -130,6 +136,13 @@ fn desktop_entry(entry: &Entry) -> String {
 /// The Run value: a Windows command line (arguments with spaces quoted).
 #[cfg(any(windows, test))]
 fn windows_command(entry: &Entry) -> String {
+    command_line(entry.argv())
+}
+
+/// `words` as one Windows command line, each one read back intact by
+/// `CommandLineToArgvW` (the Run value, a scheduled task's arguments).
+#[cfg(any(windows, test))]
+pub(crate) fn command_line(words: impl IntoIterator<Item = String>) -> String {
     let quote = |arg: String| {
         if !arg.is_empty() && !arg.contains([' ', '\t', '"']) {
             return arg;
@@ -152,7 +165,15 @@ fn windows_command(entry: &Entry) -> String {
         out.push('"');
         out
     };
-    entry.argv().map(quote).collect::<Vec<_>>().join(" ")
+    words.into_iter().map(quote).collect::<Vec<_>>().join(" ")
+}
+
+/// `domovoi-server-launcher.exe` beside `server`, when it is there: started
+/// in its place, it runs the server with no console window (the server is a
+/// console program, so its own subcommands print where they are run).
+#[cfg(windows)]
+pub(crate) fn launcher_beside(server: &std::path::Path) -> Option<PathBuf> {
+    Some(server.with_file_name("domovoi-server-launcher.exe")).filter(|p| p.is_file())
 }
 
 #[cfg(not(windows))]

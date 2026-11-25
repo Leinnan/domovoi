@@ -1112,7 +1112,7 @@ fn exit_failed(model: &mut Model, route: Route, cause: &Value) -> Vec<Cmd> {
             return vec![];
         }
         Route::ImportProject { path, .. } | Route::ImportSessions(path) => {
-            let name = path.trim_end_matches('/').rsplit('/').next().unwrap_or(path).to_owned();
+            let name = crate::tools::file_name(path).to_owned();
             model.sessions.failures.push(format!("{name} ({message})"));
             return vec![import_step_done(model)];
         }

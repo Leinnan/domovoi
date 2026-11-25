@@ -1,0 +1,151 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Domovoi's Windows installer, built by package.ps1 in two flavors:
+
+     full    "Domovoi": the WinUI app (Client), the Iced app (Desktop, not
+             chosen by default) and the server (Server, with "Start at sign-in"
+             not chosen by default).
+     server  "Domovoi Server": the server alone, for a machine nobody works at.
+
+     Per user: it goes to %LOCALAPPDATA%\Programs\Domovoi and writes only under
+     HKCU, so it needs no administrator, like the server's own Run value and
+     scheduled task, and the agent CLIs it starts (npm installs them per user).
+
+     package.ps1 passes Version, Flavor, BinDir (the executables), RuntimeDir
+     (the Windows App Runtime the WinUI app carries) and IconFile. -->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+
+  <?if $(var.Flavor) = "server" ?>
+    <?define ProductName = "Domovoi Server" ?>
+    <?define UpgradeCode = "{5B7F6D1E-2C4A-4E8B-9F3D-7A1C0E6B4D21}" ?>
+  <?else?>
+    <?define ProductName = "Domovoi" ?>
+    <?define UpgradeCode = "{C3A9E4F2-8D6B-4F1A-A7E5-1B2D3C4E5F60}" ?>
+  <?endif?>
+
+  <Package Name="$(var.ProductName)" Manufacturer="Domovoi" Version="$(var.Version)"
+           UpgradeCode="$(var.UpgradeCode)" Scope="perUser" InstallerVersion="500" Compressed="yes">
+    <SummaryInformation Description="$(var.ProductName) $(var.Version)" />
+    <!-- Builds between releases keep the version and each gets a new product
+         code; without this a rebuild would install beside the last one. -->
+    <MajorUpgrade AllowSameVersionUpgrades="yes" DowngradeErrorMessage="A newer version of [ProductName] is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+    <!-- Also replace files whose version equals the packaged one. -->
+    <Property Id="REINSTALLMODE" Value="emus" />
+
+    <!-- The Windows App SDK needs Windows 10 1809 (build 17763). The installer
+         engine reports an old version on Windows 10 and 11, so the build
+         number is read from the registry. -->
+    <Property Id="DOMOVOI_OS_BUILD" Secure="yes">
+      <RegistrySearch Id="DomovoiOsBuild" Root="HKLM" Key="SOFTWARE\Microsoft\Windows NT\CurrentVersion" Name="CurrentBuildNumber" Type="raw" />
+    </Property>
+    <Launch Condition="Installed OR DOMOVOI_OS_BUILD &gt;= 17763" Message="Domovoi requires Windows 10 version 1809 or later." />
+
+    <!-- The Icon table keeps the whole file: an .ico, not an executable. -->
+    <Icon Id="DomovoiIcon.ico" SourceFile="$(var.IconFile)" />
+    <Property Id="ARPPRODUCTICON" Value="DomovoiIcon.ico" />
+    <WixVariable Id="WixUILicenseRtf" Value="$(sys.SOURCEFILEDIR)license.rtf" />
+    <ui:WixUI Id="WixUI_FeatureTree" />
+
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="ProgramsFolder" Name="Programs">
+        <Directory Id="INSTALLFOLDER" Name="Domovoi" />
+      </Directory>
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder" />
+
+    <!-- The apps running now hold their files open: they are stopped first
+         (quietly; nothing that is not running is touched). An immediate
+         WixQuietExec64 takes its command from WixQuietExec64CmdLine. -->
+    <SetProperty Id="WixQuietExec64CmdLine" Sequence="execute" Before="StopRunningApps"
+                 Value="&quot;[System64Folder]taskkill.exe&quot; /F /T /IM Domovoi.exe /IM domovoi-desktop.exe /IM domovoi-server-launcher.exe /IM domovoi-server.exe" />
+    <CustomAction Id="StopRunningApps" BinaryRef="Wix4UtilCA_X64" DllEntry="WixQuietExec64" Execute="immediate" Return="ignore" />
+
+    <?if $(var.Flavor) != "server" ?>
+    <!-- The WinUI app, with its own copy of the Windows App Runtime. -->
+    <Component Id="ClientExe" Directory="INSTALLFOLDER" Guid="{A1B2C3D4-1111-4E5F-8A9B-0C1D2E3F4A01}">
+      <File Id="DomovoiExe" Source="$(var.BinDir)\Domovoi.exe" />
+      <Shortcut Id="ClientShortcut" Directory="ProgramMenuFolder" Name="Domovoi" Description="Domovoi" Target="[#DomovoiExe]" WorkingDirectory="INSTALLFOLDER">
+        <!-- The app's own id: its toasts and taskbar button go with this shortcut. -->
+        <ShortcutProperty Key="System.AppUserModel.ID" Value="Domovoi.Client" />
+      </Shortcut>
+      <RegistryValue Root="HKCU" Key="Software\Domovoi\Installer" Name="Client" Type="integer" Value="1" KeyPath="yes" />
+    </Component>
+    <!-- domovoi:// links open the WinUI app. The mark tells the Iced app the
+         scheme is taken. -->
+    <Component Id="ClientScheme" Directory="INSTALLFOLDER" Guid="{A1B2C3D4-2222-4E5F-8A9B-0C1D2E3F4A02}">
+      <RegistryKey Root="HKCU" Key="Software\Classes\domovoi">
+        <RegistryValue Type="string" Value="URL:Domovoi" />
+        <RegistryValue Name="URL Protocol" Type="string" Value="" />
+        <RegistryValue Name="Domovoi.Installer" Type="string" Value="Client" KeyPath="yes" />
+        <RegistryValue Key="DefaultIcon" Type="string" Value="&quot;[INSTALLFOLDER]Domovoi.exe&quot;,0" />
+        <RegistryValue Key="shell\open\command" Type="string" Value="&quot;[INSTALLFOLDER]Domovoi.exe&quot; &quot;%1&quot;" />
+      </RegistryKey>
+    </Component>
+    <ComponentGroup Id="ClientRuntime" Directory="INSTALLFOLDER">
+      <Files Include="$(var.RuntimeDir)\**" />
+    </ComponentGroup>
+
+    <!-- The Iced app: the same features on another toolkit. -->
+    <Component Id="DesktopExe" Directory="INSTALLFOLDER" Guid="{A1B2C3D4-3333-4E5F-8A9B-0C1D2E3F4A03}">
+      <File Id="DesktopExeFile" Source="$(var.BinDir)\domovoi-desktop.exe" />
+      <Shortcut Id="DesktopShortcut" Directory="ProgramMenuFolder" Name="Domovoi Desktop" Description="Domovoi (Iced)" Target="[#DesktopExeFile]" WorkingDirectory="INSTALLFOLDER">
+        <ShortcutProperty Key="System.AppUserModel.ID" Value="Domovoi.Desktop" />
+      </Shortcut>
+      <RegistryValue Root="HKCU" Key="Software\Domovoi\Installer" Name="Desktop" Type="integer" Value="1" KeyPath="yes" />
+    </Component>
+    <?endif?>
+
+    <!-- The server, the launcher that starts it with no console window, and
+         the server's folder on this user's PATH (`domovoi-server pair` in a
+         new terminal). -->
+    <Component Id="ServerExe" Directory="INSTALLFOLDER" Guid="{A1B2C3D4-4444-4E5F-8A9B-0C1D2E3F4A04}">
+      <File Id="ServerExeFile" Source="$(var.BinDir)\domovoi-server.exe" />
+      <File Id="LauncherExeFile" Source="$(var.BinDir)\domovoi-server-launcher.exe" />
+      <Shortcut Id="ServerShortcut" Directory="ProgramMenuFolder" Name="Domovoi Server" Description="The Domovoi server, with its icon in the notification area"
+                Target="[#LauncherExeFile]" Arguments="--tray" WorkingDirectory="INSTALLFOLDER" Icon="DomovoiIcon.ico" />
+      <Environment Id="ServerPath" Name="PATH" Value="[INSTALLFOLDER]" Part="last" Action="set" System="no" Permanent="no" />
+      <RegistryValue Root="HKCU" Key="Software\Domovoi\Installer" Name="Server" Type="integer" Value="1" KeyPath="yes" />
+    </Component>
+    <!-- Launch at sign-in, as `domovoi-server autostart on` sets it. -->
+    <Component Id="ServerAutostart" Directory="INSTALLFOLDER" Guid="{A1B2C3D4-5555-4E5F-8A9B-0C1D2E3F4A05}">
+      <RegistryValue Root="HKCU" Key="Software\Microsoft\Windows\CurrentVersion\Run" Name="Domovoi Server" Type="string"
+                     Value="&quot;[INSTALLFOLDER]domovoi-server-launcher.exe&quot; --tray --no-startup-code" KeyPath="yes" />
+    </Component>
+    <!-- What the server set up itself goes with it: a scheduled task
+         (`domovoi-server service install`) and its Run value. -->
+    <CustomAction Id="RemoveServerTask" FileRef="LauncherExeFile" ExeCommand="service uninstall" Execute="deferred" Impersonate="yes" Return="ignore" />
+    <CustomAction Id="RemoveServerAutostart" FileRef="LauncherExeFile" ExeCommand="autostart off" Execute="deferred" Impersonate="yes" Return="ignore" />
+
+    <!-- The apps register domovoi:// and their app ids themselves too: what
+         they wrote goes on uninstall. -->
+    <SetProperty Id="RemoveAppRegistrations" Sequence="execute" Before="RemoveAppRegistrations"
+                 Value="&quot;[System64Folder]cmd.exe&quot; /D /C reg delete HKCU\Software\Classes\domovoi /f &amp; reg delete HKCU\Software\Classes\AppUserModelId\Domovoi.Client /f &amp; reg delete HKCU\Software\Classes\AppUserModelId\Domovoi.Desktop /f &amp; exit /b 0" />
+    <CustomAction Id="RemoveAppRegistrations" BinaryRef="Wix4UtilCA_X64" DllEntry="WixQuietExec64" Execute="deferred" Impersonate="yes" Return="ignore" />
+
+    <InstallExecuteSequence>
+      <Custom Action="StopRunningApps" Before="InstallValidate" />
+      <Custom Action="RemoveServerTask" Before="RemoveFiles" Condition="REMOVE=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
+      <Custom Action="RemoveServerAutostart" Before="RemoveFiles" Condition="REMOVE=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
+      <Custom Action="RemoveAppRegistrations" After="RemoveRegistryValues" Condition="REMOVE=&quot;ALL&quot; AND NOT UPGRADINGPRODUCTCODE" />
+    </InstallExecuteSequence>
+
+    <?if $(var.Flavor) != "server" ?>
+    <Feature Id="Client" Title="Domovoi" Description="The Windows app (WinUI 3)." Level="1" AllowAbsent="no">
+      <ComponentRef Id="ClientExe" />
+      <ComponentRef Id="ClientScheme" />
+      <ComponentGroupRef Id="ClientRuntime" />
+    </Feature>
+    <Feature Id="Desktop" Title="Domovoi Desktop" Description="The cross-platform desktop app (Iced), beside the Windows app." Level="1000">
+      <ComponentRef Id="DesktopExe" />
+    </Feature>
+    <?endif?>
+    <Feature Id="Server" Title="Domovoi Server" Description="Runs the agents on this computer, for Domovoi apps here and on your other devices." Level="1">
+      <ComponentRef Id="ServerExe" />
+      <Feature Id="ServerAtSignIn" Title="Start at sign-in" Description="Starts the server, with its icon, when you sign in." Level="1000">
+        <ComponentRef Id="ServerAutostart" />
+      </Feature>
+    </Feature>
+  </Package>
+</Wix>

@@ -84,6 +84,8 @@ mod util;
 mod vcs;
 mod vcs_ops;
 mod webhooks;
+#[cfg(windows)]
+mod win;
 mod worktree_setup;
 mod workspace;
 

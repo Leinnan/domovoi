@@ -113,7 +113,9 @@ async fn pair_command_and_permission_enforcement() {
     // The default code grants full access, and each code works only once.
     let full = pair_code(&server, &[]);
     let mut ws = connect(&server, &full).await;
-    let browse = call(&mut ws, "1", "filesystem.browse", json!({ "partialPath": "/" })).await;
+    // The root of the drive the server runs on: `/` has no drive on Windows.
+    let root = if cfg!(windows) { std::env::temp_dir().ancestors().last().map(|r| r.to_string_lossy().into_owned()).unwrap_or_default() } else { "/".to_owned() };
+    let browse = call(&mut ws, "1", "filesystem.browse", json!({ "partialPath": root })).await;
     assert_eq!(browse["exit"]["_tag"], "Success", "{browse}");
     let again = http_client()
         .post(format!("http://127.0.0.1:{}/api/auth/browser-session", server.port))

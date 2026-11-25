@@ -29,8 +29,9 @@
 //! manifest, so a `targetVersion` is always refused as t3code refuses an
 //! unrecommended one. Running sessions are not drained first (t3code's
 //! `ProviderInstallationGate`): npm, Homebrew and the native updaters replace
-//! files that running processes keep open. Windows installers (WinGet,
-//! Chocolatey, npm `.cmd` shims) are not recognised.
+//! files that running processes keep open. On Windows, npm's global `.cmd`
+//! shims are updated with npm and the native installers' `.exe` with the CLI
+//! itself; what WinGet, Scoop and Chocolatey installed is left to them.
 
 use crate::config_failure::Failure;
 use crate::providers::Tool;
@@ -214,6 +215,23 @@ fn manual_only(path: &str) -> bool {
         || p.contains("/yarn/global/")
         || p.contains("/.volta/")
         || p.contains("/.vite-plus/")
+        || p.contains("/scoop/apps/")
+        || p.contains("/scoop/shims/")
+        || p.contains("/microsoft/winget/")
+        || p.contains("/chocolatey/")
+}
+
+/// npm's global install on Windows: `<prefix>\claude.cmd` beside
+/// `<prefix>\node_modules\<package>` (no `lib\` there, and the shim is a
+/// script, not a link to the package). The prefix, if `resolved` is one.
+fn npm_shim_prefix(resolved: &Path, package: &str) -> Option<String> {
+    let ext = resolved.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase);
+    if !matches!(ext.as_deref(), Some("cmd" | "ps1") | None) {
+        return None;
+    }
+    let prefix = resolved.parent()?;
+    let manifest = package.split('/').fold(prefix.join("node_modules"), |dir, part| dir.join(part)).join("package.json");
+    manifest.is_file().then(|| prefix.to_string_lossy().into_owned())
 }
 
 /// What updates the CLI at `resolved` (as found) whose real file is `real`,
@@ -224,7 +242,7 @@ fn resolve(definition: &Definition, resolved: &Path, real: &Path, npm: impl Fn(&
     if paths.iter().any(|p| manual_only(p)) {
         return Err(false);
     }
-    let npm_prefix = npm_global_prefix(&paths[1], definition.npm_package);
+    let npm_prefix = npm_global_prefix(&paths[1], definition.npm_package).or_else(|| npm_shim_prefix(resolved, definition.npm_package));
     let native = definition.native.as_ref().map(|n| Action {
         executable: paths[0].clone(),
         args: n.args.iter().map(|a| (*a).to_owned()).collect(),
@@ -261,7 +279,16 @@ fn resolve(definition: &Definition, resolved: &Path, real: &Path, npm: impl Fn(&
 /// `npm` beside the prefix's Node when there is one (a version manager's), else the PATH's.
 fn npm_for(prefix: &str) -> String {
     let beside = Path::new(prefix).join("bin").join("npm");
-    if crate::providers::is_executable(&beside) { beside.to_string_lossy().into_owned() } else { "npm".to_owned() }
+    if crate::providers::is_executable(&beside) {
+        return beside.to_string_lossy().into_owned();
+    }
+    // Windows starts `npm.cmd` only by its full name.
+    if cfg!(windows)
+        && let Some(npm) = crate::providers::find_in(&crate::providers::search_dirs(), "npm")
+    {
+        return npm.to_string_lossy().into_owned();
+    }
+    "npm".to_owned()
 }
 
 /// t3code `resolveHomebrewProviderMaintenance`: `brew upgrade` once the
@@ -272,7 +299,7 @@ async fn homebrew(real: &Path) -> Option<Action> {
     let brew = if crate::providers::is_executable(&keg_brew) {
         keg_brew
     } else {
-        crate::providers::search_dirs().into_iter().map(|d| d.join("brew")).find(|p| crate::providers::is_executable(p))?
+        crate::providers::find_in(&crate::providers::search_dirs(), "brew")?
     };
     let mut cmd = crate::process::command(&brew);
     cmd.arg("--prefix").stdin(std::process::Stdio::null());
@@ -295,11 +322,11 @@ fn locate(tool: Tool) -> Option<(PathBuf, PathBuf)> {
     let real = crate::providers::executable(tool).ok()?;
     let overridden = std::env::var(tool.env).ok().map(|v| crate::util::expand_home(v.trim())).filter(|v| !v.is_empty());
     let found = match overridden {
-        Some(given) if given.contains('/') => Some(PathBuf::from(given)),
+        Some(given) if given.contains('/') || cfg!(windows) && given.contains('\\') => crate::providers::runnable(Path::new(&given)),
         given => {
             let names: Vec<String> = given.into_iter().chain([tool.program.to_owned()]).collect();
             let dirs = crate::providers::search_dirs();
-            names.iter().find_map(|name| dirs.iter().map(|d| d.join(name)).find(|p| crate::providers::is_executable(p)))
+            names.iter().find_map(|name| crate::providers::find_in(&dirs, name))
         }
     };
     Some((found.unwrap_or_else(|| real.clone()), real))

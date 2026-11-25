@@ -159,7 +159,12 @@ fn running(pid: u32) -> bool {
     i32::try_from(pid).is_ok_and(|pid| unsafe { libc::kill(pid, 0) } == 0)
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn running(pid: u32) -> bool {
+    crate::win::process_alive(pid)
+}
+
+#[cfg(not(any(unix, windows)))]
 fn running(_pid: u32) -> bool {
     true
 }

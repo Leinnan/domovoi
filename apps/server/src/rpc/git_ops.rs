@@ -193,8 +193,10 @@ pub fn available_editors() -> Vec<EditorId> {
     out
 }
 
+/// `name` on PATH (on Windows also `name.cmd` and the like: VS Code's `code`).
 fn find_command(name: &str) -> Option<std::path::PathBuf> {
-    std::env::var_os("PATH").and_then(|paths| std::env::split_paths(&paths).map(|p| p.join(name)).find(|p| p.is_file()))
+    let dirs: Vec<std::path::PathBuf> = std::env::var_os("PATH").map(|paths| std::env::split_paths(&paths).collect()).unwrap_or_default();
+    crate::providers::find_in(&dirs, name)
 }
 
 /// What `shell.openInEditor` is asked with (`OpenInEditorInput`).
@@ -238,10 +240,13 @@ async fn open_in_editor(_ctx: Arc<ConnCtx>, input: OpenInEditorInput) -> Result<
     let (commands, base_args, style) = editor(id).ok_or_else(|| LauncherFailure::UnknownEditor { editor: id.to_owned() })?;
     let target = crate::util::expand_home(&input.cwd);
     let (command, args): (String, Vec<String>) = if commands.is_empty() {
-        // The file manager: Finder on macOS, xdg-open elsewhere.
+        // The file manager: Finder on macOS, Explorer on Windows, xdg-open elsewhere.
         if cfg!(target_os = "macos") {
             let args = if input.reveal { vec!["-R".into(), target] } else { vec![target] };
             ("open".into(), args)
+        } else if cfg!(windows) {
+            let args = if input.reveal { vec!["/select,".into(), target] } else { vec![target] };
+            ("explorer.exe".into(), args)
         } else if find_command("xdg-open").is_some() && std::env::var_os("DISPLAY").or(std::env::var_os("WAYLAND_DISPLAY")).is_some() {
             let dir = if input.reveal { std::path::Path::new(&target).parent().map(|p| p.to_string_lossy().into_owned()).unwrap_or(target.clone()) } else { target };
             ("xdg-open".into(), vec![dir])

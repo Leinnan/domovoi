@@ -46,7 +46,11 @@ fn write(userdata: &Path, instance: &str, field: &str, value: &str) -> std::io::
         f.write_all(value.as_bytes())?;
     }
     #[cfg(not(unix))]
-    std::fs::write(&tmp, value)?;
+    {
+        crate::util::make_private(&dir)?;
+        std::fs::write(&tmp, value)?;
+        crate::util::make_private(&tmp)?;
+    }
     std::fs::rename(&tmp, &path)
 }
 
@@ -177,12 +181,7 @@ pub mod requests {
 
     fn owner_only_dir(path: &Path) -> std::io::Result<()> {
         std::fs::create_dir_all(path)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))?;
-        }
-        Ok(())
+        crate::util::make_private(path)
     }
 
     /// Writes `bytes` to a new owner-only file; an existing one is left as it is (`Ok(false)`).
@@ -436,7 +435,11 @@ pub fn set_server_secret(userdata: &Path, name: &str, value: &str) -> std::io::R
         f.write_all(value.as_bytes())?;
     }
     #[cfg(not(unix))]
-    std::fs::write(&tmp, value)?;
+    {
+        crate::util::make_private(&dir)?;
+        std::fs::write(&tmp, value)?;
+        crate::util::make_private(&tmp)?;
+    }
     std::fs::rename(&tmp, &path)
 }
 
@@ -472,7 +475,11 @@ pub fn set_tracker_token(userdata: &Path, tracker: &str, token: &str) -> std::io
         f.write_all(token.as_bytes())?;
     }
     #[cfg(not(unix))]
-    std::fs::write(&tmp, token)?;
+    {
+        crate::util::make_private(&dir)?;
+        std::fs::write(&tmp, token)?;
+        crate::util::make_private(&tmp)?;
+    }
     std::fs::rename(&tmp, &path)
 }
 

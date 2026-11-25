@@ -6,6 +6,13 @@
 //! Like t3code's `fixPath`, the login shell is asked for its PATH once at
 //! startup, before any thread starts, and that goes in front of the inherited
 //! one.
+//!
+//! On Windows there is no login shell: the PATH the server inherits is the
+//! one Explorer had when the user signed in. The user's and the machine's
+//! PATH as they are now (in the registry) go after it, so a CLI installed
+//! since sign-in is found without signing out.
+
+#![cfg_attr(windows, allow(dead_code, reason = "the login shell is only asked on macOS and Linux; Windows reads the registry"))]
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -45,10 +52,42 @@ impl Report {
 /// Call before any other thread starts. `DOMOVOI_NO_SHELL_ENV=1` turns it off.
 pub fn hydrate() -> Report {
     let mut report = Report::default();
-    if cfg!(windows) || std::env::var_os("DOMOVOI_NO_SHELL_ENV").is_some_and(|v| !v.is_empty()) {
+    if std::env::var_os("DOMOVOI_NO_SHELL_ENV").is_some_and(|v| !v.is_empty()) {
         report.entries = std::env::var("PATH").map(|p| split(&p).len()).unwrap_or(0);
         return report;
     }
+    #[cfg(windows)]
+    {
+        let inherited = std::env::var("PATH").unwrap_or_default();
+        let (user, machine) = registry_paths();
+        let known = well_known_dirs(&crate::util::home_dir());
+        let merged = merge(&[&inherited, &user, &machine, &known.join(SEPARATOR)]);
+        report.entries = split(&merged).len();
+        report.source = Some("the registry".into());
+        // SAFETY: called from `main` before the runtime, the log writer or any
+        // other thread exists, so nothing reads the environment concurrently.
+        unsafe { std::env::set_var("PATH", &merged) };
+        return report;
+    }
+    #[cfg(not(windows))]
+    hydrate_from_login_shell(report)
+}
+
+/// The user's and the machine's PATH as they are in the registry now, with
+/// `%VARIABLES%` expanded.
+#[cfg(windows)]
+fn registry_paths() -> (String, String) {
+    let user = crate::win::registry_string(windows_sys::Win32::System::Registry::HKEY_CURRENT_USER, "Environment", "Path");
+    let machine = crate::win::registry_string(
+        windows_sys::Win32::System::Registry::HKEY_LOCAL_MACHINE,
+        r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment",
+        "Path",
+    );
+    (user.unwrap_or_default(), machine.unwrap_or_default())
+}
+
+#[cfg(not(windows))]
+fn hydrate_from_login_shell(mut report: Report) -> Report {
     let mut found = Vec::new();
     let mut waited = false;
     for shell in shell_candidates() {
@@ -92,7 +131,7 @@ pub fn hydrate() -> Report {
     }
     let inherited = std::env::var("PATH").unwrap_or_default();
     let known = well_known_dirs(&crate::util::home_dir());
-    let merged = merge(&[shell_path.as_deref().unwrap_or(""), &inherited, &known.join(":")]);
+    let merged = merge(&[shell_path.as_deref().unwrap_or(""), &inherited, &known.join(SEPARATOR)]);
     report.entries = split(&merged).len();
     // SAFETY: called from `main` before the runtime, the log writer or any
     // other thread exists, so nothing reads the environment concurrently.
@@ -269,6 +308,40 @@ fn launchctl_path() -> Option<String> {
 
 /// Where CLIs usually live, for a profile that sets no PATH or failed.
 /// Only folders that exist.
+#[cfg(windows)]
+pub fn well_known_dirs(home: &Path) -> Vec<String> {
+    let env_dir = |name: &str| std::env::var_os(name).map(PathBuf::from);
+    let appdata = env_dir("APPDATA").unwrap_or_else(|| home.join(r"AppData\Roaming"));
+    let local = env_dir("LOCALAPPDATA").unwrap_or_else(|| home.join(r"AppData\Local"));
+    let mut candidates: Vec<PathBuf> = vec![
+        home.join(r".local\bin"),
+        // npm's global folder (`npm i -g @anthropic-ai/claude-code`).
+        appdata.join("npm"),
+        // winget's command aliases.
+        local.join(r"Microsoft\WinGet\Links"),
+        home.join(r"scoop\shims"),
+        home.join(r".bun\bin"),
+        home.join(r".cargo\bin"),
+        local.join(r"Volta\bin"),
+        local.join("pnpm"),
+        local.join(r"Programs\nodejs"),
+    ];
+    if let Some(volta) = env_dir("VOLTA_HOME") {
+        candidates.push(volta.join("bin"));
+    }
+    if let Some(pnpm) = env_dir("PNPM_HOME") {
+        candidates.push(pnpm);
+    }
+    if let Some(files) = env_dir("ProgramFiles") {
+        candidates.push(files.join("nodejs"));
+        candidates.push(files.join(r"Git\cmd"));
+    }
+    candidates.into_iter().filter(|p| p.is_dir()).map(|p| p.to_string_lossy().into_owned()).collect()
+}
+
+/// Where CLIs usually live, for a profile that sets no PATH or failed.
+/// Only folders that exist.
+#[cfg(not(windows))]
 pub fn well_known_dirs(home: &Path) -> Vec<String> {
     let candidates: Vec<PathBuf> = vec![
         home.join(".local/bin"),
@@ -285,8 +358,11 @@ pub fn well_known_dirs(home: &Path) -> Vec<String> {
     candidates.into_iter().filter(|p| p.is_dir()).map(|p| p.to_string_lossy().into_owned()).collect()
 }
 
+/// Between the folders of a PATH value.
+pub const SEPARATOR: &str = if cfg!(windows) { ";" } else { ":" };
+
 fn split(path: &str) -> Vec<&str> {
-    path.split(':').map(str::trim).filter(|e| !e.is_empty()).collect()
+    path.split(SEPARATOR).map(str::trim).filter(|e| !e.is_empty()).collect()
 }
 
 /// Joins PATH values in order, each folder once.
@@ -300,7 +376,7 @@ pub fn merge(paths: &[&str]) -> String {
             }
         }
     }
-    out.join(":")
+    out.join(SEPARATOR)
 }
 
 #[cfg(test)]
@@ -326,17 +402,26 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(windows))]
     fn merge_keeps_order_and_drops_repeats() {
         assert_eq!(merge(&["/opt/homebrew/bin:/usr/bin", "/usr/bin:/bin: ", "", "/home/u/.local/bin:/bin"]), "/opt/homebrew/bin:/usr/bin:/bin:/home/u/.local/bin");
     }
 
     #[test]
+    #[cfg(windows)]
+    fn merge_splits_on_semicolons_not_drive_colons() {
+        assert_eq!(merge(&[r"C:\a;C:\Program Files\b", r"C:\b; ;C:\a", ""]), r"C:\a;C:\Program Files\b;C:\b");
+    }
+
+    #[test]
+    #[cfg(unix)]
     fn a_real_shell_reports_its_path() {
         let v = read_login_shell("/bin/sh", TIMEOUT).unwrap();
         assert!(value(&v, "PATH").is_some_and(|p| p.contains("/bin")));
     }
 
     #[test]
+    #[cfg(unix)]
     fn a_shell_that_lingers_after_printing_is_not_waited_for() {
         use std::os::unix::fs::PermissionsExt;
         let dir = std::env::temp_dir().join(format!("domovoi-shellenv-{}", crate::util::new_uuid()));
@@ -358,7 +443,7 @@ mod tests {
         std::fs::create_dir_all(home.join(".local/bin")).unwrap();
         let dirs = well_known_dirs(&home);
         let _ = std::fs::remove_dir_all(&home);
-        assert!(dirs[0].ends_with(".local/bin"));
-        assert!(!dirs.iter().any(|d| d.ends_with(".bun/bin")));
+        assert!(std::path::Path::new(&dirs[0]).ends_with(".local/bin"));
+        assert!(!dirs.iter().any(|d| std::path::Path::new(d).ends_with(".bun/bin")));
     }
 }

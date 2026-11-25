@@ -1,0 +1,31 @@
+[package]
+name = "domovoi-windows"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "Domovoi for Windows: a WinUI 3 shell (windows-reactor) on the client core, linked directly"
+
+[[bin]]
+name = "Domovoi"
+path = "src/main.rs"
+
+# Windows only; other hosts build an empty binary so workspace-wide commands still pass.
+[target.'cfg(windows)'.dependencies]
+domovoi_core = { path = "../domovoi-core" }
+# The core's effects, secure storage and domovoi:// links, shared with the Iced app.
+domovoi-desktop-host = { path = "../../crates/domovoi-desktop-host" }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+# WinUI 3 from Rust: the `dirfleet` branch of the windows-rs fork lwa_fm uses
+# (scroll observation, scroll-to, TextBox selection, wheel and X buttons on
+# top of upstream). Every windows-rs crate must use the same rev.
+windows-reactor = { workspace = true }
+# Win32 beside the UI (the wake window), the version the server uses.
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_System_LibraryLoader", "Win32_UI_WindowsAndMessaging"] }
+
+[target.'cfg(windows)'.build-dependencies]
+# Stages the Windows App SDK runtime beside the exe and embeds its manifest.
+windows-reactor-setup = { workspace = true }
+winresource = "0.1"

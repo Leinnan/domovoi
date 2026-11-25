@@ -411,6 +411,8 @@ mod tests {
         assert_eq!(pick(&reg()["agents"][0], Some("npx"), &|_| true), None, "a distribution it doesn't have");
     }
 
+    // A tarball of a shell script, and a `file://` URL written as a Unix path.
+    #[cfg(unix)]
     #[tokio::test]
     async fn a_binary_agent_installs_with_its_checksum_checked() {
         let dir = std::env::temp_dir().join(format!("acp-reg-test-{}", crate::util::new_uuid()));

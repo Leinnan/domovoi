@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/*", "apps/server", "apps/ws-tap", "apps/domovoi-core", "apps/domovoi-iced"]
+members = ["crates/*", "apps/server", "apps/server-launcher", "apps/ws-tap", "apps/domovoi-core", "apps/domovoi-iced", "apps/domovoi-windows"]
 
 [workspace.package]
 version = "0.1.0"
@@ -20,6 +20,10 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 effect-rpc = { path = "crates/effect-rpc" }
 # Benchmarks (`cargo bench`), driven by the recorded sessions in fixtures/golden.
 divan = "0.1.21"
+# The WinUI 3 shell (`apps/domovoi-windows`): the fork lwa_fm builds on, one
+# rev for every windows-rs crate.
+windows-reactor = { git = "https://github.com/Leinnan/windows-rs", rev = "31f34dae58c03844fc3ff0dd49dd0bff8867ff83" }
+windows-reactor-setup = { git = "https://github.com/Leinnan/windows-rs", rev = "31f34dae58c03844fc3ff0dd49dd0bff8867ff83" }
 
 # Dependencies (serde_json, the PTY, git and grep crates) run optimized in dev
 # builds; Domovoi's own code stays fast to compile and debuggable.

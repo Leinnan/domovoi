@@ -12,7 +12,7 @@ use iced_test::simulator::Simulator;
 
 use crate::app::{App, ComposerPopover, ConnectMode, Message, Overlay, SettingsSection, ViewerKey};
 use crate::host::{self, HostMsg};
-use crate::store::SecureStore;
+use domovoi_desktop_host::SecureStore;
 use crate::ui::theme::Appearance;
 
 fn snapshot(app: &App, name: &str) {

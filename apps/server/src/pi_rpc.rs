@@ -33,6 +33,7 @@ pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(15);
 pub const LIFECYCLE_TIMEOUT: Duration = Duration::from_secs(60);
 /// `get_session_stats`, `abort`, probes that must not hold a turn up.
 pub const SHORT_TIMEOUT: Duration = Duration::from_secs(2);
+#[cfg(unix)]
 const TERMINATION_GRACE: Duration = Duration::from_secs(1);
 /// A record longer than this is dropped. MCP image results are carried twice
 /// (model content and the tool result), so leave room for several images.
@@ -302,6 +303,8 @@ pub fn environment(runtime_mode: &str, mcp: Option<(String, String)>) -> Vec<(St
 pub struct PiRpc {
     stdin: Mutex<ChildStdin>,
     child: Mutex<Child>,
+    /// Pi and what it starts (Windows; Unix signals the process group).
+    tree: crate::process::Tree,
     pending: Mutex<HashMap<String, oneshot::Sender<Value>>>,
     next: AtomicU64,
     exited: AtomicBool,
@@ -333,7 +336,8 @@ impl PiRpc {
         let mut stdout = child.stdout.take().expect("piped stdout");
         #[expect(clippy::disallowed_methods, reason = "the reader also delivers the answers a turn waits for: made to wait for room here, it could never read the answer that frees the turn")]
         let (tx, rx) = mpsc::unbounded_channel();
-        let rpc = Arc::new(PiRpc { stdin: Mutex::new(stdin), child: Mutex::new(child), pending: Mutex::default(), next: AtomicU64::new(1), exited: AtomicBool::new(false) });
+        let tree = crate::process::Tree::of(child.id());
+        let rpc = Arc::new(PiRpc { stdin: Mutex::new(stdin), child: Mutex::new(child), tree, pending: Mutex::default(), next: AtomicU64::new(1), exited: AtomicBool::new(false) });
         let weak: Weak<PiRpc> = Arc::downgrade(&rpc);
         let log: Box<Log> = Box::new(log);
         tokio::spawn(async move {
@@ -445,6 +449,8 @@ impl PiRpc {
                 unsafe { libc::killpg(pid as i32, libc::SIGKILL) };
             }
         }
+        // Windows has no signal to ask with: the tree ends at once.
+        self.tree.kill();
         let _ = child.kill().await;
     }
 }
@@ -540,6 +546,13 @@ mod tests {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
+        // Windows runs no shebang: a batch file starts Python on it.
+        #[cfg(windows)]
+        let exe = {
+            let cmd = dir.join("pi.cmd");
+            std::fs::write(&cmd, "@python \"%~dp0pi\" %*\r\n").unwrap();
+            cmd
+        };
         let (rpc, mut events) = PiRpc::spawn(&exe, &Launch::default(), dir.to_str().unwrap(), &[], |_, _| {}).unwrap();
         assert_eq!(rpc.request(json!({ "type": "get_state" }), DEFAULT_TIMEOUT).await.unwrap(), json!({ "echo": "get_state" }));
         assert_eq!(rpc.request(json!({ "type": "bad" }), DEFAULT_TIMEOUT).await, Err(RpcError::Refused("no such command".into())));

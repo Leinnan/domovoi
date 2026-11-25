@@ -71,8 +71,9 @@ account or port forwarding.
   off remote access, webhook tasks, providers or the preview tunnel.
 - **A status bar icon** with remote access on/off, pairing, device list and
   launch at login.
-- **The server runs on macOS and Linux.** On Linux it can run headless as a
-  systemd user service. It also cross-compiles for Windows.
+- **The server runs on macOS, Linux and Windows.** It can run headless as a
+  systemd user service on Linux, or as a scheduled task on Windows
+  ([docs/windows.md](docs/windows.md)).
   `domovoi-server doctor` checks an install, and `/health` and `/ready` serve
   monitoring.
 
@@ -85,11 +86,15 @@ account or port forwarding.
 | `apps/domovoi-apple` | macOS and iOS apps, share extension, widgets and Live Activities |
 | `apps/domovoi-android` | Android app (Kotlin) |
 | `apps/domovoi-iced` | `domovoi-desktop`, the cross-platform desktop app for Linux, Windows and macOS (Iced) |
+| `apps/domovoi-windows` | `Domovoi.exe`, the native Windows app (WinUI 3 on `windows-reactor`, in progress) |
+| `apps/server-launcher` | `domovoi-server-launcher.exe`: starts the Windows server with no console window, and restarts it after a failure |
+| `packaging/windows` | The Windows installers (WiX MSIs) |
 | `apps/ws-tap` | Recording reverse proxy that captures HTTP and WebSocket RPC traffic as NDJSON fixtures |
 | `crates/effect-rpc` | Server side of Effect's RPC wire protocol |
 | `crates/domovoi-contracts` | Wire types for t3code's server API, validated against the real Effect schemas |
 | `crates/domovoi-model` | Typed records and the thread read model, shared by the server and the client core |
 | `crates/domovoi-remote` | HTTP/1.1 over iroh streams, plus a loopback bridge for clients |
+| `crates/domovoi-desktop-host` | Runs the client core's effects on Tokio, with secure storage and `domovoi://` link hand-off, for the Rust desktop clients |
 | `conformance/` | Schema checks and RPC test cases run against t3code's own client code |
 | `fixtures/golden/` | Recorded sessions used for replay tests and benchmarks |
 | `tools/` | Icon generator, binary size report, cross-build and Linux deployment scripts |
@@ -109,6 +114,9 @@ account or port forwarding.
   feature) needs GTK 3, `libxdo` and an appindicator library; build headless
   with `--no-default-features` to leave them out.
 - **Desktop app (`domovoi-iced`, Linux / Windows / macOS)**: Rust only.
+- **Windows app and installers**: MSVC, the Windows SDK, PowerShell 7 and the
+  .NET SDK. [docs/windows.md](docs/windows.md) lists them; `just windows-doctor`
+  checks them.
 - **Apple and Android apps**: `boltffi` (`cargo install boltffi_cli`), which
   packages the Rust core for Swift and Kotlin, plus:
   - **Mac / iOS**: Xcode 26 and [XcodeGen](https://github.com/yonaskolb/XcodeGen).

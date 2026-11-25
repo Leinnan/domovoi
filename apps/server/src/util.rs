@@ -39,6 +39,60 @@ pub fn expand_home(s: &str) -> String {
     }
 }
 
+/// Makes `path` this user's alone: a folder mode 0700 and a file 0600 on
+/// Unix; on Windows an ACL of its own granting only this user (a folder's
+/// new contents inherit it).
+pub fn make_private(path: &std::path::Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = if path.is_dir() { 0o700 } else { 0o600 };
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
+    }
+    #[cfg(windows)]
+    {
+        crate::win::restrict_to_current_user(path)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = path;
+        Ok(())
+    }
+}
+
+/// Whether only this user can read `path` (what [`make_private`] leaves).
+/// `None` when that can't be told.
+#[cfg(any(windows, test))]
+pub fn is_private(path: &std::path::Path) -> Option<bool> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::metadata(path).ok().map(|m| m.permissions().mode() & 0o077 == 0)
+    }
+    #[cfg(windows)]
+    {
+        crate::win::only_current_user_can_access(path)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = path;
+        None
+    }
+}
+
+/// Whether `path` is a symlink (or on Windows any reparse point: a junction
+/// too), which the no-follow opens refuse.
+pub fn is_link(path: &std::path::Path) -> bool {
+    #[cfg(windows)]
+    {
+        crate::win::is_reparse_point(path)
+    }
+    #[cfg(not(windows))]
+    {
+        std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink())
+    }
+}
+
 pub fn home_dir() -> std::path::PathBuf {
     dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("/"))
 }

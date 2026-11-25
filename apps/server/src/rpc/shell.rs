@@ -761,6 +761,7 @@ mod tests {
         p
     }
 
+    #[cfg(unix)]
     fn changes(sent: serde_json::Value) -> serde_json::Result<ProjectChanges> {
         match serde_json::from_value(sent)? {
             ProjectMutation::Update { changes, .. } => Ok(changes),
@@ -768,12 +769,15 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     fn update(fields: serde_json::Value) -> serde_json::Value {
         let mut sent = serde_json::json!({ "type": "project.update", "commandId": "c", "projectId": "p" });
         sent.as_object_mut().unwrap().extend(fields.as_object().unwrap().clone());
         sent
     }
 
+    // The workspace roots are Unix paths.
+    #[cfg(unix)]
     #[test]
     fn an_update_keeps_what_it_does_not_name_and_passes_over_what_is_not_of_its_type() {
         // Nothing named: nothing changes.

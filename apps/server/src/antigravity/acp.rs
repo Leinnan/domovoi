@@ -557,6 +557,7 @@ mod tests {
         assert_eq!(read(work.join("a.txt"), json!({})).unwrap()["content"], "one\ntwo\nthree");
         assert_eq!(read(work.join("a.txt"), json!({ "line": 2, "limit": 1 })).unwrap()["content"], "two");
         assert!(read(other.join("secret.txt"), json!({})).unwrap_err().1.contains("outside"));
+        #[cfg(unix)]
         assert!(read(work.join("out/secret.txt"), json!({})).unwrap_err().1.contains("outside"), "a link leading out");
         assert!(read(work.join("out/missing/x"), json!({})).is_err());
         assert!(read(work.join("bin"), json!({})).unwrap_err().1.contains("binary"));

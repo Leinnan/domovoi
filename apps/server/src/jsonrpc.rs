@@ -60,6 +60,8 @@ pub struct RpcClient {
     pending: Pending,
     #[cfg_attr(not(test), allow(dead_code))]
     child: Mutex<Child>,
+    /// What the agent starts ends with it (Windows: a `.cmd` shim's `node`).
+    _tree: crate::process::Tree,
     /// The diagnostics log, for what this side answers and notifies.
     log: Arc<dyn Fn(&str, &Value) + Send + Sync>,
 }
@@ -128,7 +130,8 @@ impl RpcClient {
         let (tx, rx) = mpsc::unbounded_channel();
         let pending: Pending = Arc::default();
         let log: Arc<dyn Fn(&str, &Value) + Send + Sync> = Arc::new(log);
-        let client = Arc::new(RpcClient { stdin: Mutex::new(stdin), jsonrpc2, next_id: AtomicI64::new(1), pending: pending.clone(), child: Mutex::new(child), log: log.clone() });
+        let tree = crate::process::Tree::of(child.id());
+        let client = Arc::new(RpcClient { stdin: Mutex::new(stdin), jsonrpc2, next_id: AtomicI64::new(1), pending: pending.clone(), child: Mutex::new(child), _tree: tree, log: log.clone() });
         let log_in = log;
         tokio::spawn(async move {
             let mut lines = BufReader::new(stdout).lines();
@@ -243,7 +246,7 @@ for line in sys.stdin:
 
     #[tokio::test]
     async fn request_response_notifications_and_server_requests() {
-        let (c, mut rx) = RpcClient::spawn("python3", &["-c", FAKE], None, |_, _| {}).unwrap();
+        let (c, mut rx) = RpcClient::spawn(if cfg!(windows) { "python" } else { "python3" }, &["-c", FAKE], None, |_, _| {}).unwrap();
         let res = c.request("ping", json!(7)).await.unwrap();
         assert_eq!(res, json!({ "pong": 7 }));
         let mut got_note = false;

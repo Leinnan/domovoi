@@ -72,7 +72,7 @@ impl Prefs {
         if cfg!(test) || std::env::var("DOMOVOI_STORE").ok().as_deref() == Some("memory") {
             return None;
         }
-        Some(crate::store::default_data_dir().join("desktop-preferences.txt"))
+        Some(domovoi_desktop_host::default_data_dir(crate::host::IDENTITY).join("desktop-preferences.txt"))
     }
 
     pub fn load() -> Self {

@@ -300,6 +300,11 @@ fn check_remote(home: &Path, relays: &[String]) -> Check {
             return Check::new(name, Status::Warn, format!("{} is readable by other users (mode {mode:03o}); run `chmod 600` on it", key_path.display()));
         }
     }
+    #[cfg(windows)]
+    if crate::util::is_private(&key_path) == Some(false) {
+        let fix = format!("icacls \"{}\" /inheritance:r /grant:r \"%USERNAME%:F\"", key_path.display());
+        return Check::new(name, Status::Warn, format!("{} can be read by other accounts (its folder's permissions); run `{fix}`", key_path.display()));
+    }
     Check::new(name, Status::Ok, format!("remote access {state} ({relays}), endpoint {}", key.public()))
 }
 

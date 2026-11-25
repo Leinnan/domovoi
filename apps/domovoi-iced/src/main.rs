@@ -1,11 +1,13 @@
 //! Domovoi Desktop for Linux, Windows and macOS (Iced 0.14).
 
+// Release builds on Windows open no console window beside the app.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 mod app;
 mod host;
 mod image_actions;
 mod links;
 mod scroll;
-mod store;
 mod ui;
 mod views;
 #[cfg(feature = "webview")]
@@ -17,7 +19,7 @@ pub(crate) const WINDOW_ICON_PNG: &[u8] = include_bytes!("../assets/app-icon-256
 
 /// PNG files start with these bytes. A checkout without `git lfs pull` embeds
 /// a pointer file instead, and the app goes on without that icon.
-#[cfg(any(target_os = "macos", test))]
+#[cfg(any(target_os = "macos", windows, test))]
 const PNG_MAGIC: &[u8] = b"\x89PNG\r\n\x1a\n";
 
 pub(crate) fn window_icon() -> Option<iced::window::Icon> {
@@ -53,6 +55,17 @@ fn set_macos_app_icon() {
     }
 }
 
+/// Taskbar grouping and toasts under this app's own name and icon. The icon
+/// is handed to Windows as a file, kept in the data folder.
+#[cfg(windows)]
+fn register_with_windows() {
+    let icon = WINDOW_ICON_PNG.starts_with(PNG_MAGIC).then(|| domovoi_desktop_host::default_data_dir(host::IDENTITY).join("app-icon.png")).filter(|path| {
+        std::fs::read(path).is_ok_and(|bytes| bytes == WINDOW_ICON_PNG)
+            || path.parent().is_some_and(|dir| std::fs::create_dir_all(dir).is_ok()) && std::fs::write(path, WINDOW_ICON_PNG).is_ok()
+    });
+    domovoi_desktop_host::windows::register_app_id(host::IDENTITY, icon);
+}
+
 fn main() -> iced::Result {
     // Started as an artifact's preview window (`webview::open`): that window only.
     #[cfg(feature = "webview")]
@@ -68,6 +81,8 @@ fn main() -> iced::Result {
     }
     #[cfg(target_os = "macos")]
     set_macos_app_icon();
+    #[cfg(windows)]
+    register_with_windows();
     #[cfg(target_os = "linux")]
     let platform_specific = iced::window::settings::PlatformSpecific { application_id: "domovoi".into(), ..Default::default() };
     #[cfg(not(target_os = "linux"))]

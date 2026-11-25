@@ -134,6 +134,11 @@ async fn plan_snapshot(directory: &Path, path: &Path) -> Option<(PathBuf, String
     if !path.starts_with(&directory) || !tokio::fs::metadata(&path).await.ok()?.is_file() {
         return None;
     }
+    // No O_NOFOLLOW on Windows: a link put there since is refused here.
+    #[cfg(windows)]
+    if crate::util::is_link(&path) {
+        return None;
+    }
     let mut options = tokio::fs::OpenOptions::new();
     options.read(true);
     #[cfg(unix)]

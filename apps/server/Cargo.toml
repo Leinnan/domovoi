@@ -109,9 +109,13 @@ gtk = { version = "0.18", optional = true }
 dark-light = { version = "2", optional = true }
 
 [target.'cfg(windows)'.dependencies]
-# The status bar icon's Windows workarounds, and the launch-at-login registry value.
+# The status bar icon's Windows workarounds, the launch-at-login registry
+# value, and `win.rs`: job objects, owner-only ACLs, listening ports,
+# keep-awake, free space, the computer name.
 windows-sys = { version = "0.61", features = [
-    "Win32_Foundation", "Win32_Graphics_Gdi", "Win32_System_Console", "Win32_System_LibraryLoader", "Win32_System_Registry",
+    "Win32_Foundation", "Win32_Graphics_Gdi", "Win32_NetworkManagement_IpHelper", "Win32_Networking_WinSock", "Win32_Security",
+    "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_JobObjects",
+    "Win32_System_LibraryLoader", "Win32_System_Power", "Win32_System_Registry", "Win32_System_SystemInformation",
     "Win32_System_Threading", "Win32_UI_Accessibility", "Win32_UI_WindowsAndMessaging",
 ] }
 

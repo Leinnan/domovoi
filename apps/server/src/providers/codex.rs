@@ -170,7 +170,7 @@ for line in sys.stdin:
 "#;
 
     async fn fake_catalog(scenario: &str) -> Result<Vec<ServerProviderModel>, String> {
-        let (rpc, _events) = RpcClient::spawn("python3", &["-c", FAKE, scenario], None, |_, _| {}).unwrap();
+        let (rpc, _events) = RpcClient::spawn(if cfg!(windows) { "python" } else { "python3" }, &["-c", FAKE, scenario], None, |_, _| {}).unwrap();
         let result = tokio::time::timeout(Duration::from_secs(5), list_models(&rpc)).await.unwrap();
         rpc.kill().await;
         result

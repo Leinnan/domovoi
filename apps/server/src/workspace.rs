@@ -667,6 +667,10 @@ pub fn write_file(cwd: &str, relative_path: &str, contents: &str) -> Result<Stri
             use std::os::unix::fs::OpenOptionsExt;
             options.custom_flags(libc_nofollow());
         }
+        #[cfg(windows)]
+        if crate::util::is_link(&real_target) {
+            return Err(op(FileOperation::WriteFile, std::io::Error::other("the target is a link")));
+        }
         let mut f = options.open(&real_target).map_err(|e| op(FileOperation::WriteFile, e))?;
         f.write_all(contents.as_bytes()).map_err(|e| op(FileOperation::WriteFile, e))?;
     }
@@ -741,7 +745,9 @@ pub struct EntryMetadata {
 /// missing path.
 pub fn metadata(requested: &str, server_home: &Path) -> Option<EntryMetadata> {
     let expanded = PathBuf::from(crate::util::expand_home(requested));
-    if !expanded.is_absolute() || requested.starts_with("//") || requested.starts_with("\\\\") {
+    // A network share is never asked; a local path written `\\?\C:\…` is.
+    let verbatim_local = requested.strip_prefix(r"\\?\").is_some_and(|rest| rest.as_bytes().get(1) == Some(&b':'));
+    if !expanded.is_absolute() || requested.starts_with("//") || requested.starts_with(r"\\") && !verbatim_local {
         return None;
     }
     let m = std::fs::metadata(&expanded).ok()?;
@@ -860,8 +866,11 @@ mod tests {
         assert_eq!(std::fs::read_to_string(d.join("docs/new.md")).unwrap(), "again");
         assert_eq!(write_file(root, "../escape.txt", "x").err().map(|e| e.failure), Some(FileFailure::WorkspacePathOutsideRoot));
         assert_eq!(write_file(root, ".git/config", "x").err().map(|e| e.failure), Some(FileFailure::WorkspacePathOutsideRoot));
-        std::os::unix::fs::symlink(std::env::temp_dir(), d.join("out")).unwrap();
-        assert_eq!(write_file(root, "out/x.txt", "x").err().map(|e| e.failure), Some(FileFailure::ResolvedPathOutsideRoot));
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(std::env::temp_dir(), d.join("out")).unwrap();
+            assert_eq!(write_file(root, "out/x.txt", "x").err().map(|e| e.failure), Some(FileFailure::ResolvedPathOutsideRoot));
+        }
         assert_eq!(write_file(root, "src", "x").err().map(|e| e.failure), Some(FileFailure::PathNotFile));
         std::fs::remove_dir_all(d).unwrap();
     }

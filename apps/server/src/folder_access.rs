@@ -104,6 +104,14 @@ fn app_bundle() -> Option<PathBuf> {
 
 /// Opens `app` again once this process has exited (a fresh process gets a
 /// fresh look from macOS).
+#[cfg(not(unix))]
+fn relaunch_after_exit(_app: &Path) -> std::io::Result<()> {
+    Err(std::io::ErrorKind::Unsupported.into())
+}
+
+/// Opens `app` again once this process has exited (a fresh process gets a
+/// fresh look from macOS).
+#[cfg(unix)]
 fn relaunch_after_exit(app: &Path) -> std::io::Result<()> {
     use std::os::unix::process::CommandExt;
     crate::process::blocking_command("/bin/sh")
@@ -205,10 +213,11 @@ pub fn apply(providers: &mut [domovoi_model::typed::ServerProvider]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::unix::fs::PermissionsExt;
 
     #[test]
+    #[cfg(unix)]
     fn missing_folders_and_unix_permissions_are_not_blocks() {
+        use std::os::unix::fs::PermissionsExt;
         let dir = std::env::temp_dir().join(format!("domovoi-folder-{}", crate::util::new_uuid()));
         let (ok, gone) = (dir.join("ok"), dir.join("gone"));
         std::fs::create_dir_all(&ok).unwrap();

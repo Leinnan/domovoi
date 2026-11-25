@@ -221,7 +221,7 @@ pub fn in_brain_scope(profile_home: &Path, session_id: &str, raw_path: &str) -> 
 /// Opens a regular UTF-8 markdown file with symlink protection (`O_NOFOLLOW`) and size cap.
 fn read_markdown_file(path: &Path) -> Option<String> {
     let meta = std::fs::symlink_metadata(path).ok()?;
-    if meta.file_type().is_symlink() || !meta.is_file() {
+    if meta.file_type().is_symlink() || crate::util::is_link(path) || !meta.is_file() {
         return None;
     }
     let mut opts = std::fs::OpenOptions::new();
@@ -411,6 +411,14 @@ mod tests {
     }
 
     #[test]
+    #[cfg(windows)]
+    fn finds_windows_markdown_file_links() {
+        let text = "See [plan.md](file:///C:/Users/test/.domovoi/brain/s1/plan.md).";
+        assert_eq!(markdown_file_links(text), vec![PathBuf::from(r"C:\Users\test\.domovoi\brain\s1\plan.md")]);
+    }
+
+    #[test]
+    #[cfg(unix)]
     fn finds_markdown_file_links_in_assistant_messages() {
         let text = "See [claude_artifacts_plan.md](file:///Users/test/.domovoi/brain/s1/claude_artifacts_plan.md) and [code](file:///w/main.rs).";
         let links = markdown_file_links(text);

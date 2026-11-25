@@ -249,19 +249,19 @@ pub(crate) fn expand_tilde(p: &str) -> PathBuf {
 /// up like a CLI), else Domovoi's managed install, else `agy` (or
 /// `antigravity`) where CLIs live.
 pub fn locate(config: &Config) -> Result<PathBuf, String> {
+    use crate::providers::{find_in, resolve, runnable};
     let dirs = crate::providers::search_dirs();
-    let resolve = |p: PathBuf| std::fs::canonicalize(&p).unwrap_or(p);
     if !config.binary_path.is_empty() {
         let given = expand_tilde(&config.binary_path);
         if given.components().count() > 1 || given.is_absolute() {
-            return if crate::providers::is_executable(&given) { Ok(resolve(given)) } else { Err(format!("Antigravity was not found at {} (its binary path setting).", given.display())) };
+            return runnable(&given).map(resolve).ok_or_else(|| format!("Antigravity was not found at {} (its binary path setting).", given.display()));
         }
-        return dirs.iter().map(|d| d.join(&given)).find(|p| crate::providers::is_executable(p)).map(resolve).ok_or_else(|| format!("Antigravity's binary path names `{}`, which is not on the server's PATH.", config.binary_path));
+        return find_in(&dirs, &given.to_string_lossy()).map(resolve).ok_or_else(|| format!("Antigravity's binary path names `{}`, which is not on the server's PATH.", config.binary_path));
     }
     if let Some(managed) = install::active_executable() {
         return Ok(managed);
     }
-    crate::providers::executable(TOOL).or_else(|e| dirs.iter().map(|d| d.join(ALTERNATE_PROGRAM)).find(|p| crate::providers::is_executable(p)).map(resolve).ok_or(e))
+    crate::providers::executable(TOOL).or_else(|e| find_in(&dirs, ALTERNATE_PROGRAM).map(resolve).ok_or(e))
 }
 
 /// The executable and its version (`agy --version`).
@@ -343,12 +343,7 @@ pub fn profile_settings(config: &Config) -> String {
 
 fn private_dir(dir: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
-    }
-    Ok(())
+    crate::util::make_private(dir)
 }
 
 /// The user's global skill folders, as linked into a profile.
@@ -364,17 +359,23 @@ fn link_user_skills(profile: &Profile, user_home: &Path) {
     let targets = user_skill_dirs(&user_home.join(".gemini"));
     for (link, target) in links.iter().zip(targets.iter()) {
         let existing = std::fs::read_link(link).ok().map(|t| link.parent().map_or(t.clone(), |p| p.join(&t)));
+        // A directory link is a folder to Windows: removed as one.
+        let unlink = |link: &Path| {
+            let _ = std::fs::remove_file(link).or_else(|_| std::fs::remove_dir(link));
+        };
         if !target.exists() {
             if existing.is_some() {
-                let _ = std::fs::remove_file(link);
+                unlink(link);
             }
             continue;
         }
-        if existing.as_deref() == Some(target.as_path()) {
+        // Windows reads a junction back as `\\?\C:\…`: compared as real paths.
+        let same = |a: &Path, b: &Path| a == b || std::fs::canonicalize(a).ok().zip(std::fs::canonicalize(b).ok()).is_some_and(|(a, b)| a == b);
+        if existing.as_deref().is_some_and(|e| same(e, target)) {
             continue;
         }
         if existing.is_some() {
-            let _ = std::fs::remove_file(link);
+            unlink(link);
         } else if link.exists() && std::fs::remove_dir(link).is_err() {
             // A real folder with content: the user's, left alone.
             continue;
@@ -382,10 +383,34 @@ fn link_user_skills(profile: &Profile, user_home: &Path) {
         if let Some(parent) = link.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        #[cfg(unix)]
-        if let Err(e) = std::os::unix::fs::symlink(target, link) {
+        if let Err(e) = link_dir(target, link) {
             tracing::warn!(link = %link.display(), "Antigravity user skills are not linked into the profile: {e}");
         }
+    }
+}
+
+/// `link` pointing at the folder `target`: a symlink, or on Windows (where
+/// one needs Developer Mode) a junction, which any user may make.
+fn link_dir(target: &Path, link: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(target, link)
+    }
+    #[cfg(windows)]
+    {
+        if std::os::windows::fs::symlink_dir(target, link).is_ok() {
+            return Ok(());
+        }
+        // `mklink` is a cmd built-in; `/J` makes a junction.
+        let mut cmd = crate::process::blocking_command(std::env::var_os("ComSpec").unwrap_or_else(|| "cmd.exe".into()));
+        cmd.args(["/D", "/C", "mklink", "/J"]).arg(link).arg(target);
+        let out = crate::process::output_blocking(&mut cmd, crate::process::QUICK)?;
+        if out.status.success() { Ok(()) } else { Err(std::io::Error::other(String::from_utf8_lossy(&out.stderr).trim().to_owned())) }
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (target, link);
+        Err(std::io::ErrorKind::Unsupported.into())
     }
 }
 
@@ -459,7 +484,10 @@ pub fn signin_link_file(launch_temp: &Path) -> PathBuf {
 /// native CLI opens its Google sign-in link with them (it reads no
 /// `BROWSER`), so a link goes to the server (to [`signin_link_file`])
 /// instead of a browser on the server's machine; anything else is opened
-/// by the real command. Returns the folder to put first on PATH.
+/// by the real command. Returns the folder to put first on PATH. Unix only:
+/// on Windows the CLI opens its link through the shell, which no PATH entry
+/// stands in front of (docs/windows.md, known limits).
+#[cfg(unix)]
 pub fn write_open_shims(launch_temp: &Path) -> Result<PathBuf, String> {
     let exe = std::env::current_exe().map_err(|e| format!("The server's own path is unknown: {e}"))?;
     let dir = launch_temp.join("bin");
@@ -934,7 +962,8 @@ mod tests {
         assert!(!names(&env).iter().any(|k| k.contains("API_KEY")));
         assert!(env.contains(&("GEMINI_HOME".into(), p.home.to_string_lossy().into_owned())));
         assert!(!names(&env).iter().any(|k| k == "AGY_ACP_FORCE_FILE_STORAGE"), "the sign-in stays where the agent keeps it, never in a file Domovoi could read");
-        assert!(env.contains(&("TMPDIR".into(), "/t/run-1".into())));
+        let temp = if cfg!(windows) { "TEMP" } else { "TMPDIR" };
+        assert!(env.contains(&(temp.into(), "/t/run-1".into())));
         let key = Config { auth_method: AuthMethod::GeminiApiKey, api_key: "k1".into(), ..Config::default() };
         assert!(environment(&p, &key, Path::new("/t"), "b").contains(&("GEMINI_API_KEY".into(), "k1".into())));
         let platform = Config { auth_method: AuthMethod::AgentPlatform, api_key: "k2".into(), ..Config::default() };

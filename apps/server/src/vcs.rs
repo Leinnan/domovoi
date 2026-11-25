@@ -37,6 +37,20 @@ pub async fn is_repo(cwd: &str) -> bool {
     is_dir(cwd).await && git(cwd, &["rev-parse", "--is-inside-work-tree"]).await.is_some_and(|s| s.trim() == "true")
 }
 
+/// Whether this user owns `path` (`git`'s `safe.directory` rule; anything
+/// else is left to `git` to judge).
+#[cfg(unix)]
+fn owned_by_me(_path: &Path, meta: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    // SAFETY: `geteuid` has no preconditions and cannot fail.
+    meta.uid() == unsafe { libc::geteuid() }
+}
+
+#[cfg(windows)]
+fn owned_by_me(path: &Path, _meta: &std::fs::Metadata) -> bool {
+    crate::win::owned_by_current_user(path)
+}
+
 /// The branch checked out in `cwd`, read from the repository's files with no
 /// `git` process: `Some(None)` outside a repository or on a detached head,
 /// `None` when the layout is one only `git` reads (the caller then asks it).
@@ -47,7 +61,6 @@ pub async fn is_repo(cwd: &str) -> bool {
 /// `safe.directory` rule), a HEAD that is no plain branch ref (reftable), a
 /// folder inside `.git`.
 pub fn head_branch_in_process(cwd: &str) -> Option<Option<String>> {
-    use std::os::unix::fs::MetadataExt;
     if ["GIT_DIR", "GIT_WORK_TREE", "GIT_CEILING_DIRECTORIES", "GIT_DISCOVERY_ACROSS_FILESYSTEM", "GIT_COMMON_DIR"].iter().any(|v| std::env::var_os(v).is_some()) {
         return None;
     }
@@ -58,14 +71,12 @@ pub fn head_branch_in_process(cwd: &str) -> Option<Option<String>> {
     if !start.is_dir() {
         return Some(None);
     }
-    // SAFETY: `geteuid` has no preconditions and cannot fail.
-    let me = unsafe { libc::geteuid() };
     let mut dir = Some(start);
     while let Some(d) = dir {
         let dot_git = d.join(".git");
         match std::fs::symlink_metadata(&dot_git) {
             Ok(meta) => {
-                if meta.uid() != me {
+                if !owned_by_me(&dot_git, &meta) {
                     return None;
                 }
                 let git_dir = if meta.is_dir() {

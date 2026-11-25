@@ -77,6 +77,9 @@ pub struct OpenCodeServer {
     http: reqwest::Client,
     routes: Arc<Mutex<HashMap<String, mpsc::UnboundedSender<Value>>>>,
     child: Mutex<tokio::process::Child>,
+    /// Windows: `opencode serve` (a `.cmd` shim's `node`) ends with this server
+    /// however it ends, as the Unix watchdog makes sure.
+    tree: crate::process::Tree,
     /// The folder each thread's MCP server was added for, by thread.
     mcp: Mutex<HashMap<String, String>>,
     /// The instruction entry each session holds, by session.
@@ -160,7 +163,8 @@ pub fn subagent_output(text: &str) -> String {
 
 /// `opencode serve` under a small watchdog shell (Unix): it stops the
 /// server when Domovoi is gone however Domovoi ended (`opencode serve` doesn't watch
-/// its stdin), and when stopped itself (SIGTERM).
+/// its stdin), and when stopped itself (SIGTERM). On Windows the server's
+/// job object does that (`OpenCodeServer::tree`).
 fn serve_command(exe: &std::path::Path, port: u16) -> tokio::process::Command {
     if cfg!(unix) {
         let mut c = crate::process::command("/bin/sh");
@@ -423,7 +427,8 @@ impl OpenCodeServer {
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
         let routes: Arc<Mutex<HashMap<String, mpsc::UnboundedSender<Value>>>> = Arc::default();
-        let server = Arc::new(OpenCodeServer { base, auth, http, routes, child: Mutex::new(child), mcp: Mutex::default(), instructed: Mutex::default() });
+        let tree = crate::process::Tree::of(child.id());
+        let server = Arc::new(OpenCodeServer { base, auth, http, routes, child: Mutex::new(child), tree, mcp: Mutex::default(), instructed: Mutex::default() });
         let s = server.clone();
         tokio::spawn(async move { s.pump_events().await });
         Ok(server)
@@ -591,6 +596,7 @@ impl OpenCodeServer {
                 return;
             }
         }
+        self.tree.kill();
         let _ = child.kill().await;
     }
 

@@ -452,6 +452,13 @@ pub fn terminal_qr(text: &str, dark_background: bool) -> Option<String> {
 /// Reads a 32-byte key (hex) or creates one, readable only by the owner.
 pub fn load_or_create_key(path: &Path) -> std::io::Result<SecretKey> {
     if let Some(key) = read_key(path) {
+        // Made before Windows keys were given an ACL of their own.
+        #[cfg(windows)]
+        if crate::util::is_private(path) == Some(false)
+            && let Err(e) = crate::util::make_private(path)
+        {
+            tracing::warn!("{} can be read by other accounts: {e}", path.display());
+        }
         return Ok(key);
     }
     if let Some(dir) = path.parent() {
@@ -488,7 +495,11 @@ pub(crate) fn write_private(path: &Path, data: &[u8]) -> std::io::Result<()> {
     options.write(true).create(true).truncate(true);
     #[cfg(unix)]
     options.mode(0o600);
-    options.open(path)?.write_all(data)
+    options.open(path)?.write_all(data)?;
+    // Windows has no mode to create it with: its ACL is set after.
+    #[cfg(windows)]
+    crate::util::make_private(path)?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -502,11 +513,7 @@ mod tests {
         let a = load_or_create_key(&path).unwrap();
         let b = load_or_create_key(&path).unwrap();
         assert_eq!(a.public(), b.public());
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
-        }
+        assert_eq!(crate::util::is_private(&path), Some(true));
         let _ = std::fs::remove_dir_all(dir);
     }
 

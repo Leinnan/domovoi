@@ -175,7 +175,7 @@ async fn a_managed_server_tells_clients_and_refuses_what_its_policy_locks() {
     assert_eq!(opencode["unavailableReason"], "Acme Corp's policy does not allow the OpenCode provider.");
 
     // Locked settings are refused, however they are sent; the rest is written.
-    let settings_path = server.home.join("userdata/settings.json");
+    let settings_path = server.home.join("userdata").join("settings.json");
     let locked = rpc.failure("server.updateSettings", json!({ "patch": { "storageCleanup": { "logsAfterDays": 30 } } })).await;
     assert_eq!(
         locked,

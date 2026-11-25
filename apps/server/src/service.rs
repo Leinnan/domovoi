@@ -159,8 +159,12 @@ fn state(query: &str) -> String {
         .unwrap_or_else(|| "unknown".into())
 }
 
-/// `doctor`: whether the unit is installed, enabled and running; `None` off Linux.
+/// `doctor`: whether the unit (the scheduled task on Windows) is installed,
+/// enabled and running; `None` elsewhere.
 pub fn summary() -> Option<String> {
+    #[cfg(windows)]
+    return Some(windows::summary());
+    #[cfg_attr(windows, expect(unreachable_code, reason = "Windows answered above"))]
     if !cfg!(target_os = "linux") {
         return None;
     }
@@ -177,8 +181,11 @@ fn lingering() -> Option<bool> {
 }
 
 pub fn service(base: &crate::Base, exec: &Exec, cmd: &ServiceCmd) -> crate::Fallible {
+    #[cfg(windows)]
+    return windows::service(base, exec, cmd);
+    #[cfg_attr(windows, expect(unreachable_code, reason = "Windows answered above"))]
     if !cfg!(target_os = "linux") {
-        return Err("`service` sets up a systemd user service (Linux); on this system use `domovoi-server autostart on`".into());
+        return Err("`service` sets up a systemd user service (Linux) or a scheduled task (Windows); on this system use `domovoi-server autostart on`".into());
     }
     let path = unit_path().ok_or("no config directory")?;
     match cmd {
@@ -233,9 +240,205 @@ fn print_status(path: &Path) {
     }
 }
 
+/// Windows: the headless server as a scheduled task that starts when this
+/// user signs in. It runs `domovoi-server-launcher.exe --supervise` beside
+/// the server, which starts the server with no console window and starts it
+/// again after a failure (5 s, backing off to five minutes), as systemd's
+/// `Restart=on-failure` does. Ending the task ends the server with it.
+#[cfg(any(windows, test))]
+pub(crate) mod windows {
+    use super::Exec;
+    #[cfg(windows)]
+    use super::ServiceCmd;
+    use std::path::{Path, PathBuf};
+
+    #[cfg(windows)]
+    pub const TASK: &str = "Domovoi Server";
+
+    /// What the task runs: the launcher (when it is beside the server) and its arguments.
+    pub fn action(exec: &Exec, launcher: Option<PathBuf>) -> (PathBuf, String) {
+        match launcher {
+            Some(launcher) => (launcher, crate::autostart::command_line(std::iter::once("--supervise".to_owned()).chain(exec.args.iter().cloned()))),
+            None => (exec.exe.clone(), crate::autostart::command_line(exec.args.iter().cloned())),
+        }
+    }
+
+    fn xml_escape(text: &str) -> String {
+        text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
+    }
+
+    /// The task definition (Task Scheduler schema 1.4) for `user`
+    /// (`DOMAIN\name`): at their sign-in, in their session, with no time limit.
+    pub fn task_xml(user: &str, command: &Path, arguments: &str) -> String {
+        let dir = command.parent().map(|d| d.display().to_string()).unwrap_or_default();
+        format!(
+            r#"<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Description>Domovoi server (headless), started at sign-in. `domovoi-server service uninstall` removes it.</Description>
+  </RegistrationInfo>
+  <Triggers>
+    <LogonTrigger>
+      <Enabled>true</Enabled>
+      <UserId>{user}</UserId>
+    </LogonTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id="Author">
+      <UserId>{user}</UserId>
+      <LogonType>InteractiveToken</LogonType>
+      <RunLevel>LeastPrivilege</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <AllowHardTerminate>true</AllowHardTerminate>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>
+    <IdleSettings>
+      <StopOnIdleEnd>false</StopOnIdleEnd>
+      <RestartOnIdle>false</RestartOnIdle>
+    </IdleSettings>
+    <AllowStartOnDemand>true</AllowStartOnDemand>
+    <Enabled>true</Enabled>
+    <Hidden>false</Hidden>
+    <RunOnlyIfIdle>false</RunOnlyIfIdle>
+    <WakeToRun>false</WakeToRun>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <Priority>7</Priority>
+    <RestartOnFailure>
+      <Interval>PT1M</Interval>
+      <Count>3</Count>
+    </RestartOnFailure>
+  </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <Command>"{command}"</Command>
+      <Arguments>{arguments}</Arguments>
+      <WorkingDirectory>{dir}</WorkingDirectory>
+    </Exec>
+  </Actions>
+</Task>
+"#,
+            user = xml_escape(user),
+            command = xml_escape(&command.display().to_string()),
+            arguments = xml_escape(arguments),
+            dir = xml_escape(&dir),
+        )
+    }
+
+    #[cfg(windows)]
+    /// `schtasks` reads a definition declared UTF-16 as UTF-16 (with its BOM).
+    fn utf16_with_bom(text: &str) -> Vec<u8> {
+        std::iter::once(0xFEFF_u16).chain(text.encode_utf16()).flat_map(u16::to_le_bytes).collect()
+    }
+
+    #[cfg(windows)]
+    fn schtasks(args: &[&str]) -> Result<String, String> {
+        super::run("schtasks", args)
+    }
+
+    #[cfg(windows)]
+    fn installed() -> bool {
+        schtasks(&["/Query", "/TN", TASK]).is_ok()
+    }
+
+    #[cfg(windows)]
+    /// The task's status column ("Running", "Ready", "Disabled"; in the
+    /// system's language).
+    fn status() -> Option<String> {
+        let csv = schtasks(&["/Query", "/TN", TASK, "/FO", "CSV", "/NH"]).ok()?;
+        let line = csv.lines().find(|l| !l.trim().is_empty())?;
+        line.rsplit("\",\"").next().map(|s| s.trim_matches(['"', ' ']).to_owned())
+    }
+
+    #[cfg(windows)]
+    pub fn summary() -> String {
+        match status() {
+            Some(status) => format!("scheduled task {TASK:?} at sign-in, {status}"),
+            None => "not installed".into(),
+        }
+    }
+
+    #[cfg(windows)]
+    fn user() -> String {
+        let name = std::env::var("USERNAME").unwrap_or_default();
+        match std::env::var("USERDOMAIN") {
+            Ok(domain) if !domain.is_empty() => format!("{domain}\\{name}"),
+            _ => name,
+        }
+    }
+
+    #[cfg(windows)]
+    pub fn service(base: &crate::Base, exec: &Exec, cmd: &ServiceCmd) -> crate::Fallible {
+        match cmd {
+            ServiceCmd::Install { linger, no_start, no_remote } => {
+                let new = !installed();
+                let launcher = crate::autostart::launcher_beside(&exec.exe);
+                if launcher.is_none() {
+                    println!("warning: domovoi-server-launcher.exe is not beside {}: the task runs the server itself, in a console window, and does not restart it after a failure", exec.exe.display());
+                }
+                let (command, arguments) = action(exec, launcher);
+                let definition = std::env::temp_dir().join(format!("domovoi-task-{}.xml", std::process::id()));
+                std::fs::write(&definition, utf16_with_bom(&task_xml(&user(), &command, &arguments)))?;
+                let created = schtasks(&["/Create", "/TN", TASK, "/XML", &definition.to_string_lossy(), "/F"]);
+                let _ = std::fs::remove_file(&definition);
+                created?;
+                println!("Scheduled task {TASK:?}: {} {arguments}", command.display());
+                if new && !no_remote && !base.remote.settings().enabled {
+                    base.remote.save_enabled(true)?;
+                    println!("Remote access: on (`domovoi-server remote off` keeps it off across restarts)");
+                }
+                if !no_start {
+                    // A server already running from the task is replaced by the new definition's.
+                    let _ = schtasks(&["/End", "/TN", TASK]);
+                    schtasks(&["/Run", "/TN", TASK])?;
+                }
+                if crate::autostart::is_enabled() {
+                    println!("warning: launch at login is also on and would start a second server; `domovoi-server autostart off` turns it off");
+                }
+                if *linger {
+                    println!("note: on Windows the task starts when you sign in; starting before anyone signs in needs your password stored with the task (Task Scheduler › Domovoi Server › \"Run whether user is logged on or not\")");
+                }
+            }
+            ServiceCmd::Uninstall => {
+                if installed() {
+                    let _ = schtasks(&["/End", "/TN", TASK]);
+                    schtasks(&["/Delete", "/TN", TASK, "/F"])?;
+                    println!("Removed the scheduled task {TASK:?}");
+                }
+            }
+            ServiceCmd::Status => {}
+        }
+        println!("Service: {}", summary());
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_windows_task_runs_the_launcher_supervising_the_headless_server() {
+        let exec = Exec {
+            exe: PathBuf::from(r"C:\Users\me\AppData\Local\Programs\Domovoi\domovoi-server.exe"),
+            args: vec!["--no-startup-code".into(), "--home-dir".into(), r"C:\Users\me\.domovoi".into(), "--port".into(), "13773".into()],
+        };
+        let launcher = PathBuf::from(r"C:\Users\me\AppData\Local\Programs\Domovoi\domovoi-server-launcher.exe");
+        let (command, arguments) = windows::action(&exec, Some(launcher.clone()));
+        assert_eq!(command, launcher);
+        assert_eq!(arguments, r"--supervise --no-startup-code --home-dir C:\Users\me\.domovoi --port 13773");
+        let xml = windows::task_xml(r"PC\me & co", &command, &arguments);
+        assert!(xml.contains(r#"<Command>"C:\Users\me\AppData\Local\Programs\Domovoi\domovoi-server-launcher.exe"</Command>"#), "{xml}");
+        assert!(xml.contains(r"<UserId>PC\me &amp; co</UserId>"), "escaped");
+        assert!(xml.contains("<LogonTrigger>") && xml.contains("<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>"));
+        assert!(!xml.contains("--tray"), "headless");
+        let (bare, _) = windows::action(&exec, None);
+        assert_eq!(bare, exec.exe, "without the launcher the server runs itself");
+    }
 
     fn exec() -> Exec {
         Exec {

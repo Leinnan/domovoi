@@ -1,7 +1,7 @@
 //! Cross-platform secure key-value storage for `domovoi-core`'s `Store` effect
 //! plus this device's persistent iroh identity key.
 //!
-//! - `DOMOVOI_STORE=memory` (or unit tests): in-memory only.
+//! - `DOMOVOI_STORE=memory`: in-memory only.
 //! - `cache:*` keys: atomic JSON files in the platform cache directory so large
 //!   offline thread caches never hit the OS keyring.
 //! - Secret keys (`deviceKey`, `token:*`, `environments`, `activeEnvironment`):
@@ -9,6 +9,8 @@
 //!   to avoid repeated ad-hoc macOS Keychain prompts) to a `0600`-permissioned
 //!   atomic JSON file under the platform config directory (`DOMOVOI_DATA`
 //!   overrides the directory).
+//!
+//! Each client keeps its own folder and keyring service ([`Identity`]).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -16,7 +18,8 @@ use std::sync::Mutex;
 
 use domovoi_remote::SecretKey;
 
-const KEYRING_SERVICE: &str = "com.crayen.domovoi.client";
+use crate::Identity;
+
 const DEVICE_KEY_NAME: &str = "deviceKey";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -28,6 +31,7 @@ enum Backend {
 
 pub struct SecureStore {
     backend: Backend,
+    keyring_service: &'static str,
     data_dir: PathBuf,
     cache_dir: PathBuf,
     memory: Mutex<BTreeMap<String, String>>,
@@ -35,10 +39,10 @@ pub struct SecureStore {
 }
 
 impl SecureStore {
-    pub fn from_env() -> Self {
+    pub fn from_env(identity: Identity) -> Self {
         let memory_only = cfg!(test) || std::env::var("DOMOVOI_STORE").ok().as_deref() == Some("memory");
-        let data_dir = default_data_dir();
-        let cache_dir = default_cache_dir(&data_dir);
+        let data_dir = default_data_dir(identity);
+        let cache_dir = default_cache_dir(identity, &data_dir);
         let backend = if memory_only {
             Backend::Memory
         } else if cfg!(debug_assertions) || std::env::var("DOMOVOI_STORE").ok().as_deref() == Some("file") {
@@ -48,6 +52,7 @@ impl SecureStore {
         };
         Self {
             backend,
+            keyring_service: identity.keyring_service,
             data_dir,
             cache_dir,
             memory: Mutex::new(BTreeMap::new()),
@@ -55,10 +60,11 @@ impl SecureStore {
         }
     }
 
-    #[cfg(test)]
+    /// Nothing written anywhere (tests).
     pub fn in_memory() -> Self {
         Self {
             backend: Backend::Memory,
+            keyring_service: "",
             data_dir: PathBuf::new(),
             cache_dir: PathBuf::new(),
             memory: Mutex::new(BTreeMap::new()),
@@ -66,11 +72,12 @@ impl SecureStore {
         }
     }
 
-    #[cfg(test)]
+    /// Files in `data_dir` only, no keyring (tests).
     pub fn in_dir(data_dir: PathBuf) -> Self {
         let cache_dir = data_dir.join("cache");
         Self {
             backend: Backend::File,
+            keyring_service: "",
             data_dir,
             cache_dir,
             memory: Mutex::new(BTreeMap::new()),
@@ -86,7 +93,7 @@ impl SecureStore {
             return std::fs::read_to_string(path).ok();
         }
         if self.backend == Backend::KeyringWithFileFallback
-            && let Ok(entry) = keyring::Entry::new(KEYRING_SERVICE, key) {
+            && let Ok(entry) = keyring::Entry::new(self.keyring_service, key) {
                 match entry.get_password() {
                     Ok(value) => return Some(value),
                     Err(keyring::Error::NoEntry) => {
@@ -110,7 +117,7 @@ impl SecureStore {
             return write_atomic(&path, value.as_bytes(), false);
         }
         if self.backend == Backend::KeyringWithFileFallback
-            && let Ok(entry) = keyring::Entry::new(KEYRING_SERVICE, key)
+            && let Ok(entry) = keyring::Entry::new(self.keyring_service, key)
                 && entry.set_password(value).is_ok() {
                     return true;
                 }
@@ -133,7 +140,7 @@ impl SecureStore {
             return true;
         }
         if self.backend == Backend::KeyringWithFileFallback
-            && let Ok(entry) = keyring::Entry::new(KEYRING_SERVICE, key) {
+            && let Ok(entry) = keyring::Entry::new(self.keyring_service, key) {
                 let _ = entry.delete_credential();
             }
         let _guard = self.file_lock.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -186,18 +193,20 @@ impl SecureStore {
     }
 }
 
-pub fn default_data_dir() -> PathBuf {
+/// The client's settings folder: `DOMOVOI_DATA`, else its folder in the
+/// platform config directory.
+pub fn default_data_dir(identity: Identity) -> PathBuf {
     if let Some(dir) = std::env::var_os("DOMOVOI_DATA") {
         return PathBuf::from(dir);
     }
-    dirs::config_dir().unwrap_or_else(|| PathBuf::from(".")).join("domovoi-desktop")
+    dirs::config_dir().unwrap_or_else(|| PathBuf::from(".")).join(identity.dir_name)
 }
 
-fn default_cache_dir(data_dir: &Path) -> PathBuf {
+fn default_cache_dir(identity: Identity, data_dir: &Path) -> PathBuf {
     if std::env::var_os("DOMOVOI_DATA").is_some() {
         return data_dir.join("cache");
     }
-    dirs::cache_dir().unwrap_or_else(|| data_dir.to_path_buf()).join("domovoi-desktop")
+    dirs::cache_dir().unwrap_or_else(|| data_dir.to_path_buf()).join(identity.dir_name)
 }
 
 fn write_atomic(path: &Path, bytes: &[u8], secret: bool) -> bool {
@@ -207,6 +216,10 @@ fn write_atomic(path: &Path, bytes: &[u8], secret: bool) -> bool {
     if std::fs::create_dir_all(dir).is_err() {
         return false;
     }
+    // Windows: the file inherits the ACL of the user's profile folder (the
+    // user, SYSTEM and Administrators), so it is set no tighter.
+    #[cfg(not(unix))]
+    let _ = secret;
     #[cfg(unix)]
     if secret {
         use std::os::unix::fs::PermissionsExt;

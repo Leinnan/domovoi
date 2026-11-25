@@ -114,6 +114,8 @@ type ProtocolLog = Arc<dyn Fn(&str, &Value) + Send + Sync>;
 pub struct ClaudeCli {
     stdin: Mutex<ChildStdin>,
     child: Mutex<Child>,
+    /// What the CLI starts ends with it (Windows: a `.cmd` shim's `node`).
+    _tree: crate::process::Tree,
     pending: Arc<Mutex<HashMap<String, oneshot::Sender<Value>>>>,
     /// The session's protocol log (`direction`, message).
     log: ProtocolLog,
@@ -146,7 +148,8 @@ impl ClaudeCli {
         let (tx, rx) = mpsc::unbounded_channel();
         let pending: Arc<Mutex<HashMap<String, oneshot::Sender<Value>>>> = Arc::default();
         let log: ProtocolLog = Arc::new(log);
-        let cli = Arc::new(ClaudeCli { stdin: Mutex::new(stdin), child: Mutex::new(child), pending: pending.clone(), log: log.clone() });
+        let tree = crate::process::Tree::of(child.id());
+        let cli = Arc::new(ClaudeCli { stdin: Mutex::new(stdin), child: Mutex::new(child), _tree: tree, pending: pending.clone(), log: log.clone() });
         tokio::spawn(async move {
             let mut lines = BufReader::new(stdout).lines();
             while let Ok(Some(line)) = lines.next_line().await {

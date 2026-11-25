@@ -321,7 +321,11 @@ fn free_space(dir: &Path) -> Option<u64> {
         let ok = unsafe { libc::statvfs(path.as_ptr(), &mut stat) } == 0;
         ok.then(|| stat.f_bavail as u64 * stat.f_frsize as u64)
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        crate::win::free_space(dir)
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = dir;
         None

@@ -178,9 +178,12 @@ pub fn antigravity_plans(store: &Store, userdata: &Path) -> usize {
     let thread_ids: Vec<String> = store
         .db()
         .with(|c| {
+            // A Windows path is `antigravity-acp\brain\…`, its backslashes
+            // doubled in the JSON record.
             let mut st = c.prepare(
-                "SELECT DISTINCT thread_id FROM thread_entities
-                 WHERE kind IN ('turnItems', 'messages') AND record LIKE '%antigravity-acp/brain/%'",
+                r"SELECT DISTINCT thread_id FROM thread_entities
+                 WHERE kind IN ('turnItems', 'messages')
+                   AND (record LIKE '%antigravity-acp/brain/%' OR record LIKE '%antigravity-acp\\brain\\%')",
             )?;
             let rows = st.query_map(params![], |r| r.get(0))?;
             rows.collect()
@@ -1079,7 +1082,7 @@ mod tests {
         // Thread 2: run 1 had a plan link in assistant reply, run 2 followed -> repaired as Completed ProposedPlan.
         let plan2 = brain.join("app_icon_plan.md");
         std::fs::write(&plan2, "# App Icon Plan\n\n1. Draw icon").unwrap();
-        let link_text = format!("See [app_icon_plan.md](file://{}).", plan2.display());
+        let link_text = format!("See [app_icon_plan.md]({}).", url::Url::from_file_path(&plan2).unwrap());
         append(&store, "t-ag-2", "thread.created", with(thread("t-ag-2", "p1"), json!({ "providerInstanceId": "antigravity", "interactionMode": "default" })), &o).unwrap();
         append(&store, "t-ag-2", "run.created", with(run("t-ag-2", "r1", "completed"), json!({ "ordinal": 1, "providerInstanceId": "antigravity", "rootNodeId": "root-2-1" })), &o).unwrap();
         append(&store, "t-ag-2", "run.created", with(run("t-ag-2", "r2", "completed"), json!({ "ordinal": 2, "providerInstanceId": "antigravity", "rootNodeId": "root-2-2" })), &o).unwrap();

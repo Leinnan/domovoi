@@ -277,8 +277,18 @@ pub fn system_path() -> PathBuf {
     if cfg!(target_os = "macos") {
         PathBuf::from("/Library/Application Support/Domovoi/policy.json")
     } else if cfg!(windows) {
-        // Not ProgramData, where a user can create the folder first and own it.
-        PathBuf::from("C:\\Program Files\\Domovoi\\policy.json")
+        // Not ProgramData, where a user can create the folder first and own
+        // it. Program Files from the registry, which only administrators
+        // change (`%ProgramFiles%` is any user's to set), on whichever drive.
+        #[cfg(windows)]
+        let program_files = crate::win::registry_string(
+            windows_sys::Win32::System::Registry::HKEY_LOCAL_MACHINE,
+            r"SOFTWARE\Microsoft\Windows\CurrentVersion",
+            "ProgramFilesDir",
+        );
+        #[cfg(not(windows))]
+        let program_files: Option<String> = None;
+        PathBuf::from(program_files.unwrap_or_else(|| r"C:\Program Files".into())).join("Domovoi").join("policy.json")
     } else {
         PathBuf::from("/etc/domovoi/policy.json")
     }

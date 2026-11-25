@@ -1,6 +1,8 @@
 //! Operations: `/health` and `/ready`, compressed HTTP responses, the RPC
 //! socket's orchestration protocol check (HTTP 426), and `domovoi-server doctor`.
 
+#![cfg_attr(windows, allow(dead_code, reason = "the tests using these helpers script fake CLIs as shell scripts, so they run on Unix only"))]
+
 use serde_json::Value;
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};

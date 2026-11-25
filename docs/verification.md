@@ -962,7 +962,9 @@ Android unit tests pass.
     binary sat in `~/Documents` hung opening it (macOS guards that folder from
     login items), which is why `autostart on` now refuses such paths.
   - Windows: `just check-windows` cross-builds and links the server and icon
-    (zig, GNU target); not run on Windows. Linux: `just check-linux` builds and
+    (zig, GNU target). Native Windows (docs/windows.md): the server's 555 unit
+    tests pass on Windows 11 (`just windows-test`), and so do its integration
+    suites except `provider_turns` and `rpc_calls` (`just windows-test-server`). Linux: `just check-linux` builds and
     passes all 173 server, transport, model and RPC tests in Docker (the schema
     checks are skipped there: no Node); the icon itself needs a desktop
     session. It found two Linux-only problems, now fixed: terminals failed
@@ -1693,8 +1695,9 @@ What the live runs found:
 - Not done: managed Codex installation (`provider.install.*` for managed setup
   mode still refuses); latest-version lookups and version advisories;
   `targetVersion` (refused: no model manifest); draining running sessions
-  before an update; bun, pnpm, yarn, Volta and mise updaters; Windows
-  installers; the `x-t3-orchestration-protocol` header on HTTP snapshot
+  before an update; bun, pnpm, yarn, Volta and mise updaters; WinGet, Scoop
+  and Chocolatey installs (left to their managers; npm's `.cmd` shims and the
+  native `.exe`s are updated); the `x-t3-orchestration-protocol` header on HTTP snapshot
   routes; relay dialling and database compaction in `doctor`.
 - Verified: `apps/server/tests/ops.rs` (health and ready; gzip and brotli
   decoded and compared; the 426 cases; `doctor --json` against a temp home with

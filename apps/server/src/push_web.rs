@@ -180,7 +180,10 @@ fn write_owner_only(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
     }
-    options.open(path)?.write_all(bytes)
+    options.open(path)?.write_all(bytes)?;
+    #[cfg(windows)]
+    crate::util::make_private(path)?;
+    Ok(())
 }
 
 /// `scheme://host[:port]` of a URL (VAPID's audience).

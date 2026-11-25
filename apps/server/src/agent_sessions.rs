@@ -2329,6 +2329,8 @@ mod tests {
         assert_eq!(missing.written(), r#"{"_tag":"AgentSessionImportProjectNotFoundError","projectId":"p1"}"#);
     }
 
+    // The settings name Unix paths.
+    #[cfg(unix)]
     #[test]
     fn the_scan_reads_settings_leniently() {
         let of = |settings: Value| crate::settings::Settings::from_document(settings.as_object().cloned().unwrap_or_default());
