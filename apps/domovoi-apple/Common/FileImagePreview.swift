@@ -15,7 +15,6 @@ struct FileImagePreview: View {
     @State private var failed = false
     @State private var attempt = 0
     @State private var gallery: ImageGallery?
-    @State private var notice: ImageNotice?
 
     private var name: String { (path as NSString).lastPathComponent }
 
@@ -31,7 +30,6 @@ struct FileImagePreview: View {
         }
         .padding(Space.s)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .imageNotice($notice)
         .imageGallery($gallery)
         .task(id: "\(address)\u{0}\(attempt)") {
             picture = nil
@@ -57,7 +55,7 @@ struct FileImagePreview: View {
             .accessibilityAction(named: "Show Full Size", openFull)
             .contextMenu {
                 if let loaded {
-                    ImageActionItems(file: loaded, name: name, preview: picture, notice: $notice)
+                    ImageActionItems(file: loaded, name: name, preview: picture)
                 }
             }
     }

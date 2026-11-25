@@ -1,0 +1,479 @@
+{
+ "fixture": false,
+ "env": {
+  "GIT_ALLOW_PROTOCOL": "file",
+  "GIT_TERMINAL_PROMPT": "0"
+ },
+ "normalize": [],
+ "cases": [
+  {
+   "tag": "projects.mutate",
+   "payload": {
+    "type": "project.create",
+    "commandId": "create-gl-one",
+    "projectId": "gl-one",
+    "title": "GitLab one",
+    "workspaceRoot": "$DIR/repos/gl-one",
+    "createWorkspaceRootIfMissing": false,
+    "defaultModelSelection": null
+   }
+  },
+  {
+   "tag": "projects.mutate",
+   "payload": {
+    "type": "project.create",
+    "commandId": "create-gl-self",
+    "projectId": "gl-self",
+    "title": "Self-managed app",
+    "workspaceRoot": "$DIR/repos/gl-self",
+    "createWorkspaceRootIfMissing": false,
+    "defaultModelSelection": null
+   }
+  },
+  {
+   "tag": "issues.list",
+   "payload": {
+    "state": "open"
+   },
+   "note": "both GitLab hosts"
+  },
+  {
+   "tag": "issues.list",
+   "payload": {
+    "state": "all",
+    "host": "gitlab.com"
+   }
+  },
+  {
+   "tag": "issues.list",
+   "payload": {
+    "state": "closed",
+    "projectId": "gl-one"
+   }
+  },
+  {
+   "tag": "issues.list",
+   "payload": {
+    "state": "open",
+    "involvement": "authored",
+    "host": "gitlab.com"
+   }
+  },
+  {
+   "tag": "issues.list",
+   "payload": {
+    "state": "open",
+    "involvement": "assigned",
+    "host": "gitlab.com"
+   }
+  },
+  {
+   "tag": "issues.list",
+   "payload": {
+    "state": "open",
+    "involvement": "assigned",
+    "assignee": "rev",
+    "host": "gitlab.com"
+   },
+   "note": "a named assignee, the viewer kept by dropping rows"
+  },
+  {
+   "tag": "issues.list",
+   "payload": {
+    "state": "all",
+    "labels": [
+     "bug"
+    ],
+    "host": "gitlab.com"
+   }
+  },
+  {
+   "tag": "issues.list",
+   "payload": {
+    "state": "all",
+    "query": "dark",
+    "sort": "created",
+    "host": "gitlab.com"
+   }
+  },
+  {
+   "tag": "issues.list",
+   "payload": {
+    "state": "all",
+    "limit": 1,
+    "host": "gitlab.com"
+   },
+   "note": "a next page"
+  },
+  {
+   "tag": "issues.list",
+   "payload": {
+    "state": "all",
+    "limit": 1,
+    "host": "gitlab.com",
+    "cursors": {
+     "gitlab.com group/one": "2"
+    }
+   }
+  },
+  {
+   "tag": "issues.list",
+   "payload": {
+    "state": "all",
+    "host": "gitlab.com",
+    "cursors": {
+     "gitlab.com group/one": "x"
+    }
+   },
+   "note": "a cursor GitLab did not hand out: the project's error"
+  },
+  {
+   "tag": "issues.detail",
+   "payload": {
+    "projectId": "gl-one",
+    "tracker": "gitlab",
+    "scope": "group/one",
+    "key": "1"
+   },
+   "note": "comments with awards, events, closing and mentioning merge requests"
+  },
+  {
+   "tag": "issues.detail",
+   "payload": {
+    "projectId": "gl-one",
+    "tracker": "gitlab",
+    "scope": "group/one",
+    "key": "2"
+   },
+   "note": "a hundred comments and a cursor"
+  },
+  {
+   "tag": "issues.comments",
+   "payload": {
+    "projectId": "gl-one",
+    "tracker": "gitlab",
+    "scope": "group/one",
+    "key": "2",
+    "cursor": "2"
+   }
+  },
+  {
+   "tag": "issues.comments",
+   "payload": {
+    "projectId": "gl-one",
+    "tracker": "gitlab",
+    "scope": "group/one",
+    "key": "2",
+    "cursor": "2:"
+   },
+   "expect": "failure",
+   "error": "IssueOperationError"
+  },
+  {
+   "tag": "issues.detail",
+   "payload": {
+    "projectId": "gl-self",
+    "tracker": "gitlab",
+    "scope": "team/sub/app",
+    "key": "1",
+    "host": "gitlab.example.com"
+   }
+  },
+  {
+   "tag": "issues.detail",
+   "payload": {
+    "projectId": "gl-one",
+    "tracker": "gitlab",
+    "scope": "group/one",
+    "key": "99"
+   },
+   "expect": "failure",
+   "error": "IssueOperationError",
+   "note": "not found"
+  },
+  {
+   "tag": "issues.detail",
+   "payload": {
+    "projectId": "gl-one",
+    "tracker": "gitlab",
+    "scope": "group/one",
+    "key": "abc"
+   },
+   "expect": "failure",
+   "error": "IssueOperationError",
+   "note": "a key that names no iid"
+  },
+  {
+   "tag": "issues.templates",
+   "payload": {
+    "projectId": "gl-one",
+    "tracker": "gitlab",
+    "scope": "group/one"
+   }
+  },
+  {
+   "tag": "issues.templates",
+   "payload": {
+    "projectId": "gl-self",
+    "tracker": "gitlab",
+    "scope": "team/sub/app"
+   }
+  },
+  {
+   "tag": "issues.candidates",
+   "payload": {
+    "projectId": "gl-one",
+    "tracker": "gitlab",
+    "scope": "group/one"
+   }
+  },
+  {
+   "tag": "issues.create",
+   "payload": {
+    "projectId": "gl-one",
+    "tracker": "gitlab",
+    "scope": "group/one",
+    "title": "Negative numbers",
+    "body": "Handle them.",
+    "labels": [
+     "bug"
+    ],
+    "assignees": [
+     "2"
+    ]
+   }
+  },
+  {
+   "tag": "issues.create",
+   "payload": {
+    "projectId": "gl-one",
+    "tracker": "gitlab",
+    "scope": "group/one",
+    "title": "Rounding",
+    "body": "",
+    "labels": [],
+    "assignees": [
+     "ann"
+    ]
+   },
+   "note": "a username is looked up"
+  },
+  {
+   "tag": "issues.create",
+   "payload": {
+    "projectId": "gl-one",
+    "tracker": "gitlab",
+    "scope": "group/one",
+    "title": "Nobody",
+    "body": "",
+    "labels": [],
+    "assignees": [
+     "nobody"
+    ]
+   },
+   "expect": "failure",
+   "error": "IssueOperationError"
+  },
+  {
+   "tag": "issues.comment",
+   "payload": {
+    "projectId": "gl-one",
+    "tracker": "gitlab",
+    "scope": "group/one",
+    "key": "1",
+    "body": "Fixed in !1."
+   }
+  },
+  {
+   "tag": "issues.comment",
+   "payload": {
+    "projectId": "gl-one",
+    "tracker": "gitlab",
+    "scope": "group/one",
+    "key": "1",
+    "body": " "
+   },
+   "expect": "failure",
+   "error": "IssueOperationError"
+  },
+  {
+   "tag": "issues.update",
+   "payload": {
+    "projectId": "gl-one",
+    "tracker": "gitlab",
+    "scope": "group/one",
+    "key": "3",
+    "title": "Dark mode, please",
+    "labels": [
+     "ui",
+     "bug"
+    ],
+    "assignees": [
+     "101"
+    ]
+   }
+  },
+  {
+   "tag": "issues.update",
+   "payload": {
+    "projectId": "gl-one",
+    "tracker": "gitlab",
+    "scope": "group/one",
+    "key": "3"
+   },
+   "expect": "failure",
+   "error": "IssueOperationError",
+   "note": "nothing to change"
+  },
+  {
+   "tag": "issues.setState",
+   "payload": {
+    "projectId": "gl-one",
+    "tracker": "gitlab",
+    "scope": "group/one",
+    "key": "3",
+    "state": "Closed"
+   }
+  },
+  {
+   "tag": "issues.setState",
+   "payload": {
+    "projectId": "gl-one",
+    "tracker": "gitlab",
+    "scope": "group/one",
+    "key": "3",
+    "state": "Open"
+   }
+  },
+  {
+   "tag": "issues.setState",
+   "payload": {
+    "projectId": "gl-one",
+    "tracker": "gitlab",
+    "scope": "group/one",
+    "key": "3",
+    "state": "Done"
+   },
+   "expect": "failure",
+   "error": "IssueOperationError"
+  },
+  {
+   "tag": "issues.react",
+   "payload": {
+    "projectId": "gl-one",
+    "tracker": "gitlab",
+    "scope": "group/one",
+    "key": "1",
+    "content": "rocket",
+    "reacted": true
+   }
+  },
+  {
+   "tag": "issues.react",
+   "payload": {
+    "projectId": "gl-one",
+    "tracker": "gitlab",
+    "scope": "group/one",
+    "key": "1",
+    "content": "thumbs-up",
+    "reacted": false
+   }
+  },
+  {
+   "tag": "issues.react",
+   "payload": {
+    "projectId": "gl-one",
+    "tracker": "gitlab",
+    "scope": "group/one",
+    "key": "1",
+    "subjectId": "401",
+    "content": "thumbs-up",
+    "reacted": false
+   }
+  },
+  {
+   "tag": "issues.react",
+   "payload": {
+    "projectId": "gl-one",
+    "tracker": "gitlab",
+    "scope": "group/one",
+    "key": "1",
+    "subjectId": "x",
+    "content": "heart",
+    "reacted": true
+   },
+   "expect": "failure",
+   "error": "IssueOperationError"
+  },
+  {
+   "tag": "issues.detail",
+   "payload": {
+    "projectId": "gl-one",
+    "tracker": "gitlab",
+    "scope": "group/one",
+    "key": "3"
+   },
+   "note": "after the writes"
+  },
+  {
+   "tag": "issues.detail",
+   "payload": {
+    "projectId": "gl-one",
+    "tracker": "gitlab",
+    "scope": "group/other",
+    "key": "1"
+   },
+   "expect": "failure",
+   "error": "IssueOperationError",
+   "note": "another project on the host: read through gl-one, and GitLab has none"
+  },
+  {
+   "tag": "issues.comment",
+   "payload": {
+    "projectId": "gl-one",
+    "tracker": "gitlab",
+    "scope": "group/other",
+    "key": "1",
+    "body": "hi"
+   },
+   "expect": "failure",
+   "error": "IssueOperationError",
+   "note": "read-only"
+  },
+  {
+   "sh": "glab-rule err 'api user' 'glab auth login'",
+   "tag": "issues.detail",
+   "payload": {
+    "projectId": "gl-one",
+    "tracker": "gitlab",
+    "scope": "group/one",
+    "key": "1"
+   },
+   "expect": "failure",
+   "error": "IssueUnavailableError",
+   "note": "signed out"
+  },
+  {
+   "sh": "glab-rule err 'issues[?]' '429 Too Many Requests'",
+   "tag": "issues.list",
+   "payload": {
+    "state": "open",
+    "host": "gitlab.com"
+   },
+   "note": "rate limited: the project's error"
+  },
+  {
+   "sh": "rm \"$DIR/bin/glab\"",
+   "tag": "issues.detail",
+   "payload": {
+    "projectId": "gl-one",
+    "tracker": "gitlab",
+    "scope": "group/one",
+    "key": "1"
+   },
+   "expect": "failure",
+   "error": "IssueUnavailableError",
+   "note": "no glab"
+  }
+ ]
+}

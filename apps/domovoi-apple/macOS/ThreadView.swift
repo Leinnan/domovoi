@@ -157,6 +157,7 @@ private struct ThreadContent: View {
             }
             // One per thread: another thread starts at its own end (or where
             // it was read), not with this one's scroll state.
+            WorkLinksStrip(links: thread.links)
             Transcript(core: core, thread: thread, artifactJump: artifactJump)
                 .id(thread.id)
             ApprovalArea(core: core)
@@ -164,7 +165,7 @@ private struct ThreadContent: View {
     }
 }
 
-/// Approvals and questions waiting on the reader, under the transcript.
+/// Approvals, questions and secret requests waiting on the reader, under the transcript.
 private struct ApprovalArea: View {
     @ObservedObject var core: Core
 
@@ -172,6 +173,13 @@ private struct ApprovalArea: View {
         let requests = core.view.pendingRequests
         if !requests.isEmpty {
             ApprovalBar(core: core, requests: requests)
+                .padding(.horizontal, Space.gutter - Space.s)
+                .frame(maxWidth: Space.column)
+                .frame(maxWidth: .infinity)
+        }
+        let secrets = core.view.secretRequests
+        if !secrets.isEmpty {
+            SecretRequestArea(core: core, requests: secrets)
                 .padding(.horizontal, Space.gutter - Space.s)
                 .frame(maxWidth: Space.column)
                 .frame(maxWidth: .infinity)

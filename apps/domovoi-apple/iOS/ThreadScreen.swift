@@ -38,7 +38,7 @@ struct ThreadScreen: View {
     }
 
     private var artifactSheetTrigger: String {
-        "\(core.view.panel.open)|\(core.view.panel.tab)|\(core.view.panel.artifacts.active?.id ?? "")"
+        "\(core.view.panel.open)|\(core.view.panel.tab)|\(core.view.panel.artifacts.active?.id ?? "")|\(core.view.panel.files.artifactPreview?.path ?? "")"
     }
 
     @ToolbarContentBuilder
@@ -144,6 +144,7 @@ struct ThreadScreen: View {
                 }
                 // One per thread (as on the Mac): another thread starts at its
                 // own end (or where it was read), not with this one's scroll state.
+                WorkLinksStrip(links: thread.links)
                 Transcript(core: core, thread: thread, artifactJump: artifactJump)
                     .id(thread.id)
                     .environment(\.openDiff) { open(.diff) }
@@ -175,6 +176,11 @@ struct ThreadScreen: View {
                         .frame(maxWidth: Space.column)
                         .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
                 }
+                if let secrets = thread?.secretRequests, !secrets.isEmpty {
+                    SecretRequestArea(core: core, requests: secrets)
+                        .frame(maxWidth: Space.column)
+                        .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
+                }
                 ForEach(thread?.waitingChildren ?? [], id: \.threadId) { child in
                     WaitingChildBanner(child: child) { open(.thread($0)) }
                         // The composer panel's own inset: their edges line up.
@@ -193,6 +199,7 @@ struct ThreadScreen: View {
                 MobileComposer(core: core).frame(maxWidth: Space.column)
             }
             .animation(.snappy, value: thread?.pendingRequests.map(\.id))
+            .animation(.snappy, value: thread?.secretRequests.map(\.itemId))
             .animation(.snappy, value: thread?.tasks == nil && thread?.plan == nil)
             .animation(.snappy, value: thread?.waitingChildren.map(\.threadId))
         }
@@ -206,7 +213,10 @@ struct ThreadScreen: View {
         .onChange(of: core.view.connection.state) { _, state in
             if state != "connected", thread == nil || thread?.items.isEmpty == true && thread?.loading == true { slow = true }
         }
-        .sheet(isPresented: $artifacts, onDismiss: { core.update(.closeArtifact) }) {
+        .sheet(isPresented: $artifacts, onDismiss: {
+            core.update(.closeArtifact)
+            core.update(.closeArtifactFile)
+        }) {
             if let thread {
                 ArtifactGallery(core: core, thread: thread, close: { artifacts = false }) { item in
                     core.update(.closeFind)

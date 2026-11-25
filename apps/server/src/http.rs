@@ -1,4 +1,13 @@
 //! HTTP routes (t3code `EnvironmentHttpApi` subset) and the RPC WebSocket.
+//!
+//! Domovoi's own, not t3code's: `/health` (the process serves HTTP) and
+//! `/ready` (the database answers and startup recovery has run), both
+//! unauthenticated, for systemd and monitoring. HTTP responses are gzip or
+//! brotli compressed when the client asks (`Accept-Encoding`), except the
+//! RPC socket, webhook URLs and media that is compressed already.
+//!
+//! The RPC socket refuses a client of another orchestration protocol with
+//! HTTP 426 before any authentication, as t3code's `/ws` route does.
 
 #![expect(clippy::disallowed_types, clippy::disallowed_macros, reason = "the MCP route: a JSON-RPC body and its parse-error answer")]
 
@@ -23,6 +32,7 @@ use domovoi_model::typed::{
     RemoteAccessRejection, RequestInvalidRejection, RequestRejection, ScopeRequiredRejection,
 };
 use domovoi_remote::RemotePeer;
+use domovoi_contracts::environment::ORCHESTRATION_PROTOCOL_VERSION;
 
 /// The iroh peer a request came through, as its endpoint id (`None` for TCP).
 type Peer = Option<Extension<RemotePeer>>;
@@ -41,6 +51,8 @@ fn rpc_router() -> Arc<RpcRouter<ConnCtx>> {
 
 pub fn router(state: SharedState) -> Router {
     Router::new()
+        .route("/health", get(health))
+        .route("/ready", get(ready))
         .route("/.well-known/t3/environment", get(environment))
         .route("/api/auth/session", get(auth_session))
         .route("/api/auth/browser-session", post(browser_session))
@@ -56,6 +68,7 @@ pub fn router(state: SharedState) -> Router {
         .route("/api/domovoi/session/end", post(end_session))
         .route("/api/domovoi/push/devices", post(push_register).delete(push_unregister))
         .route("/api/domovoi/push/activities", post(activity_register).delete(activity_unregister))
+        .merge(crate::push_web::routes())
         .route("/api/orchestration/shell", get(shell_snapshot))
         .route("/mcp", post(mcp_post).get(|| async { StatusCode::METHOD_NOT_ALLOWED }).delete(|| async { StatusCode::METHOD_NOT_ALLOWED }))
         .route("/api/observability/v1/traces", post(|| async { StatusCode::NO_CONTENT }))
@@ -73,10 +86,69 @@ pub fn router(state: SharedState) -> Router {
             "/api/attachments/upload/{token}",
             post(attachment_upload).layer(axum::extract::DefaultBodyLimit::max(50 * 1024 * 1024)),
         )
+        // Only the routes above are compressed.
+        .layer(compression())
         .route("/ws", get(ws))
+        .route(crate::preview::tunnel::ROUTE, get(crate::preview::tunnel::handler))
+        .route(crate::preview::stream::ROUTE, get(crate::preview::stream::handler).post(crate::preview::stream::upload))
         .route("/api/hooks/{task}/{token}", hooks_route())
         .layer(axum::middleware::from_fn_with_state(state.clone(), gate_unknown_peers))
         .with_state(state)
+}
+
+/// Media types whose bodies are compressed already (or are opaque bytes),
+/// by prefix: compressing them again costs time and saves nothing.
+const PRECOMPRESSED: &[&str] = &[
+    "audio/",
+    "video/",
+    "font/woff",
+    "application/zip",
+    "application/gzip",
+    "application/x-gzip",
+    "application/zstd",
+    "application/x-7z-compressed",
+    "application/x-bzip2",
+    "application/x-xz",
+    "application/x-rar",
+    "application/pdf",
+    "application/octet-stream",
+];
+
+/// gzip and brotli for responses of 32 bytes or more, when the client
+/// accepts them; never images (but SVG), event streams or `PRECOMPRESSED`.
+fn compression() -> tower_http::compression::CompressionLayer<impl tower_http::compression::Predicate> {
+    use tower_http::compression::{CompressionLayer, DefaultPredicate, Predicate};
+    let not_precompressed = |_: StatusCode, _: axum::http::Version, headers: &HeaderMap, _: &axum::http::Extensions| {
+        let media = headers.get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or_default().to_ascii_lowercase();
+        !PRECOMPRESSED.iter().any(|prefix| media.starts_with(prefix))
+    };
+    CompressionLayer::new().no_deflate().no_zstd().compress_when(DefaultPredicate::new().and(not_precompressed))
+}
+
+/// `/health`: the process is up and serves HTTP.
+async fn health() -> Response {
+    ([(header::CACHE_CONTROL, "no-store")], Json(Health { status: "ok" })).into_response()
+}
+
+/// `/ready`: 200 once the database answers and startup recovery has run, 503 before.
+async fn ready(State(state): State<SharedState>) -> Response {
+    let store = state.store.clone();
+    let database = tokio::task::spawn_blocking(move || store.db().read(|c| c.query_row("SELECT 1", [], |row| row.get::<_, i64>(0))).is_ok())
+        .await
+        .unwrap_or(false);
+    let recovered = crate::orchestration::recovery::recovered();
+    let (code, status) = match (database, recovered) {
+        (true, true) => (StatusCode::OK, "ready"),
+        (false, _) => (StatusCode::SERVICE_UNAVAILABLE, "database_unavailable"),
+        (true, false) => (StatusCode::SERVICE_UNAVAILABLE, "recovering"),
+    };
+    (code, [(header::CACHE_CONTROL, "no-store")], Json(Health { status })).into_response()
+}
+
+/// The body of `/health` and `/ready`.
+#[derive(Serialize)]
+struct Health {
+    status: &'static str,
 }
 
 /// Webhook task URLs and nothing else, for `--hooks-listen`.
@@ -662,6 +734,12 @@ async fn remote_pairing(State(state): State<SharedState>, headers: HeaderMap, pe
         Ok(s) => s,
         Err(r) => return r,
     };
+    // No link for another device where the managed policy allows none (`crate::policy`).
+    let policy = crate::policy::current();
+    if !policy.allows_remote_clients() {
+        let message = policy.refuse_remote_clients(Some("so no link for another device is made".into())).to_string();
+        return (StatusCode::FORBIDDEN, Json(RequestRejection::RemoteAccess(RemoteAccessRejection { message }))).into_response();
+    }
     let body = body.map(|b| b.0).unwrap_or_default();
     let ttl = std::time::Duration::from_secs(body.ttl_minutes.unwrap_or(10).clamp(1, 24 * 60) * 60);
     // A new device gets at most what the session minting the code holds.
@@ -702,7 +780,7 @@ async fn remote_configure(State(state): State<SharedState>, headers: HeaderMap, 
         Err(e) => {
             // What the caller typed is echoed back; why the endpoint failed stays in the log.
             let message = match &e {
-                crate::remote::RemoteError::InvalidRelay(m) => m.clone(),
+                crate::remote::RemoteError::InvalidRelay(m) | crate::remote::RemoteError::Refused(m) => m.clone(),
                 _ => "Remote access could not start. See the server log.".to_owned(),
             };
             (StatusCode::BAD_REQUEST, Json(RequestRejection::RemoteAccess(RemoteAccessRejection { message }))).into_response()
@@ -800,8 +878,16 @@ async fn ws(
     headers: HeaderMap,
     peer: Peer,
     Query(q): Query<HashMap<String, String>>,
-    upgrade: WebSocketUpgrade,
+    upgrade: Result<WebSocketUpgrade, axum::extract::ws::rejection::WebSocketUpgradeRejection>,
 ) -> Response {
+    // t3code checks the protocol first, before the upgrade and any credential.
+    if !compatible_protocol(&q) {
+        return protocol_incompatible();
+    }
+    let upgrade = match upgrade {
+        Ok(upgrade) => upgrade,
+        Err(rejection) => return rejection.into_response(),
+    };
     let session = match q.get("wsTicket") {
         // A ticket was minted over authenticated HTTP; no cookie is involved,
         // so there is no cross-site risk to guard against.
@@ -850,4 +936,31 @@ async fn ws(
         }
         drop(live);
     })
+}
+
+/// t3code `ORCHESTRATION_PROTOCOL_QUERY_PARAM`.
+const ORCHESTRATION_PROTOCOL_QUERY_PARAM: &str = "orchestrationProtocol";
+
+/// t3code `hasCompatibleOrchestrationProtocol`: the socket URL names this
+/// server's orchestration protocol.
+fn compatible_protocol(query: &HashMap<String, String>) -> bool {
+    query.get(ORCHESTRATION_PROTOCOL_QUERY_PARAM).map(String::as_str) == Some(ORCHESTRATION_PROTOCOL_VERSION.to_string().as_str())
+}
+
+/// What t3code's `/ws` answers a client of another protocol (HTTP 426).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProtocolIncompatible {
+    code: &'static str,
+    message: String,
+    orchestration_protocol_version: u32,
+}
+
+fn protocol_incompatible() -> Response {
+    let body = ProtocolIncompatible {
+        code: "orchestration_protocol_incompatible",
+        message: format!("Update this client to one that supports orchestration protocol {ORCHESTRATION_PROTOCOL_VERSION}."),
+        orchestration_protocol_version: ORCHESTRATION_PROTOCOL_VERSION,
+    };
+    (StatusCode::UPGRADE_REQUIRED, Json(body)).into_response()
 }

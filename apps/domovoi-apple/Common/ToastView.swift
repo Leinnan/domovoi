@@ -82,7 +82,7 @@ struct ToastCapsule: View {
                 // Long enough to read; one with a button long enough to use it.
                 let seconds = !toast.actionLabel.isEmpty ? 7.0 : toast.kind == "error" ? 6.0 : 3.0
                 try? await Task.sleep(for: .seconds(seconds + Double(toast.message.count) / 40))
-                if !Task.isCancelled, core.view.toast?.id == toast.id { core.update(.dismissToast) }
+                if !Task.isCancelled { core.dismissToast(toast.id) }
             }
             .id(toast.id)
         }

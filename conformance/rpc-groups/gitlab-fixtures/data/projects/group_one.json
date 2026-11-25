@@ -1,0 +1,840 @@
+{
+ "id": 4,
+ "path_with_namespace": "group/one",
+ "merge_method": "merge",
+ "squash_option": "default_off",
+ "enterprise": false,
+ "canAdmin": true,
+ "labels": [
+  {
+   "name": "bug",
+   "color": "#d9534f",
+   "description": "Something is broken",
+   "archived": false
+  },
+  {
+   "name": "ui",
+   "color": "#428bca",
+   "description": null,
+   "archived": false
+  },
+  {
+   "name": "old",
+   "color": "#cccccc",
+   "description": null,
+   "archived": true
+  }
+ ],
+ "users": [
+  {
+   "id": 101,
+   "username": "me",
+   "name": "Me",
+   "avatar_url": "https://gitlab.com/uploads/me.png"
+  },
+  {
+   "id": 2,
+   "username": "rev",
+   "name": "Rev Iewer",
+   "avatar_url": null
+  },
+  {
+   "id": 3,
+   "username": "ann",
+   "name": "Ann",
+   "avatar_url": null
+  },
+  {
+   "id": 4,
+   "username": "build-bot",
+   "name": "Build Bot",
+   "avatar_url": null,
+   "bot": true
+  }
+ ],
+ "files": {
+  "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": {
+   "calc.py": "def add(a, b):\n    return a + b\n"
+  },
+  "1111111111111111111111111111111111111111": {
+   "calc.py": "def add(a, b):\n    return a + b\n\n\ndef sub(a, b):\n    return a - b\n",
+   "tests/test_calc.py": "from calc import sub\n"
+  },
+  "2222222222222222222222222222222222222222": {
+   "calc.py": "def add(a, b):\n    return a + b\n\n\ndef sub(a, b):\n    return a - b\n"
+  }
+ },
+ "commits": {
+  "2222222222222222222222222222222222222222": {
+   "id": "2222222222222222222222222222222222222222",
+   "parent_ids": [
+    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+   ]
+  },
+  "1111111111111111111111111111111111111111": {
+   "id": "1111111111111111111111111111111111111111",
+   "parent_ids": [
+    "2222222222222222222222222222222222222222"
+   ]
+  }
+ },
+ "mergeRequests": [
+  {
+   "iid": 1,
+   "id": 1001,
+   "project_id": 4,
+   "source_project_id": 4,
+   "target_project_id": 4,
+   "title": "Add subtraction",
+   "description": "Adds `sub`.\n\nCloses #1",
+   "web_url": "https://gitlab.com/group/one/-/merge_requests/1",
+   "state": "opened",
+   "draft": false,
+   "author": {
+    "id": 3,
+    "username": "ann",
+    "name": "Ann",
+    "avatar_url": null
+   },
+   "source_branch": "feature-1",
+   "target_branch": "main",
+   "sha": "1111111111111111111111111111111111111111",
+   "merge_status": "can_be_merged",
+   "detailed_merge_status": "mergeable",
+   "has_conflicts": false,
+   "created_at": "2026-01-01T10:00:00Z",
+   "updated_at": "2026-01-11T10:00:00Z",
+   "merged_at": null,
+   "closed_at": null,
+   "reviewers": [
+    {
+     "id": 2,
+     "username": "rev",
+     "name": "Rev Iewer",
+     "avatar_url": null
+    },
+    {
+     "id": 101,
+     "username": "me",
+     "name": "Me",
+     "avatar_url": "https://gitlab.com/uploads/me.png"
+    }
+   ],
+   "labels": [
+    {
+     "name": "bug",
+     "color": "#d9534f",
+     "description": "Something is broken"
+    }
+   ],
+   "changes_count": "2",
+   "head_pipeline": {
+    "id": 90,
+    "project_id": 4,
+    "status": "failed",
+    "web_url": "https://gitlab.com/group/one/-/pipelines/90",
+    "source": "push"
+   },
+   "user": {
+    "can_merge": true
+   },
+   "merge_when_pipeline_succeeds": false,
+   "squash_on_merge": false,
+   "allow_collaboration": null,
+   "diff_refs": {
+    "base_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "head_sha": "1111111111111111111111111111111111111111",
+    "start_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+   },
+   "stats": {
+    "additions": 5,
+    "deletions": 1
+   },
+   "diverged_commits_count": 1,
+   "files": [
+    {
+     "path": "calc.py",
+     "additions": 4,
+     "deletions": 1
+    },
+    {
+     "path": "tests/test_calc.py",
+     "additions": 1,
+     "deletions": 0
+    }
+   ],
+   "approved": false,
+   "approvedBy": [],
+   "reviewStates": {
+    "rev": "REQUESTED_CHANGES"
+   },
+   "stages": {
+    "path": "/group/one/-/pipelines/90",
+    "stages": {
+     "pageInfo": {
+      "hasNextPage": false
+     },
+     "nodes": [
+      {
+       "name": "build",
+       "status": "success",
+       "detailedStatus": {
+        "label": "passed",
+        "detailsPath": "/group/one/-/pipelines/90/builds"
+       },
+       "jobs": {
+        "pageInfo": {
+         "hasNextPage": false
+        },
+        "nodes": [
+         {
+          "name": "compile",
+          "status": "SUCCESS",
+          "allowFailure": false,
+          "retried": false,
+          "webPath": "/group/one/-/jobs/1",
+          "detailedStatus": {
+           "label": "passed"
+          },
+          "downstreamPipeline": null
+         }
+        ]
+       }
+      },
+      {
+       "name": "test",
+       "status": "failed",
+       "detailedStatus": {
+        "label": "failed",
+        "detailsPath": "/group/one/-/pipelines/90/test"
+       },
+       "jobs": {
+        "pageInfo": {
+         "hasNextPage": false
+        },
+        "nodes": [
+         {
+          "name": "unit",
+          "status": "FAILED",
+          "allowFailure": false,
+          "retried": false,
+          "webPath": "/group/one/-/jobs/2",
+          "detailedStatus": {
+           "label": "failed"
+          },
+          "downstreamPipeline": null
+         },
+         {
+          "name": "lint",
+          "status": "FAILED",
+          "allowFailure": true,
+          "retried": false,
+          "webPath": "/group/one/-/jobs/3",
+          "detailedStatus": {
+           "label": "failed"
+          },
+          "downstreamPipeline": null
+         }
+        ]
+       }
+      }
+     ]
+    }
+   },
+   "notes": [
+    {
+     "id": 301,
+     "body": "Thanks, a first look.",
+     "author": {
+      "id": 2,
+      "username": "rev",
+      "name": "Rev Iewer",
+      "avatar_url": null
+     },
+     "created_at": "2026-01-12T09:00:00Z",
+     "system": false,
+     "award_emoji": [
+      {
+       "id": 801,
+       "name": "heart",
+       "user": {
+        "username": "me"
+       }
+      }
+     ]
+    },
+    {
+     "id": 302,
+     "body": "added 1 commit",
+     "author": {
+      "id": 3,
+      "username": "ann",
+      "name": "Ann",
+      "avatar_url": null
+     },
+     "created_at": "2026-01-12T10:00:00Z",
+     "system": true
+    },
+    {
+     "id": 303,
+     "body": "Nit: name it `subtract`.",
+     "author": {
+      "id": 2,
+      "username": "rev",
+      "name": "Rev Iewer",
+      "avatar_url": null
+     },
+     "created_at": "2026-01-12T11:00:00Z",
+     "system": false,
+     "type": "DiffNote",
+     "position": {
+      "new_path": "calc.py",
+      "old_path": "calc.py"
+     }
+    },
+    {
+     "id": 304,
+     "body": "Pipeline ran.",
+     "author": {
+      "id": 4,
+      "username": "build-bot",
+      "name": "Build Bot",
+      "avatar_url": null,
+      "bot": true
+     },
+     "created_at": "2026-01-12T12:00:00Z",
+     "system": false,
+     "last_edited_at": "2026-01-12T12:30:00Z",
+     "last_edited_by": {
+      "username": "build-bot"
+     }
+    }
+   ],
+   "discussions": [
+    {
+     "id": "d-line",
+     "notes": [
+      {
+       "id": 303,
+       "body": "Nit: name it `subtract`.",
+       "author": {
+        "id": 2,
+        "username": "rev",
+        "name": "Rev Iewer",
+        "avatar_url": null
+       },
+       "created_at": "2026-01-12T11:00:00Z",
+       "resolvable": true,
+       "resolved": false,
+       "position": {
+        "position_type": "text",
+        "new_path": "calc.py",
+        "old_path": "calc.py",
+        "new_line": 5,
+        "old_line": null,
+        "base_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "start_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "head_sha": "2222222222222222222222222222222222222222"
+       }
+      },
+      {
+       "id": 305,
+       "body": "Will do.",
+       "author": {
+        "id": 3,
+        "username": "ann",
+        "name": "Ann",
+        "avatar_url": null
+       },
+       "created_at": "2026-01-12T11:30:00Z",
+       "resolvable": true,
+       "resolved": false
+      }
+     ]
+    },
+    {
+     "id": "d-overview",
+     "notes": [
+      {
+       "id": 306,
+       "body": "Please add a changelog entry.",
+       "author": {
+        "id": 2,
+        "username": "rev",
+        "name": "Rev Iewer",
+        "avatar_url": null
+       },
+       "created_at": "2026-01-12T13:00:00Z",
+       "resolvable": true,
+       "resolved": false
+      }
+     ]
+    },
+    {
+     "id": "d-note",
+     "notes": [
+      {
+       "id": 301,
+       "body": "Thanks, a first look.",
+       "author": {
+        "id": 2,
+        "username": "rev",
+        "name": "Rev Iewer",
+        "avatar_url": null
+       },
+       "created_at": "2026-01-12T09:00:00Z",
+       "resolvable": false
+      }
+     ]
+    },
+    {
+     "id": "d-system",
+     "notes": [
+      {
+       "id": 302,
+       "body": "added 1 commit",
+       "author": {
+        "id": 3,
+        "username": "ann",
+        "name": "Ann",
+        "avatar_url": null
+       },
+       "created_at": "2026-01-12T10:00:00Z",
+       "system": true
+      }
+     ]
+    }
+   ],
+   "commits": [
+    {
+     "id": "1111111111111111111111111111111111111111",
+     "short_id": "1111111",
+     "title": "Add a test",
+     "committed_date": "2026-01-11T09:00:00Z",
+     "author_name": "Ann",
+     "author_email": "ann@example.com",
+     "stats": {
+      "additions": 1,
+      "deletions": 0
+     }
+    },
+    {
+     "id": "2222222222222222222222222222222222222222",
+     "short_id": "2222222",
+     "title": "Add sub",
+     "committed_date": "2026-01-10T09:00:00Z",
+     "author_name": "Ann",
+     "author_email": "ann@example.com",
+     "stats": {
+      "additions": 4,
+      "deletions": 1
+     }
+    }
+   ],
+   "award_emoji": [
+    {
+     "id": 802,
+     "name": "thumbsup",
+     "user": {
+      "username": "rev"
+     }
+    },
+    {
+     "id": 803,
+     "name": "rocket",
+     "user": {
+      "username": "me"
+     }
+    }
+   ]
+  },
+  {
+   "iid": 2,
+   "id": 1002,
+   "project_id": 4,
+   "source_project_id": 9,
+   "target_project_id": 4,
+   "title": "Draft: Document the calculator",
+   "description": "",
+   "web_url": "https://gitlab.com/group/one/-/merge_requests/2",
+   "state": "opened",
+   "draft": true,
+   "author": {
+    "id": 101,
+    "username": "me",
+    "name": "Me",
+    "avatar_url": "https://gitlab.com/uploads/me.png"
+   },
+   "source_branch": "feature-2",
+   "target_branch": "main",
+   "sha": "1111111111111111111111111111111111111111",
+   "merge_status": "checking",
+   "detailed_merge_status": "need_rebase",
+   "has_conflicts": false,
+   "created_at": "2026-01-02T10:00:00Z",
+   "updated_at": "2026-01-12T10:00:00Z",
+   "merged_at": null,
+   "closed_at": null,
+   "reviewers": [
+    {
+     "id": 2,
+     "username": "rev",
+     "name": "Rev Iewer",
+     "avatar_url": null
+    }
+   ],
+   "labels": [
+    "ui"
+   ],
+   "changes_count": "1",
+   "head_pipeline": null,
+   "user": {
+    "can_merge": true
+   },
+   "merge_when_pipeline_succeeds": false,
+   "squash_on_merge": false,
+   "allow_collaboration": true,
+   "diff_refs": {
+    "base_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "head_sha": "1111111111111111111111111111111111111111",
+    "start_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+   },
+   "stats": {
+    "additions": 10,
+    "deletions": 0
+   },
+   "approved": true,
+   "approvedBy": [
+    "rev"
+   ]
+  },
+  {
+   "iid": 3,
+   "id": 1003,
+   "project_id": 4,
+   "source_project_id": 4,
+   "target_project_id": 4,
+   "title": "Fix rounding",
+   "description": "",
+   "web_url": "https://gitlab.com/group/one/-/merge_requests/3",
+   "state": "merged",
+   "draft": false,
+   "author": {
+    "id": 3,
+    "username": "ann",
+    "name": "Ann",
+    "avatar_url": null
+   },
+   "source_branch": "feature-3",
+   "target_branch": "main",
+   "sha": "1111111111111111111111111111111111111111",
+   "merge_status": "can_be_merged",
+   "detailed_merge_status": "mergeable",
+   "has_conflicts": false,
+   "created_at": "2026-01-03T10:00:00Z",
+   "updated_at": "2026-01-13T10:00:00Z",
+   "merged_at": "2026-01-20T10:00:00Z",
+   "closed_at": null,
+   "reviewers": [],
+   "labels": [],
+   "changes_count": "1",
+   "head_pipeline": {
+    "id": 91,
+    "project_id": 4,
+    "status": "success",
+    "web_url": "https://gitlab.com/group/one/-/pipelines/91",
+    "source": "push"
+   },
+   "user": {
+    "can_merge": true
+   },
+   "merge_when_pipeline_succeeds": false,
+   "squash_on_merge": false,
+   "allow_collaboration": null,
+   "diff_refs": {
+    "base_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "head_sha": "1111111111111111111111111111111111111111",
+    "start_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+   },
+   "stats": {
+    "additions": 1,
+    "deletions": 0
+   },
+   "approved": true,
+   "approvedBy": [
+    "rev"
+   ]
+  },
+  {
+   "iid": 4,
+   "id": 1004,
+   "project_id": 4,
+   "source_project_id": 4,
+   "target_project_id": 4,
+   "title": "Rejected idea",
+   "description": "",
+   "web_url": "https://gitlab.com/group/one/-/merge_requests/4",
+   "state": "closed",
+   "draft": false,
+   "author": {
+    "id": 2,
+    "username": "rev",
+    "name": "Rev Iewer",
+    "avatar_url": null
+   },
+   "source_branch": "feature-4",
+   "target_branch": "main",
+   "sha": "1111111111111111111111111111111111111111",
+   "merge_status": "can_be_merged",
+   "detailed_merge_status": "mergeable",
+   "has_conflicts": false,
+   "created_at": "2026-01-04T10:00:00Z",
+   "updated_at": "2026-01-14T10:00:00Z",
+   "merged_at": null,
+   "closed_at": "2026-01-21T10:00:00Z",
+   "reviewers": [],
+   "labels": [],
+   "changes_count": "1",
+   "head_pipeline": null,
+   "user": {
+    "can_merge": false
+   },
+   "merge_when_pipeline_succeeds": false,
+   "squash_on_merge": false,
+   "allow_collaboration": null,
+   "diff_refs": {
+    "base_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "head_sha": "1111111111111111111111111111111111111111",
+    "start_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+   },
+   "stats": {
+    "additions": 1,
+    "deletions": 0
+   }
+  }
+ ],
+ "issues": [
+  {
+   "iid": 1,
+   "title": "Crash on divide by zero",
+   "description": "Dividing by zero crashes.",
+   "state": "opened",
+   "web_url": "https://gitlab.com/group/one/-/issues/1",
+   "author": {
+    "id": 3,
+    "username": "ann",
+    "name": "Ann",
+    "avatar_url": null
+   },
+   "assignees": [
+    {
+     "id": 101,
+     "username": "me",
+     "name": "Me",
+     "avatar_url": "https://gitlab.com/uploads/me.png"
+    }
+   ],
+   "labels": [
+    {
+     "name": "bug",
+     "color": "#d9534f",
+     "description": "Something is broken"
+    }
+   ],
+   "created_at": "2026-01-02T00:00:00Z",
+   "updated_at": "2026-01-15T00:00:00Z",
+   "closed_at": null,
+   "user_notes_count": 1,
+   "notes": [
+    {
+     "id": 401,
+     "body": "I can reproduce this.",
+     "author": {
+      "id": 2,
+      "username": "rev",
+      "name": "Rev Iewer",
+      "avatar_url": null
+     },
+     "created_at": "2026-01-03T00:00:00Z",
+     "system": false,
+     "award_emoji": [
+      {
+       "id": 901,
+       "name": "thumbsup",
+       "user": {
+        "username": "me"
+       }
+      }
+     ]
+    },
+    {
+     "id": 402,
+     "body": "assigned to @me",
+     "author": {
+      "id": 3,
+      "username": "ann",
+      "name": "Ann",
+      "avatar_url": null
+     },
+     "created_at": "2026-01-03T01:00:00Z",
+     "system": true
+    },
+    {
+     "id": 403,
+     "body": "mentioned in merge request !1",
+     "author": {
+      "id": 3,
+      "username": "ann",
+      "name": "Ann",
+      "avatar_url": null
+     },
+     "created_at": "2026-01-04T00:00:00Z",
+     "system": true
+    },
+    {
+     "id": 404,
+     "body": "changed title from **{-Crash-}** to **{+Crash on divide by zero+}**",
+     "author": {
+      "id": 3,
+      "username": "ann",
+      "name": "Ann",
+      "avatar_url": null
+     },
+     "created_at": "2026-01-04T01:00:00Z",
+     "system": true
+    }
+   ],
+   "label_events": [
+    {
+     "id": 71,
+     "action": "add",
+     "created_at": "2026-01-02T01:00:00Z",
+     "user": {
+      "id": 3,
+      "username": "ann",
+      "name": "Ann",
+      "avatar_url": null
+     },
+     "label": {
+      "id": 1,
+      "name": "bug"
+     }
+    }
+   ],
+   "closed_by": [
+    {
+     "iid": 1,
+     "title": "Add subtraction",
+     "web_url": "https://gitlab.com/group/one/-/merge_requests/1",
+     "state": "opened",
+     "draft": false,
+     "references": {
+      "full": "group/one!1"
+     }
+    }
+   ],
+   "related_merge_requests": [
+    {
+     "iid": 1,
+     "title": "Add subtraction",
+     "web_url": "https://gitlab.com/group/one/-/merge_requests/1",
+     "state": "opened",
+     "references": {
+      "full": "group/one!1"
+     }
+    },
+    {
+     "iid": 3,
+     "title": "Fix rounding",
+     "web_url": "https://gitlab.com/group/one/-/merge_requests/3",
+     "state": "merged",
+     "references": {
+      "full": "group/one!3"
+     }
+    }
+   ],
+   "award_emoji": [
+    {
+     "id": 902,
+     "name": "eyes",
+     "user": {
+      "username": "rev"
+     }
+    },
+    {
+     "id": 903,
+     "name": "thumbsup",
+     "user": {
+      "username": "me"
+     }
+    }
+   ]
+  },
+  {
+   "iid": 2,
+   "title": "Old bug",
+   "description": "",
+   "state": "closed",
+   "web_url": "https://gitlab.com/group/one/-/issues/2",
+   "author": {
+    "id": 2,
+    "username": "rev",
+    "name": "Rev Iewer",
+    "avatar_url": null
+   },
+   "assignees": [],
+   "labels": [
+    "bug"
+   ],
+   "created_at": "2025-12-01T00:00:00Z",
+   "updated_at": "2026-01-05T00:00:00Z",
+   "closed_at": "2026-01-05T00:00:00Z",
+   "user_notes_count": 120,
+   "synthetic_notes": 120
+  },
+  {
+   "iid": 3,
+   "title": "Dark mode",
+   "description": "Please add a dark mode.",
+   "state": "opened",
+   "web_url": "https://gitlab.com/group/one/-/issues/3",
+   "author": {
+    "id": 101,
+    "username": "me",
+    "name": "Me",
+    "avatar_url": "https://gitlab.com/uploads/me.png"
+   },
+   "assignees": [
+    {
+     "id": 2,
+     "username": "rev",
+     "name": "Rev Iewer",
+     "avatar_url": null
+    }
+   ],
+   "labels": [
+    {
+     "name": "ui",
+     "color": "#428bca",
+     "description": null
+    }
+   ],
+   "created_at": "2026-01-10T00:00:00Z",
+   "updated_at": "2026-01-11T00:00:00Z",
+   "closed_at": null,
+   "user_notes_count": 0
+  }
+ ],
+ "templates": [
+  {
+   "key": "Bug",
+   "name": "Bug",
+   "content": "## Steps to reproduce\n\n## What happened\n"
+  },
+  {
+   "key": "Feature request",
+   "name": "Feature request",
+   "content": "## The idea\n"
+  }
+ ]
+}

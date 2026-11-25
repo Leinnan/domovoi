@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "organization": "Acme Corp",
+  "supportUrl": "https://help.acme.test",
+  "settings": {
+    "enableAgentBrowserAccess": { "value": false, "locked": true },
+    "storageCleanup.logsAfterDays": { "value": 14, "locked": true },
+    "branchNamePrefix": { "value": "acme", "locked": false }
+  },
+  "limits": {
+    "clients": ["local-browser"],
+    "webhookTasks": false,
+    "previewTunnel": false,
+    "providers": { "allowedDrivers": ["codex", "claudeAgent"] },
+    "updates": { "mode": "off", "feedUrl": "https://mirror.acme.test/t3code" }
+  }
+}

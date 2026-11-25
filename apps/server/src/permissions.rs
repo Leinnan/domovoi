@@ -85,7 +85,7 @@ fn intern(p: &str) -> &'static str {
 }
 
 /// Older clients only know the original scope names (`authScopeRequiredResponse`).
-fn legacy_parent(permission: &str) -> &str {
+pub(crate) fn legacy_parent(permission: &str) -> &str {
     match permission {
         "filesystem:read" | "diagnostics:read" => "orchestration:read",
         "settings:write" | "providers:manage" | "environment:maintain" | "preview:operate"
@@ -180,7 +180,7 @@ mod tests {
 
     #[test]
     fn table_covers_every_t3code_method() {
-        assert_eq!(domovoi_contracts::defaults::rpc_permissions().len(), 220);
+        assert_eq!(domovoi_contracts::defaults::rpc_permissions().len(), 235);
     }
 
     #[test]

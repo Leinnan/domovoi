@@ -85,6 +85,7 @@ impl Orchestrator {
             worktree_path,
             linked_pull_request: None,
             pull_requests: Some(vec![]),
+            issues: None,
             branch_pull_request: None,
             active_provider_thread_id: None,
             history_origin: None,

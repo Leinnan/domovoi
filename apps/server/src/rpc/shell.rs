@@ -159,7 +159,7 @@ fn same_apart_from_updated_at(a: &ThreadShell, b: &ThreadShell) -> bool {
     }
     same!(
         created_by, creation_source, id, project_id, title, provider_instance_id, model_selection, runtime_mode, interaction_mode,
-        branch, worktree_path, linked_pull_request, pull_requests, branch_pull_request, lineage, forked_from,
+        branch, worktree_path, linked_pull_request, pull_requests, issues, branch_pull_request, lineage, forked_from,
         active_provider_thread_id, history_origin, link_origin, delegated_from, latest_run_id, latest_run_requested_at,
         latest_run_started_at, latest_run_completed_at, latest_run_stop_requested, latest_run_background_wake, active_run_id,
         activity_run_started_at, activity_run_status, blocked_on_thread_wait, status, last_error, last_error_class, last_error_code,
@@ -603,6 +603,10 @@ async fn mutate(ctx: Arc<ConnCtx>, m: ProjectMutation) -> Result<ProjectRecord, 
     }
 }
 
+/// Commands only the server dispatches (t3code `OrchestrationV2InternalCommand`)
+/// that Domovoi carries out, so a client must not reach them.
+const SERVER_ONLY_COMMANDS: [&str; 2] = ["secret_request.record", "link_request.record"];
+
 /// The command a client sent, decoded: the one place its JSON is read. One
 /// that is not a command (no id, no type, or a field its type does not
 /// allow) is refused as a command is, so the client is told which.
@@ -612,6 +616,8 @@ fn decode_command(input: Value) -> Result<Command, DispatchFailure> {
     let refusal = match (&command_id, &command_type) {
         (None, _) => Refusal::NoCommandId,
         (Some(_), None) => Refusal::NoCommandType,
+        // Server-only cards: no client may mark a secret saved without the value stored.
+        (Some(_), Some(command_type)) if SERVER_ONLY_COMMANDS.contains(&command_type.as_str()) => Refusal::Unsupported(command_type.clone()),
         (Some(_), Some(command_type)) => match Command::from_value(input) {
             Ok(command) => return Ok(command),
             Err(e) => Refusal::Malformed { command_type: command_type.clone(), reason: e.to_string() },

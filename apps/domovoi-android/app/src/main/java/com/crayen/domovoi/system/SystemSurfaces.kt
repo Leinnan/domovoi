@@ -33,12 +33,12 @@ class SystemSurfaces(private val context: Context, private val core: Core) {
 
     fun start() {
         scope.launch {
-            combine(core.view.sidebar, core.view.connection) { s, c -> s to c.environmentLabel }
+            combine(core.view.sidebar, core.view.connection) { s, c -> Triple(s, c.environmentLabel, c.activity.attention) }
                 .distinctUntilChanged()
-                .collect { (sidebar, server) ->
+                .collect { (sidebar, server, attention) ->
                     // A turn under way while the app is in front: the service keeps it going if the user leaves.
                     if (core.foreground && LiveTurnService.live(sidebar.surfaceThreads).isNotEmpty()) LiveTurnService.start(context)
-                    writeSnapshot(sidebar, server)
+                    writeSnapshot(sidebar, server, attention.toInt())
                 }
         }
     }
@@ -66,12 +66,13 @@ class SystemSurfaces(private val context: Context, private val core: Core) {
         runCatching { ShortcutManagerCompat.setDynamicShortcuts(context, shortcuts) }
     }
 
-    private suspend fun writeSnapshot(sidebar: SidebarView, server: String) {
+    /** What the widget shows: the server, how many threads wait on the user, and the threads. */
+    private suspend fun writeSnapshot(sidebar: SidebarView, server: String, attention: Int) {
         val threads = JSONArray()
         sidebar.surfaceThreads.take(8).forEach { t ->
             threads.put(JSONObject().put("id", t.id).put("title", t.title).put("project", t.projectTitle).put("status", t.status).put("unread", t.unread))
         }
-        val json = JSONObject().put("server", server).put("threads", threads).toString()
+        val json = JSONObject().put("server", server).put("attention", attention).put("threads", threads).toString()
         if (json == lastSnapshot) return
         lastSnapshot = json
         withContext(Dispatchers.IO) { snapshotFile(context).writeText(json) }

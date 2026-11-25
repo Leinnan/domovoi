@@ -2,6 +2,7 @@
 //! [`turn::Turn`]. [`Host`] implements the orchestrator's `ProviderHost`.
 
 pub mod acp;
+pub mod acp_terminals;
 pub mod claude;
 pub mod codex;
 pub mod opencode;
@@ -53,6 +54,10 @@ pub struct TurnInput {
     /// A native fork for the run's first turn: the source conversation (Claude
     /// session or Codex thread) and where in it (Claude message / Codex turn).
     pub fork: Option<(String, Option<String>)>,
+    /// With `fork` of an OpenCode session: the prompt of the source's next run
+    /// after the fork point, which OpenCode's fork copies history before;
+    /// `None` to copy all of it.
+    pub fork_before: Option<String>,
     /// The thread the turn is for (its agent's MCP session).
     pub thread_id: String,
     /// The thread's title (pi names its session after it).
@@ -306,6 +311,14 @@ impl Host {
         Ok(s)
     }
 
+    /// Reads the OpenCode workspace's usage limits, from the `opencode serve`
+    /// already running (none is started for this).
+    pub async fn read_opencode_limits(&self) {
+        let Some(server) = self.opencode.lock().await.clone() else { return };
+        let directory = std::env::current_dir().map(|d| d.to_string_lossy().into_owned()).unwrap_or_else(|_| "/".to_owned());
+        server.read_usage_limits(crate::providers::OPENCODE, &directory).await;
+    }
+
     fn input_for(&self, thread_id: &str, run: &Run) -> Result<TurnInput, String> {
         let store = self.orch.store();
         let thread = store.app_thread(thread_id).map_err(|e| e.to_string())?.ok_or("unknown thread")?;
@@ -320,16 +333,21 @@ impl Host {
         {
             text = format!("{}{text}", handoff.summary_text);
         }
-        let fork = outline
+        let transfer = outline
             .context_transfers
             .iter()
-            .find(|t| t.target_run_id.as_ref() == Some(&run.id) && matches!(t.resolution, Some(ContextTransferResolution::NativeFork { .. })))
-            .and_then(|t| match &t.resolution {
-                Some(ContextTransferResolution::NativeFork { provider_thread_ref }) => {
-                    Some((provider_thread_ref.native_id.clone()?, t.source_point.provider_turn_ref.as_ref().and_then(|turn| turn.native_id.clone())))
-                }
-                _ => None,
-            });
+            .find(|t| t.target_run_id.as_ref() == Some(&run.id) && matches!(t.resolution, Some(ContextTransferResolution::NativeFork { .. })));
+        let fork = transfer.and_then(|t| match &t.resolution {
+            Some(ContextTransferResolution::NativeFork { provider_thread_ref }) => {
+                Some((provider_thread_ref.native_id.clone()?, t.source_point.provider_turn_ref.as_ref().and_then(|turn| turn.native_id.clone())))
+            }
+            _ => None,
+        });
+        let fork_before = transfer.filter(|_| fork.is_some()).and_then(|t| {
+            let source = store.thread_outline(t.source_thread_id.as_str()).ok()?;
+            let at = source.runs.iter().find(|r| Some(&r.id) == t.source_point.run_id.as_ref())?;
+            native_turn_after(&source, at.ordinal, "opencode", at.provider_thread_id.as_ref(), opencode::is_prompt_id)
+        });
         let images = attachment_files(&self.userdata, attachments);
         let files = typed_file_attachments(&self.userdata, attachments);
         let cwd = self.thread_cwd(thread_id)?;
@@ -344,6 +362,7 @@ impl Host {
             claude_binary: String::new(),
             claude_artifacts: false,
             fork,
+            fork_before,
             thread_id: thread_id.to_owned(),
             title: Some(thread.title.clone()),
         })
@@ -451,6 +470,13 @@ pub fn attachment_files(userdata: &std::path::Path, attachments: &[ChatAttachmen
 
 /// The non-image files a message's attachments were uploaded as (by
 /// `attachments::store_upload`), those that exist: (name, path).
+/// Extracts the text of every attached document that has none yet (`crate::document_text`).
+async fn ensure_document_text(files: &[(String, PathBuf)]) {
+    for (_, path) in files {
+        crate::document_text::ensure(path).await;
+    }
+}
+
 pub fn file_attachments(userdata: &std::path::Path, attachments: &[ChatAttachment]) -> Vec<(String, PathBuf)> {
     attachments
         .iter()
@@ -493,6 +519,10 @@ pub fn with_attached_files(text: &str, files: &[(String, PathBuf)]) -> String {
     for (name, path) in files {
         let shown = path.to_string_lossy();
         out.push_str(&format!("\nAttached file {}: {}", quote(name), quote(&shown)));
+        // A document's text, extracted to a sidecar file (t3code names it the same way).
+        if let Some(extracted) = crate::document_text::extracted_text_path(path) {
+            out.push_str(&format!(" (text extracted to: {})", quote(&extracted.to_string_lossy())));
+        }
         let small = std::fs::metadata(path).is_ok_and(|m| m.len() <= INLINE_FILE_MAX);
         if let Some(content) = small.then(|| std::fs::read(path).ok()).flatten().and_then(|b| String::from_utf8(b).ok()).filter(|c| !c.contains('\0')) {
             let fence = if content.contains("```") { "~~~~" } else { "```" };
@@ -507,6 +537,14 @@ impl ProviderHost for Host {
     async fn start_turn(&self, thread_id: &str, run_id: &str) -> Result<(), ProviderError> {
         let store = self.orch.store().clone();
         let turn = turn::Turn::begin(store, thread_id, run_id).ok_or("The run or its provider thread is missing.")?;
+        // The managed policy's provider allow-list (`crate::policy`).
+        if let Some(reason) = crate::policy::current().disallowed_driver_reason(&turn.driver) {
+            return Err(reason.into());
+        }
+        // Documents attached to the message have their text extracted before the prompt names it.
+        if let Ok(Some(message)) = self.orch.store().record::<ConversationMessage>(thread_id, turn.run.user_message_id.as_str()) {
+            ensure_document_text(&file_attachments(&self.userdata, &message.attachments)).await;
+        }
         let mut input = self.input_for(thread_id, &turn.run)?;
         let driver = ProviderDriver::parse(&turn.driver);
         if driver == Some(ProviderDriver::ClaudeAgent) {
@@ -574,7 +612,7 @@ impl ProviderHost for Host {
                     }
                 });
             }
-            Some(ProviderDriver::AcpRegistry | ProviderDriver::Antigravity) => {
+            Some(d) if d.is_acp() => {
                 let session = self.acp_session(&thread_id, &turn, &input).await?;
                 registration.hand_over();
                 let (host, tid) = (this.clone(), thread_id.clone());
@@ -588,7 +626,7 @@ impl ProviderHost for Host {
                     }
                 });
             }
-            None => return Err(format!("Provider {} is not supported by domovoi-server yet.", turn.driver).into()),
+            Some(_) | None => return Err(format!("Provider {} is not supported by domovoi-server yet.", turn.driver).into()),
         }
         Ok(())
     }
@@ -599,7 +637,9 @@ impl ProviderHost for Host {
 
     async fn steer(&self, thread_id: &str, run_id: &str, message_id: &str) -> Result<(), ProviderError> {
         let message = self.orch.store().record::<ConversationMessage>(thread_id, message_id).map_err(|e| e.to_string())?.ok_or("unknown message")?;
-        let text = with_attached_files(&message.text, &file_attachments(&self.userdata, &message.attachments));
+        let files = file_attachments(&self.userdata, &message.attachments);
+        ensure_document_text(&files).await;
+        let text = with_attached_files(&message.text, &files);
         let images = attachment_files(&self.userdata, &message.attachments);
         let (reply, rx) = tokio::sync::oneshot::channel();
         self.send_control(thread_id, Some(run_id), Control::Steer { text, images, reply }).await?;
@@ -703,10 +743,18 @@ impl ProviderHost for Host {
                 let o = crate::orchestration::events::Origin { driver: Some("pi".into()), provider_instance_id: Some(pt.provider_instance_id.as_str().to_owned()), command_id: None };
                 store.append_event(thread_id, pt.updated(), &o).map_err(|e| e.to_string())?;
             }
+            // OpenCode reverts its session to before the first undone turn's
+            // prompt (t3code `OpenCode2Adapter.rollbackThread`); files are the checkpoint's.
+            Some("opencode") => {
+                let Some(provider_thread) = provider_thread else { return Ok(()) };
+                let Some(session) = provider_thread.native_thread_ref.as_ref().and_then(|n| n.native_id.clone()) else { return Ok(()) };
+                let Some(cut) = native_turn_after(&outline, after, "opencode", Some(&provider_thread.id), opencode::is_prompt_id) else { return Ok(()) };
+                self.opencode().await?.rollback(&session, &cut).await?;
+            }
             // ACP has no truncation: the checkpoint restores the files and the
             // next turn opens a new agent session (t3code `makeAcpAdapterV2`
             // `rollbackThread`), so the agent no longer remembers what was undone.
-            Some(driver @ ("acpRegistry" | "antigravity")) => {
+            Some(driver @ ("acpRegistry" | "antigravity" | "grok" | "kiro" | "fx")) => {
                 if let Some(s) = self.acp.lock().await.remove(thread_id) {
                     s.kill().await;
                 }
@@ -729,13 +777,22 @@ impl ProviderHost for Host {
 /// The pi user entry of the first run after ordinal `after` (not rolled back)
 /// whose turn recorded one: rollback cuts the session just before it.
 fn pi_cut_after(outline: &Outline, after: u64) -> Option<String> {
-    let mut runs: Vec<&Run> = outline.runs.iter().map(|run| &**run).filter(|run| run.ordinal > after && run.status != RunStatus::RolledBack).collect();
+    native_turn_after(outline, after, "pi", None, |id| !id.starts_with(pi::PENDING_REF))
+}
+
+/// The `driver` native turn of the first run after ordinal `after` (not
+/// rolled back; on provider thread `on`, when given) whose turn recorded one
+/// that `usable` takes.
+fn native_turn_after(outline: &Outline, after: u64, driver: &str, on: Option<&domovoi_model::typed::ProviderThreadId>, usable: impl Fn(&str) -> bool) -> Option<String> {
+    let mut runs: Vec<&Run> = outline.runs.iter().map(|run| &**run)
+        .filter(|run| run.ordinal > after && run.status != RunStatus::RolledBack && on.is_none_or(|on| run.provider_thread_id.as_ref() == Some(on)))
+        .collect();
     runs.sort_by_key(|run| run.ordinal);
     runs.into_iter().find_map(|run| {
         let attempt = outline.attempts.iter().find(|attempt| Some(&attempt.id) == run.active_attempt_id.as_ref())?;
         let turn = outline.provider_turns.iter().find(|turn| Some(&turn.id) == attempt.provider_turn_id.as_ref())?;
         let r = turn.native_turn_ref.as_ref()?;
-        (r.driver.as_str() == "pi").then(|| r.native_id.clone()).flatten().filter(|id| !id.starts_with(pi::PENDING_REF))
+        (r.driver.as_str() == driver).then(|| r.native_id.clone()).flatten().filter(|id| usable(id))
     })
 }
 
@@ -894,6 +951,11 @@ mod attachment_tests {
         assert!(!text.contains("%PDF") && !text.contains("xxxx"), "binaries and big files are only named");
         assert!(with_attached_files("", &files).starts_with(ATTACHMENT_ONLY_PROMPT));
         assert_eq!(with_attached_files("hi", &[]), "hi");
+        // A document whose text was extracted names its sidecar.
+        let sidecar = crate::document_text::sidecar(&dir.join("pending-b-pdf.pdf"));
+        std::fs::write(&sidecar, "## Page 1\nHello").unwrap();
+        let text = with_attached_files("Summarize these", &files);
+        assert!(text.contains(&format!("(text extracted to: \"{}\")", sidecar.display())), "{text}");
         let _ = std::fs::remove_dir_all(&u);
     }
 

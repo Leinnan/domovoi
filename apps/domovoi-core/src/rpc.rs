@@ -96,6 +96,9 @@ pub enum Route {
     ScheduledRunStarted(String),
     /// A thread's allowed tools forgotten (`orchestration.forgetThreadPermissions`).
     ThreadPermissionsForgotten,
+    /// `secrets.answerRequest` for a `secret_request` item (`saved`: with a
+    /// value, else declined).
+    SecretAnswer { item_id: String, saved: bool },
 }
 
 #[derive(Debug, Default)]

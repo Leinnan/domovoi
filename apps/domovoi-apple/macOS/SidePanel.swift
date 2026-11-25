@@ -171,6 +171,15 @@ struct FilesPane: View {
     var body: some View {
         VSplitView {
             VStack(spacing: 0) {
+                // Which folder the tree is of (a worktree's own, say).
+                if !files.root.isEmpty {
+                    Label((files.root as NSString).lastPathComponent, systemImage: "folder")
+                        .font(TypeRole.sectionHeader)
+                        .lineLimit(1)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding([.horizontal, .top], Space.s)
+                        .help(files.root)
+                }
                 TextField("Search files", text: $query)
                     .textFieldStyle(.roundedBorder)
                     .padding(Space.s)

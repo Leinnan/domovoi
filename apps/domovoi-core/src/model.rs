@@ -132,6 +132,8 @@ pub struct Model {
     pub server_changed: bool,
     /// This device's APNs token and environment (`sandbox` | `production`).
     pub push_token: Option<(String, String)>,
+    /// This device's UnifiedPush endpoint and Web Push keys (`p256dh`, `auth`).
+    pub push_endpoint: Option<(String, String, String)>,
     /// Live Activities of this server's threads: (thread, push token, APNs host).
     pub activity_tokens: Vec<(String, String, String)>,
 
@@ -230,6 +232,9 @@ pub struct Model {
     pub markdown_prefixes: std::sync::Mutex<rustc_hash::FxHashMap<String, crate::markdown::Prefix>>,
     /// Rows whose long output is shown in full.
     pub expanded: HashSet<String>,
+    /// Secret requests (`secret_request` item ids) answered and waiting for
+    /// the server; never what was answered.
+    pub secrets_answering: HashSet<String>,
     /// Threads opened lately, newest last, with the rows built for them: one
     /// opened again shows at once and only catches up on what happened since.
     pub recent_threads: std::collections::VecDeque<RecentThread>,
@@ -876,6 +881,7 @@ impl Model {
             token: self.token.take(),
             tunnel: std::mem::take(&mut self.tunnel),
             push_token: self.push_token.take(),
+            push_endpoint: self.push_endpoint.take(),
             toast_counter: self.toast_counter,
             companion_beat: (String::new(), self.companion_beat.1),
             // Counters keep counting, so no stale reply can match a new attempt.
@@ -893,6 +899,8 @@ impl Model {
     /// waiting, so its screen can offer to try again.
     pub fn socket_lost_flags(&mut self) {
         crate::project_icons::disconnected(self);
+        // Not sent again: the card can be answered anew.
+        self.secrets_answering.clear();
         crate::diagrams::disconnected(self);
         if self.sessions.scanning {
             self.sessions.scanning = false;

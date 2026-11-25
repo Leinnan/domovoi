@@ -44,8 +44,11 @@ pub enum HostMsg {
     ImageLoaded { url: String, handle: iced::widget::image::Handle },
     /// The image couldn't be fetched; asking for it again tries again.
     ImageFailed { url: String },
-    #[cfg_attr(not(all(unix, not(target_os = "macos"))), allow(dead_code, reason = "click actions are only reported by freedesktop notifications"))]
+    #[cfg_attr(target_os = "macos", allow(dead_code, reason = "clicks are only reported by freedesktop and Windows notifications"))]
     OpenThreadFromNotification { environment_id: String, thread_id: String },
+    /// Allow or Decline on an approval's notification.
+    #[cfg_attr(target_os = "macos", allow(dead_code, reason = "buttons are only reported by freedesktop and Windows notifications"))]
+    RespondFromNotification { environment_id: String, thread_id: String, request_id: String, decision: String },
 }
 
 impl std::fmt::Debug for HostMsg {
@@ -56,6 +59,7 @@ impl std::fmt::Debug for HostMsg {
             HostMsg::ImageLoaded { url, .. } => write!(f, "ImageLoaded({url})"),
             HostMsg::ImageFailed { url } => write!(f, "ImageFailed({url})"),
             HostMsg::OpenThreadFromNotification { thread_id, .. } => write!(f, "OpenThreadFromNotification({thread_id})"),
+            HostMsg::RespondFromNotification { request_id, decision, .. } => write!(f, "RespondFromNotification({request_id}, {decision})"),
         }
     }
 }
@@ -271,8 +275,9 @@ impl Engine {
                             maybe_out = outbound_rx.recv() => {
                                 match maybe_out {
                                     Some(text) => {
+                                        // An answer to a secret request carries the value: never traced.
                                         if let Some(filter) = trace.as_deref()
-                                            && text.contains(filter) {
+                                            && text.contains(filter) && !text.contains("\"secrets.answerRequest\"") {
                                                 tracing::info!(frame = %text.chars().take(300).collect::<String>(), "ws >>");
                                             }
                                         if let Err(err) = writer.send(WsMessage::Text(text.into())).await {
@@ -463,24 +468,43 @@ impl Engine {
         }
         let title = note.title.clone();
         let body = note.body.clone();
-        #[cfg(all(unix, not(target_os = "macos")))]
+        // freedesktop and Windows notifications report clicks and buttons;
+        // wait for one off-thread (detached: the handle blocks until the
+        // notification closes). An approval's buttons answer it from there.
+        #[cfg(any(target_os = "windows", all(unix, not(target_os = "macos"))))]
         {
-            // freedesktop notifications report clicks; wait for one off-thread
-            // (detached: the handle blocks until the notification closes).
+            use notify_rust::NotificationResponse;
             let ui_tx = self.ui_tx.clone();
-            let (environment_id, thread_id) = (note.environment_id.clone(), note.thread_id.clone());
+            let (environment_id, thread_id, request_id) = (note.environment_id.clone(), note.thread_id.clone(), note.request_id.clone());
             drop(tokio::task::spawn_blocking(move || {
-                let Ok(handle) = notify_rust::Notification::new().appname("Domovoi").summary(&title).body(&body).action("default", "Open").show() else {
+                let mut notification = notify_rust::Notification::new();
+                notification.appname("Domovoi").summary(&title).body(&body);
+                // Windows reports a click on the body by itself; a "default" action there would be a button.
+                #[cfg(not(target_os = "windows"))]
+                notification.action("default", "Open");
+                if request_id.is_some() {
+                    notification.action("accept", "Allow").action("decline", "Decline");
+                }
+                let Ok(handle) = notification.show() else {
                     return;
                 };
-                handle.wait_for_action(|action| {
-                    if action == "default" {
-                        let _ = ui_tx.blocking_send(HostMsg::OpenThreadFromNotification { environment_id, thread_id });
+                let _ = handle.wait_for_response(move |response: &NotificationResponse| {
+                    let msg = match response {
+                        NotificationResponse::Default => Some(HostMsg::OpenThreadFromNotification { environment_id, thread_id }),
+                        NotificationResponse::Action(action) if action == "default" => Some(HostMsg::OpenThreadFromNotification { environment_id, thread_id }),
+                        NotificationResponse::Action(action) if action == "accept" || action == "decline" => {
+                            request_id.map(|request_id| HostMsg::RespondFromNotification { environment_id, thread_id, request_id, decision: action.clone() })
+                        }
+                        _ => None,
+                    };
+                    if let Some(msg) = msg {
+                        let _ = ui_tx.blocking_send(msg);
                     }
                 });
             }));
         }
-        #[cfg(not(all(unix, not(target_os = "macos"))))]
+        // macOS: `NSUserNotification` waits on the main run loop, which Iced owns.
+        #[cfg(target_os = "macos")]
         {
             let _ = tokio::task::spawn_blocking(move || {
                 let _ = notify_rust::Notification::new().appname("Domovoi").summary(&title).body(&body).show();

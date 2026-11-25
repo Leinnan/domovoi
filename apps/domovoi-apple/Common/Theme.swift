@@ -84,6 +84,19 @@ enum Tint {
     static let claude = Color.orange
     static let pi = Color.pink
     static let antigravity = Color.indigo
+    private static let others: [Color] = [.blue, .mint, .brown, .cyan, .yellow]
+
+    /// The tint of a provider by its key (`claude`, `codex`, `pi`,
+    /// `antigravity`); any other gets one of a few more, the same each time.
+    static func provider(_ key: String) -> Color {
+        switch key {
+        case "claude": claude
+        case "codex": codex
+        case "pi": pi
+        case "antigravity": antigravity
+        default: others[key.unicodeScalars.reduce(0) { $0 + Int($1.value) } % others.count]
+        }
+    }
 
     /// The tint of an agent as the core names it ("Claude Code", "Codex", "Pi", "Antigravity").
     static func agent(_ name: String) -> Color {
@@ -390,16 +403,25 @@ struct SettingsRow<Icon: View>: View {
     }
 }
 
-/// A changed file: its path, and the lines added and removed.
+/// A changed file: its path (and where it was, renamed), how it changed
+/// when not just edited, and the lines added and removed.
 struct FileChangeRow: View {
     let path: String
     let added: Int
     let removed: Int
+    var oldPath: String?
+    /// `added` | `deleted` | `renamed` | `binary`; `modified` or empty says nothing.
+    var change = ""
 
     var body: some View {
         HStack(spacing: Space.s) {
-            Text(path).font(TypeRole.monoSmall).lineLimit(1).truncationMode(.middle)
+            Text(oldPath.map { "\($0) → \(path)" } ?? path).font(TypeRole.monoSmall).lineLimit(1).truncationMode(.middle)
             Spacer(minLength: Space.s)
+            if !change.isEmpty, change != "modified" {
+                Text(change.capitalized)
+                    .foregroundStyle(change == "added" ? Tint.diffAdd : change == "deleted" ? Tint.diffDel : .secondary)
+                    .badgeCapsule(tint: change == "added" ? Tint.diffAdd : change == "deleted" ? Tint.diffDel : nil)
+            }
             if added > 0 { Text("+\(added)").foregroundStyle(Tint.diffAdd) }
             if removed > 0 { Text("−\(removed)").foregroundStyle(Tint.diffDel) }
         }

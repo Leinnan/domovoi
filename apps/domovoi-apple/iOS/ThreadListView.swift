@@ -227,6 +227,9 @@ struct ThreadListView: View {
         }
         .searchable(text: $search, prompt: "Search threads")
         .onChange(of: search) { _, query in core.update(.setSearch(query: query)) }
+        // Back on the list (or a new one, on iPad): the field shows the
+        // search the core still filters by.
+        .onAppear { if search != sidebar.searchQuery { search = sidebar.searchQuery } }
         // Connected: catch up on anything missed. Disconnected: try now
         // instead of waiting for the next retry.
         .refreshable { await core.refresh(.resync) { core.view.connection.state != "connected" } }
@@ -385,6 +388,7 @@ struct ThreadListView: View {
         Text(thread.statusLabel.isEmpty ? (thread.snoozedUntilMs > 0 ? SnoozeTimes.label(thread.snoozedUntilMs) : thread.age) : thread.statusLabel)
             .font(TypeRole.meta).monospacedDigit().lineLimit(1).fixedSize()
             .foregroundStyle(thread.statusTint).fontWeight(thread.isPlanning ? .medium : nil)
+            .planningPill(thread)
     }
 
     /// Everything a row can do, on a long press.

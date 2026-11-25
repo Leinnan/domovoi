@@ -33,6 +33,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         if (savedInstanceState == null) handle(intent)
+        if (savedInstanceState == null) com.crayen.domovoi.system.UnifiedPushService.start(this)
         setContent {
             DomovoiTheme {
                 CompositionLocalProvider(LocalCore provides core) {

@@ -439,7 +439,7 @@ struct ThreadRow: View, Equatable {
                     Text(thread.statusLabel.isEmpty ? (thread.snoozedUntilMs > 0 ? SnoozeTimes.label(thread.snoozedUntilMs) : thread.age) : thread.statusLabel)
                         .font(.caption2).monospacedDigit()
                         .foregroundStyle(thread.statusTint).fontWeight(thread.isPlanning ? .medium : nil)
-                        .lineLimit(1).fixedSize()
+                        .lineLimit(1).planningPill(thread).fixedSize()
                 }
                 HStack(spacing: Space.xs) {
                     Text(thread.subtitle(showsProject: showsProject).isEmpty ? " " : thread.subtitle(showsProject: showsProject)).lineLimit(1)

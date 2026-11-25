@@ -14,12 +14,24 @@
 //! - files that need reading are parsed in parallel, with typed decoding of
 //!   only the fields used, after a substring prefilter that skips most lines.
 //!
-//! Limit: t3code prices tokens from a downloaded rate table; Domovoi has none, so
-//! every bucket is `unpriced` with zero cost and `pricing.status` is
-//! `unavailable`.
+//! Each record is priced as it is counted (`crate::usage_pricing`: LiteLLM's
+//! rate table, `usagePriceOverrides`), under the model `usageModelAliases`
+//! maps it to; the model filter matches the model as the log names it.
+//!
+//! Retention (`usageHistoryRetentionDays`, t3code's scan cache): a log file that
+//! is gone (deleted, or archived elsewhere) keeps counting from the cache while
+//! it was last written within the retention, so usage outlives its transcript;
+//! cache entries last written before it are dropped after each summary.
+//!
+//! Limits: the cache is the process's, so usage of a deleted transcript is
+//! kept only until the server restarts (t3code saves its scan cache to disk);
+//! Pi models are named as Pi's log names them, without t3code's `<provider>/`
+//! prefix; duplicate copies of a record count the first copy, not the largest
+//! of each token count.
 
 use crate::agent_sessions::{ScanEnv, Source};
 use crate::rpc::shell::{if_fits, text_or_empty};
+use crate::usage_pricing::{ModelRate, RateTable, Snapshot, Speed, Tokens};
 use serde::{Deserialize, Serialize};
 use serde_json::Number;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -28,8 +40,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::SystemTime;
 use domovoi_model::typed::{
-    UsageBucket, UsageCostSource, UsageModelFilter, UsageModelSelector, UsagePricing, UsagePricingStatus, UsageProviderKind, UsageSource,
-    UsageSourceFingerprint, UsageSourceStatus, UsageSummary, UsageTokenTotals,
+    UsageBucket, UsageCostSource, UsageModelFilter, UsageModelSelector, UsagePricing, UsageProviderKind, UsageSource,
+    UsageSourceFingerprint, UsageSourceStatus, UsageSummary, UsageTokenTotals, UsageHistoryRetentionDays, ServerSettings,
 };
 
 pub const CONTRACT_VERSION: u32 = 1;
@@ -49,6 +61,11 @@ struct Rec {
     creation: u64,
     output: u64,
     reasoning: u64,
+    /// Of `creation`, written with a 1-hour TTL (Claude).
+    creation_1h: u64,
+    /// The cost the log reports (Claude's `costUSD`, Pi's `cost.total`); NaN for none.
+    reported_usd: f64,
+    speed: Speed,
     /// Claude streams the same message into more than one record (and resumed
     /// sessions replay history into new files): a hash of message and request
     /// id, counted once. 0 = no key.
@@ -72,6 +89,7 @@ fn cache() -> &'static Mutex<HashMap<PathBuf, Arc<FileEntry>>> {
     CACHE.get_or_init(Default::default)
 }
 
+/// One bucket's sums (`MutableBucket`).
 #[derive(Default, Clone)]
 struct Totals {
     uncached: u64,
@@ -81,6 +99,16 @@ struct Totals {
     reasoning: u64,
     records: u64,
     sessions: HashSet<Arc<str>>,
+    cost_usd: f64,
+    cache_savings_usd: f64,
+    /// `[input, cacheRead, cacheWrite, output]` of the records whose cost splits.
+    category: Option<[f64; 4]>,
+    fast_cost_usd: f64,
+    ultrafast_cost_usd: f64,
+    speed_premium_usd: f64,
+    unpriced_records: u64,
+    unpriced_tokens: u64,
+    provider_reported_records: u64,
 }
 
 struct Window {
@@ -136,6 +164,8 @@ struct ClaudeLine<'a> {
     request_id: Option<std::borrow::Cow<'a, str>>,
     #[serde(borrow)]
     message: Option<ClaudeMessage<'a>>,
+    #[serde(rename = "costUSD", default, deserialize_with = "if_fits")]
+    cost_usd: Option<f64>,
 }
 
 #[derive(Deserialize)]
@@ -157,6 +187,17 @@ struct ClaudeUsage {
     cache_creation_input_tokens: u64,
     #[serde(default)]
     output_tokens: u64,
+    #[serde(default, deserialize_with = "if_fits")]
+    cache_creation: Option<ClaudeCacheCreation>,
+    #[serde(default, deserialize_with = "if_fits")]
+    speed: Option<String>,
+}
+
+/// The cache writes by TTL.
+#[derive(Deserialize, Default)]
+struct ClaudeCacheCreation {
+    #[serde(default)]
+    ephemeral_1h_input_tokens: u64,
 }
 
 #[derive(Deserialize)]
@@ -231,6 +272,15 @@ struct PiUsage {
     cache_read: u64,
     cache_write: u64,
     reasoning: u64,
+    #[serde(deserialize_with = "if_fits")]
+    cost: Option<PiCost>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct PiCost {
+    #[serde(deserialize_with = "if_fits")]
+    total: Option<f64>,
 }
 
 fn contains(hay: &[u8], needle: &[u8]) -> bool {
@@ -291,6 +341,9 @@ fn parse_lines(source: Source, path: &Path, bytes: &[u8], entry: &mut FileEntry,
                     creation: u.cache_creation_input_tokens,
                     output: u.output_tokens,
                     reasoning: 0,
+                    creation_1h: u.cache_creation.as_ref().map_or(0, |c| c.ephemeral_1h_input_tokens),
+                    reported_usd: l.cost_usd.filter(|c| c.is_finite()).unwrap_or(f64::NAN),
+                    speed: if u.speed.as_deref() == Some("fast") { Speed::Fast } else { Speed::Standard },
                     dedupe: if key == ":" { 0 } else { hash(&key) },
                 });
             }
@@ -321,7 +374,11 @@ fn parse_lines(source: Source, path: &Path, bytes: &[u8], entry: &mut FileEntry,
                     cached: u.cache_read,
                     creation: u.cache_write,
                     output: u.output,
-                    reasoning: u.reasoning,
+                    reasoning: u.reasoning.min(u.output),
+                    creation_1h: 0,
+                    // Pi writes zero for rates it does not know: only a positive cost is one.
+                    reported_usd: u.cost.and_then(|c| c.total).filter(|c| c.is_finite() && *c > 0.0).unwrap_or(f64::NAN),
+                    speed: Speed::Standard,
                     dedupe: l.id.is_some().then(|| hash(&key)).unwrap_or(0),
                 });
             }
@@ -355,6 +412,9 @@ fn parse_lines(source: Source, path: &Path, bytes: &[u8], entry: &mut FileEntry,
                     creation: 0,
                     output: u.output_tokens,
                     reasoning: u.reasoning_output_tokens,
+                    creation_1h: 0,
+                    reported_usd: f64::NAN,
+                    speed: Speed::Standard,
                     dedupe: 0,
                 });
             }
@@ -395,14 +455,19 @@ fn refresh(source: Source, path: &Path, len: u64, modified: SystemTime, old: Opt
     Arc::new(entry)
 }
 
-/// Every log file of a provider home with its size and modification time.
-fn log_files(source: Source, dir: &Path) -> Option<Vec<(PathBuf, u64, SystemTime)>> {
-    let root = match source {
+/// The folder below a provider home that holds its logs.
+fn log_root(source: Source, dir: &Path) -> PathBuf {
+    match source {
         Source::Claude => dir.join("projects"),
         Source::Codex => dir.join("sessions"),
         // A pi home is its sessions folder.
         Source::Pi => dir.to_path_buf(),
-    };
+    }
+}
+
+/// Every log file of a provider home with its size and modification time.
+fn log_files(source: Source, dir: &Path) -> Option<Vec<(PathBuf, u64, SystemTime)>> {
+    let root = log_root(source, dir);
     if !root.is_dir() {
         return None;
     }
@@ -444,12 +509,23 @@ struct Scanned {
     malformed_records: u64,
 }
 
-/// Brings the cache up to date for the files that can hold records in the window.
-fn scan(source: Source, dir: &Path, w: &Window) -> (Vec<Arc<FileEntry>>, Scanned) {
+/// Brings the cache up to date for the files that can hold records in the
+/// window; then, after them, the cached files of this provider that are gone
+/// but were last written since `retained_since_ms`.
+fn scan(source: Source, dir: &Path, w: &Window, retained_since_ms: i64) -> (Vec<Arc<FileEntry>>, Scanned) {
     let Some(files) = log_files(source, dir) else {
         return (vec![], Scanned { status: UsageSourceStatus::Missing, scanned_files: 0, skipped_files: 0, malformed_records: 0 });
     };
     let total = files.len();
+    let live: HashSet<&Path> = files.iter().map(|(p, _, _)| p.as_path()).collect();
+    let root = log_root(source, dir);
+    let mut gone: Vec<(PathBuf, Arc<FileEntry>)> = {
+        let c = cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        c.iter().filter(|(p, e)| millis(e.modified) >= retained_since_ms && p.starts_with(&root) && !live.contains(p.as_path())).map(|(p, e)| (p.clone(), e.clone())).collect()
+    };
+    // In one order every time, so the same copy of a duplicated record is the one counted.
+    gone.sort_by(|a, b| a.0.cmp(&b.0));
+    drop(live);
     let relevant: Vec<(PathBuf, u64, SystemTime)> = files.into_iter().filter(|(_, _, m)| millis(*m) + MTIME_SLACK_MS >= w.start_ms).collect();
     let skipped = total - relevant.len();
     let previous: Vec<Option<Arc<FileEntry>>> = {
@@ -480,7 +556,7 @@ fn scan(source: Source, dir: &Path, w: &Window) -> (Vec<Arc<FileEntry>>, Scanned
             entries[i] = Some(e);
         }
     }
-    let entries: Vec<Arc<FileEntry>> = entries.into_iter().flatten().collect();
+    let entries: Vec<Arc<FileEntry>> = entries.into_iter().flatten().chain(gone.into_iter().map(|(_, e)| e)).collect();
     let malformed: u32 = entries.iter().map(|e| e.malformed).sum();
     let scanned = Scanned { status: UsageSourceStatus::Ok, scanned_files: relevant.len() as u64, skipped_files: skipped as u64, malformed_records: malformed.into() };
     (entries, scanned)
@@ -488,25 +564,133 @@ fn scan(source: Source, dir: &Path, w: &Window) -> (Vec<Arc<FileEntry>>, Scanned
 
 type Buckets = BTreeMap<(String, Option<String>, &'static str, Arc<str>), Totals>;
 
-fn aggregate(provider: &'static str, entries: &[Arc<FileEntry>], w: &Window, seen: &mut HashSet<u64>, buckets: &mut Buckets) -> usize {
+/// How the records of one model are counted: under which model, at which rate.
+#[derive(Clone)]
+struct Resolved {
+    /// The model `usageModelAliases` maps it to, or itself.
+    model: Arc<str>,
+    rate: Option<Arc<ModelRate>>,
+    /// The rate is a `usagePriceOverrides` entry.
+    overridden: bool,
+}
+
+/// Prices records (`UsageAggregator`'s model mapping and `#accumulate`).
+struct Pricer<'a> {
+    table: &'a RateTable,
+    overrides: RateTable,
+    aliases: HashMap<String, String>,
+    filter: Option<&'a UsageModelFilter>,
+    /// By provider and model as logged; `None` for a model the filter leaves out.
+    resolved: HashMap<(&'static str, Arc<str>), Option<Resolved>>,
+    /// The names rates were looked up by, for `refreshForUnlistedModels`.
+    rate_models: HashSet<String>,
+}
+
+/// The provider's own name for a model's rates (a driver's `rateModel`).
+fn provider_rate_model(provider: &str, model: &str) -> Option<String> {
+    match provider {
+        "antigravity" => Some(crate::usage_pricing::antigravity_rate_model(model)),
+        // Pi model ids may be `<provider>/<rate model>`.
+        "pi" => Some(model.split_once('/').map_or(model, |(_, m)| m).to_owned()),
+        _ => None,
+    }
+}
+
+impl<'a> Pricer<'a> {
+    fn new(table: &'a RateTable, settings: &ServerSettings, filter: Option<&'a UsageModelFilter>) -> Pricer<'a> {
+        Pricer {
+            table,
+            overrides: settings.usage_price_overrides.as_ref().map(crate::usage_pricing::override_table).unwrap_or_default(),
+            aliases: settings.usage_model_aliases.as_ref().map(crate::usage_pricing::resolve_model_aliases).unwrap_or_default(),
+            filter,
+            resolved: HashMap::new(),
+            rate_models: HashSet::new(),
+        }
+    }
+
+    fn resolve(&mut self, provider: &'static str, model: &Arc<str>) -> Option<Resolved> {
+        if let Some(r) = self.resolved.get(&(provider, model.clone())) {
+            return r.clone();
+        }
+        let kept = self.filter.is_none_or(|f| matches_filter(f, provider, model.trim()));
+        let r = kept.then(|| {
+            let alias = self.aliases.get(&**model);
+            let mapped: Arc<str> = alias.map_or_else(|| model.clone(), |a| a.as_str().into());
+            if let Some(rate) = self.overrides.get(mapped.trim()) {
+                return Resolved { model: mapped, rate: Some(rate.clone()), overridden: true };
+            }
+            // An alias takes the target's rate; only an unpriced target goes through the provider's naming.
+            let rate_model = match alias {
+                Some(a) => crate::usage_pricing::lookup_rate(self.table, a).is_none().then(|| provider_rate_model(provider, a)).flatten(),
+                None => provider_rate_model(provider, model),
+            };
+            self.rate_models.insert(match (alias, &rate_model) {
+                (None, Some(r)) => r.clone(),
+                _ => mapped.to_string(),
+            });
+            let rate = rate_model.and_then(|m| crate::usage_pricing::lookup_rate(self.table, &m)).or_else(|| crate::usage_pricing::lookup_rate(self.table, &mapped));
+            Resolved { model: mapped, rate, overridden: false }
+        });
+        self.resolved.insert((provider, model.clone()), r.clone());
+        r
+    }
+}
+
+/// Adds one record to its bucket, priced.
+fn accumulate(t: &mut Totals, r: &Rec, resolved: &Resolved, session: &Arc<str>) {
+    let tokens = Tokens { uncached: r.uncached, cached: r.cached, creation: r.creation, creation_1h: r.creation_1h, output: r.output };
+    let reported = (!r.reported_usd.is_nan()).then_some(r.reported_usd);
+    let p = crate::usage_pricing::price(resolved.rate.as_deref(), resolved.overridden, &tokens, r.speed, reported);
+    t.uncached += r.uncached;
+    t.cached += r.cached;
+    t.creation += r.creation;
+    t.output += r.output;
+    t.reasoning += r.reasoning;
+    t.records += 1;
+    if !session.is_empty() {
+        t.sessions.insert(session.clone());
+    }
+    t.cost_usd += p.cost_usd;
+    t.cache_savings_usd += p.cache_savings_usd;
+    if let Some(c) = p.category {
+        let sum = t.category.get_or_insert([0.0; 4]);
+        for (s, c) in sum.iter_mut().zip(c) {
+            *s += c;
+        }
+    }
+    match r.speed {
+        Speed::Fast => t.fast_cost_usd += p.cost_usd,
+        Speed::Ultrafast => t.ultrafast_cost_usd += p.cost_usd,
+        Speed::Standard => {}
+    }
+    t.speed_premium_usd += p.speed_premium_usd;
+    match p.cost_source {
+        UsageCostSource::Unpriced => {
+            t.unpriced_records += 1;
+            t.unpriced_tokens += r.uncached + r.cached + r.creation + r.output;
+        }
+        UsageCostSource::ProviderReported => t.provider_reported_records += 1,
+        _ => {}
+    }
+}
+
+fn aggregate(provider: &'static str, entries: &[Arc<FileEntry>], w: &Window, seen: &mut HashSet<u64>, buckets: &mut Buckets, pricer: &mut Pricer) -> usize {
     let mut sessions: HashSet<Arc<str>> = HashSet::new();
     for e in entries {
         for r in &e.records {
+            // The filter matches the model as logged, so an alias cannot pull excluded usage in.
+            let Some(resolved) = pricer.resolve(provider, &r.model) else { continue };
             // Deduplicate before the window: a message whose records straddle
             // midnight counts on the day of its first record, in every window.
             if r.dedupe != 0 && !seen.insert(r.dedupe) {
                 continue;
             }
             let Some((day, hour)) = w.key(r.ts_ms) else { continue };
-            sessions.insert(r.session.clone());
-            let t = buckets.entry((day, hour, provider, r.model.clone())).or_default();
-            t.uncached += r.uncached;
-            t.cached += r.cached;
-            t.creation += r.creation;
-            t.output += r.output;
-            t.reasoning += r.reasoning;
-            t.records += 1;
-            t.sessions.insert(r.session.clone());
+            if !r.session.is_empty() {
+                sessions.insert(r.session.clone());
+            }
+            let t = buckets.entry((day, hour, provider, resolved.model.clone())).or_default();
+            accumulate(t, r, &resolved, &r.session);
         }
     }
     sessions.len()
@@ -517,9 +701,26 @@ fn matches_filter(filter: &UsageModelFilter, provider: &str, model: &str) -> boo
     filter.include.as_deref().is_none_or(hit) && !filter.exclude.as_deref().is_some_and(hit)
 }
 
-/// `server.refreshUsageRates`: the price table, of which there is none.
-pub fn pricing() -> UsagePricing {
-    UsagePricing { status: UsagePricingStatus::Unavailable, source: "none".into(), fetched_at: None, known_models: 0 }
+/// A summary, and the model names its rates were looked up by.
+pub struct Summarized {
+    pub summary: UsageSummary,
+    pub rate_models: HashSet<String>,
+}
+
+/// When usage kept for gone log files stops counting (`retentionCutoffMs`).
+fn retention_cutoff_ms(settings: &ServerSettings, now_ms: i64) -> i64 {
+    match settings.usage_history_retention_days.unwrap_or(UsageHistoryRetentionDays::DEFAULT) {
+        UsageHistoryRetentionDays::Unlimited => 0,
+        UsageHistoryRetentionDays::Days(days) => (now_ms - i64::from(days) * 86_400_000).max(0),
+    }
+}
+
+/// `pruneScanCache`: drops cached files last written before the retention.
+fn prune(cutoff_ms: i64) {
+    if cutoff_ms <= 0 {
+        return;
+    }
+    cache().lock().unwrap_or_else(std::sync::PoisonError::into_inner).retain(|_, e| millis(e.modified) >= cutoff_ms);
 }
 
 /// Why `server.getUsageSummary` failed (the `reason` of `UsageReadError`).
@@ -579,18 +780,18 @@ pub fn warm(env: &ScanEnv) {
         hourly: false,
     };
     for (source, _, dir) in &env.homes {
-        let _ = scan(*source, dir, &w);
+        let _ = scan(*source, dir, &w, i64::MAX);
     }
     let _ = crate::antigravity::usage::read(&antigravity_roots(env), w.start_ms);
 }
 
-/// A cost of nothing, written `0.0` as t3code writes its costs.
-fn no_cost() -> Number {
-    Number::from_f64(0.0).expect("zero is finite")
+/// A cost in USD as t3code writes it (`0.0` for none).
+fn usd(v: f64) -> Number {
+    Number::from_f64(v).or_else(|| Number::from_f64(0.0)).unwrap_or_else(|| Number::from(0))
 }
 
-/// `server.getUsageSummary`.
-pub fn summary(env: &ScanEnv, input: &SummaryInput) -> Result<UsageSummary, Failure> {
+/// `server.getUsageSummary`, priced with `rates`.
+pub fn summary(env: &ScanEnv, input: &SummaryInput, settings: &ServerSettings, rates: &Snapshot) -> Result<Summarized, Failure> {
     let err = |detail: String| Failure::Read { reason: ReadFailure::InvalidWindow, detail };
     let started = std::time::Instant::now();
     let tz_name = input.time_zone.as_deref().unwrap_or("UTC");
@@ -603,6 +804,9 @@ pub fn summary(env: &ScanEnv, input: &SummaryInput) -> Result<UsageSummary, Fail
     let start = since.to_zoned(tz.clone()).map_err(|e| err(e.to_string()))?.timestamp().as_millisecond();
     let end = until.tomorrow().and_then(|d| d.to_zoned(tz.clone())).map_err(|e| err(e.to_string()))?.timestamp().as_millisecond();
     let w = Window { tz, since, until, start_ms: start, end_ms: end, hourly: input.resolution.as_deref() == Some("hour") };
+    let cutoff = retention_cutoff_ms(settings, domovoi_contracts::time_fmt::now_millis());
+    let retained_since = (start - MTIME_SLACK_MS).max(cutoff);
+    let mut pricer = Pricer::new(&rates.table, settings, input.model_filter.as_ref());
     let mut buckets: Buckets = BTreeMap::new();
     let mut seen = HashSet::new();
     let mut sources = vec![];
@@ -612,8 +816,8 @@ pub fn summary(env: &ScanEnv, input: &SummaryInput) -> Result<UsageSummary, Fail
             Source::Codex => "codex",
             Source::Pi => "pi",
         };
-        let (entries, scanned) = scan(*source, dir, &w);
-        let distinct_sessions = aggregate(provider, &entries, &w, &mut seen, &mut buckets) as u64;
+        let (entries, scanned) = scan(*source, dir, &w, retained_since);
+        let distinct_sessions = aggregate(provider, &entries, &w, &mut seen, &mut buckets, &mut pricer) as u64;
         sources.push(UsageSource {
             fingerprint: UsageSourceFingerprint {
                 host_id: "local".into(),
@@ -635,18 +839,29 @@ pub fn summary(env: &ScanEnv, input: &SummaryInput) -> Result<UsageSummary, Fail
     let mut sessions: HashSet<Arc<str>> = HashSet::new();
     let mut models: HashMap<String, Arc<str>> = HashMap::new();
     for r in &records {
+        let model = models.entry(r.model.clone()).or_insert_with(|| r.model.as_str().into()).clone();
+        let Some(resolved) = pricer.resolve("antigravity", &model) else { continue };
         let Some((day, hour)) = w.key(r.ts_ms) else { continue };
         let session: Arc<str> = r.session.as_str().into();
-        sessions.insert(session.clone());
-        let model = models.entry(r.model.clone()).or_insert_with(|| r.model.as_str().into()).clone();
-        let t = buckets.entry((day, hour, "antigravity", model)).or_default();
-        t.uncached += r.uncached;
-        t.cached += r.cached;
-        t.creation += r.creation;
-        t.output += r.output;
-        t.reasoning += r.reasoning;
-        t.records += 1;
-        t.sessions.insert(session);
+        if !session.is_empty() {
+            sessions.insert(session.clone());
+        }
+        let rec = Rec {
+            ts_ms: r.ts_ms,
+            model,
+            session: session.clone(),
+            uncached: r.uncached,
+            cached: r.cached,
+            creation: r.creation,
+            output: r.output,
+            reasoning: r.reasoning,
+            creation_1h: 0,
+            reported_usd: f64::NAN,
+            speed: Speed::Standard,
+            dedupe: 0,
+        };
+        let t = buckets.entry((day, hour, "antigravity", resolved.model.clone())).or_default();
+        accumulate(t, &rec, &resolved, &session);
     }
     for s in scanned {
         sources.push(UsageSource {
@@ -665,10 +880,10 @@ pub fn summary(env: &ScanEnv, input: &SummaryInput) -> Result<UsageSummary, Fail
             refreshing: None,
         });
     }
-    let filter = input.model_filter.as_ref();
+    prune(cutoff);
+    let rounded = |v: f64| Some(crate::usage_pricing::round_usd(v)).filter(|r| *r != 0.0).map(usd);
     let rows: Vec<UsageBucket> = buckets
         .into_iter()
-        .filter(|((_, _, p, m), _)| filter.is_none_or(|filter| matches_filter(filter, p, m)))
         .map(|((day, hour, provider, model), t)| UsageBucket {
             day,
             // `null` in a summary by the day.
@@ -683,20 +898,27 @@ pub fn summary(env: &ScanEnv, input: &SummaryInput) -> Result<UsageSummary, Fail
                 output_tokens: t.output,
                 reasoning_tokens: t.reasoning,
             },
-            cost_usd: no_cost(),
-            cache_savings_usd: no_cost(),
-            category_cost_usd: None,
-            fast_cost_usd: None,
-            ultrafast_cost_usd: None,
-            speed_premium_usd: None,
-            cost_source: UsageCostSource::Unpriced,
+            cost_usd: usd(t.cost_usd),
+            cache_savings_usd: usd(t.cache_savings_usd),
+            category_cost_usd: t.category.map(crate::usage_pricing::category_cost),
+            fast_cost_usd: rounded(t.fast_cost_usd),
+            ultrafast_cost_usd: rounded(t.ultrafast_cost_usd),
+            speed_premium_usd: rounded(t.speed_premium_usd),
+            // `resolveCostSource`.
+            cost_source: if t.unpriced_records == t.records {
+                UsageCostSource::Unpriced
+            } else if t.provider_reported_records == t.records {
+                UsageCostSource::ProviderReported
+            } else {
+                UsageCostSource::ModelPriced
+            },
             records: t.records,
-            unpriced_records: t.records,
-            unpriced_tokens: Some(t.uncached + t.cached + t.creation + t.output + t.reasoning),
+            unpriced_records: t.unpriced_records,
+            unpriced_tokens: Some(t.unpriced_tokens),
             sessions: t.sessions.len() as u64,
         })
         .collect();
-    Ok(UsageSummary {
+    let summary = UsageSummary {
         contract_version: CONTRACT_VERSION.into(),
         read_at: domovoi_contracts::iso_now().as_str().into(),
         time_zone: tz_name.to_owned(),
@@ -704,27 +926,69 @@ pub fn summary(env: &ScanEnv, input: &SummaryInput) -> Result<UsageSummary, Fail
         until_day: until.to_string(),
         buckets: rows.into(),
         sources: sources.into(),
-        pricing: pricing(),
+        pricing: rates.pricing.clone(),
         scan_duration_ms: started.elapsed().as_millis() as u64,
         model_filter: input.model_filter.clone(),
-    })
+    };
+    Ok(Summarized { summary, rate_models: pricer.rate_models })
+}
+
+/// `server.getUsageSummary` as the server answers it: the rates brought up to
+/// date first, and the summary made again when a model it met had none and a
+/// newer table was fetched.
+pub async fn read_summary(env: ScanEnv, input: SummaryInput, settings: ServerSettings) -> Result<UsageSummary, Failure> {
+    let rates = crate::usage_pricing::RateService::global();
+    let env = Arc::new(env);
+    let input = Arc::new(input);
+    let settings = Arc::new(settings);
+    let run = |snapshot: Snapshot| {
+        let (env, input, settings) = (env.clone(), input.clone(), settings.clone());
+        async move {
+            tokio::task::spawn_blocking(move || summary(&env, &input, &settings, &snapshot))
+                .await
+                .unwrap_or_else(|e| Err(Failure::Read { reason: ReadFailure::ScanFailed, detail: e.to_string() }))
+        }
+    };
+    let first = run(rates.ensure(false).await).await?;
+    if rates.refresh_for_unlisted(&first.rate_models).await {
+        return Ok(run(rates.snapshot()).await?.summary);
+    }
+    Ok(first.summary)
+}
+
+/// `server.refreshUsageRates`: the table fetched again unless it was within the minute.
+pub async fn refresh_rates() -> UsagePricing {
+    crate::usage_pricing::RateService::global().ensure(true).await.pricing
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use domovoi_model::typed::UsagePricingStatus;
     use serde_json::{Value, json};
+
+    fn no_rates() -> Snapshot {
+        Snapshot {
+            table: Arc::new(RateTable::new()),
+            pricing: UsagePricing { status: UsagePricingStatus::Unavailable, source: crate::usage_pricing::LITELLM_RATES_URL.into(), fetched_at: None, known_models: 0 },
+        }
+    }
 
     /// The summary `asked` for, as it is written.
     fn summary(env: &ScanEnv, asked: &Value) -> Value {
+        priced(env, asked, &ServerSettings::default(), &no_rates())
+    }
+
+    /// The summary `asked` for with these settings and rates, as it is written.
+    fn priced(env: &ScanEnv, asked: &Value, settings: &ServerSettings, rates: &Snapshot) -> Value {
         let input: SummaryInput = serde_json::from_value(asked.clone()).expect("an input");
-        json!(super::summary(env, &input).expect("a summary"))
+        json!(super::summary(env, &input, settings, rates).expect("a summary").summary)
     }
 
     /// Why no summary was made of what was `asked` for, as it is written.
     fn refused(env: &ScanEnv, asked: &Value) -> Value {
         let input: SummaryInput = serde_json::from_value(asked.clone()).expect("an input");
-        json!(super::summary(env, &input).err().expect("a failure"))
+        json!(super::summary(env, &input, &ServerSettings::default(), &no_rates()).err().expect("a failure"))
     }
 
     #[test]
@@ -772,10 +1036,9 @@ mod tests {
         assert_eq!(filtered["buckets"], json!([{
             "day": "2026-11-13", "hourStart": "2026-11-13T09:00:00Z", "provider": "codex", "model": "gpt-6-luna",
             "totals": { "uncachedInputTokens": 60, "cachedInputTokens": 40, "cacheCreationTokens": 0, "outputTokens": 7, "reasoningTokens": 2 },
-            "costUsd": 0.0, "cacheSavingsUsd": 0.0, "costSource": "unpriced", "records": 1, "unpricedRecords": 1, "unpricedTokens": 109, "sessions": 1,
+            "costUsd": 0.0, "cacheSavingsUsd": 0.0, "costSource": "unpriced", "records": 1, "unpricedRecords": 1, "unpricedTokens": 107, "sessions": 1,
         }]));
         assert_eq!(filtered["buckets"][0]["costUsd"].to_string(), "0.0");
-        assert_eq!(json!(pricing()), json!({ "status": "unavailable", "source": "none", "fetchedAt": null, "knownModels": 0 }));
 
         // Appended records are picked up without rereading; a half-written line waits.
         let day = json!({ "sinceDay": "2026-11-13", "untilDay": "2026-11-13", "timeZone": "UTC" });
@@ -831,6 +1094,100 @@ mod tests {
         assert_eq!((s["sources"][0]["fingerprint"]["provider"].as_str(), s["sources"][0]["malformedRecords"].as_i64()), (Some("pi"), Some(1)));
         std::fs::remove_dir_all(home).unwrap();
     }
+
+    fn claude_env(home: &Path) -> ScanEnv {
+        ScanEnv {
+            home: home.to_path_buf(),
+            homes: vec![(Source::Claude, "claudeAgent".into(), home.join(".claude"))],
+            base_dir: home.join("domovoi"), worktrees_dir: home.join("wt"), temp_dir: std::env::temp_dir(),
+        }
+    }
+
+    fn claude_rec(id: &str, ts: &str, model: &str, extra: Value) -> String {
+        let mut usage = json!({ "input_tokens": 1000, "cache_read_input_tokens": 2000, "cache_creation_input_tokens": 300, "output_tokens": 400 });
+        if let (Some(u), Some(e)) = (usage.as_object_mut(), extra.as_object()) {
+            u.extend(e.clone());
+        }
+        json!({ "type": "assistant", "timestamp": ts, "sessionId": "s1", "requestId": id, "message": { "id": id, "model": model, "usage": usage } }).to_string()
+    }
+
+    #[test]
+    fn prices_buckets_with_overrides_and_aliases() {
+        let home = std::env::temp_dir().join(format!("domovoi-usage-priced-{}", crate::util::new_uuid()));
+        let dir = home.join(".claude/projects/p");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.jsonl"), [
+            claude_rec("m1", "2026-11-13T10:00:00Z", "claude-x", json!({ "cache_creation": { "ephemeral_1h_input_tokens": 100 } })),
+            claude_rec("m2", "2026-11-13T10:01:00Z", "claude-x", json!({ "speed": "fast" })),
+            claude_rec("m3", "2026-11-13T10:02:00Z", "claude-unknown-9", json!({})),
+            claude_rec("m4", "2026-11-13T10:03:00Z", "my-alias", json!({})),
+            claude_rec("m5", "2026-11-13T10:04:00Z", "house-model", json!({})),
+        ].join("\n")).unwrap();
+        let env = claude_env(&home);
+        let table = crate::usage_pricing::parse_rate_table(json!({
+            "anthropic/claude-x": { "input_cost_per_token": 3e-6, "output_cost_per_token": 15e-6, "cache_read_input_token_cost": 0.3e-6,
+                "cache_creation_input_token_cost": 3.75e-6, "cache_creation_input_token_cost_above_1hr": 6e-6, "provider_specific_entry": { "fast": 6 } },
+        }).to_string().as_bytes());
+        let rates = Snapshot { table: Arc::new(table), pricing: UsagePricing { status: UsagePricingStatus::Fresh, source: "x".into(), fetched_at: None, known_models: 2 } };
+        let settings: ServerSettings = serde_json::from_value(json!({
+            "usageModelAliases": { "my-alias": "claude-x" },
+            "usagePriceOverrides": { "house-model": { "inputCostPerMillionTokens": 1, "outputCostPerMillionTokens": 2 } },
+        })).unwrap();
+        let day = json!({ "sinceDay": "2026-11-13", "untilDay": "2026-11-13", "timeZone": "UTC" });
+        let s = priced(&env, &day, &settings, &rates);
+        assert_eq!(s["pricing"]["status"], "fresh");
+        let row = |m: &str| s["buckets"].as_array().unwrap().iter().find(|b| b["model"] == m).cloned().unwrap_or_else(|| panic!("{m}: {s}"));
+        let x = row("claude-x");
+        // m1 (with 100 one-hour cache writes), m2 at six times the rates, m4 by its alias.
+        let standard = 1000.0 * 3e-6 + 2000.0 * 0.3e-6 + 300.0 * 3.75e-6 + 400.0 * 15e-6;
+        let m1 = standard + 100.0 * (6e-6 - 3.75e-6);
+        let cost = x["costUsd"].as_f64().unwrap();
+        assert!((cost - (m1 + 6.0 * standard + standard)).abs() < 1e-12, "{x}");
+        assert_eq!((x["records"].as_i64(), x["costSource"].as_str(), x["unpricedRecords"].as_i64()), (Some(3), Some("modelPriced"), Some(0)));
+        assert!((x["fastCostUsd"].as_f64().unwrap() - crate::usage_pricing::round_usd(6.0 * standard)).abs() < 1e-9);
+        assert!((x["speedPremiumUsd"].as_f64().unwrap() - crate::usage_pricing::round_usd(5.0 * standard)).abs() < 1e-9);
+        assert!((x["cacheSavingsUsd"].as_f64().unwrap() - 2000.0 * 2.7e-6 * 8.0).abs() < 1e-12, "fast savings are at the fast rates: {x}");
+        assert_eq!(x["categoryCostUsd"]["input"].as_f64(), Some(crate::usage_pricing::round_usd(1000.0 * 3e-6 * 8.0)));
+        let unknown = row("claude-unknown-9");
+        assert_eq!((unknown["costUsd"].as_f64(), unknown["costSource"].as_str(), unknown["unpricedTokens"].as_i64()), (Some(0.0), Some("unpriced"), Some(3700)));
+        assert!(unknown.get("categoryCostUsd").is_none());
+        let house = row("house-model");
+        assert!((house["costUsd"].as_f64().unwrap() - (3300.0 * 1e-6 + 400.0 * 2e-6)).abs() < 1e-12, "{house}");
+        // The filter matches the model as logged, before the alias.
+        let only_alias = priced(&env, &json!({ "sinceDay": "2026-11-13", "untilDay": "2026-11-13", "timeZone": "UTC", "modelFilter": { "include": [{ "model": "my-alias" }] } }), &settings, &rates);
+        let b = only_alias["buckets"].as_array().unwrap();
+        assert_eq!((b.len(), b[0]["model"].as_str(), b[0]["records"].as_i64()), (1, Some("claude-x"), Some(1)));
+        // The names looked up, for a refetch when one is unlisted.
+        let input: SummaryInput = serde_json::from_value(day).unwrap();
+        let out = super::summary(&env, &input, &settings, &rates).unwrap();
+        assert!(out.rate_models.contains("claude-unknown-9") && out.rate_models.contains("claude-x") && !out.rate_models.contains("house-model"));
+        std::fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn a_gone_log_counts_until_its_retention_ends() {
+        let home = std::env::temp_dir().join(format!("domovoi-usage-retained-{}", crate::util::new_uuid()));
+        let dir = home.join(".claude/projects/p");
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("gone.jsonl");
+        let then = domovoi_contracts::time_fmt::iso_from_millis(domovoi_contracts::time_fmt::now_millis() - 10 * 86_400_000);
+        std::fs::write(&file, claude_rec("g1", &then, "claude-x", json!({}))).unwrap();
+        let ten_days_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(10 * 86_400);
+        std::fs::File::options().write(true).open(&file).unwrap().set_modified(ten_days_ago).unwrap();
+        let env = claude_env(&home);
+        let window = json!({ "sinceDay": &then[..10], "untilDay": &then[..10], "timeZone": "UTC" });
+        let records = |s: &Value| s["buckets"].as_array().unwrap().iter().map(|b| b["records"].as_i64().unwrap()).sum::<i64>();
+        let settings = |days: Value| -> ServerSettings { serde_json::from_value(json!({ "usageHistoryRetentionDays": days })).unwrap() };
+        assert_eq!(records(&priced(&env, &window, &settings(json!(30)), &no_rates())), 1);
+        std::fs::remove_file(&file).unwrap();
+        let s = priced(&env, &window, &settings(json!(30)), &no_rates());
+        assert_eq!((records(&s), s["sources"][0]["scannedFiles"].as_i64()), (1, Some(0)), "the deleted transcript's usage is kept");
+        assert_eq!(records(&priced(&env, &window, &settings(json!("unlimited")), &no_rates())), 1);
+        // Past its retention it is dropped, and does not come back.
+        assert_eq!(records(&priced(&env, &window, &settings(json!(5)), &no_rates())), 0);
+        assert_eq!(records(&priced(&env, &window, &settings(json!(30)), &no_rates())), 0);
+        std::fs::remove_dir_all(home).unwrap();
+    }
 }
 
 #[cfg(test)]
@@ -848,7 +1205,8 @@ mod bench {
             let input = serde_json::json!({ "sinceDay": since, "untilDay": until, "timeZone": "Europe/Warsaw" });
             for pass in ["cold", "warm"] {
                 let t = std::time::Instant::now();
-                let s = serde_json::json!(super::summary(&env, &serde_json::from_value(input.clone()).unwrap()).unwrap());
+                let rates = crate::usage_pricing::RateService::new(std::path::PathBuf::from("/tmp/domovoi-bench/userdata"), vec![]).snapshot();
+                let s = serde_json::json!(super::summary(&env, &serde_json::from_value(input.clone()).unwrap(), &crate::settings::Settings::default(), &rates).unwrap().summary);
                 let tokens: i64 = s["buckets"].as_array().unwrap().iter().map(|b| ["uncachedInputTokens", "cachedInputTokens", "cacheCreationTokens", "outputTokens", "reasoningTokens"].iter().map(|k| b["totals"][k].as_i64().unwrap_or(0)).sum::<i64>()).sum();
                 let before_today: i64 = s["buckets"].as_array().unwrap().iter().filter(|b| b["day"].as_str() != Some(until)).map(|b| ["uncachedInputTokens", "cachedInputTokens", "cacheCreationTokens", "outputTokens", "reasoningTokens"].iter().map(|k| b["totals"][k].as_i64().unwrap_or(0)).sum::<i64>()).sum();
                 println!("{days:>2} day(s) {pass}: {:>7.3}s  {} buckets  {tokens} tokens ({before_today} before today)  files {}", t.elapsed().as_secs_f64(), s["buckets"].as_array().unwrap().len(),

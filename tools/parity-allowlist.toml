@@ -1,0 +1,92 @@
+# Core events and view-model fields a client does not use on purpose
+# (`tools/parity.py`, `just parity`). Each entry names the clients that leave
+# it out (`macos`, `ios`, `android`, `desktop`, or `*` for all) and why.
+# Anything a client lacks that is not listed here is a gap the check reports.
+
+# ---- events ----
+
+[events.ActivityToken]
+missing = ["macos", "android", "desktop"]
+reason = "Live Activities exist only on iOS."
+
+[events.PushToken]
+missing = ["macos", "android", "desktop"]
+reason = "APNs device tokens: only the iPhone app registers for APNs pushes (Android uses PushEndpoint)."
+
+[events.PushEndpoint]
+missing = ["macos", "ios", "desktop"]
+reason = "UnifiedPush (Web Push) endpoints come from an Android distributor; Apple devices use APNs (PushToken), and desktop apps notify while running."
+
+[events.CreateScheduled]
+missing = ["*"]
+reason = "Superseded by SaveScheduled (the full editor); kept for the core's replay and digest tests."
+
+[events.TogglePanel]
+missing = ["ios", "android"]
+reason = "Phones and tablets open the diff, files and terminal as their own screens, not a side panel."
+
+[events.ToggleProject]
+missing = ["ios", "android"]
+reason = "The mobile thread lists don't collapse project groups; they push a project's thread list instead."
+
+[events.ShowRoute]
+missing = ["ios", "android"]
+reason = "Mobile navigation is a shell-owned stack (Screen.usage, Screen.PullRequests), not the core's route."
+
+[events.RemoveKeybinding]
+missing = ["ios", "android"]
+reason = "Keyboard shortcuts are edited on the desktop clients only."
+
+[events.RespondToThread]
+missing = ["desktop"]
+reason = "Approving from outside the app (Live Activity, widget, ongoing notification) is a mobile surface."
+
+[events.AnswerFromNotification]
+missing = ["desktop"]
+reason = "Desktop notifications take no typed reply (freedesktop, Windows), and the core's local notice carries no question id; see notify.rs."
+
+# ---- fields ----
+
+[fields."SettingsView.keybindings"]
+missing = ["ios", "android"]
+reason = "Keyboard shortcuts are edited on the desktop clients only."
+
+[fields."KeybindingView.condition"]
+missing = ["ios", "android"]
+reason = "Keyboard shortcuts are edited on the desktop clients only."
+
+[fields."PanelView.tab"]
+missing = ["android"]
+reason = "Android opens each panel tab as its own screen."
+
+[fields."ComposerView.is_new_thread"]
+missing = ["ios", "android", "desktop"]
+reason = "These clients show the new-thread composer from the route (`new-thread`) instead."
+
+[fields."EnvironmentView.server_id"]
+missing = ["macos", "desktop"]
+reason = "Matches pushes and notification actions to a saved server; only iOS and Android act on those outside the app."
+
+[fields."RemoteAccessView.push_configured"]
+missing = ["macos", "android", "desktop"]
+reason = "Whether the server has an APNs key: only iOS registers for pushes."
+
+[fields."ThreadPageView.checkpoints"]
+missing = ["*"]
+reason = "Checkpoints are shown on the transcript rows (ItemView.checkpoint); the list is for Revert inside the core."
+
+[fields."CheckpointView.scope_id"]
+missing = ["*"]
+reason = "Read by the core's Revert to build the rollback command."
+
+[fields."ThreadPageView.provider_instance_id"]
+missing = ["*"]
+reason = "Read inside the core (compact support, the header's limits); clients show model_label."
+
+[fields."ContextUsageView.used_tokens"]
+missing = ["*"]
+reason = "Clients show `label` and `percent`, which the core derives from it."
+
+[fields."SecretRequestView.delivery"]
+missing = ["*"]
+reason = "The core words what delivery means into SecretRequestView.hint, which every client shows; the raw value is for tests and future clients."

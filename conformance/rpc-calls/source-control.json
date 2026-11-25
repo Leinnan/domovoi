@@ -1,4 +1,12 @@
 [
+  { "tag": "issues.list", "payload": { "state": "open" }, "expect": "success" },
+  { "tag": "issues.linkedThreads", "payload": { "tracker": "github", "host": "github.com", "scope": "o/r", "key": "1" }, "expect": "success" },
+  { "tag": "issues.detail", "payload": { "projectId": "$PROJECT", "tracker": "github", "scope": "o/r", "key": "1" }, "expect": "failure", "error": "IssueUnavailableError" },
+  { "tag": "issueTrackers.list", "payload": {}, "expect": "success" },
+  { "tag": "issueTrackers.connect", "payload": { "tracker": "linear", "token": null }, "expect": "success" },
+  { "tag": "issueTrackers.connect", "payload": { "tracker": "jira", "token": "t" }, "expect": "failure", "error": "IssueTrackerConnectionError" },
+  { "tag": "issueTrackers.bindProject", "payload": { "projectId": "$PROJECT", "binding": null }, "expect": "success" },
+  { "tag": "server.getSettings", "payload": {}, "expect": "success" },
   { "tag": "pullRequests.list", "payload": { "state": "open" }, "expect": "success" },
   { "tag": "pullRequests.list", "payload": { "state": "all", "involvement": "reviewing", "projectId": "$PROJECT", "limit": 10 }, "expect": "success" },
   { "tag": "pullRequests.list", "payload": { "state": "all", "cursors": { "github.com/o/r": "bogus" } }, "expect": "failure", "error": "PullRequestOperationError" },

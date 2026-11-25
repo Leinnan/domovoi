@@ -728,3 +728,163 @@ async fn a_scheduled_fresh_session_is_a_side_conversation() {
     let run3 = held(&o, "t1").runs.iter().find(|r| r.ordinal == 3).unwrap().provider_thread_id.clone();
     assert_eq!(run3, first.provider_thread_id);
 }
+
+#[tokio::test]
+async fn issues_link_once_and_unlink_by_tracker_level_key() {
+    use domovoi_model::typed::ThreadIssueLinkSource;
+    use domovoi_model::typed::command::{ThreadIssueLinkCommand, ThreadIssueUnlink};
+    let (o, mut fx) = setup();
+    o.launch_thread(launch("t1")).await.unwrap();
+    fx.recv().await;
+    let link = |command: &str, host: &str, key: &str| -> Command {
+        ThreadIssueLinkCommand {
+            command_id: command.into(),
+            thread_id: "t1".into(),
+            tracker: "github".into(),
+            host: host.into(),
+            scope: "o/r".into(),
+            key: key.into(),
+            project_id: "p1".into(),
+            url: format!("https://github.com/o/r/issues/{key}"),
+            display_key: format!("#{key}"),
+            title: "A bug".into(),
+            source: ThreadIssueLinkSource::Agent,
+        }
+        .into()
+    };
+    let keys = |o: &Orchestrator| -> Vec<String> {
+        o.store.app_thread("t1").unwrap().unwrap().issues.unwrap_or_default().into_iter().map(|l| format!("{}/{}", l.key.host, l.key.key)).collect()
+    };
+    o.dispatch(link("i1", " GitHub.com", "7")).await.unwrap();
+    let before = o.store.latest_sequence().unwrap();
+    o.dispatch(link("i2", "github.com", "7 ")).await.unwrap();
+    assert_eq!(o.store.latest_sequence().unwrap(), before, "the same issue twice is one link and no event");
+    o.dispatch(link("i3", "github.com", "8")).await.unwrap();
+    assert_eq!(keys(&o), ["github.com/7", "github.com/8"], "hosts are stored lower-cased and trimmed");
+    let unlink = ThreadIssueUnlink { command_id: "u1".into(), thread_id: "t1".into(), tracker: "github".into(), host: "GITHUB.COM".into(), scope: "O/R".into(), key: "7".into() };
+    o.dispatch(unlink.into()).await.unwrap();
+    assert_eq!(keys(&o), ["github.com/8"]);
+}
+
+#[tokio::test]
+async fn pull_requests_link_once_unlink_to_a_tombstone_in_a_stack_and_watch() {
+    use domovoi_model::typed::command::{PullRequestToLink, ThreadPullRequestLink, ThreadPullRequestUnlink, ThreadPullRequestWatch};
+    use domovoi_model::typed::{PullRequestLinkSource, PullRequestStack, PullRequestStackKind, PullRequestStackLayer, PullRequestState, PullRequestWatchUntil};
+    let (o, mut fx) = setup();
+    o.launch_thread(launch("t1")).await.unwrap();
+    fx.recv().await;
+    let link = |command: &str, number: u64, source: PullRequestLinkSource| -> Command {
+        Command::ThreadPullRequestLink(Box::new(ThreadPullRequestLink {
+            command_id: command.into(),
+            thread_id: "t1".into(),
+            host: "GitHub.com".into(),
+            repository: "Acme/App".into(),
+            number,
+            url: format!("https://github.com/acme/app/pull/{number}"),
+            source,
+            repository_web_url: None,
+        }))
+    };
+    let unlink = |command: &str, number: u64| -> Command {
+        Command::ThreadPullRequestUnlink(Box::new(ThreadPullRequestUnlink { command_id: command.into(), thread_id: "t1".into(), host: "github.com".into(), repository: "acme/app".into(), number }))
+    };
+    let watch = |command: &str, number: u64, watching: bool, until: Option<PullRequestWatchUntil>| -> Command {
+        Command::ThreadPullRequestWatch(Box::new(ThreadPullRequestWatch {
+            command_id: command.into(),
+            thread_id: "t1".into(),
+            host: "github.com".into(),
+            repository: "acme/app".into(),
+            number,
+            watching,
+            until,
+            checks_pending: Some(false),
+            link: Some(PullRequestToLink { url: format!("https://github.com/acme/app/pull/{number}"), source: PullRequestLinkSource::Agent, repository_web_url: None }),
+        }))
+    };
+    let links = |o: &Orchestrator| o.store.app_thread("t1").unwrap().unwrap().pull_requests.unwrap_or_default();
+    o.dispatch(link("l1", 7, PullRequestLinkSource::Agent)).await.unwrap();
+    let before = o.store.latest_sequence().unwrap();
+    o.dispatch(link("l2", 7, PullRequestLinkSource::Manual)).await.unwrap();
+    assert_eq!(o.store.latest_sequence().unwrap(), before, "the same pull request twice is one link and no event");
+    assert_eq!(links(&o).len(), 1);
+    assert_eq!((links(&o)[0].host.as_str(), links(&o)[0].repository.as_str()), ("github.com", "acme/app"), "keys are lower-cased");
+    let event = o.store.events_after(before - 1, before).unwrap().into_iter().last().unwrap();
+    assert_eq!(event.event_type, "thread.pull-request-synced");
+
+    // Watching starts a watch that carries `until: merged`; unwatching keeps it as ended.
+    o.dispatch(watch("w1", 7, true, Some(PullRequestWatchUntil::Merged))).await.unwrap();
+    let w = links(&o)[0].watch.clone().unwrap();
+    assert_eq!((w.until, w.checks_pending), (Some(PullRequestWatchUntil::Merged), None));
+    o.dispatch(watch("w2", 7, false, None)).await.unwrap();
+    assert!(links(&o)[0].watch.is_none() && links(&o)[0].ended_watch.is_some());
+
+    // A watch links a pull request not linked yet.
+    o.dispatch(watch("w3", 9, true, None)).await.unwrap();
+    assert_eq!(links(&o).iter().map(|l| (l.number, l.watch.is_some())).collect::<Vec<_>>(), [(7, false), (9, true)]);
+
+    // A plain link goes; a stack member stays as a tombstone, and a manual link brings it back.
+    o.dispatch(unlink("u1", 9)).await.unwrap();
+    assert_eq!(links(&o).iter().map(|l| l.number).collect::<Vec<_>>(), [7]);
+    let mut thread = o.store.app_thread("t1").unwrap().unwrap();
+    let layer = |number| PullRequestStackLayer { number, head_branch: format!("b{number}"), state: PullRequestState::Open };
+    thread.pull_requests.as_mut().unwrap()[0].stack =
+        Some(PullRequestStack { kind: PullRequestStackKind::Native, id: "s".into(), number: 7, url: "u".into(), base: "main".into(), layers: vec![layer(6), layer(7)] });
+    o.store.append_event("t1", EventBody::Thread { change: domovoi_model::typed::ThreadChange::PullRequestSynced, thread: Box::new(thread) }, &Origin::default()).unwrap();
+    o.dispatch(unlink("u2", 7)).await.unwrap();
+    assert_eq!(links(&o)[0].source, PullRequestLinkSource::StackDismissed);
+    o.dispatch(link("l3", 7, PullRequestLinkSource::Stack)).await.unwrap();
+    assert_eq!(links(&o)[0].source, PullRequestLinkSource::StackDismissed, "a stack sync does not bring it back");
+    o.dispatch(link("l4", 7, PullRequestLinkSource::Manual)).await.unwrap();
+    assert_eq!(links(&o)[0].source, PullRequestLinkSource::Manual);
+
+    // A settled thread watches nothing.
+    o.dispatch(ThreadArchive { command_id: "a1".into(), thread_id: "t1".into() }.into()).await.unwrap();
+    let refused = o.dispatch(watch("w4", 7, true, None)).await.unwrap_err();
+    assert!(refused.to_string().contains("cannot watch pull requests"), "{refused}");
+}
+
+#[tokio::test]
+async fn a_secret_card_is_asked_under_the_run_root_and_ends_once() {
+    use domovoi_model::typed::command::SecretRequestRecord;
+    use domovoi_model::typed::{SecretRequestStatus, TurnItemStatus};
+    let (o, mut fx) = setup();
+    o.launch_thread(launch("t1")).await.unwrap();
+    fx.recv().await;
+    let run_id = run_turn(&o, "t1");
+    let root = held(&o, "t1").runs.as_slice().first().unwrap().root_node_id.clone().unwrap();
+    let record = |command: &str, node: &str, status: SecretRequestStatus| -> Command {
+        Command::SecretRequestRecord(Box::new(SecretRequestRecord {
+            command_id: command.into(),
+            thread_id: "t1".into(),
+            run_id: run_id.as_str().into(),
+            node_id: node.into(),
+            turn_item_id: "turn-item:secret-request:t1:k".into(),
+            label: "Deploy token".into(),
+            reason: "To deploy".into(),
+            url: None,
+            placeholder: None,
+            delivery: None,
+            secret_status: status,
+        }))
+    };
+    let card = |o: &Orchestrator| match o.store.record::<TurnItem>("t1", "turn-item:secret-request:t1:k").unwrap() {
+        Some(TurnItem::SecretRequest(card)) => *card,
+        other => panic!("{other:?}"),
+    };
+    let refused = o.dispatch(record("s0", "node:elsewhere", SecretRequestStatus::Pending)).await.unwrap_err();
+    assert!(refused.to_string().contains("is not the root of run"), "{refused}");
+    o.dispatch(record("s1", root.as_str(), SecretRequestStatus::Pending)).await.unwrap();
+    assert_eq!((card(&o).secret_status, card(&o).status), (SecretRequestStatus::Pending, TurnItemStatus::Waiting));
+    assert_eq!(card(&o).provider_turn_id.map(|t| t.as_str().to_owned()).as_deref(), Some("pturn-1"));
+    o.dispatch(record("s2", root.as_str(), SecretRequestStatus::Saved)).await.unwrap();
+    assert_eq!((card(&o).secret_status, card(&o).status), (SecretRequestStatus::Saved, TurnItemStatus::Completed));
+    let before = o.store.latest_sequence().unwrap();
+    o.dispatch(record("s3", root.as_str(), SecretRequestStatus::Cancelled)).await.unwrap();
+    assert_eq!(o.store.latest_sequence().unwrap(), before, "an ended card stays as it ended");
+    assert_eq!(card(&o).secret_status, SecretRequestStatus::Saved);
+    // No client may record one.
+    let sent = json!({ "type": "secret_request.record", "commandId": "x", "threadId": "t1", "runId": run_id, "nodeId": root, "turnItemId": "i2",
+        "label": "l", "reason": "r", "secretStatus": "saved" });
+    let refused = crate::rpc::shell::dispatch_command(&o, sent).await.unwrap_err();
+    assert!(refused.to_string().contains("not supported"), "{refused}");
+}

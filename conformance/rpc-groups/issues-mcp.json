@@ -1,0 +1,212 @@
+{
+ "fixture": true,
+ "env": {
+  "DOMOVOI_CLAUDE_BINARY": "$DIR/bin/claude",
+  "GIT_ALLOW_PROTOCOL": "file",
+  "GIT_TERMINAL_PROMPT": "0"
+ },
+ "normalize": [],
+ "cases": [
+  {
+   "sh": "mcp 01 '{\"jsonrpc\": \"2.0\", \"id\": 1, \"method\": \"tools/list\"}'",
+   "tag": "projects.readFile",
+   "payload": {
+    "cwd": "$DIR/mcp-out",
+    "relativePath": "01.json"
+   },
+   "note": "the issue tools are listed"
+  },
+  {
+   "sh": "mcp 02 '{\"jsonrpc\": \"2.0\", \"id\": 2, \"method\": \"tools/call\", \"params\": {\"name\": \"list_issues\", \"arguments\": {}}}'",
+   "tag": "projects.readFile",
+   "payload": {
+    "cwd": "$DIR/mcp-out",
+    "relativePath": "02.json"
+   },
+   "note": "this thread's project, open issues"
+  },
+  {
+   "sh": "mcp 03 '{\"jsonrpc\": \"2.0\", \"id\": 3, \"method\": \"tools/call\", \"params\": {\"name\": \"list_issues\", \"arguments\": {\"state\": \"all\", \"query\": \"negative\", \"limit\": 1}}}'",
+   "tag": "projects.readFile",
+   "payload": {
+    "cwd": "$DIR/mcp-out",
+    "relativePath": "03.json"
+   }
+  },
+  {
+   "sh": "mcp 04 '{\"jsonrpc\": \"2.0\", \"id\": 4, \"method\": \"tools/call\", \"params\": {\"name\": \"read_issue\", \"arguments\": {\"key\": \"7\"}}}'",
+   "tag": "projects.readFile",
+   "payload": {
+    "cwd": "$DIR/mcp-out",
+    "relativePath": "04.json"
+   },
+   "note": "by key: the project's tracker"
+  },
+  {
+   "sh": "mcp 05 '{\"jsonrpc\": \"2.0\", \"id\": 5, \"method\": \"tools/call\", \"params\": {\"name\": \"read_issue\", \"arguments\": {\"url\": \"https://github.com/acme/calc/issues/7\"}}}'",
+   "tag": "projects.readFile",
+   "payload": {
+    "cwd": "$DIR/mcp-out",
+    "relativePath": "05.json"
+   },
+   "note": "by URL"
+  },
+  {
+   "sh": "mcp 06 '{\"jsonrpc\": \"2.0\", \"id\": 6, \"method\": \"tools/call\", \"params\": {\"name\": \"read_issue\", \"arguments\": {\"url\": \"https://github.com/other/lib/issues/3\"}}}'",
+   "tag": "projects.readFile",
+   "payload": {
+    "cwd": "$DIR/mcp-out",
+    "relativePath": "06.json"
+   },
+   "note": "another repository: read-only"
+  },
+  {
+   "sh": "mcp 07 '{\"jsonrpc\": \"2.0\", \"id\": 7, \"method\": \"tools/call\", \"params\": {\"name\": \"read_issue\", \"arguments\": {}}}'",
+   "tag": "projects.readFile",
+   "payload": {
+    "cwd": "$DIR/mcp-out",
+    "relativePath": "07.json"
+   },
+   "note": "neither url nor key"
+  },
+  {
+   "sh": "mcp 08 '{\"jsonrpc\": \"2.0\", \"id\": 8, \"method\": \"tools/call\", \"params\": {\"name\": \"read_issue\", \"arguments\": {\"url\": \"https://example.com/acme/calc/issues/7\"}}}'",
+   "tag": "projects.readFile",
+   "payload": {
+    "cwd": "$DIR/mcp-out",
+    "relativePath": "08.json"
+   },
+   "note": "not an issue URL here"
+  },
+  {
+   "sh": "mcp 09 '{\"jsonrpc\": \"2.0\", \"id\": 9, \"method\": \"tools/call\", \"params\": {\"name\": \"read_issue\", \"arguments\": {\"key\": \"999\"}}}'",
+   "tag": "projects.readFile",
+   "payload": {
+    "cwd": "$DIR/mcp-out",
+    "relativePath": "09.json"
+   },
+   "note": "not found"
+  },
+  {
+   "sh": "mcp 10 '{\"jsonrpc\": \"2.0\", \"id\": 10, \"method\": \"tools/call\", \"params\": {\"name\": \"create_issue\", \"arguments\": {\"title\": \"Filed by the agent\", \"labels\": [\"bug\"]}}}'",
+   "tag": "projects.readFile",
+   "payload": {
+    "cwd": "$DIR/mcp-out",
+    "relativePath": "10.json"
+   }
+  },
+  {
+   "sh": "mcp 11 '{\"jsonrpc\": \"2.0\", \"id\": 11, \"method\": \"tools/call\", \"params\": {\"name\": \"comment_on_issue\", \"arguments\": {\"key\": \"7\", \"body\": \"Fixed.\"}}}'",
+   "tag": "projects.readFile",
+   "payload": {
+    "cwd": "$DIR/mcp-out",
+    "relativePath": "11.json"
+   }
+  },
+  {
+   "sh": "mcp 12 '{\"jsonrpc\": \"2.0\", \"id\": 12, \"method\": \"tools/call\", \"params\": {\"name\": \"comment_on_issue\", \"arguments\": {\"url\": \"https://github.com/other/lib/issues/3\", \"body\": \"Hi\"}}}'",
+   "tag": "projects.readFile",
+   "payload": {
+    "cwd": "$DIR/mcp-out",
+    "relativePath": "12.json"
+   },
+   "note": "read-only"
+  },
+  {
+   "sh": "mcp 13 '{\"jsonrpc\": \"2.0\", \"id\": 13, \"method\": \"tools/call\", \"params\": {\"name\": \"set_issue_state\", \"arguments\": {\"key\": \"7\", \"state\": \"Completed\"}}}'",
+   "tag": "projects.readFile",
+   "payload": {
+    "cwd": "$DIR/mcp-out",
+    "relativePath": "13.json"
+   }
+  },
+  {
+   "sh": "mcp 14 '{\"jsonrpc\": \"2.0\", \"id\": 14, \"method\": \"tools/call\", \"params\": {\"name\": \"link_issue\", \"arguments\": {\"key\": \"7\"}}}'",
+   "tag": "projects.readFile",
+   "payload": {
+    "cwd": "$DIR/mcp-out",
+    "relativePath": "14.json"
+   },
+   "note": "links with source agent"
+  },
+  {
+   "sh": "mcp 15 '{\"jsonrpc\": \"2.0\", \"id\": 15, \"method\": \"tools/call\", \"params\": {\"name\": \"link_issue\", \"arguments\": {\"url\": \"https://github.com/ACME/calc/issues/7\"}}}'",
+   "tag": "projects.readFile",
+   "payload": {
+    "cwd": "$DIR/mcp-out",
+    "relativePath": "15.json"
+   },
+   "note": "already linked"
+  },
+  {
+   "sh": "mcp 16 '{\"jsonrpc\": \"2.0\", \"id\": 16, \"method\": \"tools/call\", \"params\": {\"name\": \"list_thread_issues\", \"arguments\": {}}}'",
+   "tag": "projects.readFile",
+   "payload": {
+    "cwd": "$DIR/mcp-out",
+    "relativePath": "16.json"
+   }
+  },
+  {
+   "tag": "issues.linkedThreads",
+   "payload": {
+    "tracker": "github",
+    "host": "github.com",
+    "scope": "acme/calc",
+    "key": "7"
+   },
+   "note": "the agent's link"
+  },
+  {
+   "sh": "mcp 17 '{\"jsonrpc\": \"2.0\", \"id\": 17, \"method\": \"tools/call\", \"params\": {\"name\": \"unlink_issue\", \"arguments\": {\"key\": \"7\"}}}'",
+   "tag": "projects.readFile",
+   "payload": {
+    "cwd": "$DIR/mcp-out",
+    "relativePath": "17.json"
+   }
+  },
+  {
+   "sh": "mcp 18 '{\"jsonrpc\": \"2.0\", \"id\": 18, \"method\": \"tools/call\", \"params\": {\"name\": \"unlink_issue\", \"arguments\": {\"key\": \"7\"}}}'",
+   "tag": "projects.readFile",
+   "payload": {
+    "cwd": "$DIR/mcp-out",
+    "relativePath": "18.json"
+   },
+   "note": "not linked any more"
+  },
+  {
+   "sh": "mcp 19 '{\"jsonrpc\": \"2.0\", \"id\": 19, \"method\": \"tools/call\", \"params\": {\"name\": \"list_issues\", \"arguments\": {\"projectId\": \"nope\"}}}'",
+   "tag": "projects.readFile",
+   "payload": {
+    "cwd": "$DIR/mcp-out",
+    "relativePath": "19.json"
+   },
+   "note": "no such project"
+  },
+  {
+   "sh": "mcp 20 '{\"jsonrpc\": \"2.0\", \"id\": 20, \"method\": \"tools/call\", \"params\": {\"name\": \"link_issue\", \"arguments\": {\"key\": \"7\", \"threadId\": \"thread-x\"}}}'",
+   "tag": "projects.readFile",
+   "payload": {
+    "cwd": "$DIR/mcp-out",
+    "relativePath": "20.json"
+   },
+   "note": "no such thread"
+  },
+  {
+   "sh": "mcp 21 '{\"jsonrpc\": \"2.0\", \"id\": 21, \"method\": \"tools/call\", \"params\": {\"name\": \"list_issues\", \"arguments\": {\"limit\": 0}}}'",
+   "tag": "projects.readFile",
+   "payload": {
+    "cwd": "$DIR/mcp-out",
+    "relativePath": "21.json"
+   },
+   "note": "outside the bounds"
+  },
+  {
+   "tag": "projects.readFile",
+   "payload": {
+    "cwd": "$DIR/gh-data",
+    "relativePath": "log"
+   },
+   "note": "what gh was asked"
+  }
+ ]
+}

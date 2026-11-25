@@ -1,7 +1,9 @@
 //! The agent MCP server (t3code `mcp/McpHttpServer` and its core toolkits):
 //! the agents Domovoi runs reach this server back over Streamable HTTP at
 //! `/mcp`, to read and message other threads of their project, delegate
-//! tasks to child agents, schedule tasks, and look up their project.
+//! tasks to child agents, schedule tasks, look up their project, ask the
+//! user for a secret, link and watch pull requests, send attachments, show
+//! HTML pages and messages in their thread, and use the server's browser.
 //!
 //! Each agent session gets a bearer token naming its thread (`session_for`);
 //! a call acts as that thread, inside its project. Only connections from
@@ -68,11 +70,19 @@ pub fn claude_config(thread_id: &str) -> Option<String> {
 /// Codex thread config entries (`config` on `thread/start` / `thread/resume`).
 pub fn codex_config(thread_id: &str) -> Option<Value> {
     let (url, token) = session_for(thread_id)?;
-    Some(json!({ format!("mcp_servers.{SERVER_NAME}"): { "url": url, "http_headers": { "Authorization": format!("Bearer {token}") }, "tool_timeout_sec": 1800 } }))
+    Some(json!({ format!("mcp_servers.{SERVER_NAME}"): { "url": url, "http_headers": { "Authorization": format!("Bearer {token}") }, "tool_timeout_sec": 3900 } }))
 }
 
 mod artifacts;
+mod attachments;
 pub mod bridge;
+mod html;
+mod environments;
+mod issues;
+mod message;
+mod preview;
+mod pull_requests;
+mod secrets;
 mod tasks;
 mod threads;
 mod worktree;
@@ -108,6 +118,14 @@ pub fn tools() -> Vec<Value> {
     all.extend(tasks::tools());
     all.extend(worktree::tools());
     all.extend(artifacts::tools());
+    all.extend(secrets::tools());
+    all.extend(pull_requests::tools());
+    all.extend(attachments::tools());
+    all.extend(html::tools());
+    all.extend(message::tools());
+    all.extend(issues::tools());
+    all.extend(environments::tools());
+    all.extend(preview::tools());
     all
 }
 
@@ -173,6 +191,18 @@ impl Call<'_> {
     }
 }
 
+/// A tool answers `{ FULL_RESULT: <CallToolResult> }` when its result is not
+/// only JSON text (a screenshot is image content).
+pub(crate) const FULL_RESULT: &str = "_mcpCallToolResult";
+
+/// The `tools/call` result for what a tool answered.
+fn finished(v: Value) -> Value {
+    match v {
+        Value::Object(mut m) if m.contains_key(FULL_RESULT) => m.remove(FULL_RESULT).unwrap_or(Value::Null),
+        v => text_result(v),
+    }
+}
+
 pub(crate) fn text_result(v: Value) -> Value {
     json!({ "content": [{ "type": "text", "text": serde_json::to_string_pretty(&v).unwrap_or_default() }], "structuredContent": v })
 }
@@ -223,6 +253,10 @@ impl Caller {
 
 async fn call_tool(state: &Arc<AppState>, caller: &Caller, name: &str, args: &Value) -> Result<Value, String> {
     let call = Call { state, caller, args };
+    // A call naming a linked environment goes there (`PeerForwarding`).
+    if let Some(answer) = environments::forwarded(&call, name).await {
+        return answer;
+    }
     if let Some(answer) = threads::call(&call, name).await {
         return answer;
     }
@@ -233,6 +267,30 @@ async fn call_tool(state: &Arc<AppState>, caller: &Caller, name: &str, args: &Va
         return answer;
     }
     if let Some(answer) = artifacts::call(&call, name).await {
+        return answer;
+    }
+    if let Some(answer) = secrets::call(&call, name).await {
+        return answer;
+    }
+    if let Some(answer) = pull_requests::call(&call, name).await {
+        return answer;
+    }
+    if let Some(answer) = attachments::call(&call, name).await {
+        return answer;
+    }
+    if let Some(answer) = html::call(&call, name).await {
+        return answer;
+    }
+    if let Some(answer) = message::call(&call, name).await {
+        return answer;
+    }
+    if let Some(answer) = issues::call(&call, name).await {
+        return answer;
+    }
+    if let Some(answer) = environments::call(&call, name).await {
+        return answer;
+    }
+    if let Some(answer) = preview::call(&call, name).await {
         return answer;
     }
     Err(format!("Unknown tool {name}."))
@@ -262,7 +320,7 @@ pub async fn handle(state: &Arc<AppState>, token: &str, msg: &Value) -> Option<V
             let name = msg["params"]["name"].as_str().unwrap_or_default();
             let args = msg["params"].get("arguments").cloned().unwrap_or(json!({}));
             ok(match call_tool(state, &caller, name, &args).await {
-                Ok(v) => text_result(v),
+                Ok(v) => finished(v),
                 Err(m) => tool_error(m),
             })
         }

@@ -1,0 +1,157 @@
+{
+ "fixture": true,
+ "env": {
+  "GIT_ALLOW_PROTOCOL": "file",
+  "GIT_TERMINAL_PROMPT": "0"
+ },
+ "normalize": [],
+ "cases": [
+  {
+   "tag": "issues.list",
+   "payload": {
+    "state": "open"
+   },
+   "note": "no gh: the tracker is not configured, the project errs"
+  },
+  {
+   "tag": "issues.detail",
+   "payload": {
+    "projectId": "$PROJECT",
+    "tracker": "github",
+    "scope": "acme/calc",
+    "key": "7"
+   },
+   "expect": "failure",
+   "error": "IssueUnavailableError",
+   "note": "tool-missing"
+  },
+  {
+   "tag": "issues.list",
+   "payload": {
+    "state": "open",
+    "involvement": "assigned"
+   },
+   "note": "no viewer either"
+  },
+  {
+   "sh": "cp \"$DIR/tools/gh\" \"$DIR/bin/gh\" && chmod +x \"$DIR/bin/gh\" && gh-rule err 'graphql|api user' 'To get started with GitHub CLI, please run:  gh auth login'",
+   "tag": "issues.list",
+   "payload": {
+    "state": "open"
+   },
+   "note": "signed out: unauthenticated"
+  },
+  {
+   "tag": "issues.detail",
+   "payload": {
+    "projectId": "$PROJECT",
+    "tracker": "github",
+    "scope": "acme/calc",
+    "key": "7"
+   },
+   "expect": "failure",
+   "error": "IssueUnavailableError",
+   "note": "unauthenticated"
+  },
+  {
+   "tag": "issues.comment",
+   "payload": {
+    "projectId": "$PROJECT",
+    "tracker": "github",
+    "scope": "acme/calc",
+    "key": "7",
+    "body": "Hi"
+   },
+   "expect": "failure",
+   "error": "IssueUnavailableError"
+  },
+  {
+   "sh": "gh-rule err 'graphql' 'GraphQL: API rate limit exceeded for user ID 583231.'",
+   "tag": "issues.list",
+   "payload": {
+    "state": "open"
+   },
+   "note": "rate-limited: the project errs, the tracker stays configured"
+  },
+  {
+   "tag": "issues.detail",
+   "payload": {
+    "projectId": "$PROJECT",
+    "tracker": "github",
+    "scope": "acme/calc",
+    "key": "7"
+   },
+   "expect": "failure",
+   "error": "IssueOperationError",
+   "note": "rate-limited"
+  },
+  {
+   "sh": "gh-rule err 'IssueDetail' 'HTTP 502: Bad Gateway'",
+   "tag": "issues.detail",
+   "payload": {
+    "projectId": "$PROJECT",
+    "tracker": "github",
+    "scope": "acme/calc",
+    "key": "7"
+   },
+   "expect": "failure",
+   "error": "IssueOperationError",
+   "note": "failed"
+  },
+  {
+   "sh": "gh-rule out 'IssueDetail' 'not json'",
+   "tag": "issues.detail",
+   "payload": {
+    "projectId": "$PROJECT",
+    "tracker": "github",
+    "scope": "acme/calc",
+    "key": "7"
+   },
+   "expect": "failure",
+   "error": "IssueOperationError",
+   "note": "unreadable"
+  },
+  {
+   "sh": "gh-rule err 'api -X POST' 'HTTP 403: Resource not accessible by integration'",
+   "tag": "issues.create",
+   "payload": {
+    "projectId": "$PROJECT",
+    "tracker": "github",
+    "scope": "acme/calc",
+    "title": "x",
+    "body": "",
+    "labels": [],
+    "assignees": []
+   },
+   "expect": "failure",
+   "error": "IssueOperationError"
+  },
+  {
+   "sh": "gh-rule out 'api -X POST' '{}'",
+   "tag": "issues.create",
+   "payload": {
+    "projectId": "$PROJECT",
+    "tracker": "github",
+    "scope": "acme/calc",
+    "title": "x",
+    "body": "",
+    "labels": [],
+    "assignees": []
+   },
+   "expect": "failure",
+   "error": "IssueOperationError",
+   "note": "an answer without the new issue"
+  },
+  {
+   "sh": "gh-rule clear",
+   "tag": "issues.detail",
+   "payload": {
+    "projectId": "$PROJECT",
+    "tracker": "github",
+    "scope": "acme/calc",
+    "key": "7"
+   },
+   "note": "working again"
+  }
+ ]
+}

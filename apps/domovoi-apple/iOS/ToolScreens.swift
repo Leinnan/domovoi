@@ -38,7 +38,7 @@ struct DiffScreen: View {
                     .defaultScrollAnchor(.leading)
                     .listRowInsets(EdgeInsets())
                 } label: {
-                    FileChangeRow(path: file.path, added: Int(file.additions), removed: Int(file.deletions))
+                    FileChangeRow(path: file.path, added: Int(file.additions), removed: Int(file.deletions), oldPath: file.oldPath, change: file.change)
                 }
             }
             if diff.truncated {
@@ -187,7 +187,6 @@ struct FilePreviewScreen: View {
     @State private var confirmDiscard = false
     /// An image file's bytes once its preview loaded them (Share, Copy, Save).
     @State private var imageFile: ImageFile?
-    @State private var notice: ImageNotice?
 
     private var preview: FilePreviewView? {
         guard let preview = core.view.panel.files.preview, preview.path == path else { return nil }
@@ -235,7 +234,6 @@ struct FilePreviewScreen: View {
                 ProgressView()
             }
         }
-        .imageNotice($notice)
         .navigationTitle((path as NSString).lastPathComponent)
         .navigationBarTitleDisplayMode(.inline)
         .onChange(of: editText) { _, text in
@@ -268,7 +266,7 @@ struct FilePreviewScreen: View {
                     Menu {
                         Button("Copy Path", systemImage: "doc.on.doc") { Platform.copy(preview.path) }
                         if preview.imageUrl != nil, let imageFile {
-                            ImageActionItems(file: imageFile, name: (preview.path as NSString).lastPathComponent, preview: nil, notice: $notice)
+                            ImageActionItems(file: imageFile, name: (preview.path as NSString).lastPathComponent, preview: nil)
                         }
                         if !preview.loading, preview.imageUrl == nil {
                             Toggle("Wrap Lines", systemImage: "text.word.spacing", isOn: $wraps)
@@ -697,19 +695,36 @@ struct UsageScreen: View {
                     ForEach(UsageSpan.days, id: \.0) { Text($0.1).tag($0.0) }
                 }
                 .pickerStyle(.segmented)
-            }
-            Section {
-                LabeledContent("Total tokens", value: usage.totalTokens)
-                if !usage.totalCost.isEmpty { LabeledContent("Cost", value: usage.totalCost) }
-                if !usage.rangeLabel.isEmpty { LabeledContent("Range", value: usage.rangeLabel) }
+                if !usage.providers.isEmpty {
+                    UsageProviderFilter(usage: usage) { core.update(.filterUsageProvider(provider: $0)) }
+                }
             } footer: {
                 if !usage.notice.isEmpty { Text(usage.notice) }
+            }
+            if usage.error != nil || !usage.sourceNotices.isEmpty {
+                Section {
+                    if let error = usage.error { ErrorRow(error) }
+                    UsageSourceNotices(notices: usage.sourceNotices)
+                }
             }
             // A row, not a full-screen state: the range and totals stay above it.
             if usage.loading && usage.rows.isEmpty {
                 LoadingRow("Loading usage…")
             } else if usage.rows.isEmpty {
                 Text("No usage yet. Turns run in this range show up here.").font(TypeRole.meta).foregroundStyle(.secondary)
+            } else {
+                // The cards draw their own surface, on the list's background.
+                Section {
+                    UsageKPIs(usage: usage)
+                        .listRowInsets(EdgeInsets())
+                        .listRowBackground(Color.clear)
+                }
+                if !usage.series.isEmpty {
+                    Section { UsageActivityChart(usage: usage).padding(.vertical, Space.xs) }
+                }
+                if !usage.tokenMix.isEmpty {
+                    Section { UsageTokenMix(slices: usage.tokenMix).padding(.vertical, Space.xs) }
+                }
             }
             if !usage.byModel.isEmpty {
                 Section("By model") {
@@ -717,7 +732,7 @@ struct UsageScreen: View {
                 }
             }
             if !usage.rows.isEmpty {
-                Section("By day and model") {
+                Section(usage.hourly ? "By hour" : "By day and model") {
                     ForEach(Array(usage.rows.enumerated()), id: \.offset) { _, row in usageRow(row, byDay: true) }
                 }
             }
@@ -731,20 +746,28 @@ struct UsageScreen: View {
         }
         .navigationTitle("Usage")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                RefreshLimitsButton(refreshing: usage.limitsRefreshing) { core.update(.refreshUsageLimits) }
+            }
+        }
         .onAppear { core.update(.loadUsage(days: usage.days == 0 ? 7 : usage.days)) }
     }
 
     private func usageRow(_ row: UsageRowView, byDay: Bool) -> some View {
         VStack(alignment: .leading, spacing: Space.xxs) {
             HStack {
+                Circle().fill(Tint.provider(row.providerKey)).frame(width: Size.dot, height: Size.dot)
                 Text(row.model).lineLimit(1)
                 Spacer()
                 Text(row.total).monospacedDigit()
                 if !row.cost.isEmpty { Text(row.cost).monospacedDigit().foregroundStyle(.secondary) }
             }
-            Text(([byDay ? row.day : "", row.provider, "in \(row.input)", "cached \(row.cached)", "out \(row.output)"]).filter { !$0.isEmpty }.joined(separator: " · "))
+            Text([byDay ? row.when(hourly: usage.hourly) : "", row.provider, "\(row.shareLabel) of tokens", "\(row.cacheHitText) cache hit", row.sessionsText].filter { !$0.isEmpty }.joined(separator: " · "))
                 .font(TypeRole.metaSmall).foregroundStyle(.secondary)
+            Text(row.breakdown).font(TypeRole.metaSmall).monospacedDigit().foregroundStyle(.secondary)
         }
+        .accessibilityElement(children: .combine)
     }
 }
 

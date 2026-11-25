@@ -2,7 +2,8 @@
 
 Traffic recorded from the real t3code TypeScript server (`pingdotgg/t3code@f313d0a`,
 Effect 4.1.3) driven by its unmodified web client. These are the compatibility target
-for `domovoi-server`.
+for `domovoi-server`. Both sessions still decode under the current pin (t3code v0.1.11)
+with `conformance/wire-check.ts`.
 
 ## ts-session1
 

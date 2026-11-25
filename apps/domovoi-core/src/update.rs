@@ -87,15 +87,15 @@ pub fn request_asset_urls(model: &mut Model) -> Cmd {
     // Images the agent's steps looked at or made.
     let thread_id = thread.record.id.as_str().to_owned();
     let cwd = model.thread_cwd(&thread_id).unwrap_or_default();
-    let mut shown: Vec<(String, serde_json::Value)> = vec![];
+    let mut shown: Vec<(String, crate::tools::ImageSource, String)> = vec![];
     for item in thread.visible_turn_item_refs() {
         if *item.status() == domovoi_model::typed::TurnItemStatus::Running {
             continue;
         }
         for source in crate::tools::image_sources(item, &cwd) {
             let key = source.key(item.id().as_str());
-            if !model.asset_urls.contains_key(&key) && !shown.iter().any(|(k, _)| *k == key) {
-                shown.push((key, source.resource(&thread_id, item.id().as_str())));
+            if !model.asset_urls.contains_key(&key) && !shown.iter().any(|(k, _, _)| *k == key) {
+                shown.push((key, source, item.id().as_str().to_owned()));
             }
         }
     }
@@ -104,9 +104,9 @@ pub fn request_asset_urls(model: &mut Model) -> Cmd {
         model.asset_urls.insert(image.id.clone(), String::new());
         cmds.push(call(model, requests::assets_create_url(&image), Route::AssetUrl(image.id)));
     }
-    for (key, resource) in shown {
+    for (key, source, item_id) in shown {
         model.asset_urls.insert(key.clone(), String::new());
-        cmds.push(call(model, requests::assets_create_url_for(resource), Route::AssetUrl(key)));
+        cmds.push(call(model, requests::assets_create_url_for(&source, &thread_id, &item_id), Route::AssetUrl(key)));
     }
     Command::all(cmds)
 }
@@ -158,6 +158,27 @@ fn request_thread(model: &Model, request_id: &str) -> Option<String> {
     let tid = model.selected_thread.as_deref()?;
     model.held_thread(tid)?.runtime_requests.get(request_id)?;
     Some(tid.to_owned())
+}
+
+/// Answers a secret request of the open thread, once: unlike a command it
+/// waits in no outbox (that would keep the value), so with no connection it
+/// is not sent and the card stays to answer again.
+fn answer_secret(model: &mut Model, item_id: String, answer: requests::SecretAnswer) -> Cmd {
+    let Some(tid) = model.selected_thread.clone() else { return Command::done() };
+    let pending = model.held_thread(&tid).and_then(|t| t.turn_items.get(item_id.as_str())).is_some_and(|item| {
+        matches!(item, TurnItem::SecretRequest(asked) if asked.secret_status == typed::SecretRequestStatus::Pending)
+    });
+    if !pending || model.secrets_answering.contains(&item_id) {
+        return Command::done();
+    }
+    if model.connection != Connection::Connected {
+        model.toast("error", "Secret: not connected to the server. Try again once it's back.");
+        return render();
+    }
+    let saved = matches!(answer, requests::SecretAnswer::Save(_));
+    let request = requests::secrets_answer_request(&ThreadId::from(tid), &item_id, answer);
+    model.secrets_answering.insert(item_id.clone());
+    Command::all([call(model, request, Route::SecretAnswer { item_id, saved }), render()])
 }
 
 /// The user's answer to what an agent asked: a decision on an approval, or
@@ -1521,6 +1542,7 @@ pub fn update(event: Event, model: &mut Model) -> Cmd {
         Event::Resume => crate::environments::resume(model),
         Event::NetworkChanged => crate::environments::network_changed(model),
         Event::PushToken { token, environment } => crate::environments::push_token(model, token, environment),
+        Event::PushEndpoint { endpoint, p256dh, auth } => crate::environments::push_endpoint(model, endpoint, p256dh, auth),
         Event::ActivityToken { thread_id, token, environment } => crate::environments::activity_token(model, thread_id, token, environment),
         Event::OpenNotification { environment_id, thread_id } => crate::environments::open_notification(model, environment_id, thread_id),
         Event::RespondFromNotification { environment_id, thread_id, request_id, decision } => {
@@ -1966,6 +1988,13 @@ pub fn update(event: Event, model: &mut Model) -> Cmd {
             let Some(tid) = request_thread(model, &request_id) else { return Command::done() };
             dispatch(model, ThreadUserInputDismiss { command_id: command_id(), thread_id: tid.into(), request_id: request_id.into() }, "Skip question")
         }
+        Event::AnswerSecret { item_id, value } => {
+            if value.trim().is_empty() {
+                return Command::done();
+            }
+            answer_secret(model, item_id, requests::SecretAnswer::Save(&value))
+        }
+        Event::DeclineSecret { item_id } => answer_secret(model, item_id, requests::SecretAnswer::Decline),
         Event::Interrupt => {
             let Some(tid) = model.selected_thread.clone() else { return Command::done() };
             model.composer.stop_asked_ms = model.now_ms;

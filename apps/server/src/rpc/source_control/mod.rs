@@ -1,14 +1,15 @@
 //! Source control RPCs: repositories, sign-in and project clones
 //! (`repositories`), pull requests (`pull_requests`, answered from GitHub by
-//! `github` with the records of `pull_request_records` and the failures of
-//! `pull_request_failure`; review guides in `review_guides`) and the pull
-//! request side of git (`git_workflow`).
+//! `github` and from GitLab by `gitlab` with the records of
+//! `pull_request_records` and the failures of `pull_request_failure`; review
+//! guides in `review_guides`) and the pull request side of git (`git_workflow`).
 
 mod git_workflow;
 mod github;
+mod gitlab;
 mod pull_request_failure;
 mod pull_request_records;
-mod pull_requests;
+pub(crate) mod pull_requests;
 mod repositories;
 mod review_guides;
 

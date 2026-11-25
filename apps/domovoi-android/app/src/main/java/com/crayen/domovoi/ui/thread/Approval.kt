@@ -141,11 +141,7 @@ fun ApprovalBar(requests: List<RequestView>, send: (Event) -> Unit) {
                 request.detail?.let { SelectionContainer { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) } }
                 request.files.forEach { file ->
                     Column(verticalArrangement = Arrangement.spacedBy(Space.xs)) {
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Space.s)) {
-                            Text(file.path, fontFamily = Mono, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.StartEllipsis, modifier = Modifier.weight(1f))
-                            Text("+${file.additions}", color = LocalTints.current.success, style = MaterialTheme.typography.labelMedium)
-                            Text("−${file.deletions}", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelMedium)
-                        }
+                        DiffFileHeader(file)
                         DiffFileBody(file)
                     }
                 }

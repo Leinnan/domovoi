@@ -3,10 +3,13 @@
 mod app;
 mod host;
 mod image_actions;
+mod links;
 mod scroll;
 mod store;
 mod ui;
 mod views;
+#[cfg(feature = "webview")]
+mod webview;
 
 #[cfg(target_os = "macos")]
 const MACOS_DOCK_ICON_PNG: &[u8] = include_bytes!("../assets/app-icon-macos.png");
@@ -14,6 +17,7 @@ pub(crate) const WINDOW_ICON_PNG: &[u8] = include_bytes!("../assets/app-icon-256
 
 /// PNG files start with these bytes. A checkout without `git lfs pull` embeds
 /// a pointer file instead, and the app goes on without that icon.
+#[cfg(any(target_os = "macos", test))]
 const PNG_MAGIC: &[u8] = b"\x89PNG\r\n\x1a\n";
 
 pub(crate) fn window_icon() -> Option<iced::window::Icon> {
@@ -50,9 +54,18 @@ fn set_macos_app_icon() {
 }
 
 fn main() -> iced::Result {
+    // Started as an artifact's preview window (`webview::open`): that window only.
+    #[cfg(feature = "webview")]
+    if let Some((url, title)) = webview::window_args() {
+        webview::run(url, title);
+    }
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "warn,domovoi_iced=info".into()))
         .init();
+    // A link opened while the app runs goes to it, and this launch ends.
+    if links::start(links::from_args().as_deref()) {
+        return Ok(());
+    }
     #[cfg(target_os = "macos")]
     set_macos_app_icon();
     #[cfg(target_os = "linux")]

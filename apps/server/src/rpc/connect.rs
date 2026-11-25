@@ -9,6 +9,8 @@
 //!   `relayClient.resolve`: `T3CODE_CLOUDFLARED_PATH`, a managed copy under the
 //!   Domovoi home (`relay-client/<version>/<platform>-<arch>/`), then `PATH`, each
 //!   accepted only when `cloudflared version` reports the minimum version;
+//! - linked environments over iroh (`crate::peer_links`): `peerLinks.list`,
+//!   `link` and `unlink`;
 //! - the settings gates (`guestSharingEnabled`, `linkedEnvironmentsEnabled`)
 //!   and every lookup a card answer makes before acting (unknown thread or
 //!   item, already answered, stopped run, not an MCP App).
@@ -16,18 +18,17 @@
 //! Limits (Domovoi contacts no remote service and installs nothing):
 //! - `cloud.installRelayClient` never downloads: with no usable client it fails
 //!   with `managed_by_policy` and says how to provide one;
-//! - no peer links are stored, so the list is empty, linking is `disabled`
-//!   and unlinking removes nothing; guest shares need T3 Connect
-//!   (`connect_unavailable`);
-//! - Domovoi has no secret store, no peer links and no MCP App bridge to its
-//!   providers, so a card that passes every check still fails: secrets with
-//!   `store_failed` (or `record_failed` for a decline), MCP Apps with
-//!   `provider-unsupported`. Domovoi's providers never create secret or link cards.
+//! - guest shares need T3 Connect (`connect_unavailable`); under a managed
+//!   policy without T3 Connect the relay client install is refused;
+//! - Domovoi has no link request cards and no MCP App bridge to its
+//!   providers, so a card that passes every check still fails: a link card
+//!   with `record_failed`, MCP Apps with `provider-unsupported`.
+//!   Domovoi's agents never create link cards.
 
 #![expect(clippy::disallowed_types, reason = "the `type` of an answer to a card, whatever its shape")]
 
 use super::Never;
-use super::admin_failure::{Cause, Failure, GuestShareReason, McpAppReason, PeerLinkReason, PeerLinkRequestReason, RelayInstallReason, SecretRequestReason};
+use super::admin_failure::{Cause, Failure, GuestShareReason, McpAppReason, PeerLinkRequestReason, RelayInstallReason, SecretRequestReason};
 use crate::state::{AppState, ConnCtx};
 use effect_rpc::Router;
 use futures::StreamExt;
@@ -37,7 +38,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
-use domovoi_model::typed::{LinkRequestStatus, Run, SecretRequestStatus, TurnItem};
+use domovoi_model::typed::{LinkRequestStatus, Run, SecretRequestItem, SecretRequestStatus, TurnItem};
 
 // ---- relay client ----
 
@@ -165,6 +166,12 @@ fn missing() -> RelayClientStatus {
 
 fn install_stream(ctx: Arc<ConnCtx>) -> BoxStream<'static, Result<InstallEvent, Failure>> {
     async_stream::stream! {
+        // T3 Connect is off under the managed policy (`RelayClient.installRefusedByPolicy`).
+        let policy = crate::policy::current();
+        if !policy.allows_connect() {
+            yield Err(Failure::RelayClientInstall { reason: RelayInstallReason::ManagedByPolicy, message: policy.refuse_connect().to_string() });
+            return;
+        }
         yield Ok(InstallEvent::Progress { stage: InstallStage::Checking });
         let reason = match relay_client_status(&ctx.state).await {
             status @ RelayClientStatus::Available { .. } => {
@@ -186,24 +193,38 @@ fn install_stream(ctx: Arc<ConnCtx>) -> BoxStream<'static, Result<InstallEvent, 
 
 // ---- peer links and guest shares ----
 
-const LINKED_ENVIRONMENTS_OFF: &str = "Linked environments is off on this machine. Turn it on in Settings → Labs.";
-const LINKED_ENVIRONMENTS_UNAVAILABLE: &str = "Linked environments are not available on this Domovoi server: it does not contact other environments.";
+/// What a pending link card fails with: Domovoi's agents make no link requests (`crate::peer_links`).
+const LINK_REQUESTS_UNAVAILABLE: &str = "This Domovoi server does not answer link request cards: link the environment from Settings instead.";
 
-/// `peerLinks.list`: Domovoi stores no links.
+/// `peerLinks.list`.
 #[derive(Serialize)]
 struct PeerLinks {
-    links: [Never; 0],
+    links: Vec<crate::peer_links::Summary>,
 }
 
-/// `peerLinks.unlink` (`PeerLinkRemoveResult`): there was nothing to remove.
+/// `peerLinks.unlink` (`PeerLinkRemoveResult`).
 #[derive(Serialize)]
 struct Unlinked {
     removed: bool,
 }
 
-async fn link(state: &AppState) -> Failure {
-    let message = if state.settings.read().await.linked_environments_enabled == Some(true) { LINKED_ENVIRONMENTS_UNAVAILABLE } else { LINKED_ENVIRONMENTS_OFF };
-    Failure::PeerLink { reason: PeerLinkReason::Disabled, message }
+/// `PeerLinkRemoveInput`.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UnlinkInput {
+    environment_id: String,
+}
+
+async fn list_links(state: &AppState) -> Result<PeerLinks, Failure> {
+    Ok(PeerLinks { links: crate::peer_links::links(state)?.list(state).await? })
+}
+
+async fn link(state: &AppState, input: crate::peer_links::CreateInput) -> Result<crate::peer_links::PeerLink, Failure> {
+    Ok(crate::peer_links::links(state)?.link(state, input, false).await?.0)
+}
+
+async fn unlink(state: &AppState, input: UnlinkInput) -> Result<Unlinked, Failure> {
+    Ok(Unlinked { removed: crate::peer_links::links(state)?.unlink(state, &input.environment_id).await? })
 }
 
 async fn guest_share(state: &AppState) -> Failure {
@@ -225,19 +246,37 @@ struct LinkAnswer {
     _answer: IgnoredAny,
 }
 
-/// The answer to a secret request card: of what it says, only whether it declines is read.
+/// The answer to a secret request card. Its shape is read only once the card waits for it.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SecretAnswer {
     thread_id: String,
     turn_item_id: String,
-    #[serde(rename = "answer", deserialize_with = "declines")]
-    declined: bool,
+    #[serde(deserialize_with = "secret_answer")]
+    answer: SecretChoice,
 }
 
-/// Whether a card's answer, whatever its shape, is of type `decline`.
-fn declines<'de, D: serde::Deserializer<'de>>(answer: D) -> Result<bool, D::Error> {
-    Ok(serde_json::Value::deserialize(answer)?["type"] == "decline")
+/// What the user did with a secret card (`SecretRequestAnswerInput.answer`).
+#[derive(Debug, PartialEq)]
+enum SecretChoice {
+    Save(String),
+    Decline,
+    /// A secret provider's reference, or an answer of no known shape.
+    Unreadable,
+}
+
+/// Any shape is taken: an answer of type `decline` declines, one of type
+/// `save` saves its trimmed `secret`, anything else cannot be read.
+fn secret_answer<'de, D: serde::Deserializer<'de>>(answer: D) -> Result<SecretChoice, D::Error> {
+    let answer = serde_json::Value::deserialize(answer)?;
+    Ok(match answer["type"].as_str() {
+        Some("decline") => SecretChoice::Decline,
+        Some("save") => match answer["secret"].as_str().map(str::trim).filter(|s| !s.is_empty()) {
+            Some(secret) => SecretChoice::Save(secret.to_owned()),
+            None => SecretChoice::Unreadable,
+        },
+        _ => SecretChoice::Unreadable,
+    })
 }
 
 /// A thread's turn items and runs.
@@ -260,36 +299,83 @@ fn secret_error(reason: SecretRequestReason, cause: Option<&str>) -> Failure {
     Failure::SecretRequest { reason, cause: cause.map(Cause::of) }
 }
 
-/// `SecretRequests.answer` up to the point where t3code stores the value, or
-/// records that the user declined (`declined`).
-pub fn answer_secret(threads: Result<Option<ThreadItems>, String>, turn_item_id: &str, declined: bool) -> Failure {
+/// The card `turn_item_id` of a thread, if it waits for an answer
+/// (`SecretRequests.answer`'s checks, in its order).
+pub fn waiting_secret_card(threads: Result<Option<ThreadItems>, String>, turn_item_id: &str) -> Result<SecretRequestItem, Failure> {
     let (items, runs) = match threads {
         Ok(Some(t)) => t,
-        Ok(None) => return secret_error(SecretRequestReason::NotFound, None),
-        Err(e) => return secret_error(SecretRequestReason::LoadFailed, Some(&e)),
+        Ok(None) => return Err(secret_error(SecretRequestReason::NotFound, None)),
+        Err(e) => return Err(secret_error(SecretRequestReason::LoadFailed, Some(&e))),
     };
     let card = items.iter().find_map(|item| match &**item {
         TurnItem::SecretRequest(card) if card.id.as_str() == turn_item_id => Some(card),
         _ => None,
     });
     let Some(card) = card else {
-        return secret_error(SecretRequestReason::NotFound, None);
+        return Err(secret_error(SecretRequestReason::NotFound, None));
     };
     let (Some(run_id), Some(_)) = (&card.run_id, &card.node_id) else {
-        return secret_error(SecretRequestReason::NotFound, None);
+        return Err(secret_error(SecretRequestReason::NotFound, None));
     };
     if card.secret_status != SecretRequestStatus::Pending {
-        return secret_error(SecretRequestReason::AlreadyAnswered, None);
+        return Err(secret_error(SecretRequestReason::AlreadyAnswered, None));
     }
     let run = runs.iter().find(|run| run.id == *run_id);
     if run.is_none_or(|run| TERMINAL_RUN_STATUSES.contains(&run.status.as_str())) {
-        return secret_error(SecretRequestReason::AgentStopped, None);
+        return Err(secret_error(SecretRequestReason::AgentStopped, None));
     }
-    if declined {
-        secret_error(SecretRequestReason::RecordFailed, Some("This Domovoi server cannot record secret request answers."))
-    } else {
-        secret_error(SecretRequestReason::StoreFailed, Some("This Domovoi server has no secret store."))
+    Ok((**card).clone())
+}
+
+/// `secrets.answerRequest` (t3code `SecretRequests.answer`): the value is
+/// stored before the card is marked saved, so no card shows saved without
+/// it, and is removed again when the card can no longer hand it to the agent.
+async fn answer_secret(state: &AppState, input: SecretAnswer) -> Result<(), Failure> {
+    use domovoi_model::typed::command::SecretRequestRecord;
+    let card = waiting_secret_card(thread_items(state, &input.thread_id), &input.turn_item_id)?;
+    let (Some(run_id), Some(node_id)) = (card.run_id.clone(), card.node_id.clone()) else {
+        return Err(secret_error(SecretRequestReason::NotFound, None));
+    };
+    let userdata = &state.paths.userdata;
+    let project_id = state.store.app_thread(&input.thread_id).ok().flatten().map(|t| t.project_id.as_str().to_owned()).unwrap_or_default();
+    let secret = match input.answer {
+        SecretChoice::Save(secret) => Some(secret),
+        SecretChoice::Decline => None,
+        SecretChoice::Unreadable => return Err(secret_error(SecretRequestReason::ReferenceUnreadable, Some("This server reads no secret providers: enter the value."))),
+    };
+    if let Some(secret) = &secret {
+        crate::secrets::requests::save(userdata, &input.thread_id, card.id.as_str(), &project_id, secret)
+            .map_err(|refused| secret_error(SecretRequestReason::StoreFailed, Some(refused.message())))?;
     }
+    let status = if secret.is_some() { SecretRequestStatus::Saved } else { SecretRequestStatus::Declined };
+    let record = SecretRequestRecord {
+        command_id: format!("secret-request:{}:{}", card.id.as_str(), status.as_str()).into(),
+        thread_id: input.thread_id.as_str().into(),
+        run_id,
+        node_id,
+        turn_item_id: card.id.clone(),
+        label: card.label.clone(),
+        reason: card.reason.clone(),
+        url: card.url.clone(),
+        placeholder: card.placeholder.clone(),
+        delivery: card.delivery.clone(),
+        secret_status: status,
+    };
+    if let Err(e) = state.orchestrator.dispatch(record.into()).await {
+        // A pending card can be answered again: the failed save goes.
+        crate::secrets::requests::forget(userdata, &input.thread_id, card.id.as_str());
+        return Err(secret_error(SecretRequestReason::RecordFailed, Some(&e.to_string())));
+    }
+    if secret.is_none() {
+        return Ok(());
+    }
+    // The wait may have closed the card meanwhile: no one would get its ref.
+    let saved = state.store.record::<TurnItem>(&input.thread_id, card.id.as_str()).ok().flatten();
+    if !matches!(saved, Some(TurnItem::SecretRequest(card)) if card.secret_status == SecretRequestStatus::Saved) {
+        crate::secrets::requests::forget(userdata, &input.thread_id, card.id.as_str());
+        return Err(secret_error(SecretRequestReason::AgentStopped, None));
+    }
+    Ok(())
 }
 
 fn peer_request_error(reason: PeerLinkRequestReason, cause: Option<&str>) -> Failure {
@@ -316,7 +402,7 @@ pub fn answer_peer_link(threads: Result<Option<ThreadItems>, String>, turn_item_
     if card.link_status != LinkRequestStatus::Pending {
         return peer_request_error(PeerLinkRequestReason::AlreadyAnswered, None);
     }
-    peer_request_error(PeerLinkRequestReason::RecordFailed, Some(LINKED_ENVIRONMENTS_UNAVAILABLE))
+    peer_request_error(PeerLinkRequestReason::RecordFailed, Some(LINK_REQUESTS_UNAVAILABLE))
 }
 
 #[derive(Deserialize)]
@@ -360,16 +446,14 @@ pub fn register(r: Router<ConnCtx>) -> Router<ConnCtx> {
         Ok::<_, Never>(relay_client_status(&ctx.state).await)
     })
     .stream("cloud.installRelayClient", |ctx, _: IgnoredAny| install_stream(ctx))
-    .unary("peerLinks.list", |_, _: IgnoredAny| async { Ok::<_, Never>(PeerLinks { links: [] }) })
-    .unary("peerLinks.link", |ctx: Arc<ConnCtx>, _: IgnoredAny| async move { Err::<Never, _>(link(&ctx.state).await) })
-    .unary("peerLinks.unlink", |_, _: IgnoredAny| async { Ok::<_, Never>(Unlinked { removed: false }) })
+    .unary("peerLinks.list", |ctx: Arc<ConnCtx>, _: IgnoredAny| async move { list_links(&ctx.state).await })
+    .unary("peerLinks.link", |ctx: Arc<ConnCtx>, input: crate::peer_links::CreateInput| async move { link(&ctx.state, input).await })
+    .unary("peerLinks.unlink", |ctx: Arc<ConnCtx>, input: UnlinkInput| async move { unlink(&ctx.state, input).await })
     .unary("peerLinks.answerRequest", |ctx: Arc<ConnCtx>, input: LinkAnswer| async move {
         Err::<Never, _>(answer_peer_link(thread_items(&ctx.state, &input.thread_id), &input.turn_item_id))
     })
     .unary("guestShare.create", |ctx: Arc<ConnCtx>, _: IgnoredAny| async move { Err::<Never, _>(guest_share(&ctx.state).await) })
-    .unary("secrets.answerRequest", |ctx: Arc<ConnCtx>, input: SecretAnswer| async move {
-        Err::<Never, _>(answer_secret(thread_items(&ctx.state, &input.thread_id), &input.turn_item_id, input.declined))
-    })
+    .unary("secrets.answerRequest", |ctx: Arc<ConnCtx>, input: SecretAnswer| async move { answer_secret(&ctx.state, input).await })
     .unary("mcpApps.callTool", |ctx: Arc<ConnCtx>, input: McpAppInput| async move { Err::<Never, _>(mcp_app(&ctx.state, input)) })
     .unary("mcpApps.toolInfo", |ctx: Arc<ConnCtx>, input: McpAppInput| async move { Err::<Never, _>(mcp_app(&ctx.state, input)) })
     .unary("mcpApps.readResource", |ctx: Arc<ConnCtx>, input: McpAppInput| async move { Err::<Never, _>(mcp_app(&ctx.state, input)) })
@@ -404,22 +488,16 @@ mod tests {
     #[test]
     fn secret_answers_check_the_card_first() {
         let card = item(json!({ "type": "secret_request", "label": "Token", "reason": "To deploy", "secretStatus": "pending" }));
-        let reason = |failure: Failure| json!(failure)["reason"].clone();
-        assert_eq!(json!(answer_secret(Err("gone".into()), "i1", false)), json!({ "_tag": "SecretRequestError", "reason": "load_failed", "cause": { "message": "gone" } }));
-        assert_eq!(json!(answer_secret(Ok(None), "i1", false)), json!({ "_tag": "SecretRequestError", "reason": "not_found" }));
-        assert_eq!(reason(answer_secret(items(card.clone(), "running"), "i2", false)), "not_found");
-        assert_eq!(reason(answer_secret(items(card.clone(), "completed"), "i1", false)), "agent_stopped");
-        assert_eq!(
-            json!(answer_secret(items(card.clone(), "running"), "i1", false)),
-            json!({ "_tag": "SecretRequestError", "reason": "store_failed", "cause": { "message": "This Domovoi server has no secret store." } })
-        );
-        assert_eq!(
-            json!(answer_secret(items(card.clone(), "running"), "i1", true)),
-            json!({ "_tag": "SecretRequestError", "reason": "record_failed", "cause": { "message": "This Domovoi server cannot record secret request answers." } })
-        );
+        let failed = |found: Result<SecretRequestItem, Failure>| json!(found.err().unwrap());
+        let reason = |found: Result<SecretRequestItem, Failure>| failed(found)["reason"].clone();
+        assert_eq!(failed(waiting_secret_card(Err("gone".into()), "i1")), json!({ "_tag": "SecretRequestError", "reason": "load_failed", "cause": { "message": "gone" } }));
+        assert_eq!(failed(waiting_secret_card(Ok(None), "i1")), json!({ "_tag": "SecretRequestError", "reason": "not_found" }));
+        assert_eq!(reason(waiting_secret_card(items(card.clone(), "running"), "i2")), "not_found");
+        assert_eq!(reason(waiting_secret_card(items(card.clone(), "completed"), "i1")), "agent_stopped");
+        assert_eq!(waiting_secret_card(items(card.clone(), "running"), "i1").unwrap().label, "Token");
         let mut saved = card;
         saved["secretStatus"] = json!("saved");
-        assert_eq!(reason(answer_secret(items(saved, "running"), "i1", false)), "already_answered");
+        assert_eq!(reason(waiting_secret_card(items(saved, "running"), "i1")), "already_answered");
     }
 
     #[test]
@@ -431,16 +509,17 @@ mod tests {
         assert_eq!(json!(answer_peer_link(items(card("linked"), "running"), "i1")), json!({ "_tag": "PeerLinkRequestError", "reason": "already_answered" }));
         assert_eq!(
             json!(answer_peer_link(items(card("pending"), "running"), "i1")),
-            json!({ "_tag": "PeerLinkRequestError", "reason": "record_failed", "cause": { "message": LINKED_ENVIRONMENTS_UNAVAILABLE } })
+            json!({ "_tag": "PeerLinkRequestError", "reason": "record_failed", "cause": { "message": LINK_REQUESTS_UNAVAILABLE } })
         );
     }
 
     #[test]
-    fn only_an_answer_of_type_decline_declines() {
-        let declined = |answer: Value| serde_json::from_value::<SecretAnswer>(json!({ "threadId": "t", "turnItemId": "i", "answer": answer })).unwrap().declined;
-        assert!(declined(json!({ "type": "decline" })));
-        for other in [json!({ "type": "save", "secret": "x" }), json!({ "type": 5 }), json!({}), json!("decline"), json!(null), json!(["decline"])] {
-            assert!(!declined(other.clone()), "{other}");
+    fn secret_answers_of_any_shape_are_taken() {
+        let choice = |answer: Value| serde_json::from_value::<SecretAnswer>(json!({ "threadId": "t", "turnItemId": "i", "answer": answer })).unwrap().answer;
+        assert_eq!(choice(json!({ "type": "decline" })), SecretChoice::Decline);
+        assert_eq!(choice(json!({ "type": "save", "secret": "  s3cret " })), SecretChoice::Save("s3cret".into()));
+        for other in [json!({ "type": "save", "secret": " " }), json!({ "type": "reference", "reference": { "provider": "op", "reference": "x" } }), json!({ "type": 5 }), json!({}), json!("decline"), json!(null), json!(["decline"])] {
+            assert_eq!(choice(other.clone()), SecretChoice::Unreadable, "{other}");
         }
         assert!(serde_json::from_value::<SecretAnswer>(json!({ "threadId": "t", "turnItemId": "i" })).is_err(), "an answer is required");
         assert!(serde_json::from_value::<LinkAnswer>(json!({ "threadId": "t", "turnItemId": "i" })).is_err(), "an answer is required");
@@ -460,7 +539,7 @@ mod tests {
         );
         assert_eq!(json!(InstallEvent::Progress { stage: InstallStage::Checking }), json!({ "type": "progress", "stage": "checking" }));
         assert_eq!(json!(InstallEvent::Complete { status: available }), json!({ "type": "complete", "status": written }));
-        assert_eq!(json!(PeerLinks { links: [] }), json!({ "links": [] }));
+        assert_eq!(json!(PeerLinks { links: vec![] }), json!({ "links": [] }));
         assert_eq!(json!(Unlinked { removed: false }), json!({ "removed": false }));
     }
 

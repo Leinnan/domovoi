@@ -395,9 +395,12 @@ extension ScheduledTaskEdit: @retroactive Identifiable {}
 extension ScheduledTaskView {
     /// The thread to open from the task: its own, else the one its last run started.
     var openableThread: String? {
-        let id = threadId.isEmpty ? lastThreadId : threadId
+        let id = threadId.isEmpty ? self.lastThreadId : threadId
         return id.isEmpty ? nil : id
     }
+
+    /// "Open Thread", or "Open Last Run" for a task that starts a new thread each run.
+    var openThreadLabel: String { threadId.isEmpty && !self.lastThreadId.isEmpty ? "Open Last Run" : "Open Thread" }
 
     /// Where its runs go, for the task's row.
     var destination: String {

@@ -28,6 +28,7 @@ const Group = RpcGroup.make(
 
 const url = new URL(process.argv[2]!);
 url.searchParams.set("frameParts", "1");
+url.searchParams.set("orchestrationProtocol", "2");
 
 const results: Array<[string, boolean, string?]> = [];
 const check = (name: string, ok: boolean, detail?: string) => results.push([name, ok, detail]);

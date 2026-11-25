@@ -45,7 +45,7 @@ val LimitWindowView.resetsLabel: String
     get() {
         if (resets.isEmpty()) return ""
         if (resets == "now") return "Resets now"
-        val at = runCatching { Instant.parse(resetsAt).toEpochMilli() }.getOrNull()
+        val at = runCatching { Instant.parse(this.resetsAt).toEpochMilli() }.getOrNull()
         return if (at == null) "Resets $resets" else "Resets $resets · ${SnoozeTimes.label(at)}"
     }
 

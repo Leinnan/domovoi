@@ -393,6 +393,50 @@ pub struct ThreadPageView {
     pub waiting_children: Vec<ThreadLinkView>,
     /// Number of distinct artifacts discovered or published in this thread.
     pub artifact_count: u32,
+    /// Secrets the agent asked for (`request_secret`) that wait for an
+    /// answer: `AnswerSecret` or `DeclineSecret`, by `item_id`.
+    pub secret_requests: Vec<SecretRequestView>,
+    /// The pull requests and issues linked to the thread (by an agent or by
+    /// hand), pull requests first; each opens its `url` in the browser.
+    pub links: Vec<WorkLinkView>,
+}
+
+/// A secret the agent asked for, as its card shows it. The value typed is
+/// the shell's until it is sent: never part of the view or the model.
+#[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct SecretRequestView {
+    /// The `secret_request` item's id (`secrets.answerRequest`'s `turnItemId`).
+    pub item_id: String,
+    /// What is asked for ("OpenAI API key").
+    pub label: String,
+    /// Why the agent needs it.
+    pub reason: String,
+    /// Where to get one, to open in the browser.
+    pub url: Option<String>,
+    /// The field's placeholder (empty: the shell's own).
+    pub placeholder: String,
+    /// `file`: the agent reads the value from an owner-only file; empty:
+    /// the agent gets a reference to it, never the value.
+    pub delivery: String,
+    /// One line under the field on how the value is kept and handed over.
+    pub hint: String,
+    /// An answer is on its way: the buttons wait.
+    pub sending: bool,
+}
+
+/// A pull request or issue linked to a thread.
+#[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct WorkLinkView {
+    /// `pull_request` | `issue`
+    pub kind: String,
+    /// As the host writes it: `#12`, `ENG-123`.
+    pub label: String,
+    /// The title when it was linked (or last synced); may be empty.
+    pub title: String,
+    pub url: String,
+    /// A pull request's `open` | `draft` | `merged` | `closed`; empty when
+    /// not known, and for issues (a link keeps no issue state).
+    pub state: String,
 }
 
 /// The latest plan, with the Markdown blocks used by the transcript.

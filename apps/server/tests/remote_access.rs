@@ -123,7 +123,7 @@ async fn open_ws(base: &str, token: &str) -> Ws {
     let res = http_client().post(format!("{base}/api/auth/websocket-ticket/rpc")).bearer_auth(token).send().await.unwrap();
     assert_eq!(res.status(), 200);
     let ticket = res.json::<Value>().await.unwrap()["ticket"].as_str().unwrap().to_owned();
-    let url = format!("{}/ws?wsTicket={ticket}", base.replacen("http", "ws", 1));
+    let url = format!("{}/ws?orchestrationProtocol=2&wsTicket={ticket}", base.replacen("http", "ws", 1));
     tokio_tungstenite::connect_async(url.into_client_request().unwrap()).await.unwrap().0
 }
 
@@ -172,6 +172,15 @@ async fn remote_devices_pair_and_stay_bound_to_their_key() {
     assert_eq!(session["sessionMethod"], "bearer-access-token");
     assert_eq!(http_client().get(format!("{base}/api/orchestration/shell")).bearer_auth(&token).send().await.unwrap().status(), 200);
 
+    // Compressed responses pass through the bridge as they are.
+    let runtime = format!("{base}/api/assets/artifact-runtime/v1/runtime.js");
+    let plain = http_client().get(&runtime).bearer_auth(&token).send().await.unwrap().bytes().await.unwrap();
+    let gzipped = http_client().get(&runtime).bearer_auth(&token).header("accept-encoding", "gzip").send().await.unwrap();
+    assert_eq!(gzipped.headers().get("content-encoding").and_then(|v| v.to_str().ok()), Some("gzip"));
+    let mut unzipped = Vec::new();
+    std::io::Read::read_to_end(&mut flate2::read::GzDecoder::new(&gzipped.bytes().await.unwrap()[..]), &mut unzipped).unwrap();
+    assert_eq!(unzipped, plain);
+
     // RPC over the WebSocket, opened with a ticket.
     let mut ws = open_ws(&base, &token).await;
     let config = rpc(&mut ws, "1", "server.getConfig").await.expect("reply");
@@ -200,7 +209,7 @@ async fn remote_devices_pair_and_stay_bound_to_their_key() {
     };
     let res = http_client().post(format!("{local}/api/auth/browser-session")).json(&json!({ "credential": local_code })).send().await.unwrap();
     let cookie = res.headers().get("set-cookie").unwrap().to_str().unwrap().split(';').next().unwrap().to_owned();
-    let mut req = format!("ws://127.0.0.1:{}/ws", server.port).into_client_request().unwrap();
+    let mut req = format!("ws://127.0.0.1:{}/ws?orchestrationProtocol=2", server.port).into_client_request().unwrap();
     req.headers_mut().insert("cookie", cookie.parse().unwrap());
     let mut owner = tokio_tungstenite::connect_async(req).await.unwrap().0;
     let snapshot = loop {

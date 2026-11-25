@@ -97,6 +97,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.crayen.domovoi.app.ContextUsageView
+import com.crayen.domovoi.app.ThreadPageView
 import com.crayen.domovoi.app.Event
 import com.crayen.domovoi.app.FindView
 import com.crayen.domovoi.core.Core
@@ -121,6 +122,7 @@ import com.crayen.domovoi.ui.nav.Navigator
 import com.crayen.domovoi.ui.nav.Screen
 import com.crayen.domovoi.ui.threads.NameDialog
 import com.crayen.domovoi.ui.theme.LocalTints
+import com.crayen.domovoi.ui.theme.Mono
 import com.crayen.domovoi.ui.theme.Space
 import kotlinx.coroutines.delay
 
@@ -143,6 +145,7 @@ fun ThreadScreen(core: Core, threadId: String, nav: Navigator, snackbars: Snackb
     var artifactJump by remember(threadId) { mutableStateOf<String?>(null) }
     var progress by remember(threadId) { mutableStateOf(false) }
     var contextDetails by remember { mutableStateOf(false) }
+    var info by remember { mutableStateOf(false) }
     val context = LocalContext.current
 
     LaunchedEffect(threadId) {
@@ -174,6 +177,11 @@ fun ThreadScreen(core: Core, threadId: String, nav: Navigator, snackbars: Snackb
                 core.update(Event.OpenArtifactWorkspacePath(threadId, path, dark))
                 nav.open(Screen.Artifacts)
             },
+            previewFile = { path ->
+                core.update(Event.ShowPanel("artifacts"))
+                core.update(Event.OpenArtifactFile(threadId, path))
+                nav.open(Screen.Artifacts)
+            },
         )
     }
     val isScratch = thread != null && sidebar.projects.firstOrNull { it.id == thread.projectId }?.isScratch == true
@@ -183,7 +191,8 @@ fun ThreadScreen(core: Core, threadId: String, nav: Navigator, snackbars: Snackb
             TopAppBar(
                 navigationIcon = { if (showBack) IconButton(onClick = nav::back) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Back") } },
                 title = {
-                    Column {
+                    // A tap shows where the thread works: project, branch, worktree, folder.
+                    Column(Modifier.clickable(enabled = thread != null, onClickLabel = "Thread info") { info = true }) {
                         Text(thread?.title ?: "Thread", maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleMedium)
                         thread?.let { t ->
                             val sub = listOfNotNull(t.projectTitle.ifEmpty { null }, t.branch).joinToString(" · ")
@@ -230,6 +239,7 @@ fun ThreadScreen(core: Core, threadId: String, nav: Navigator, snackbars: Snackb
                                     core.update(Event.ArchiveThread(thread.id, !thread.archived))
                                     if (!thread.archived) nav.back()
                                 })
+                                DropdownMenuItem(text = { Text("Thread info") }, onClick = { menu = false; info = true })
                                 DropdownMenuItem(text = { Text("Copy thread ID") }, onClick = { menu = false; copyText(context, thread.id) })
                                 DropdownMenuItem(text = { Text("Schedule this thread…") }, enabled = !thread.archived, onClick = {
                                     menu = false
@@ -278,6 +288,10 @@ fun ThreadScreen(core: Core, threadId: String, nav: Navigator, snackbars: Snackb
                 AnimatedVisibility(requests.isNotEmpty(), enter = slideInVertically { it } + fadeIn(), exit = slideOutVertically { it } + fadeOut()) {
                     ApprovalBar(requests, core::update)
                 }
+                val secrets = thread?.secretRequests.orEmpty()
+                AnimatedVisibility(secrets.isNotEmpty(), enter = slideInVertically { it } + fadeIn(), exit = slideOutVertically { it } + fadeOut()) {
+                    SecretRequestBar(secrets, core::update, Modifier.widthIn(max = Space.column))
+                }
                 if (thread != null && (thread.plan != null || thread.tasks != null)) {
                     WorkProgressStrip(thread.plan, thread.tasks, Modifier.widthIn(max = Space.column)) { progress = true }
                 }
@@ -288,6 +302,7 @@ fun ThreadScreen(core: Core, threadId: String, nav: Navigator, snackbars: Snackb
         Column(Modifier.fillMaxSize().padding(top = padding.calculateTopPadding())) {
             ConnectionBanner(core)
             thread?.find?.let { FindBar(it, core::update) }
+            thread?.links?.let { WorkLinksStrip(it) }
             when {
                 thread != null -> Transcript(
                     thread, retryBlocked, actions,
@@ -328,6 +343,7 @@ fun ThreadScreen(core: Core, threadId: String, nav: Navigator, snackbars: Snackb
             onShowAll = { contextDetails = false; nav.open(Screen.Usage) },
         ) { contextDetails = false }
     }
+    if (info && thread != null) ThreadInfoDialog(thread) { info = false }
     scheduling?.let { draft -> com.crayen.domovoi.ui.settings.ScheduledTaskEditorFor(core, draft) { scheduling = null } }
     if (renaming && thread != null) {
         NameDialog(title = "Rename thread", label = "Title", confirm = "Rename", initial = thread.title, onDismiss = { renaming = false }) {
@@ -344,6 +360,36 @@ fun ThreadScreen(core: Core, threadId: String, nav: Navigator, snackbars: Snackb
             dismissButton = { TextButton(onClick = { deleting = false }) { Text("Cancel") } },
         )
     }
+}
+
+/** Where the thread works: its project, branch, worktree and folder (each copied with a tap). */
+@Composable
+private fun ThreadInfoDialog(thread: ThreadPageView, onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val rows = listOfNotNull(
+        thread.projectTitle.ifEmpty { null }?.let { "Project" to it },
+        thread.branch?.let { "Branch" to it },
+        thread.worktreePath?.let { "Worktree" to it },
+        thread.cwd.ifEmpty { null }?.let { "Folder" to it },
+        thread.modelLabel.ifEmpty { null }?.let { "Model" to it },
+    )
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(thread.title, maxLines = 2, overflow = TextOverflow.Ellipsis) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(Space.m)) {
+                rows.forEach { (label, value) ->
+                    Column(
+                        Modifier.fillMaxWidth().clip(MaterialTheme.shapes.small).clickable(onClickLabel = "Copy $label") { copyText(context, value, label) },
+                    ) {
+                        Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(value, style = MaterialTheme.typography.bodyMedium, fontFamily = if (label == "Folder" || label == "Worktree") Mono else null)
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Done") } },
+    )
 }
 
 /** The meter's colour: red all but full (90 %), orange nearly full (80 %). */
@@ -413,7 +459,7 @@ private fun UsageMeter(usage: SessionUsageView, onClick: () -> Unit) {
 
 /** `Context: 48k of 200k tokens (24%)`, `Claude Weekly: 92% used, resets in 2d`. */
 private fun usageSummary(usage: SessionUsageView): List<String> = buildList {
-    usage.context?.let { add("Context: ${it.label}" + if (it.maxTokens > 0uL) " (${it.percent}%)" else "") }
+    usage.context?.let { add("Context: ${it.label}" + (if (it.maxTokens > 0uL) " (${it.percent}%)" else "") + if (it.remainingLabel.isNotEmpty()) ", ${it.remainingLabel}" else "") }
     val provider = usage.limits?.provider
     val fullest = usage.fullest
     if (provider != null && fullest != null) {
@@ -442,8 +488,18 @@ private fun UsageDetailsSheet(usage: SessionUsageView, onCompact: () -> Unit, on
                 if (context.maxTokens > 0uL) {
                     PercentBar(context.percent, contextColor(context, MaterialTheme.colorScheme.primary), tick = context.compactAtPercent)
                     Row {
-                        Text("${context.percent}% used", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
+                        Text(
+                            listOf("${context.percent}% used", context.remainingLabel).filter { it.isNotEmpty() }.joinToString(" · "),
+                            style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f),
+                        )
                         if (context.compactAtPercent > 0u) Text("Compacts at ${context.compactAtPercent}%", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+                if (context.cacheHitLabel.isNotEmpty()) {
+                    // How much of the input came from the prompt cache (cheaper, faster).
+                    Column(verticalArrangement = Arrangement.spacedBy(Space.xxs)) {
+                        StatRow("Cache hit", context.cacheHitLabel)
+                        PercentBar(context.cacheHitPercent, LocalTints.current.success)
                     }
                 }
                 if (context.breakdown.isNotEmpty() || context.cost.isNotEmpty()) {

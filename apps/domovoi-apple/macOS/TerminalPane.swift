@@ -90,7 +90,7 @@ struct TerminalScreen: View {
                 .frame(width: geo.size.width, height: geo.size.height)
                 if screen.scrollbackOffset > 0 {
                     Button { core.update(.terminalScroll(lines: -Int32(screen.scrollbackOffset))) } label: {
-                        Label("\(screen.scrollbackOffset) lines back", systemImage: "arrow.down.to.line").font(.caption)
+                        Label("\(screen.scrollbackOffset) of \(max(screen.scrollbackMax, screen.scrollbackOffset)) lines back", systemImage: "arrow.down.to.line").font(.caption)
                     }
                     .buttonStyle(.borderless)
                     .padding(Space.tight)

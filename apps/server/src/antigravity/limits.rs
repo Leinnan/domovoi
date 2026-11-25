@@ -1,19 +1,16 @@
 //! An Antigravity account's usage limits (t3code `antigravityUsageLimits.ts`),
 //! as Gemini and shared Claude & GPT windows, five-hourly and weekly.
 //!
-//! The agent's own language server answers first: each running `agy acp`
-//! serves it on a local port (named in its log,
-//! `<acp>/log/acp-server-<time>-<pid>.log`) and reads the account's quota
-//! (`RetrieveUserQuotaSummary`) with the sign-in it keeps, keychain or not,
-//! so no credential leaves the agent. With no agent running the last reading
-//! stays. Older runtimes, which save the sign-in in the profile
-//! (`acp_token.json`), are read directly: the saved refresh token gets an
-//! access token, and Google's Cloud Code service reports the quotas
-//! (`retrieveUserQuotaSummary`, else `fetchAvailableModels`). Read in the
-//! background: never in the way of readiness or a session's start.
-//!
-//! `DOMOVOI_ANTIGRAVITY_GOOGLE_API` sends every Google request to one base URL
-//! instead (`/token`, `/userinfo`, `/v1internal:…`), for tests.
+//! Only the agent reads them: each running `agy acp` serves its language
+//! server on a local port (named in its log,
+//! `<acp>/log/acp-server-<time>-<pid>.log`), which reads the account's quota
+//! (`RetrieveUserQuotaSummary`) with the sign-in it keeps. Domovoi never
+//! reads, refreshes or sends the account's Google credentials, and never
+//! calls a Google service itself: using Antigravity's sign-in from software
+//! other than Google's own is against Antigravity's terms and gets accounts
+//! suspended. With no agent running the last reading stays. Read in the
+//! background, at most once per interval (each read makes the agent ask
+//! Google), and never in the way of readiness or a session's start.
 
 #![expect(clippy::disallowed_types, clippy::disallowed_macros, reason = "Google's OAuth and Cloud Code answers, read as Google sends them")]
 
@@ -23,39 +20,20 @@ use std::sync::Mutex;
 use std::time::Duration;
 use domovoi_model::typed::{ForwardList, ServerProviderUsageLimits, ServerProviderUsageUnavailable, ServerProviderUsageUnavailableReason, ServerProviderUsageWindow, ServerProviderUsageWindowKind, Timestamp};
 
-const DAILY: &str = "https://daily-cloudcode-pa.googleapis.com";
-const PROD: &str = "https://cloudcode-pa.googleapis.com";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const READ_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// A token kept between reads, for the refresh token it came from.
-struct Cached {
-    fingerprint: String,
-    account: String,
-    access_token: String,
-    expires_at_ms: i64,
-}
-
-static TOKENS: Mutex<BTreeMap<String, Cached>> = Mutex::new(BTreeMap::new());
 static READING: Mutex<std::collections::BTreeSet<String>> = Mutex::new(std::collections::BTreeSet::new());
+/// When each instance's agent was last asked for its quota.
+static ASKED: Mutex<BTreeMap<String, std::time::Instant>> = Mutex::new(BTreeMap::new());
 
-fn test_base() -> Option<String> {
-    std::env::var("DOMOVOI_ANTIGRAVITY_GOOGLE_API").ok().filter(|v| !v.is_empty())
-}
+/// How soon after a turn the agent may be asked again (one turn's use shows
+/// then; a run of quick turns asks once).
+pub const AFTER_TURN: Duration = Duration::from_secs(60);
 
-/// The agent's own `User-Agent` for Cloud Code.
-fn user_agent() -> String {
-    let os = match std::env::consts::OS {
-        "macos" => "darwin",
-        "windows" => "win32",
-        other => other,
-    };
-    let arch = match std::env::consts::ARCH {
-        "aarch64" => "arm64",
-        "x86_64" => "x64",
-        other => other,
-    };
-    format!("antigravity/hub/2.24.0 (aidev_client; os_type={os}; arch={arch}; cl=963137146)")
+/// Whether the agent, last asked at `asked`, may be asked again at `now`.
+fn due(asked: Option<std::time::Instant>, now: std::time::Instant, min_interval: Duration) -> bool {
+    asked.is_none_or(|at| now.saturating_duration_since(at) >= min_interval)
 }
 
 fn checked_at() -> Timestamp {
@@ -146,38 +124,6 @@ pub fn summary_windows(summary: &Value, requested_ms: i64) -> Vec<ServerProvider
     out
 }
 
-/// Older accounts' model quotas (`fetchAvailableModels`), with no window length.
-pub fn model_windows(models: &Value) -> Vec<ServerProviderUsageWindow> {
-    let mut out: BTreeMap<String, ServerProviderUsageWindow> = BTreeMap::new();
-    for (id, model) in models["models"].as_object().into_iter().flatten() {
-        let provider = model["modelProvider"].as_str().unwrap_or_default();
-        let family = if provider == "MODEL_PROVIDER_GOOGLE" || id.starts_with("gemini-") {
-            "Gemini"
-        } else if provider == "MODEL_PROVIDER_ANTHROPIC" || id.starts_with("claude-") {
-            "Claude"
-        } else if provider == "MODEL_PROVIDER_OPENAI" || id.starts_with("gpt-") {
-            "GPT"
-        } else {
-            continue;
-        };
-        for (suffix, quota) in [("quota", &model["quotaInfo"]), ("weekly", &model["weeklyQuotaInfo"])] {
-            if quota.is_null() {
-                continue;
-            }
-            let weekly = suffix == "weekly";
-            let wid = format!("{}-{suffix}", family.to_lowercase());
-            let label = format!("{family} \u{b7} {}", if weekly { "Weekly" } else { "Reported quota" });
-            let kind = if weekly { ServerProviderUsageWindowKind::Weekly } else { ServerProviderUsageWindowKind::Unnamed };
-            let Some(w) = window(&wid, label, quota["remainingFraction"].as_f64(), quota["resetTime"].as_str(), kind, weekly.then_some(7 * 24 * 60)) else { continue };
-            let used = |w: &ServerProviderUsageWindow| w.used_percent.as_f64().unwrap_or(0.0);
-            if out.get(&wid).is_none_or(|old| used(&w) > used(old)) {
-                out.insert(wid, w);
-            }
-        }
-    }
-    out.into_values().collect()
-}
-
 fn client() -> Option<reqwest::Client> {
     reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).timeout(REQUEST_TIMEOUT).build().ok()
 }
@@ -241,6 +187,7 @@ async fn read_from_agent(id: &str) -> Option<Vec<ServerProviderUsageWindow>> {
     let ports = agent_ports(&super::profile(id).acp);
     let http = client()?;
     for port in ports {
+        crate::util::locked(&ASKED).insert(id.to_owned(), std::time::Instant::now());
         let requested = domovoi_contracts::time_fmt::now_millis();
         let r = http
             .post(format!("http://127.0.0.1:{port}/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary"))
@@ -253,113 +200,36 @@ async fn read_from_agent(id: &str) -> Option<Vec<ServerProviderUsageWindow>> {
     None
 }
 
-fn limits_of(mut windows: Vec<ServerProviderUsageWindow>, account: Option<String>) -> ServerProviderUsageLimits {
+fn limits_of(mut windows: Vec<ServerProviderUsageWindow>) -> ServerProviderUsageLimits {
     windows.sort_by(|a, b| kind_rank(&a.kind).cmp(&kind_rank(&b.kind)).then_with(|| a.id.cmp(&b.id)));
-    ServerProviderUsageLimits { checked_at: checked_at(), windows: windows.into(), credential_fingerprint: account, reset_credits: None, external_usage: None, unavailable: None }
+    ServerProviderUsageLimits { checked_at: checked_at(), windows: windows.into(), credential_fingerprint: None, reset_credits: None, external_usage: None, unavailable: None }
 }
 
-/// Nothing to read the limits from now: no agent running, no sign-in saved in the profile.
+/// Nothing to read the limits from now: no agent running.
 const NO_AGENT: &str = "Antigravity's limits show once one of its sessions has run.";
 
 /// One read of instance `id`'s limits: `None` when nothing can read them
 /// now (the last reading stays).
 async fn read(id: &str) -> Option<ServerProviderUsageLimits> {
-    let config = super::config(id);
     let from_agent = read_from_agent(id).await;
     if let Some(windows) = from_agent.clone().filter(|w| !w.is_empty()) {
-        return Some(limits_of(windows, None));
+        return Some(limits_of(windows));
     }
-    if !config.auth_method.uses_browser() {
+    if !super::config(id).auth_method.uses_browser() {
         // An API key or Vertex: no subscription quota.
         return Some(unavailable(ServerProviderUsageUnavailableReason::Unsupported, None));
     }
-    let token_path = super::profile(id).acp.join("acp_token.json");
-    let Some(token) = std::fs::read_to_string(&token_path).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()) else {
-        crate::util::locked(&TOKENS).remove(id);
-        // The sign-in is in the keychain, where only the agent reads it.
-        return match from_agent {
-            Some(_) => Some(unavailable(ServerProviderUsageUnavailableReason::ProbeFailed, Some("Antigravity did not return usable quota information."))),
-            None => None,
-        };
-    };
-    let field = |k: &str| token[k].as_str().filter(|v| !v.is_empty()).map(str::to_owned);
-    let (Some(client_id), Some(secret), Some(refresh)) = (field("client_id"), field("client_secret"), field("refresh_token")) else {
-        return Some(unavailable(ServerProviderUsageUnavailableReason::ProbeFailed, Some("Could not read Antigravity limits. Refresh provider status to retry.")));
-    };
-    let project = field("project_id");
-    let fingerprint = crate::util::sha256_hex(format!("{client_id}\0{refresh}\0{}", project.clone().unwrap_or_default()).as_bytes());
-    let Some(http) = client() else { return Some(unavailable(ServerProviderUsageUnavailableReason::ProbeFailed, None)) };
-    let base = test_base();
-    let url = |real: &str, path: &str| base.as_ref().map_or_else(|| real.to_owned(), |b| format!("{b}{path}"));
-    let now = domovoi_contracts::time_fmt::now_millis();
-    let cached = crate::util::locked(&TOKENS).get(id).filter(|c| c.fingerprint == fingerprint && c.expires_at_ms > now + 60_000).map(|c| (c.access_token.clone(), c.account.clone()));
-    let (access, account) = match cached {
-        Some(c) => c,
-        None => {
-            let body = url::form_urlencoded::Serializer::new(String::new())
-                .append_pair("client_id", &client_id)
-                .append_pair("client_secret", &secret)
-                .append_pair("refresh_token", &refresh)
-                .append_pair("grant_type", "refresh_token")
-                .finish();
-            let refreshed = json_of(http.post(url("https://oauth2.googleapis.com/token", "/token")).header("content-type", "application/x-www-form-urlencoded").body(body)).await;
-            let (Some(access), Some(expires_in)) = (refreshed.as_ref().and_then(|r| r["access_token"].as_str().map(str::to_owned)), refreshed.as_ref().and_then(|r| r["expires_in"].as_f64()).filter(|e| *e > 0.0)) else {
-                return Some(unavailable(ServerProviderUsageUnavailableReason::ProbeFailed, Some("Could not read Antigravity limits. Refresh provider status to retry.")));
-            };
-            // The Google account id matches across machines; refresh tokens do not.
-            let info = json_of(http.get(url("https://www.googleapis.com/oauth2/v2/userinfo", "/userinfo")).bearer_auth(&access)).await;
-            let account = info.and_then(|i| i["id"].as_str().filter(|id| !id.is_empty()).map(|g| crate::util::sha256_hex(format!("google-account\0{g}").as_bytes()))).unwrap_or_else(|| fingerprint.clone());
-            crate::util::locked(&TOKENS).insert(id.to_owned(), Cached { fingerprint, account: account.clone(), access_token: access.clone(), expires_at_ms: now + (expires_in * 1000.0) as i64 });
-            (access, account)
-        }
-    };
-    // Consumer tiers are metered on the daily host and business ones on prod; each answers what it knows.
-    let endpoints: &[&str] = if config.auth_method == super::AuthMethod::OauthBusiness { &[PROD, DAILY] } else { &[DAILY, PROD] };
-    let body = project.map_or_else(|| json!({}), |p| json!({ "project": p }));
-    let fetch = |operation: &'static str| {
-        let (http, access, body, base) = (http.clone(), access.clone(), body.clone(), base.clone());
-        async move {
-            let mut answers = vec![];
-            let hosts: Vec<String> = match &base {
-                Some(b) => vec![b.clone()],
-                None => endpoints.iter().map(|e| (*e).to_owned()).collect(),
-            };
-            for host in hosts {
-                let requested = domovoi_contracts::time_fmt::now_millis();
-                let r = http.post(format!("{host}/v1internal:{operation}")).bearer_auth(&access).header("User-Agent", user_agent()).json(&body);
-                if let Some(v) = json_of(r).await {
-                    answers.push((v, requested));
-                }
-            }
-            answers
-        }
-    };
-    // The first host's reading of a window wins.
-    fn add(windows: &mut Vec<ServerProviderUsageWindow>, found: Vec<ServerProviderUsageWindow>) {
-        for w in found {
-            if !windows.iter().any(|o| o.id == w.id) {
-                windows.push(w);
-            }
-        }
-    }
-    let mut windows: Vec<ServerProviderUsageWindow> = vec![];
-    for (answer, at) in fetch("retrieveUserQuotaSummary").await {
-        add(&mut windows, summary_windows(&answer, at));
-    }
-    if windows.is_empty() {
-        for (answer, _) in fetch("fetchAvailableModels").await {
-            add(&mut windows, model_windows(&answer));
-        }
-    }
-    if windows.is_empty() {
-        return Some(unavailable(ServerProviderUsageUnavailableReason::ProbeFailed, Some("Antigravity did not return usable quota information.")));
-    }
-    Some(limits_of(windows, Some(account)))
+    // An agent answered without quota; with none running there is nothing to ask.
+    from_agent.map(|_| unavailable(ServerProviderUsageUnavailableReason::ProbeFailed, Some("Antigravity did not return usable quota information.")))
 }
 
-/// Reads instance `id`'s limits in the background (one read at a time);
-/// the provider list shows them when they arrive.
-pub fn refresh(id: &str) {
+/// Reads instance `id`'s limits in the background (one read at a time, and
+/// none when its agent was asked less than `min_interval` ago); the provider
+/// list shows them when they arrive.
+pub fn refresh(id: &str, min_interval: Duration) {
+    if !due(crate::util::locked(&ASKED).get(id).copied(), std::time::Instant::now(), min_interval) {
+        return;
+    }
     if !crate::util::locked(&READING).insert(id.to_owned()) {
         return;
     }
@@ -384,9 +254,10 @@ pub fn refresh(id: &str) {
     });
 }
 
-/// Forgets the instance's token (signed out: another account may sign in).
+/// Forgets when the instance's agent was asked (signed out: another account
+/// may sign in, and its limits are read at once).
 pub fn forget(id: &str) {
-    crate::util::locked(&TOKENS).remove(id);
+    crate::util::locked(&ASKED).remove(id);
 }
 
 #[cfg(test)]
@@ -432,9 +303,15 @@ mod tests {
         let shown: Vec<(&str, &str, f64, bool)> = w.iter().map(|w| (w.id.as_str(), w.label.as_str(), w.used_percent.as_f64().unwrap(), w.resets_at.is_some())).collect();
         assert_eq!(shown, [("gemini-5h", "Gemini \u{b7} 5-hour", 75.0, true), ("gemini-weekly", "Gemini \u{b7} Weekly", 0.0, false), ("3p-5h", "Claude & GPT (shared) \u{b7} 5-hour", 50.0, true)]);
         assert_eq!(w[0].window_duration_mins, Some(300));
-        let models = json!({ "models": { "gemini-3.8-flash": { "quotaInfo": { "remainingFraction": 0.9 } }, "claude-x": { "modelProvider": "MODEL_PROVIDER_ANTHROPIC", "weeklyQuotaInfo": { "remainingFraction": 0.4 } } } });
-        let m = model_windows(&models);
-        assert_eq!(m.iter().map(|w| w.id.as_str()).collect::<Vec<_>>(), ["claude-weekly", "gemini-quota"]);
-        assert!(user_agent().starts_with("antigravity/hub/2.24.0 (aidev_client; os_type="));
+    }
+
+    #[test]
+    fn the_agent_is_asked_at_most_once_an_interval() {
+        let now = std::time::Instant::now();
+        assert!(due(None, now, AFTER_TURN), "never asked");
+        assert!(!due(Some(now), now + Duration::from_secs(59), AFTER_TURN));
+        assert!(due(Some(now), now + AFTER_TURN, AFTER_TURN));
+        assert!(!due(Some(now), now + Duration::from_secs(120), crate::providers::LIMITS_FRESH), "the periodic read waits five minutes");
+        assert!(due(Some(now), now, Duration::ZERO));
     }
 }

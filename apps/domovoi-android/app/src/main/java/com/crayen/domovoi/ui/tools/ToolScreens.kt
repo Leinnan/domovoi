@@ -100,8 +100,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.material.icons.automirrored.outlined.OpenInNew
-import com.crayen.domovoi.app.UsageRowView
-import com.crayen.domovoi.ui.common.LimitWindowRow
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -119,6 +117,7 @@ import com.crayen.domovoi.ui.common.watch
 import com.crayen.domovoi.ui.nav.Navigator
 import com.crayen.domovoi.ui.nav.Screen
 import com.crayen.domovoi.ui.thread.DiffFileBody
+import com.crayen.domovoi.ui.thread.DiffFileHeader
 import com.crayen.domovoi.ui.theme.LocalTints
 import com.crayen.domovoi.ui.theme.Mono
 import com.crayen.domovoi.ui.theme.Space
@@ -154,9 +153,7 @@ fun DiffScreen(core: Core, nav: Navigator, onBack: (() -> Unit)?) {
                                 verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Space.s),
                             ) {
                                 Icon(Icons.Outlined.ChevronRight, null, modifier = Modifier.size(18.dp).rotate(if (open) 90f else 0f))
-                                Text(file.path, fontFamily = Mono, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.StartEllipsis, modifier = Modifier.weight(1f))
-                                Text("+${file.additions}", color = LocalTints.current.success, style = MaterialTheme.typography.labelMedium)
-                                Text("−${file.deletions}", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelMedium)
+                                DiffFileHeader(file, Modifier.weight(1f))
                             }
                             AnimatedVisibility(open) {
                                 Box(Modifier.padding(start = Space.s, end = Space.s, bottom = Space.s)) {
@@ -329,9 +326,12 @@ private fun LfsCard(lfs: LfsView, fetch: () -> Unit) {
                 modifier = Modifier.background(MaterialTheme.colorScheme.primary.copy(alpha = 0.15f), RoundedCornerShape(50)).padding(horizontal = Space.s, vertical = 2.dp),
             )
             Text(lfs.stateLabel, style = MaterialTheme.typography.labelMedium, color = tint)
+            // The short id; a tap copies the whole SHA-256 (to look the object up elsewhere).
+            val context = androidx.compose.ui.platform.LocalContext.current
             Text(
                 "${lfs.sizeLabel} · ${lfs.oidShort}", fontFamily = Mono, style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, modifier = Modifier.weight(1f),
+                color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1,
+                modifier = Modifier.weight(1f).clickable(enabled = lfs.oid.isNotEmpty(), onClickLabel = "Copy object ID") { com.crayen.domovoi.ui.common.copyText(context, lfs.oid, "Git LFS object") },
             )
             if (lfs.fetching) {
                 CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
@@ -757,95 +757,5 @@ private fun ReviewDialog(onDismiss: () -> Unit, submit: (String, String) -> Unit
         },
         confirmButton = { TextButton(onClick = { submit(verdict, body) }, enabled = verdict == "approve" || body.isNotBlank()) { Text("Submit") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
-    )
-}
-
-// ---- usage ----
-
-/** Tokens used, by day and model. */
-@Composable
-fun UsageScreen(core: Core) {
-    val usage by core.view.usage.watch()
-    val uri = LocalUriHandler.current
-    // The span the core has (`LoadUsage` sets it); a week the first time.
-    LaunchedEffect(Unit) { core.update(Event.LoadUsage(if (usage.days > 0u) usage.days else 7u)) }
-    ToolScaffold("Usage", onBack = null) { padding ->
-        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = Space.xl)) {
-            item("range") {
-                val ranges = listOf(1u to "Today", 7u to "7 days", 30u to "30 days", 90u to "90 days")
-                SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(horizontal = Space.l, vertical = Space.s)) {
-                    ranges.forEachIndexed { i, (d, label) ->
-                        SegmentedButton(
-                            selected = usage.days == d, onClick = { if (usage.days != d) core.update(Event.LoadUsage(d)) },
-                            shape = SegmentedButtonDefaults.itemShape(i, ranges.size),
-                        ) { Text(label, maxLines = 1) }
-                    }
-                }
-            }
-            item("total") {
-                Surface(color = MaterialTheme.colorScheme.primaryContainer, shape = MaterialTheme.shapes.large, modifier = Modifier.fillMaxWidth().padding(Space.l)) {
-                    Row(Modifier.padding(Space.l), verticalAlignment = Alignment.Bottom) {
-                        Column(Modifier.weight(1f)) {
-                            Text(usage.rangeLabel.ifEmpty { "Total" }, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onPrimaryContainer)
-                            Text(usage.totalTokens.ifEmpty { "—" }, style = MaterialTheme.typography.displaySmall, color = MaterialTheme.colorScheme.onPrimaryContainer)
-                            Text("tokens", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onPrimaryContainer)
-                        }
-                        if (usage.totalCost.isNotEmpty()) {
-                            Column(horizontalAlignment = Alignment.End) {
-                                Text(usage.totalCost, style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.onPrimaryContainer, fontWeight = FontWeight.SemiBold)
-                                Text("cost", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onPrimaryContainer)
-                            }
-                        }
-                    }
-                }
-            }
-            if (usage.loading) item("loading") { LinearProgressIndicator(Modifier.fillMaxWidth().padding(horizontal = Space.l)) }
-            if (usage.notice.isNotEmpty()) item("notice") { Text(usage.notice, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = Space.l)) }
-            if (usage.limits.any { it.windows.isNotEmpty() }) {
-                item("limits") { SectionHeader("Limits") }
-                usage.limits.filter { it.windows.isNotEmpty() }.forEach { provider ->
-                    item("limits/${provider.instanceId}") {
-                        Column(Modifier.fillMaxWidth().padding(horizontal = Space.l, vertical = Space.s), verticalArrangement = Arrangement.spacedBy(Space.m)) {
-                            Text(provider.provider, style = MaterialTheme.typography.titleSmall)
-                            provider.windows.forEach { LimitWindowRow(it) }
-                            if (provider.externalUrl.isNotEmpty()) {
-                                TextButton(onClick = { runCatching { uri.openUri(provider.externalUrl) } }, contentPadding = PaddingValues(0.dp)) {
-                                    Text(provider.externalLabel.ifEmpty { "Usage on the web" })
-                                    Icon(Icons.AutoMirrored.Outlined.OpenInNew, null, modifier = Modifier.padding(start = Space.xs).size(16.dp))
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            if (usage.byModel.isNotEmpty()) {
-                item("by-model") { SectionHeader("By model") }
-                usage.byModel.forEachIndexed { i, row -> item("model/$i") { UsageRow(row) } }
-            }
-            var lastDay = ""
-            usage.rows.forEachIndexed { i, row ->
-                if (row.day != lastDay) {
-                    lastDay = row.day
-                    item("day/$i") { SectionHeader(row.day) }
-                }
-                item("row/$i") { UsageRow(row) }
-            }
-        }
-    }
-}
-
-/** A model's tokens (and cost, when the server has prices). */
-@Composable
-private fun UsageRow(row: UsageRowView) {
-    ListItem(
-        headlineContent = { Text(row.model) },
-        supportingContent = { Text("${row.provider} · in ${row.input} · cached ${row.cached} · out ${row.output}", maxLines = 1, overflow = TextOverflow.Ellipsis) },
-        trailingContent = {
-            Column(horizontalAlignment = Alignment.End) {
-                Text(row.total, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-                if (row.cost.isNotEmpty()) Text(row.cost, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-        },
-        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
     )
 }

@@ -37,6 +37,7 @@ import androidx.compose.ui.window.DialogProperties
 import com.crayen.domovoi.app.ActiveArtifactView
 import com.crayen.domovoi.app.ArtifactsPanelView
 import com.crayen.domovoi.app.Event
+import com.crayen.domovoi.app.FilePreviewView
 import com.crayen.domovoi.app.ThreadPageView
 import com.crayen.domovoi.core.Core
 import com.crayen.domovoi.ffi.artifactPreviewDocument
@@ -72,6 +73,8 @@ fun ArtifactCard(
     title: String,
     kind: String,
     version: UInt = 1u,
+    /** How many versions there are (0: not known). */
+    versions: UInt = 0u,
     streaming: Boolean = false,
     hostedUrl: String? = null,
     onOpen: () -> Unit,
@@ -80,6 +83,7 @@ fun ArtifactCard(
     val label = artifactLabel(kind)
     val subtitle = when {
         streaming -> "Generating $label…"
+        versions > 1u -> "$label · v$version · $versions versions"
         version > 1u -> "$label · v$version"
         else -> label
     }
@@ -136,6 +140,7 @@ fun ArtifactsScreen(core: Core, onBack: () -> Unit) {
     val panel by core.view.panel.watch()
     val threadId by core.view.threadId.watch()
     val dark = isSystemInDarkTheme()
+    val file = panel.files.artifactPreview
     LaunchedEffect(threadId) {
         if (panel.artifacts.active == null && panel.artifacts.items.isNotEmpty() && threadId != null) {
             core.update(Event.OpenArtifact(threadId!!, panel.artifacts.items.first().id, null, dark))
@@ -145,11 +150,15 @@ fun ArtifactsScreen(core: Core, onBack: () -> Unit) {
         topBar = {
             TopAppBar(
                 navigationIcon = {
-                    IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Back") }
+                    IconButton(onClick = {
+                        // A workspace page opened over the artifacts closes with the screen.
+                        if (file != null) core.update(Event.CloseArtifactFile)
+                        onBack()
+                    }) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "Back") }
                 },
                 title = {
                     Text(
-                        panel.artifacts.active?.title ?: "Artifacts",
+                        file?.path?.substringAfterLast('/') ?: panel.artifacts.active?.title ?: "Artifacts",
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
@@ -185,12 +194,18 @@ fun ArtifactPane(
     val uriHandler = LocalUriHandler.current
 
     val active = artifacts.active
+    val panel by core.view.panel.watch()
+    val file = panel.files.artifactPreview
     LaunchedEffect(active?.id, active?.version) { runtimeError = null }
     LaunchedEffect(previewDark) {
         if (active != null) core.update(Event.RefreshArtifactPreview(previewDark))
     }
 
     Column(modifier) {
+        if (file != null) {
+            WorkspacePagePreview(core, file, previewDark)
+            return@Column
+        }
         if (active == null) {
             if (artifacts.items.isEmpty()) {
                 Box(Modifier.fillMaxSize().padding(Space.xl), contentAlignment = Alignment.Center) {
@@ -211,6 +226,7 @@ fun ArtifactPane(
                             title = item.title,
                             kind = item.kind,
                             version = item.latestVersion,
+                            versions = item.versionCount,
                             streaming = item.streaming,
                             hostedUrl = item.hostedUrl,
                             onOpen = {
@@ -236,6 +252,8 @@ fun ArtifactPane(
             horizontalArrangement = Arrangement.spacedBy(Space.xs),
         ) {
             if (artifacts.items.size > 1) {
+                // Back to the list of the thread's artifacts.
+                IconButton(onClick = { core.update(Event.CloseArtifact) }) { Icon(Icons.Outlined.GridView, "All artifacts") }
                 Box(Modifier.weight(1f)) {
                     TextButton(onClick = { artifactMenu = true }) {
                         Text(active.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -304,6 +322,14 @@ fun ArtifactPane(
                         DropdownMenuItem(
                             text = { Text(if (interactive) "Switch to static preview" else "Enable offline interactivity") },
                             onClick = { actionMenu = false; interactive = !interactive; runtimeError = null },
+                        )
+                    }
+                    val page = active.path?.takeIf(::isHtmlPath)
+                    if (page != null && threadId != null) {
+                        DropdownMenuItem(
+                            text = { Text("View workspace file") },
+                            leadingIcon = { Icon(Icons.Outlined.Description, null) },
+                            onClick = { actionMenu = false; core.update(Event.OpenArtifactFile(threadId!!, page)) },
                         )
                     }
                     active.hostedUrl?.let { hosted ->
@@ -606,6 +632,58 @@ private fun ServerArtifactWebView(url: String, onError: (String) -> Unit) {
         modifier = Modifier.fillMaxSize(),
         onRelease = { it.destroy() },
     )
+}
+
+/** The core reads only HTML files for `OpenArtifactFile`. */
+fun isHtmlPath(path: String): Boolean = path.substringAfterLast('.', "").lowercase().let { it == "html" || it == "htm" }
+
+/**
+ * An HTML page the agent wrote in the workspace, read from the server:
+ * drawn in the same sandbox as HTML artifacts, or its source.
+ */
+@Composable
+private fun WorkspacePagePreview(core: Core, file: FilePreviewView, dark: Boolean) {
+    val context = LocalContext.current
+    var source by remember(file.path) { mutableStateOf(false) }
+    var interactive by remember(file.path) { mutableStateOf(true) }
+    Column(Modifier.fillMaxSize()) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = Space.xs, vertical = Space.xs),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Space.xs),
+        ) {
+            IconButton(onClick = { core.update(Event.CloseArtifactFile) }) { Icon(Icons.Outlined.Close, "Close file") }
+            Text(file.path, fontFamily = Mono, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.StartEllipsis, modifier = Modifier.weight(1f))
+            if (file.error == null) {
+                IconButton(onClick = { core.update(Event.AppendToDraft("@${file.path} ")) }) { Icon(Icons.Outlined.AlternateEmail, "Mention in message") }
+                if (!file.loading) IconButton(onClick = { copyText(context, file.text) }) { Icon(Icons.Outlined.ContentCopy, "Copy contents") }
+            }
+        }
+        val error = file.error
+        when {
+            error != null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { EmptyState(Icons.Outlined.Warning, "Couldn't read the file", error) }
+            file.loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+            else -> {
+                TabRow(selectedTabIndex = if (source) 1 else 0) {
+                    Tab(selected = !source, onClick = { source = false }, text = { Text("Preview") })
+                    Tab(selected = source, onClick = { source = true }, text = { Text("Source") })
+                }
+                if (file.truncated) {
+                    Text("Only the start of the file was read.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = Space.m, vertical = Space.xs))
+                }
+                if (source) {
+                    SelectionContainer(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).horizontalScroll(rememberScrollState()).padding(Space.m)) {
+                        Text(file.text, fontFamily = Mono, style = MaterialTheme.typography.bodySmall, softWrap = false)
+                    }
+                } else {
+                    TextButton(onClick = { interactive = !interactive }, modifier = Modifier.padding(horizontal = Space.s)) {
+                        Text(if (interactive) "Switch to static preview" else "Enable interactivity")
+                    }
+                    SandboxedArtifactHost("html", file.text, interactive, dark) {}
+                }
+            }
+        }
+    }
 }
 
 // ---- Legacy compatibility helpers ----

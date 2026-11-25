@@ -231,6 +231,23 @@ impl Settings {
         }
     }
 
+    /// The patch as it was sent, for the managed policy's vetting.
+    pub fn patch_fields(patch: &SettingsPatch) -> &Map<String, Value> {
+        &patch.0
+    }
+
+    /// The settings document, for the managed policy's vetting.
+    pub fn document_fields(&self) -> Map<String, Value> {
+        self.fields()
+    }
+
+    /// These settings with the managed policy's locks laid over them again.
+    pub fn with_locks(self) -> Settings {
+        let mut fields = self.fields();
+        crate::policy::current().apply_locks(&mut fields);
+        Settings::from_document(fields)
+    }
+
     /// `applyServerSettingsPatch`: these settings with `patch` applied.
     pub fn patched(&self, patch: &SettingsPatch) -> Settings {
         Settings::from_document(apply_patch(&self.fields(), &patch.0))
@@ -258,20 +275,32 @@ impl Settings {
     }
 }
 
-/// What `server.updateSettings` is asked to change (`ServerSettingsPatch`).
+/// What `server.updateSettings` is asked to change (`ClientServerSettingsPatch`).
 ///
 /// Kept as the JSON object it arrives as: it is merged into the settings
 /// document key by key, whatever its keys, so that a client of another build
 /// can set what this build does not know. The operations and the keys with
 /// rules of their own are read from it where they are applied. A patch that
 /// is not an object changes nothing.
+///
+/// The theme defaults are left out as it is read, as t3code's
+/// `ClientServerSettingsPatch` omits them: only the server sets those, once
+/// it has validated the theme.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SettingsPatch(Map<String, Value>);
+
+/// Keys of `ServerSettingsPatch` a client's patch never sets.
+const SERVER_ONLY_PATCH_KEYS: [&str; 4] = ["defaultTheme", "defaultThemeSetAt", "defaultAppearance", "defaultAppearanceSetAt"];
 
 impl<'de> Deserialize<'de> for SettingsPatch {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         Ok(match Value::deserialize(deserializer)? {
-            Value::Object(fields) => SettingsPatch(fields),
+            Value::Object(mut fields) => {
+                for key in SERVER_ONLY_PATCH_KEYS {
+                    fields.remove(key);
+                }
+                SettingsPatch(fields)
+            }
             _ => SettingsPatch::default(),
         })
     }
@@ -336,24 +365,46 @@ fn deep_merge(current: &mut Value, patch: &Value) {
     }
 }
 
-/// The defaults with the saved settings merged over them.
-pub fn load(userdata: &Path) -> Settings {
-    let mut fields = encoded(&domovoi_contracts::defaults::settings());
-    let saved = std::fs::read_to_string(path(userdata)).ok().and_then(|text| serde_json::from_str::<Value>(&text).ok());
-    if let Some(Value::Object(saved)) = saved {
-        merge(&mut fields, &saved);
+/// The built-in defaults as a settings document.
+pub fn default_document() -> Map<String, Value> {
+    encoded(&domovoi_contracts::defaults::settings())
+}
+
+/// The settings file as saved, if it holds an object.
+fn saved(userdata: &Path) -> Option<Map<String, Value>> {
+    match std::fs::read_to_string(path(userdata)).ok().and_then(|text| serde_json::from_str::<Value>(&text).ok()) {
+        Some(Value::Object(saved)) => Some(saved),
+        _ => None,
     }
+}
+
+/// The defaults with the saved settings merged over them, and the managed
+/// policy's defaults and locks (`crate::policy`) laid in.
+pub fn load(userdata: &Path) -> Settings {
+    let fields = crate::policy::current().loaded(&default_document(), saved(userdata).as_ref());
     let settings = Settings::from_document(fields);
     crate::providers::remember_instances(&settings);
     settings
 }
 
-/// Writes settings atomically and announces them.
+/// Writes settings atomically and announces them. The managed policy's
+/// values are not written as the user's: each locked path keeps what the user
+/// had stored there.
 pub fn save(userdata: &Path, settings: &Settings) -> Result<(), Failure> {
     let p = path(userdata);
     let failed = |e: std::io::Error| Failure::Settings { settings_path: p.to_string_lossy().into_owned(), operation: SettingsOperation::WriteFile, cause: e.to_string() };
     let tmp = p.with_extension("json.tmp");
-    std::fs::write(&tmp, serde_json::to_string_pretty(&settings.fields()).expect("a JSON object serializes")).map_err(failed)?;
+    let mut fields = settings.fields();
+    let policy = crate::policy::current();
+    if policy.is_managed() {
+        let builtin = default_document();
+        let mut stored = builtin.clone();
+        if let Some(saved) = saved(userdata) {
+            merge(&mut stored, &saved);
+        }
+        policy.persisted(&mut fields, &stored, &builtin);
+    }
+    std::fs::write(&tmp, serde_json::to_string_pretty(&fields).expect("a JSON object serializes")).map_err(failed)?;
     std::fs::rename(&tmp, &p).map_err(failed)?;
     crate::providers::remember_instances(settings);
     let _ = updates().send(settings.clone());
@@ -571,6 +622,15 @@ mod tests {
         assert_eq!(next["defaultModelSelection"]["model"], "m");
         assert_eq!(next["previousWorktreesDirectories"], json!(["/old"]));
         assert!(next.get("setModelFavorites").is_none());
+    }
+
+    #[test]
+    fn a_client_patch_never_sets_the_theme_defaults() {
+        let patch: SettingsPatch = serde_json::from_value(json!({
+            "defaultTheme": "x", "defaultThemeSetAt": "1", "defaultAppearance": "dark", "defaultAppearanceSetAt": "2", "enablePreviewTunnel": false,
+        }))
+        .unwrap();
+        assert_eq!(patch.0, fields(json!({ "enablePreviewTunnel": false })));
     }
 
     #[test]

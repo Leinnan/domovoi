@@ -42,13 +42,21 @@ class ThreadsWidget : GlanceAppWidget() {
     private data class Row(val id: String, val title: String, val project: String, val status: String, val unread: Boolean)
 
     override suspend fun provideGlance(context: Context, id: GlanceId) {
-        val (server, rows) = load(context)
+        val (server, attention, rows) = load(context)
         provideContent {
             GlanceTheme {
                 Column(
                     GlanceModifier.fillMaxSize().background(GlanceTheme.colors.widgetBackground).cornerRadius(24.dp).padding(12.dp),
                 ) {
-                    Text(server.ifEmpty { "Domovoi" }, style = TextStyle(fontWeight = FontWeight.Bold, fontSize = 14.sp, color = GlanceTheme.colors.onSurface))
+                    Row(GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text(server.ifEmpty { "Domovoi" }, maxLines = 1, style = TextStyle(fontWeight = FontWeight.Bold, fontSize = 14.sp, color = GlanceTheme.colors.onSurface), modifier = GlanceModifier.defaultWeight())
+                        // Threads waiting on the user: approvals and questions.
+                        if (attention > 0) {
+                            Box(GlanceModifier.cornerRadius(10.dp).background(ColorProvider(Color(0xFFE08A1E))).padding(horizontal = 8.dp, vertical = 2.dp)) {
+                                Text("$attention need${if (attention == 1) "s" else ""} you", style = TextStyle(fontSize = 11.sp, fontWeight = FontWeight.Medium, color = ColorProvider(Color.White)))
+                            }
+                        }
+                    }
                     Spacer(GlanceModifier.height(8.dp))
                     if (rows.isEmpty()) {
                         Text("Open Domovoi to see your threads.", style = TextStyle(fontSize = 12.sp, color = GlanceTheme.colors.onSurfaceVariant))
@@ -88,14 +96,14 @@ class ThreadsWidget : GlanceAppWidget() {
         }
     }
 
-    private fun load(context: Context): Pair<String, List<Row>> = runCatching {
+    private fun load(context: Context): Triple<String, Int, List<Row>> = runCatching {
         val o = JSONObject(SystemSurfaces.snapshotFile(context).readText())
         val threads = o.getJSONArray("threads")
-        o.optString("server") to (0 until threads.length()).map { i ->
+        Triple(o.optString("server"), o.optInt("attention"), (0 until threads.length()).map { i ->
             val t = threads.getJSONObject(i)
             Row(t.getString("id"), t.optString("title"), t.optString("project"), t.optString("status"), t.optBoolean("unread"))
-        }
-    }.getOrDefault("" to emptyList())
+        })
+    }.getOrDefault(Triple("", 0, emptyList()))
 }
 
 class ThreadsWidgetReceiver : GlanceAppWidgetReceiver() {

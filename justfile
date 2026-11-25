@@ -39,6 +39,20 @@ default:
 build:
     cargo build --workspace
 
+# Check out the t3code release in conformance/t3code-pin under .reference/t3code and
+# install its packages: the schemas the conformance checks decode with (needs pnpm)
+reference:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    read -r tag commit < <(grep -v '^#' conformance/t3code-pin)
+    if [ ! -d .reference/t3code/.git ]; then
+      git clone -q --filter=blob:none https://github.com/pingdotgg/t3code.git .reference/t3code
+    fi
+    git -C .reference/t3code fetch -q --tags origin
+    git -C .reference/t3code checkout -q "$commit"
+    [ "$(git -C .reference/t3code rev-parse "$tag^{commit}")" = "$commit" ] || { echo "reference: $tag is not $commit" >&2; exit 1; }
+    (cd .reference/t3code && pnpm install --frozen-lockfile)
+
 # Every test; the schema checks also run when Node 26+ is on PATH (or in DOMOVOI_NODE)
 test:
     DOMOVOI_NODE="${DOMOVOI_NODE:-$(command -v node || true)}" cargo test --workspace
@@ -74,13 +88,19 @@ live provider filter="":
     fi
     exit $status
 
+# Every client uses every core event and view field, bar tools/parity-allowlist.toml (`--matrix` prints counts)
+parity *args:
+    python3 tools/parity.py {{args}}
+
 # Build everything and fail on any compiler warning or lint-gate finding
-check: lfs-check
+check: lfs-check parity
     #!/usr/bin/env bash
     set -uo pipefail
     for cmd in "cargo build --workspace" "cargo test --workspace --no-run"; do
       out=$($cmd 2>&1) || { echo "$out"; exit 1; }
-      if grep -E -A6 '^(warning|error)' <<<"$out"; then exit 1; fi
+      # A dependency's future-incompatibility notice (block 0.1.6, pulled in by
+      # iced on macOS) is not a warning about this code.
+      if grep -v 'will be rejected by a future version of Rust' <<<"$out" | grep -E -A6 '^(warning|error)'; then exit 1; fi
     done
     # The lint gate, outside tests: no `unwrap()` (an `expect` names its
     # invariant), no std lock held across an await, no oversized enum variant,
@@ -235,6 +255,14 @@ ios-archive: (mac-generate "true")
       -archivePath {{dist}}/DomovoiIOS.xcarchive -allowProvisioningUpdates MARKETING_VERSION={{version}} \
       CURRENT_PROJECT_VERSION=$(git rev-list --count HEAD) -skipPackagePluginValidation -quiet archive
     @echo "{{dist}}/DomovoiIOS.xcarchive"
+
+# Archive the iPhone app and upload it to TestFlight; `marketing` overrides the Cargo.toml version, BUILD=n the build number (docs/testflight.md)
+testflight marketing="":
+    JUST="{{just_executable()}}" DOMOVOI_VERSION={{version}} tools/ios/testflight.sh {{marketing}}
+
+# Same archive and .ipa export as testflight, validated with App Store Connect but not uploaded
+testflight-validate marketing="":
+    JUST="{{just_executable()}}" DOMOVOI_VERSION={{version}} tools/ios/testflight.sh --validate-only {{marketing}}
 
 # Print the Developer ID identity for the configured team, or fail before building.
 [private]
@@ -471,7 +499,7 @@ desktop-dev:
 desktop-test:
     cargo test -p domovoi-iced
 
-# Package the Iced desktop app for this OS into dist/: .app/.zip (macOS), .tar.gz with .desktop (Linux), or .exe (Windows)
+# Package the Iced desktop app for this OS into dist/: .app/.zip (macOS), .tar.gz with .desktop (Linux), or .exe (Windows, which registers domovoi:// itself on first run)
 desktop-package: lfs-check
     #!/usr/bin/env bash
     set -euo pipefail

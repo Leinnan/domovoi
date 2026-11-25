@@ -4,7 +4,7 @@
 
 use domovoi_core::Event;
 use domovoi_core::view::{FileEntryView, FilePreviewView, ImageView, LfsView};
-use iced::widget::{Column, Space, column, container, image, keyed_column, row, text, text_editor};
+use iced::widget::{Column, Space, button, column, container, image, keyed_column, row, text, text_editor};
 use iced::{Alignment, Element, Length, Padding};
 
 use crate::app::{App, ImageAction, Message};
@@ -171,7 +171,12 @@ fn lfs_card<'a>(path: &'a str, lfs: &'a LfsView) -> Element<'a, Message> {
     let mut top = row![
         w::badge_capsule("Git LFS", Some(accent)),
         w::colored(&lfs.state_label, TEXT_SMALL, tone),
-        w::faint(format!("{} · {}", lfs.size_label, lfs.oid_short), TEXT_CAPTION).font(fonts::MONO),
+        w::faint(&lfs.size_label, TEXT_CAPTION).font(fonts::MONO),
+        // The short id; the whole SHA-256 on hover, copied on click.
+        w::with_tooltip(
+            button(w::faint(&lfs.oid_short, TEXT_CAPTION).font(fonts::MONO)).padding([1.0, XS]).style(w::ghost_style).on_press(Message::CopyText(lfs.oid.clone())),
+            &format!("Copy object id\n{}", lfs.oid),
+        ),
         Space::new().width(Length::Fill),
     ]
     .spacing(XS)

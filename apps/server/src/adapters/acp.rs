@@ -2,22 +2,44 @@
 //! `effect-acp`): newline-delimited JSON-RPC 2.0 over the agent's stdio,
 //! one process per thread.
 //!
-//! - `initialize` (protocol 1; no file system or terminal of the client's),
-//!   then `session/new` in the thread's folder, or `session/load` /
-//!   `session/resume` of the thread's ACP session. An agent that needs
-//!   signing in is sent `authenticate` with the instance's method (or its
-//!   first agent-side one) and asked again.
+//! - `initialize` (protocol 1), then `session/new` in the thread's folder,
+//!   or `session/load` / `session/resume` of the thread's ACP session. An
+//!   agent that needs signing in is sent `authenticate` with the instance's
+//!   method (or its first agent-side one) and asked again.
+//! - What the client offers is t3code's per flavor: an `acpRegistry` agent
+//!   gets URL sign-ins (`elicitation.url`: shown on the instance's entry as
+//!   `auth.action` until `server.acceptAcpRegistryUrlAuth`, 10 minutes at
+//!   most; [`url_auth`]) and, for Devin alone, the client's terminals
+//!   ([`super::acp_terminals`]: opened only when the runtime mode runs
+//!   commands or a command was approved in the turn or for the session);
+//!   Antigravity reads files of the thread's folder; no agent is offered
+//!   `fs/write_text_file` or elicitation forms (t3code offers writes to none).
 //! - Domovoi's MCP tools go along: over HTTP when the agent takes HTTP MCP
 //!   servers, else through `domovoi-server acp-mcp-bridge` (stdio).
 //! - `session/prompt` runs a turn; `session/update` notifications are its
-//!   messages, thoughts, tool calls, plan and context use; `session/cancel`
-//!   stops it. `session/request_permission` asks as an approval, unless the
-//!   runtime mode decides it (full access allows; auto-accept-edits allows
-//!   edits; reads are allowed).
+//!   messages, thoughts, tool calls (a `terminal` content shown as what the
+//!   terminal printed), plan and context use; `session/cancel` stops it.
+//!   `session/request_permission` asks as an approval unless t3code's policy
+//!   decides it (`acpPermissionDisposition`: reads, searches and thoughts are
+//!   allowed; Supervised asks; auto-accept-edits allows edits; Auto and full
+//!   access allow), as each flavor adjusts it.
 //! - The model is the session's model option or `session/set_model`; plan
 //!   mode is a mode whose id ends in `plan` or `architect`.
+//! - A message sent during a turn waits for its end (t3code restarts the
+//!   turn instead), except for Grok and Kiro, which take it natively.
 //! - The first prompt of a session carries the instructions about Domovoi's
 //!   tools (ACP has no system prompt field).
+//!
+//! Grok, Kiro and fx ([`crate::acp_cli`]) are flavors of this: each CLI's
+//! launch, `initialize` and session `_meta`, its model, option and mode
+//! writes ([`AcpSession::apply_cli_selection`]), its approval choices and
+//! policy, and its native steer (Grok `_x.ai/interject`, taken once queued;
+//! Kiro `_session/steer`, text only, taken once Kiro reports it read, the
+//! note its model adds left out). Grok's `ask_user_question` is a question
+//! form, its `exit_plan_mode` a proposed plan, and a `prompt_complete`
+//! notification ends a prompt it never answered; its `session/load` counts
+//! as loaded a second after the replay goes quiet. Kiro's cloud-config tool
+//! call is not the turn's.
 //!
 //! Google's Antigravity (`antigravity` driver) is a flavor of this, after
 //! t3code's `AntigravityAdapterV2`: its agent starts in the instance's own
@@ -28,6 +50,11 @@
 //! answered from the thread's runtime mode; native questions are question
 //! forms; the agent may read files of the thread's folder; a stop waits a
 //! while for the agent to finish before it is killed.
+//!
+//! Limits: no steering of Antigravity (t3code sends it another
+//! `session/prompt`); no client terminals for agents other than Devin, and a
+//! terminal's folder is not held to the workspace (t3code's isn't); requests
+//! an agent sends between turns are not answered, except about terminals.
 
 #![expect(clippy::disallowed_types, clippy::disallowed_macros, reason = "the Agent Client Protocol's JSON-RPC messages, read and written as ACP agents send them")]
 
@@ -104,13 +131,32 @@ fn auth_method(instance_id: &str) -> Option<String> {
 
 const PROTOCOL_VERSION: u64 = 1;
 
-/// The client side of `initialize`.
+/// The client side of `initialize`: no file system or terminal of the
+/// client's (a flavor adds what it serves, [`registry_initialize_params`]).
 pub fn initialize_params() -> Value {
     json!({
         "protocolVersion": PROTOCOL_VERSION,
         "clientCapabilities": { "fs": { "readTextFile": false, "writeTextFile": false }, "terminal": false },
         "clientInfo": { "name": "t3-code", "title": "T3 Code (Domovoi)", "version": domovoi_contracts::environment::SERVER_VERSION },
     })
+}
+
+/// What an `acpRegistry` instance's agent is offered (t3code
+/// `makeAcpRegistryAdapterV2`): URL sign-ins (`elicitation.url`), and
+/// terminals for Devin, which runs its commands in the client's.
+pub fn registry_initialize_params(devin: bool) -> Value {
+    let mut params = initialize_params();
+    params["clientCapabilities"]["elicitation"] = json!({ "url": {} });
+    if devin {
+        params["clientCapabilities"]["terminal"] = json!(true);
+        params["clientCapabilities"]["_meta"] = json!({ "cognition.ai/subagentSupport": true, "cognition.ai/messageGrouping": true });
+    }
+    params
+}
+
+/// Whether an `acpRegistry` instance runs Devin (registry agent `devin`).
+fn is_devin(instance_id: &str) -> bool {
+    crate::providers::instance(instance_id).and_then(|c| c.config).is_some_and(|c| c["source"] != "local" && c["agentId"] == "devin")
 }
 
 /// Whether an error answer is ACP's "authentication required" (-32000).
@@ -161,6 +207,73 @@ pub struct AcpSession {
     mode_before_plan: std::sync::Mutex<Option<String>>,
     /// Antigravity's part, for an `antigravity` instance.
     antigravity: Option<Antigravity>,
+    /// The CLI, for a `grok`, `kiro` or `fx` instance ([`crate::acp_cli`]).
+    cli: Option<crate::acp_cli::Kind>,
+    /// What `initialize` answered.
+    init: Value,
+    /// The terminals the agent runs, when it was offered them.
+    terminals: Option<Arc<super::acp_terminals::Terminals>>,
+    /// Commands approved, which also let the agent open terminals.
+    grants: std::sync::Mutex<ExecGrants>,
+    /// URL sign-ins are answered (an `acpRegistry` instance).
+    url_auth: bool,
+    /// fx: the session's mode is written at the next turn even if it is the one fx reports.
+    mode_unwritten: AtomicBool,
+    /// Kiro: what its session updates need across turns.
+    kiro: std::sync::Mutex<KiroState>,
+    /// The CLI's settings it was started with: other settings need another process.
+    cli_config: Option<crate::acp_cli::Config>,
+}
+
+/// Commands approved: an approved `execute` request lets the agent open
+/// terminals for the turn, or for the session when allowed for it (ACP
+/// can't tie a command to its terminal; t3code `makeAcpClientPolicyGrants`).
+#[derive(Default)]
+struct ExecGrants {
+    session: bool,
+    turn: Option<String>,
+}
+
+#[derive(Default)]
+struct KiroState {
+    notes: crate::acp_cli::kiro::SteeringNotes,
+    cloud_config: crate::acp_cli::kiro::CloudConfigCalls,
+}
+
+/// Steers sent and not yet read by the agent (Kiro's `steering_injected`),
+/// by its message id; and those read before their send was answered.
+#[derive(Default)]
+struct SteerWaits {
+    waiting: HashMap<String, tokio::sync::oneshot::Sender<Result<(), String>>>,
+    injected: HashSet<String>,
+}
+
+impl SteerWaits {
+    fn queued(&mut self, id: String, reply: tokio::sync::oneshot::Sender<Result<(), String>>) {
+        if self.injected.remove(&id) {
+            let _ = reply.send(Ok(()));
+        } else {
+            self.waiting.insert(id, reply);
+        }
+    }
+
+    fn injected(&mut self, id: &str) {
+        match self.waiting.remove(id) {
+            Some(reply) => {
+                let _ = reply.send(Ok(()));
+            }
+            None => {
+                self.injected.insert(id.to_owned());
+            }
+        }
+    }
+
+    fn fail_all(&mut self) {
+        for (_, reply) in self.waiting.drain() {
+            let _ = reply.send(Err("The turn ended before the agent read the message.".into()));
+        }
+        self.injected.clear();
+    }
 }
 
 /// What an Antigravity session keeps beyond a generic one.
@@ -187,22 +300,41 @@ impl AcpSession {
         if crate::antigravity::is_instance(&instance) {
             return Self::start_antigravity(input, native_session, log_dir, attachments).await;
         }
-        let mut spawn = spawn_for(&instance)?;
+        let cli = crate::acp_cli::kind_of(&instance);
+        let devin = cli.is_none() && is_devin(&instance);
+        let (mut spawn, init_params, configured, instance_env) = match cli {
+            Some(kind) => {
+                let config = crate::acp_cli::config(&instance);
+                let exe = crate::acp_cli::resolve(kind, &config)?;
+                (kind.spawn(&exe, &config, Some(&input.runtime_mode)), kind.initialize_params("t3-code"), kind.auth_method(&config), config.env)
+            }
+            None => {
+                let spawn = spawn_for(&instance)?;
+                let env = spawn.env.clone();
+                (spawn, registry_initialize_params(devin), auth_method(&instance), env)
+            }
+        };
         spawn.env.push(("T3CODE_THREAD_ID".into(), input.thread_id.clone()));
         let log = crate::logging::protocol_log(log_dir.join(format!("acp-{}-{}.ndjson", crate::orchestration::events::enc(&instance), crate::util::new_uuid())));
         let args: Vec<&str> = spawn.args.iter().map(String::as_str).collect();
-        let (rpc, events) = RpcClient::spawn_with(&spawn.program, &args, Some(&input.cwd), &spawn.env, true, log).map_err(|e| format!("could not start the ACP agent: {e}"))?;
-        let init = rpc.request("initialize", initialize_params()).await.map_err(|e| format!("The ACP agent did not initialize: {e}"))?;
+        let (rpc, mut events) = RpcClient::spawn_with(&spawn.program, &args, Some(&input.cwd), &spawn.env, true, log).map_err(|e| format!("could not start the ACP agent: {e}"))?;
+        let init = rpc.request("initialize", init_params).await.map_err(|e| format!("The ACP agent did not initialize: {e}"))?;
         let caps = init["agentCapabilities"].clone();
         let servers = mcp_servers(&input.thread_id, &caps);
-        let configured = auth_method(&instance);
+        let meta = cli.and_then(crate::acp_cli::Kind::session_meta);
+        let with_meta = |mut params: Value| {
+            if let Some(m) = &meta {
+                params["_meta"] = m.clone();
+            }
+            params
+        };
         let open = |method: &'static str, params: Value| {
             let rpc = rpc.clone();
             async move { rpc.request(method, params).await }
         };
         let (session_id, session) = 'open: {
             if let Some(id) = native_session.filter(|id| !id.starts_with("pending:")) {
-                let params = json!({ "sessionId": id, "cwd": input.cwd, "mcpServers": servers });
+                let params = with_meta(json!({ "sessionId": id, "cwd": input.cwd, "mcpServers": servers }));
                 let method = if caps["loadSession"] == true {
                     Some("session/load")
                 } else if !caps["sessionCapabilities"]["resume"].is_null() {
@@ -210,17 +342,25 @@ impl AcpSession {
                 } else {
                     None
                 };
-                if let Some(method) = method
-                    && let Ok(answer) = open(method, params).await
-                {
-                    break 'open (id, answer);
+                if let Some(method) = method {
+                    let answer = if cli == Some(crate::acp_cli::Kind::Grok) && method == "session/load" {
+                        replay_settled(open(method, params), &mut events).await
+                    } else {
+                        open(method, params).await
+                    };
+                    if let Ok(answer) = answer {
+                        break 'open (id, answer);
+                    }
                 }
             }
-            let params = json!({ "cwd": input.cwd, "mcpServers": servers });
+            let params = with_meta(json!({ "cwd": input.cwd, "mcpServers": servers }));
             let answer = match open("session/new", params.clone()).await {
                 Ok(a) => a,
                 Err(e) if auth_required(&e) => {
-                    let method = pick_auth(&init["authMethods"], configured.as_deref()).ok_or("The ACP agent needs signing in, and offers no way Domovoi can do it here.")?;
+                    // A CLI's own method goes even when the agent doesn't list it (t3code `authenticateAfterRequired`).
+                    let method = pick_auth(&init["authMethods"], configured.as_deref())
+                        .or_else(|| configured.clone().filter(|_| cli.is_some()))
+                        .ok_or("The ACP agent needs signing in, and offers no way Domovoi can do it here.")?;
                     rpc.request("authenticate", json!({ "methodId": method })).await.map_err(|e| format!("The ACP agent did not sign in: {e}"))?;
                     open("session/new", params).await.map_err(|e| format!("The ACP agent started no session: {e}"))?
                 }
@@ -230,8 +370,9 @@ impl AcpSession {
             (id, answer)
         };
         // A loaded session replays its history first: not the next turn's.
-        let mut events = events;
         while events.try_recv().is_ok() {}
+        let terminals = devin.then(|| super::acp_terminals::Terminals::new(std::path::Path::new(&input.cwd), instance_env, true));
+        let cli_config = cli.map(|_| crate::acp_cli::config(&instance));
         Ok(Arc::new(AcpSession {
             rpc,
             events: Mutex::new(events),
@@ -246,6 +387,14 @@ impl AcpSession {
             instructed: AtomicBool::new(false),
             mode_before_plan: std::sync::Mutex::new(None),
             antigravity: None,
+            cli,
+            init,
+            terminals,
+            grants: Default::default(),
+            url_auth: cli.is_none(),
+            mode_unwritten: AtomicBool::new(true),
+            kiro: Default::default(),
+            cli_config,
         }))
     }
 
@@ -317,6 +466,7 @@ impl AcpSession {
         ag::session_started(&instance, launch.method(), launch.exe.version.as_deref(), &session, Some(&input.cwd));
         let ag::launch::Launch { rpc, mut events, init, config, temp, auth_url, profile, lease, .. } = launch;
         while events.try_recv().is_ok() {}
+        let (prompt_caps, appends_system_prompt) = (init["agentCapabilities"]["promptCapabilities"].clone(), ag::acp::appends_system_prompt(&init));
         Ok(Arc::new(AcpSession {
             rpc,
             events: Mutex::new(events),
@@ -325,8 +475,8 @@ impl AcpSession {
             runtime_mode: input.runtime_mode.clone(),
             instance,
             session: std::sync::Mutex::new(session),
-            prompt_caps: init["agentCapabilities"]["promptCapabilities"].clone(),
-            appends_system_prompt: ag::acp::appends_system_prompt(&init),
+            prompt_caps,
+            appends_system_prompt,
             broken: AtomicBool::new(false),
             instructed: AtomicBool::new(instructed),
             mode_before_plan: std::sync::Mutex::new(None),
@@ -340,6 +490,14 @@ impl AcpSession {
                 auth_url,
                 plan_files: Default::default(),
             }),
+            cli: None,
+            init,
+            terminals: None,
+            grants: Default::default(),
+            url_auth: false,
+            mode_unwritten: AtomicBool::new(false),
+            kiro: Default::default(),
+            cli_config: None,
         }))
     }
 
@@ -347,6 +505,7 @@ impl AcpSession {
     /// Antigravity sign-in method or credential changed: it does not).
     pub fn current(&self) -> bool {
         self.antigravity.as_ref().is_none_or(|a| crate::antigravity::config(&self.instance).launch_key() == a.launch_key)
+            && self.cli_config.as_ref().is_none_or(|c| *c == crate::acp_cli::config(&self.instance))
     }
 
     /// The provider instance whose agent this is.
@@ -359,6 +518,9 @@ impl AcpSession {
     }
 
     pub async fn kill(&self) {
+        if let Some(t) = &self.terminals {
+            t.dispose_all();
+        }
         self.rpc.kill().await;
         if let Some(a) = &self.antigravity {
             a._temp.remove();
@@ -448,6 +610,9 @@ impl AcpSession {
         if self.antigravity.is_some() {
             return self.apply_antigravity_selection(input).await;
         }
+        if let Some(kind) = self.cli {
+            return self.apply_cli_selection(kind, input).await;
+        }
         let session = crate::util::locked(&self.session).clone();
         let model = input.model_selection.model.as_str();
         if !model.is_empty() && model != "default" {
@@ -480,6 +645,216 @@ impl AcpSession {
         Ok(())
     }
 
+    /// A select config option of the session, by id.
+    fn config_option(&self, id: &str) -> Option<Value> {
+        crate::util::locked(&self.session)["configOptions"].as_array()?.iter().find(|o| o["id"] == id && o["type"] == "select").cloned()
+    }
+
+    /// Writes a select config option unless it holds `value` already; one
+    /// the session doesn't list is skipped (with `listed_only`).
+    async fn write_option(&self, id: &str, value: &str, listed_only: bool) -> Result<bool, String> {
+        let option = self.config_option(id);
+        if option.as_ref().is_some_and(|o| o["currentValue"] == value) {
+            return Ok(false);
+        }
+        if listed_only && !option.as_ref().is_some_and(|o| select_values(o).iter().any(|v| v == value)) {
+            return Ok(false);
+        }
+        self.set_option(id, value).await.map(|()| true)
+    }
+
+    /// A Grok, Kiro or fx turn's model, its options and the session's mode
+    /// (each flavor's `applyModelSelection`, then the options it leaves to
+    /// the shared loop).
+    async fn apply_cli_selection(&self, kind: crate::acp_cli::Kind, input: &TurnInput) -> Result<(), String> {
+        use crate::acp_cli::{Kind, fx, grok, kiro};
+        let model = input.model_selection.model.as_str();
+        let owned: &[&str] = match kind {
+            Kind::Grok => &["reasoningEffort"],
+            Kind::Kiro => &["reasoningEffort", kiro::AGENT],
+            Kind::Fx => &[fx::MODE],
+        };
+        match kind {
+            Kind::Grok => {
+                let effort = choice(input, "reasoningEffort");
+                let session = crate::util::locked(&self.session).clone();
+                if self.init["protocolVersion"].as_u64().unwrap_or(PROTOCOL_VERSION) <= 1 {
+                    // Protocol 1: the level goes as `session/set_model` metadata.
+                    let mut sent = grok::set_model_params(&self.session_id, &session, model, effort.as_deref());
+                    if let Some(params) = sent.clone()
+                        && let Err(e) = self.rpc.request("session/set_model", params.clone()).await
+                    {
+                        if params.get("_meta").is_none() {
+                            return Err(format!("Grok did not accept the model: {e}"));
+                        }
+                        tracing::warn!("Grok skipped the requested reasoning effort: {e}");
+                        sent = grok::set_model_params(&self.session_id, &session, model, None);
+                        if let Some(params) = &sent {
+                            self.rpc.request("session/set_model", params.clone()).await.map_err(|e| format!("Grok did not accept the model: {e}"))?;
+                        }
+                    }
+                    if let Some(params) = sent {
+                        let mut session = crate::util::locked(&self.session);
+                        session["models"]["currentModelId"] = params["modelId"].clone();
+                        if let Some(e) = params["_meta"]["reasoningEffort"].as_str()
+                            && let Some(m) = session["models"]["availableModels"].as_array_mut().and_then(|a| a.iter_mut().find(|m| m["modelId"] == params["modelId"]))
+                        {
+                            m["_meta"]["reasoningEffort"] = json!(e);
+                        }
+                    }
+                } else {
+                    let wanted = Some(grok::model_id(model)).filter(|m| *m != grok::DEFAULT_MODEL);
+                    let current = crate::util::locked(&self.session)["configOptions"].as_array().and_then(|o| o.iter().find(|o| o["category"] == "model").cloned());
+                    if let Some(m) = wanted.filter(|m| current.as_ref().is_none_or(|c| c["currentValue"] != *m)) {
+                        self.rpc.request("session/set_model", json!({ "sessionId": self.session_id, "modelId": m })).await.map_err(|e| format!("Grok did not accept the model: {e}"))?;
+                    }
+                    let level = crate::util::locked(&self.session)["configOptions"].as_array().and_then(|o| o.iter().find(|o| o["category"] == "thought_level" && o["type"] == "select").cloned());
+                    if let (Some(e), Some(level)) = (effort, level)
+                        && let Some(id) = level["id"].as_str()
+                        && let Err(e) = self.write_option(id, &e, true).await
+                    {
+                        tracing::warn!("Grok skipped the requested reasoning effort: {e}");
+                    }
+                }
+            }
+            Kind::Kiro => {
+                // The agent first: switching applies the agent's own model.
+                let mut switched = false;
+                if let Some(agent) = choice(input, kiro::AGENT)
+                    && let Some(option) = self.config_option(kiro::AGENT)
+                    && option["currentValue"] != agent.as_str()
+                {
+                    if select_values(&option).contains(&agent) {
+                        self.set_option(kiro::AGENT, &agent).await.map_err(|e| format!("Kiro did not switch to the agent \"{agent}\": {e}"))?;
+                        switched = true;
+                    } else {
+                        tracing::warn!("Kiro does not list the thread's agent");
+                    }
+                }
+                let option = crate::util::locked(&self.session)["configOptions"].as_array().and_then(|o| o.iter().find(|o| o["id"] == kiro::MODEL || o["category"] == "model").cloned());
+                let is_select = option.as_ref().is_some_and(|o| o["type"] == "select");
+                let current = option.as_ref().filter(|_| is_select).and_then(|o| o["currentValue"].as_str()).map(str::to_owned);
+                let selected = model.trim();
+                let is_default = selected.is_empty() || selected == kiro::DEFAULT_MODEL;
+                // A new session runs Kiro's default already, unless an agent switch moved it.
+                if !(is_default && !is_select && !switched) {
+                    let requested = if is_default { kiro::default_model_id(&self.instance) } else { selected.to_owned() };
+                    if Some(&requested) != current.as_ref() {
+                        let id = option.as_ref().and_then(|o| o["id"].as_str()).unwrap_or(kiro::MODEL).to_owned();
+                        self.set_option(&id, &requested).await.map_err(|e| format!("Kiro did not accept the model \"{requested}\": {e}"))?;
+                    }
+                }
+                if let Some(effort) = choice(input, "reasoningEffort")
+                    && let Err(e) = self.write_option(kiro::EFFORT, &effort, true).await
+                {
+                    tracing::warn!("Kiro rejected the reasoning effort {effort}: {e}");
+                }
+                self.write_option(kiro::AUTOPILOT, kiro::autopilot_value(&input.runtime_mode), true).await.map_err(|e| format!("Kiro did not take its autopilot setting: {e}"))?;
+            }
+            Kind::Fx => {
+                self.apply_fx_mode(&input.runtime_mode).await?;
+                self.apply_fx_model(input).await?;
+                if choice(input, fx::EFFORT).is_none() {
+                    // A thread without an effort starts at medium.
+                    self.write_option(fx::EFFORT, fx::DEFAULT_EFFORT, true).await.map_err(|e| format!("fx did not take its effort: {e}"))?;
+                }
+            }
+        }
+        // The thread's other options, where the session has an option of that id.
+        for selection in input.model_selection.options.iter().flatten() {
+            let OptionValue::Choice(value) = &selection.value else { continue };
+            if owned.contains(&selection.id.as_str()) {
+                continue;
+            }
+            if let Err(e) = self.write_option(&selection.id, value, true).await {
+                tracing::warn!(option = %selection.id, "the agent did not take a model option: {e}");
+            }
+        }
+        Ok(())
+    }
+
+    /// fx's session mode for the runtime mode (t3code `withFxSessionMode`):
+    /// the first write after a session opens always goes out.
+    async fn apply_fx_mode(&self, runtime_mode: &str) -> Result<(), String> {
+        use crate::acp_cli::fx;
+        let (advertised, current) = {
+            let session = crate::util::locked(&self.session);
+            let ids: Vec<String> = session["modes"]["availableModes"].as_array().into_iter().flatten().filter_map(|m| m["id"].as_str().map(str::to_owned)).collect();
+            (ids, session["modes"]["currentModeId"].as_str().map(str::to_owned))
+        };
+        let requested = fx::session_mode(runtime_mode);
+        let listed: Vec<&str> = advertised.iter().map(String::as_str).collect();
+        let Some(target) = fx::mode_id(requested, &listed) else {
+            let shown = if listed.is_empty() { "no modes".to_owned() } else { listed.join(", ") };
+            return Err(format!("fx cannot run in mode \"{requested}\"; it advertises {shown}."));
+        };
+        let unwritten = self.mode_unwritten.load(Ordering::SeqCst);
+        if current.as_deref() != Some(target) {
+            self.rpc.request("session/set_mode", json!({ "sessionId": self.session_id, "modeId": target })).await.map_err(|e| format!("fx did not take its mode: {e}"))?;
+            crate::util::locked(&self.session)["modes"]["currentModeId"] = json!(target);
+        } else if unwritten {
+            self.rpc
+                .request("session/set_config_option", json!({ "sessionId": self.session_id, "configId": fx::MODE, "value": target }))
+                .await
+                .map_err(|e| format!("fx did not take its mode: {e}"))?;
+        }
+        self.mode_unwritten.store(false, Ordering::SeqCst);
+        Ok(())
+    }
+
+    /// fx's backend and model (t3code `applyFxModelSelection`): the backend
+    /// first, as its models change with it; put back if the model fails.
+    async fn apply_fx_model(&self, input: &TurnInput) -> Result<(), String> {
+        use crate::acp_cli::fx;
+        let backend = self.config_option(fx::PROVIDER);
+        let backends = backend.as_ref().map(select_values).unwrap_or_default();
+        let original_backend = backend.as_ref().and_then(|b| b["currentValue"].as_str()).map(str::to_owned);
+        let original_model = self.config_option(fx::MODEL).and_then(|m| m["currentValue"].as_str().map(str::to_owned));
+        let requested = input.model_selection.model.trim();
+        let is_default = requested.is_empty() || requested == fx::DEFAULT_MODEL;
+        let target: Option<(Option<String>, String)> = if is_default {
+            let config = crate::acp_cli::config(&self.instance);
+            match crate::acp_cli::resolve(crate::acp_cli::Kind::Fx, &config) {
+                Ok(exe) => fx::default_choice(&exe, &config, std::path::Path::new(&self.cwd)).await.map(|(b, m)| (Some(b), m)),
+                Err(_) => None,
+            }
+        } else {
+            let listed: Vec<&str> = backends.iter().map(String::as_str).collect();
+            let (b, m) = fx::parse_slug(requested, &listed);
+            Some((b.map(str::to_owned), m.to_owned()))
+        };
+        let Some((target_backend, target_model)) = target else { return Ok(()) };
+        let can_select = target_backend.as_ref().is_none_or(|b| backend.is_some() && (original_backend.as_ref() == Some(b) || backends.contains(b)));
+        let changing = can_select && backend.is_some() && target_backend.as_ref().is_some_and(|b| original_backend.as_ref() != Some(b));
+        let result = async {
+            if changing && let Some(b) = &target_backend {
+                self.set_option(fx::PROVIDER, b).await?;
+            }
+            let model_option = self.config_option(fx::MODEL);
+            let current = model_option.as_ref().and_then(|m| m["currentValue"].as_str()).map(str::to_owned);
+            if current.as_ref() == Some(&target_model) || (is_default && !can_select) {
+                return Ok(());
+            }
+            if is_default && !model_option.as_ref().is_some_and(|m| select_values(m).contains(&target_model)) {
+                return Err("The default fx model is unavailable on its configured backend.".to_owned());
+            }
+            self.set_option(fx::MODEL, &target_model).await
+        }
+        .await;
+        if result.is_err()
+            && changing
+            && let Some(b) = &original_backend
+        {
+            let _ = self.set_option(fx::PROVIDER, b).await;
+            if let Some(m) = &original_model
+                && self.config_option(fx::MODEL).is_some_and(|o| o["currentValue"] != m.as_str())
+            {
+                let _ = self.set_option(fx::MODEL, m).await;
+            }
+        }
+        result.map_err(|e| format!("fx did not take the model \"{requested}\": {e}"))
+    }
+
     /// The prompt's content blocks: images the agent takes, then the text
     /// (with the instructions about Domovoi's tools on the session's first).
     fn prompt(&self, input: &TurnInput) -> Vec<Value> {
@@ -487,7 +862,8 @@ impl AcpSession {
         let mut blocks = vec![];
         if self.antigravity.is_some() {
             blocks = crate::antigravity::protocol::attachment_blocks(&input.images, &input.files, &self.prompt_caps);
-        } else if self.prompt_caps["image"] == true {
+        } else if self.prompt_caps["image"] == true || self.cli == Some(crate::acp_cli::Kind::Grok) {
+            // Grok takes images though it says it doesn't (t3code `supportsImagePrompts`).
             for (mime, path) in &input.images {
                 if let Ok(bytes) = std::fs::read(path) {
                     blocks.push(json!({ "type": "image", "mimeType": mime, "data": base64::engine::general_purpose::STANDARD.encode(bytes) }));
@@ -518,10 +894,17 @@ impl AcpSession {
         turn.thread_status(ProviderThreadStatus::Active, Some(&self.session_id));
         let mut events = self.events.lock().await;
         while let Ok(ev) = events.try_recv() {
-            if matches!(ev, Incoming::Closed) {
-                self.broken.store(true, Ordering::SeqCst);
-                turn.complete(TurnEnd::Failed, Some("The ACP agent exited."));
-                return (turn, false);
+            match ev {
+                Incoming::Closed => {
+                    self.broken.store(true, Ordering::SeqCst);
+                    turn.complete(TurnEnd::Failed, Some("The ACP agent exited."));
+                    return (turn, false);
+                }
+                // A terminal asked about between turns is answered still.
+                Incoming::Request { id, method, params } if method.starts_with("terminal/") && self.terminals.is_some() => {
+                    self.terminal_request(id, &method, params, turn.run.id.as_str(), &input.runtime_mode).await;
+                }
+                _ => {}
             }
         }
         // `/logout` alone: Domovoi signs no account out (the Google one is the
@@ -561,6 +944,7 @@ impl AcpSession {
             plan_key: format!("antigravity-plan:{}", turn.run.id),
             ..TurnState::default()
         };
+        let steers: Arc<std::sync::Mutex<SteerWaits>> = Arc::default();
         let mut interrupted = false;
         let mut prompt_done = false;
         let mut message_questions_ready = false;
@@ -591,7 +975,7 @@ impl AcpSession {
                         if let Incoming::Notification { method, params } = ev
                             && method == "session/update"
                         {
-                            self.update(&mut state, &mut turn, &params["update"]);
+                            self.update(&mut state, &mut turn, &params["update"], &steers);
                         }
                     }
                     if let Ok(Ok(r)) = &answer
@@ -632,6 +1016,13 @@ impl AcpSession {
                             (TurnEnd::Failed, Some(crate::antigravity::SIGN_IN_REQUIRED.to_owned()))
                         }
                         Ok(Err(e)) if antigravity => (TurnEnd::Failed, Some(format!("Antigravity failed the turn: {}", crate::antigravity::launch::explain(&e)))),
+                        // Grok's and Kiro's prompt errors carry a message meant for the user (t3code `promptFailure`).
+                        Ok(Err(crate::jsonrpc::RpcError::Remote(e))) if self.cli.is_some() && e["message"].as_str().is_some_and(|m| !m.trim().is_empty()) => {
+                            if self.cli == Some(crate::acp_cli::Kind::Grok) && e["code"] == crate::acp_cli::grok::RATE_LIMITED {
+                                turn.usage_limited(None);
+                            }
+                            (TurnEnd::Failed, Some(bounded(e["message"].as_str().unwrap_or_default().trim(), 2000)))
+                        }
                         Ok(Err(e)) => (TurnEnd::Failed, Some(format!("The ACP agent failed the turn: {e}"))),
                         Err(_) => (TurnEnd::Failed, Some("The ACP agent stopped answering.".to_owned())),
                     };
@@ -667,7 +1058,7 @@ impl AcpSession {
                                         if let Incoming::Notification { method, params } = ev
                                             && method == "session/update"
                                         {
-                                            self.update(&mut state, &mut turn, &params["update"]);
+                                            self.update(&mut state, &mut turn, &params["update"], &steers);
                                         }
                                     }
                                     break (TurnEnd::Completed, None);
@@ -684,7 +1075,7 @@ impl AcpSession {
                         if let Incoming::Notification { method, params } = ev
                             && method == "session/update"
                         {
-                            self.update(&mut state, &mut turn, &params["update"]);
+                            self.update(&mut state, &mut turn, &params["update"], &steers);
                         }
                     }
                     break (TurnEnd::Completed, None);
@@ -694,7 +1085,7 @@ impl AcpSession {
                         if let Incoming::Notification { method, params } = ev
                             && method == "session/update"
                         {
-                            self.update(&mut state, &mut turn, &params["update"]);
+                            self.update(&mut state, &mut turn, &params["update"], &steers);
                         }
                     }
                     break (TurnEnd::Completed, None);
@@ -705,7 +1096,22 @@ impl AcpSession {
                             let reply = crate::antigravity::acp::question_answer(&params, answers.as_ref()).filter(|_| decision != "cancel" && decision != "decline");
                             let _ = self.rpc.respond(rpc_id, reply.unwrap_or_else(|| json!({ "outcome": { "outcome": "cancelled" } }))).await;
                             turn.resolve_request(&request_id, &decision, answers.as_ref());
+                        } else if let Some((rpc_id, params)) = state.xai_questions.remove(&request_id) {
+                            let given = answers.as_ref().filter(|_| decision != "cancel" && decision != "decline");
+                            let _ = self.rpc.respond(rpc_id, crate::acp_cli::grok::question_answer(&params, given)).await;
+                            turn.resolve_request(&request_id, &decision, answers.as_ref());
                         } else if let Some((rpc_id, options)) = state.asked.remove(&request_id) {
+                            let (kind, session_offered) = state.asked_kinds.remove(&request_id).unwrap_or_default();
+                            // A card that never offered "this session" is not answered with it.
+                            let decision = if decision == "acceptForSession" && !session_offered { "accept".to_owned() } else { decision };
+                            if kind == "execute" && matches!(decision.as_str(), "accept" | "acceptForSession") {
+                                let mut grants = crate::util::locked(&self.grants);
+                                if decision == "acceptForSession" {
+                                    grants.session = true;
+                                } else {
+                                    grants.turn = Some(turn.run.id.as_str().to_owned());
+                                }
+                            }
                             let _ = self.rpc.respond(rpc_id, permission_outcome(&options, &decision)).await;
                             turn.resolve_request(&request_id, &decision, None);
                         }
@@ -713,12 +1119,13 @@ impl AcpSession {
                     }
                     Control::Interrupt => {
                         interrupted = true;
-                        let _ = self.rpc.notify("session/cancel", Some(json!({ "sessionId": self.session_id }))).await;
-                        // A cancelled turn answers what it asked as cancelled (ACP).
-                        for (id, (rpc_id, _)) in std::mem::take(&mut state.asked).into_iter().chain(std::mem::take(&mut state.questions)) {
-                            let _ = self.rpc.respond(rpc_id, json!({ "outcome": { "outcome": "cancelled" } })).await;
-                            turn.resolve_request(&id, "cancel", None);
+                        let mut cancel = json!({ "sessionId": self.session_id });
+                        if let Some(meta) = self.cli.and_then(crate::acp_cli::Kind::cancel_meta) {
+                            cancel["_meta"] = meta;
                         }
+                        let _ = self.rpc.notify("session/cancel", Some(cancel)).await;
+                        // A cancelled turn answers what it asked as cancelled (ACP).
+                        state.cancel_requests(&self.rpc, &mut turn).await;
                         if awaiting_background {
                             break (TurnEnd::Interrupted, None);
                         }
@@ -726,9 +1133,7 @@ impl AcpSession {
                             grace.as_mut().reset(tokio::time::Instant::now() + cancel_grace());
                         }
                     }
-                    Control::Steer { reply, .. } => {
-                        let _ = reply.send(Err("ACP agents take more input once the turn ends.".into()));
-                    }
+                    Control::Steer { text, images, reply } => self.steer(text, images, reply, &steers),
                     Control::StopSubagent { reply, .. } => {
                         let _ = reply.send(Err("ACP agents' subagents can't be stopped one by one.".into()));
                     }
@@ -746,7 +1151,18 @@ impl AcpSession {
                             break if interrupted { (TurnEnd::Interrupted, None) } else { (TurnEnd::Failed, Some("The ACP agent exited.".to_owned())) };
                         }
                         Some(Incoming::Notification { method, params }) if method == "session/update" => {
-                            self.update(&mut state, &mut turn, &params["update"]);
+                            self.update(&mut state, &mut turn, &params["update"], &steers);
+                        }
+                        Some(Incoming::Notification { method, params })
+                            if self.cli == Some(crate::acp_cli::Kind::Grok) && crate::acp_cli::grok::is_prompt_complete(&method) && params["sessionId"] == self.session_id.as_str() && !prompt_done =>
+                        {
+                            // Grok can say a prompt is done without answering it (t3code `makeXAiPromptCompletionRuntime`).
+                            break match params["stopReason"].as_str() {
+                                Some("cancelled") => (TurnEnd::Interrupted, None),
+                                Some("refusal") => (TurnEnd::Failed, Some("The agent refused to go on.".to_owned())),
+                                _ if interrupted => (TurnEnd::Interrupted, None),
+                                _ => (TurnEnd::Completed, None),
+                            };
                         }
                         Some(Incoming::Notification { .. }) => {}
                         Some(Incoming::Request { id, method, params }) if method == "session/request_permission" => {
@@ -770,6 +1186,30 @@ impl AcpSession {
                                 );
                             }
                         }
+                        Some(Incoming::Request { id, method, params }) if method.starts_with("terminal/") && self.terminals.is_some() => {
+                            self.terminal_request(id, &method, params, turn.run.id.as_str(), &input.runtime_mode).await;
+                        }
+                        Some(Incoming::Request { id, method, params }) if method == "elicitation/create" && self.url_auth => {
+                            self.url_elicitation(id, &params);
+                        }
+                        Some(Incoming::Request { id, method, params }) if self.cli == Some(crate::acp_cli::Kind::Grok) && crate::acp_cli::grok::is_question(&method) => {
+                            match crate::acp_cli::grok::questions(&params) {
+                                Some((call, questions)) => {
+                                    let native = format!("{}:xai-question:{call}", self.session_id);
+                                    let rid = turn.open_user_input(&native, &native, questions);
+                                    state.xai_questions.insert(rid, (id, params));
+                                }
+                                None => {
+                                    let _ = self.rpc.respond(id, json!({ "outcome": "cancelled" })).await;
+                                }
+                            }
+                        }
+                        Some(Incoming::Request { id, method, params }) if self.cli == Some(crate::acp_cli::Kind::Grok) && crate::acp_cli::grok::is_plan_exit(&method) => {
+                            state.finish(&mut turn);
+                            let markdown = crate::acp_cli::grok::plan_markdown(&params, None);
+                            turn.plan(&format!("grok-plan:{}", turn.run.id), Plan::Proposed { markdown }, true);
+                            let _ = self.rpc.respond(id, crate::acp_cli::grok::plan_captured()).await;
+                        }
                         Some(Incoming::Request { id, method, .. }) => {
                             let _ = self.rpc.respond_error(id, -32601, &format!("domovoi-server does not offer {method}")).await;
                         }
@@ -792,10 +1232,8 @@ impl AcpSession {
             }
         };
         drop(events);
-        for (id, (rpc_id, _)) in std::mem::take(&mut state.asked).into_iter().chain(std::mem::take(&mut state.questions)) {
-            let _ = self.rpc.respond(rpc_id, json!({ "outcome": { "outcome": "cancelled" } })).await;
-            turn.resolve_request(&id, "cancel", None);
-        }
+        state.cancel_requests(&self.rpc, &mut turn).await;
+        crate::util::locked(&steers).fail_all();
         state.finish(&mut turn);
         if end == TurnEnd::Completed
             && let Some(ag) = &self.antigravity
@@ -813,7 +1251,7 @@ impl AcpSession {
             if let Some(list) = commands {
                 crate::antigravity::commands_listed(&self.instance, &self.cwd, list.into_iter().map(|(name, description)| domovoi_model::typed::ServerProviderSlashCommand { name, description, input: None }).collect());
             }
-        } else {
+        } else if self.cli.is_none() {
             crate::providers::remember_acp_commands(&self.instance, commands);
         }
         if end == TurnEnd::Completed && message_questions_ready {
@@ -824,12 +1262,125 @@ impl AcpSession {
         turn.complete(end, error.as_deref());
         if antigravity {
             // What the turn used of the account's quota (the agent is still running to say).
-            crate::antigravity::limits::refresh(&self.instance);
+            crate::antigravity::limits::refresh(&self.instance, crate::antigravity::limits::AFTER_TURN);
         }
         if !self.usable() {
             self.kill().await;
         }
         (turn, self.usable())
+    }
+
+    /// More input for the running turn: Grok's `_x.ai/interject` (taken once
+    /// queued), Kiro's `_session/steer` (text only, taken once Kiro reports
+    /// it read). Other ACP agents have no way to take it: the message waits
+    /// for the turn's end.
+    fn steer(&self, text: String, images: Vec<(String, std::path::PathBuf)>, reply: tokio::sync::oneshot::Sender<Result<(), String>>, steers: &Arc<std::sync::Mutex<SteerWaits>>) {
+        use crate::acp_cli::{Kind, grok, kiro};
+        let rpc = self.rpc.clone();
+        let session_id = self.session_id.clone();
+        match self.cli {
+            Some(Kind::Grok) => {
+                use base64::Engine as _;
+                let content: Vec<Value> = images
+                    .iter()
+                    .filter_map(|(mime, path)| Some(json!({ "type": "image", "mimeType": mime, "data": base64::engine::general_purpose::STANDARD.encode(std::fs::read(path).ok()?) })))
+                    .collect();
+                let mut params = json!({ "sessionId": session_id, "text": text });
+                if !content.is_empty() {
+                    params["content"] = json!(content);
+                }
+                tokio::spawn(async move {
+                    let taken = match rpc.request(grok::INTERJECT, params).await {
+                        Ok(answer) if answer["status"] == "queued" => Ok(()),
+                        Ok(_) => Err("Grok did not queue the interjection.".to_owned()),
+                        Err(e) => Err(format!("Grok did not take the message: {e}")),
+                    };
+                    let _ = reply.send(taken);
+                });
+            }
+            Some(Kind::Kiro) if images.is_empty() => {
+                let steers = steers.clone();
+                tokio::spawn(async move {
+                    match rpc.request(kiro::STEER, json!({ "sessionId": session_id, "message": text })).await {
+                        Ok(answer) => match kiro::steer_queued(&answer) {
+                            Some(id) => crate::util::locked(&steers).queued(id, reply),
+                            None => {
+                                let _ = reply.send(Err("Kiro did not queue the steering message.".into()));
+                            }
+                        },
+                        Err(e) => {
+                            let _ = reply.send(Err(format!("Kiro did not take the message: {e}")));
+                        }
+                    }
+                });
+            }
+            Some(Kind::Kiro) => {
+                let _ = reply.send(Err("Kiro takes a message during a turn as text only.".into()));
+            }
+            _ => {
+                let _ = reply.send(Err("ACP agents take more input once the turn ends.".into()));
+            }
+        }
+    }
+
+    /// A `terminal/*` request. Opening one needs the runtime mode's leave
+    /// to run commands, or a command approved in the turn (or for the
+    /// session); waiting and releasing are answered when the command ends.
+    async fn terminal_request(&self, id: Value, method: &str, params: Value, run_id: &str, runtime_mode: &str) {
+        let Some(terminals) = self.terminals.clone() else { return };
+        let answer = match method {
+            "terminal/create" => {
+                let allowed = crate::acp_cli::disposition(runtime_mode, "execute") == crate::acp_cli::Disposition::Allow || {
+                    let grants = crate::util::locked(&self.grants);
+                    grants.session || grants.turn.as_deref() == Some(run_id)
+                };
+                if allowed {
+                    terminals.create(&params)
+                } else {
+                    Err(super::acp_terminals::Refused(
+                        "The active T3 runtime policy requires approval for terminal/create. Request permission with session/request_permission before retrying.".into(),
+                    ))
+                }
+            }
+            "terminal/output" => terminals.output(&params),
+            "terminal/kill" => terminals.kill(&params),
+            "terminal/wait_for_exit" | "terminal/release" => {
+                let (rpc, method) = (self.rpc.clone(), method.to_owned());
+                tokio::spawn(async move {
+                    let answer = if method == "terminal/release" { terminals.release(&params).await } else { terminals.wait_for_exit(&params).await };
+                    let _ = match answer {
+                        Ok(v) => rpc.respond(id, v).await,
+                        Err(e) => rpc.respond_error(id, -32603, &e.0).await,
+                    };
+                });
+                return;
+            }
+            other => Err(super::acp_terminals::Refused(format!("domovoi-server does not offer {other}"))),
+        };
+        let _ = match answer {
+            Ok(v) => self.rpc.respond(id, v).await,
+            Err(e) => self.rpc.respond_error(id, -32603, &e.0).await,
+        };
+    }
+
+    /// `elicitation/create`: a URL sign-in is shown on the instance's entry
+    /// until the user opens it (`server.acceptAcpRegistryUrlAuth`) or it
+    /// expires; anything else is declined (Domovoi has no elicitation forms).
+    fn url_elicitation(&self, id: Value, params: &Value) {
+        let rpc = self.rpc.clone();
+        let url = (params["mode"] == "url").then(|| params["url"].as_str().and_then(web_url)).flatten();
+        let elicitation = params["elicitationId"].as_str().map(str::trim).filter(|e| !e.is_empty());
+        let (Some(url), Some(elicitation)) = (url, elicitation) else {
+            tokio::spawn(async move {
+                let _ = rpc.respond(id, json!({ "action": "decline" })).await;
+            });
+            return;
+        };
+        let consent = url_auth::request(&self.instance, bounded(elicitation, 256), url, bounded(params["message"].as_str().unwrap_or_default().trim(), 1024));
+        tokio::spawn(async move {
+            let accepted = matches!(tokio::time::timeout(url_auth::TTL, consent).await, Ok(Ok(true)));
+            let _ = rpc.respond(id, json!({ "action": if accepted { "accept" } else { "decline" } })).await;
+        });
     }
 
     /// The account needs signing in again.
@@ -840,7 +1391,7 @@ impl AcpSession {
     }
 
     /// One `session/update`, recorded; Antigravity's config options kept.
-    fn update(&self, state: &mut TurnState, turn: &mut Turn, u: &Value) {
+    fn update(&self, state: &mut TurnState, turn: &mut Turn, u: &Value, steers: &std::sync::Mutex<SteerWaits>) {
         if u["sessionUpdate"] == "config_option_update"
             && let Some(options) = u["configOptions"].as_array()
         {
@@ -849,6 +1400,24 @@ impl AcpSession {
             if self.antigravity.is_some() {
                 crate::antigravity::config_options_changed(&self.instance, &options);
             }
+            return;
+        }
+        if self.cli.is_some() || self.terminals.is_some() {
+            let mut u = u.clone();
+            if self.cli == Some(crate::acp_cli::Kind::Kiro) {
+                let mut kiro = crate::util::locked(&self.kiro);
+                if kiro.cloud_config.ignore(&u) {
+                    return;
+                }
+                if let Some(("steering_injected", Some(id))) = crate::acp_cli::kiro::steering_info(&u) {
+                    crate::util::locked(steers).injected(id);
+                }
+                kiro.notes.filter(&mut u);
+            }
+            if let Some(t) = &self.terminals {
+                t.embed(&self.session_id, &mut u);
+            }
+            state.update(turn, &u, None, None);
             return;
         }
         if let Some(ag) = &self.antigravity {
@@ -882,11 +1451,16 @@ impl AcpSession {
         }
         let options = params["options"].clone();
         let kind = tool_kind(state.kinds.get(call["toolCallId"].as_str().unwrap_or_default()).map_or(call["kind"].as_str().unwrap_or("other"), String::as_str));
-        let decided = match (input.runtime_mode.as_str(), kind) {
-            (_, "read" | "search" | "fetch") => Some("accept"),
-            ("full-access", _) => Some("accept"),
-            ("auto-accept-edits", "edit" | "delete" | "move") => Some("accept"),
-            _ => None,
+        let decided = if self.antigravity.is_some() {
+            match (input.runtime_mode.as_str(), kind) {
+                (_, "read" | "search" | "fetch") => Some("accept"),
+                ("full-access", _) => Some("accept"),
+                ("auto-accept-edits", "edit" | "delete" | "move") => Some("accept"),
+                _ => None,
+            }
+        } else {
+            // t3code's ACP policy (`acpPermissionDisposition`), as each flavor adjusts it.
+            (crate::acp_cli::flavor_disposition(self.cli, &input.runtime_mode, kind, &options) == crate::acp_cli::Disposition::Allow).then_some("accept")
         };
         if let Some(decision) = decided {
             let _ = self.rpc.respond(rpc_id, permission_outcome(&options, decision)).await;
@@ -900,9 +1474,114 @@ impl AcpSession {
         };
         let prompt = call["title"].as_str().filter(|t| !t.is_empty()).map_or_else(|| "Allow this?".to_owned(), str::to_owned);
         let native = format!("permission:{item}:{}", crate::util::new_uuid());
-        let offered = self.antigravity.is_some().then(|| crate::antigravity::acp::approval_options(params));
+        let offered = match self.cli {
+            _ if self.antigravity.is_some() => Some(crate::antigravity::acp::approval_options(params)),
+            Some(crate::acp_cli::Kind::Grok) => Some(crate::acp_cli::grok::approval_options(params)),
+            Some(crate::acp_cli::Kind::Kiro) => Some(crate::acp_cli::kiro::approval_options(params)),
+            _ => None,
+        };
+        let session_offered = offered.as_ref().is_none_or(|o| o.iter().any(|o| o.decision == domovoi_model::typed::ApprovalDecision::AcceptForSession));
         let rid = turn.open_request_with(&native, &item, request_kind, &prompt, offered);
+        state.asked_kinds.insert(rid.clone(), (kind.to_owned(), session_offered));
         state.asked.insert(rid, (rpc_id, options));
+    }
+}
+
+/// Grok's `session/load`, which can stay unanswered once its replay ends
+/// (t3code `sessionLoadReplayIdleReadiness`): loaded when it answers, or a
+/// second after the replay's last update; given up after a minute.
+async fn replay_settled(load: impl std::future::Future<Output = Result<Value, crate::jsonrpc::RpcError>>, events: &mut mpsc::UnboundedReceiver<Incoming>) -> Result<Value, crate::jsonrpc::RpcError> {
+    tokio::pin!(load);
+    let give_up = tokio::time::sleep(std::time::Duration::from_secs(60));
+    tokio::pin!(give_up);
+    let idle = tokio::time::sleep(std::time::Duration::MAX / 4);
+    tokio::pin!(idle);
+    let mut replayed = false;
+    loop {
+        tokio::select! {
+            answer = &mut load => return answer,
+            ev = events.recv() => match ev {
+                None | Some(Incoming::Closed) => return Err(crate::jsonrpc::RpcError::Closed),
+                Some(_) => {
+                    replayed = true;
+                    idle.as_mut().reset(tokio::time::Instant::now() + std::time::Duration::from_secs(1));
+                }
+            },
+            () = &mut idle, if replayed => return Ok(json!({})),
+            () = &mut give_up => return Err(crate::jsonrpc::RpcError::Closed),
+        }
+    }
+}
+
+/// `text` cut to `max` characters.
+fn bounded(text: &str, max: usize) -> String {
+    text.chars().take(max).collect()
+}
+
+/// An `http(s)` URL with a host, as the agent wrote it (t3code `normalizeAcpRegistryWebUrl`).
+fn web_url(url: &str) -> Option<String> {
+    let parsed = url::Url::parse(url.trim()).ok()?;
+    (matches!(parsed.scheme(), "http" | "https") && parsed.host_str().is_some_and(|h| !h.is_empty()) && url.len() <= 2048).then(|| parsed.to_string())
+}
+
+/// URL sign-ins ACP agents asked for (t3code `AcpRegistryRuntimeCoordinator`
+/// `requestUrlAuthentication`): one per instance at a time, shown as its
+/// entry's `auth.action` for 10 minutes, a newer one replacing it.
+pub mod url_auth {
+    use domovoi_model::typed::AcpRegistryUrlAuthAction;
+    use std::collections::BTreeMap;
+
+    pub const TTL: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+
+    struct Pending {
+        action: AcpRegistryUrlAuthAction,
+        consent: tokio::sync::oneshot::Sender<bool>,
+        expires: std::time::Instant,
+    }
+
+    static PENDING: std::sync::Mutex<BTreeMap<String, Pending>> = std::sync::Mutex::new(BTreeMap::new());
+
+    /// Shows the sign-in; the answer is whether the user opened it.
+    pub fn request(instance: &str, elicitation_id: String, url: String, message: String) -> tokio::sync::oneshot::Receiver<bool> {
+        let (consent, answer) = tokio::sync::oneshot::channel();
+        let now = domovoi_contracts::now_millis();
+        let ttl = i64::try_from(TTL.as_millis()).unwrap_or(i64::MAX);
+        let action = AcpRegistryUrlAuthAction {
+            elicitation_id,
+            url,
+            message,
+            created_at: Some(domovoi_contracts::time_fmt::iso_from_millis(now)),
+            expires_at: Some(domovoi_contracts::time_fmt::iso_from_millis(now.saturating_add(ttl))),
+        };
+        let previous = crate::util::locked(&PENDING).insert(instance.to_owned(), Pending { action, consent, expires: std::time::Instant::now() + TTL });
+        if let Some(p) = previous {
+            let _ = p.consent.send(false);
+        }
+        crate::providers::CLAUDE_COMMANDS_CHANGED.notify_one();
+        answer
+    }
+
+    /// The sign-in shown for `instance`, if one is.
+    pub fn action(instance: &str) -> Option<AcpRegistryUrlAuthAction> {
+        let mut pending = crate::util::locked(&PENDING);
+        if pending.get(instance).is_some_and(|p| p.expires <= std::time::Instant::now() || p.consent.is_closed()) {
+            pending.remove(instance);
+        }
+        pending.get(instance).map(|p| p.action.clone())
+    }
+
+    /// The user opened the sign-in: `false` for another or an expired one.
+    pub fn accept(instance: &str, elicitation_id: &str) -> bool {
+        let taken = {
+            let mut pending = crate::util::locked(&PENDING);
+            match pending.get(instance) {
+                Some(p) if p.action.elicitation_id == elicitation_id => pending.remove(instance),
+                _ => None,
+            }
+        };
+        let Some(p) = taken else { return false };
+        crate::providers::CLAUDE_COMMANDS_CHANGED.notify_one();
+        p.expires > std::time::Instant::now() && p.consent.send(true).is_ok()
     }
 }
 
@@ -921,6 +1600,27 @@ pub fn permission_outcome(options: &Value, decision: &str) -> Value {
         Some(id) => json!({ "outcome": { "outcome": "selected", "optionId": id } }),
         None => json!({ "outcome": { "outcome": "cancelled" } }),
     }
+}
+
+/// A choice option of the thread's model selection.
+fn choice(input: &TurnInput, id: &str) -> Option<String> {
+    input.model_selection.options.iter().flatten().find(|o| o.id.as_str() == id).and_then(|o| match &o.value {
+        OptionValue::Choice(v) => Some(v.clone()),
+        _ => None,
+    })
+}
+
+/// The values a select config option offers, its groups' too.
+fn select_values(option: &Value) -> Vec<String> {
+    option["options"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(|o| match o["value"].as_str() {
+            Some(v) => vec![v.to_owned()],
+            None => o["options"].as_array().into_iter().flatten().filter_map(|c| c["value"].as_str().map(str::to_owned)).collect(),
+        })
+        .collect()
 }
 
 fn tool_kind(kind: &str) -> &str {
@@ -995,6 +1695,10 @@ struct TurnState {
     asked: HashMap<String, (Value, Value)>,
     /// Antigravity's questions asked, by Domovoi request id: the JSON-RPC id and the request.
     questions: HashMap<String, (Value, Value)>,
+    /// Grok's questions (`ask_user_question`), the same way.
+    xai_questions: HashMap<String, (Value, Value)>,
+    /// What each permission asked is for: its tool kind, and whether "for the session" was offered.
+    asked_kinds: HashMap<String, (String, bool)>,
     message_questions: std::collections::BTreeMap<String, Vec<domovoi_model::typed::UserInputQuestion>>,
     /// The context window as the agent last reported it (used, size).
     window: Option<(u64, Option<u64>)>,
@@ -1035,6 +1739,19 @@ fn text_of(content: &Value) -> String {
 }
 
 impl TurnState {
+    /// Answers what the agent asked and no one answered as cancelled.
+    async fn cancel_requests(&mut self, rpc: &RpcClient, turn: &mut Turn) {
+        for (id, (rpc_id, _)) in std::mem::take(&mut self.asked).into_iter().chain(std::mem::take(&mut self.questions)) {
+            let _ = rpc.respond(rpc_id, json!({ "outcome": { "outcome": "cancelled" } })).await;
+            turn.resolve_request(&id, "cancel", None);
+        }
+        for (id, (rpc_id, _)) in std::mem::take(&mut self.xai_questions) {
+            let _ = rpc.respond(rpc_id, json!({ "outcome": "cancelled" })).await;
+            turn.resolve_request(&id, "cancel", None);
+        }
+        self.asked_kinds.clear();
+    }
+
     fn close_message(&mut self, turn: &mut Turn) {
         if let Some((id, text)) = self.message.take() {
             if !text.trim().is_empty() {
@@ -1530,6 +2247,51 @@ pub fn tool_work(call: &Value) -> Work {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn url_sign_ins_are_shown_until_opened_or_replaced() {
+        assert_eq!(web_url(" https://example.com/login?x=1 ").as_deref(), Some("https://example.com/login?x=1"));
+        assert_eq!(web_url("javascript:alert(1)"), None);
+        assert_eq!(web_url("file:///etc/passwd"), None);
+        let first = url_auth::request("i-url", "e1".into(), "https://a.example/1".into(), "Sign in".into());
+        assert_eq!(url_auth::action("i-url").map(|a| a.elicitation_id), Some("e1".into()));
+        let mut second = url_auth::request("i-url", "e2".into(), "https://a.example/2".into(), "Sign in".into());
+        assert_eq!(first.blocking_recv(), Ok(false), "a newer sign-in declines the older one");
+        assert!(!url_auth::accept("i-url", "e1"), "not the one shown");
+        assert!(url_auth::accept("i-url", "e2"));
+        assert_eq!(second.try_recv(), Ok(true));
+        assert!(url_auth::action("i-url").is_none(), "gone once opened");
+        assert!(!url_auth::accept("i-url", "e2"), "only once");
+    }
+
+    #[test]
+    fn steers_wait_for_the_agent_to_read_them() {
+        let mut waits = SteerWaits::default();
+        let (tx, mut rx) = tokio::sync::oneshot::channel();
+        waits.queued("m1".into(), tx);
+        assert!(rx.try_recv().is_err(), "queued, not read yet");
+        waits.injected("m1");
+        assert_eq!(rx.try_recv(), Ok(Ok(())));
+        // Read before its send was answered.
+        waits.injected("m2");
+        let (tx, mut rx) = tokio::sync::oneshot::channel();
+        waits.queued("m2".into(), tx);
+        assert_eq!(rx.try_recv(), Ok(Ok(())));
+        let (tx, mut rx) = tokio::sync::oneshot::channel();
+        waits.queued("m3".into(), tx);
+        waits.fail_all();
+        assert!(matches!(rx.try_recv(), Ok(Err(_))), "the turn ended first");
+    }
+
+    #[test]
+    fn registry_agents_are_offered_url_sign_ins_and_devin_terminals() {
+        let plain = registry_initialize_params(false);
+        assert_eq!(plain["clientCapabilities"]["elicitation"], json!({ "url": {} }));
+        assert_eq!(plain["clientCapabilities"]["terminal"], false);
+        assert_eq!(plain["clientCapabilities"]["fs"], json!({ "readTextFile": false, "writeTextFile": false }));
+        assert_eq!(registry_initialize_params(true)["clientCapabilities"]["terminal"], true);
+        assert_eq!(select_values(&json!({ "options": [{ "value": "a" }, { "group": "g", "options": [{ "value": "b" }] }] })), ["a", "b"]);
+    }
 
     #[test]
     fn decisions_pick_the_agents_options() {

@@ -1,0 +1,517 @@
+{
+ "fixture": true,
+ "env": {
+  "GIT_ALLOW_PROTOCOL": "file",
+  "GIT_TERMINAL_PROMPT": "0",
+  "DOMOVOI_LINEAR_API_URL": "http://127.0.0.1:47613/graphql"
+ },
+ "normalize": [],
+ "cases": [
+  {
+   "tag": "projects.mutate",
+   "payload": {
+    "type": "project.create",
+    "commandId": "create-plain",
+    "projectId": "plain",
+    "title": "No remote",
+    "workspaceRoot": "$DIR/repos/plain",
+    "createWorkspaceRootIfMissing": false,
+    "defaultModelSelection": null
+   }
+  },
+  {
+   "tag": "issueTrackers.list",
+   "payload": {},
+   "note": "Linear, not connected"
+  },
+  {
+   "tag": "issueTrackers.connect",
+   "payload": {
+    "tracker": "jira",
+    "token": "x"
+   },
+   "expect": "failure",
+   "error": "IssueTrackerConnectionError",
+   "note": "unknown-tracker"
+  },
+  {
+   "tag": "issueTrackers.connect",
+   "payload": {
+    "tracker": "linear",
+    "token": "lin_bad"
+   },
+   "expect": "failure",
+   "error": "IssueTrackerConnectionError",
+   "note": "rejected: nothing stored"
+  },
+  {
+   "tag": "issueTrackers.connect",
+   "payload": {
+    "tracker": "linear",
+    "token": "lin_limited"
+   },
+   "expect": "failure",
+   "error": "IssueTrackerConnectionError",
+   "note": "failed"
+  },
+  {
+   "tag": "issueTrackers.list",
+   "payload": {},
+   "note": "still not connected"
+  },
+  {
+   "tag": "issues.list",
+   "payload": {
+    "state": "open",
+    "projectId": "plain"
+   },
+   "note": "nothing bound yet"
+  },
+  {
+   "tag": "issueTrackers.bindProject",
+   "payload": {
+    "projectId": "plain",
+    "binding": {
+     "tracker": "linear",
+     "scope": "ENG"
+    }
+   },
+   "note": "a binding before connecting is kept"
+  },
+  {
+   "tag": "issues.list",
+   "payload": {
+    "state": "open",
+    "projectId": "plain"
+   },
+   "note": "bound, not connected: the tracker is not configured"
+  },
+  {
+   "tag": "issueTrackers.connect",
+   "payload": {
+    "tracker": "linear",
+    "token": " lin_good "
+   }
+  },
+  {
+   "tag": "issueTrackers.list",
+   "payload": {},
+   "note": "connected, with the account's teams and the binding"
+  },
+  {
+   "tag": "issueTrackers.bindProject",
+   "payload": {
+    "projectId": "$PROJECT",
+    "binding": {
+     "tracker": "jira",
+     "scope": "X"
+    }
+   },
+   "expect": "failure",
+   "error": "IssueTrackerConnectionError"
+  },
+  {
+   "tag": "issueTrackers.bindProject",
+   "payload": {
+    "projectId": "$PROJECT",
+    "binding": {
+     "tracker": "linear",
+     "scope": "ENG"
+    }
+   }
+  },
+  {
+   "tag": "issues.list",
+   "payload": {
+    "state": "open"
+   },
+   "note": "Linear's ENG beside GitHub's acme/calc, read once for both projects"
+  },
+  {
+   "tag": "issues.list",
+   "payload": {
+    "state": "all",
+    "host": "linear.app",
+    "limit": 1
+   },
+   "save": {
+    "CURSOR": "/nextCursors/linear.app eng"
+   }
+  },
+  {
+   "tag": "issues.list",
+   "payload": {
+    "state": "all",
+    "host": "linear.app",
+    "limit": 1,
+    "cursors": {
+     "linear.app eng": "$CURSOR"
+    }
+   }
+  },
+  {
+   "tag": "issues.list",
+   "payload": {
+    "state": "all",
+    "involvement": "assigned",
+    "query": "ENG-1",
+    "labels": [
+     "Bug"
+    ],
+    "projectId": "$PROJECT"
+   }
+  },
+  {
+   "tag": "issues.detail",
+   "payload": {
+    "projectId": "$PROJECT",
+    "tracker": "linear",
+    "scope": "ENG",
+    "key": "ENG-1"
+   },
+   "note": "workflow states in order, history as events, attachments as pull requests"
+  },
+  {
+   "tag": "issues.detail",
+   "payload": {
+    "projectId": "$PROJECT",
+    "tracker": "linear",
+    "scope": "ENG",
+    "host": "linear.app",
+    "key": "eng-2"
+   }
+  },
+  {
+   "tag": "issues.detail",
+   "payload": {
+    "projectId": "$PROJECT",
+    "tracker": "linear",
+    "scope": "ENG",
+    "key": "ENG-404"
+   },
+   "expect": "failure",
+   "error": "IssueOperationError",
+   "note": "not-found"
+  },
+  {
+   "tag": "issues.detail",
+   "payload": {
+    "projectId": "$PROJECT",
+    "tracker": "linear",
+    "scope": "ENG",
+    "key": "404"
+   },
+   "expect": "failure",
+   "error": "IssueOperationError",
+   "note": "not an identifier"
+  },
+  {
+   "tag": "issues.detail",
+   "payload": {
+    "projectId": "$PROJECT",
+    "tracker": "linear",
+    "scope": "OPS",
+    "key": "OPS-1"
+   },
+   "note": "another team: read-only"
+  },
+  {
+   "tag": "issues.comments",
+   "payload": {
+    "projectId": "$PROJECT",
+    "tracker": "linear",
+    "scope": "ENG",
+    "key": "ENG-1",
+    "cursor": "1"
+   }
+  },
+  {
+   "tag": "issues.templates",
+   "payload": {
+    "projectId": "$PROJECT",
+    "tracker": "linear",
+    "scope": "ENG"
+   },
+   "note": "a markdown template, a form only Linear renders"
+  },
+  {
+   "tag": "issues.templates",
+   "payload": {
+    "projectId": "$PROJECT",
+    "tracker": "linear",
+    "scope": "NOPE"
+   },
+   "expect": "failure",
+   "error": "IssueOperationError"
+  },
+  {
+   "tag": "issues.candidates",
+   "payload": {
+    "projectId": "$PROJECT",
+    "tracker": "linear",
+    "scope": "ENG"
+   }
+  },
+  {
+   "tag": "issues.create",
+   "payload": {
+    "projectId": "$PROJECT",
+    "tracker": "linear",
+    "scope": "ENG",
+    "title": "Signup too",
+    "body": "Same.",
+    "labels": [
+     "bug",
+     "UX"
+    ],
+    "assignees": [
+     "ann"
+    ]
+   }
+  },
+  {
+   "tag": "issues.create",
+   "payload": {
+    "projectId": "$PROJECT",
+    "tracker": "linear",
+    "scope": "ENG",
+    "title": "x",
+    "body": "",
+    "labels": [],
+    "assignees": [
+     "ann",
+     "me"
+    ]
+   },
+   "expect": "failure",
+   "error": "IssueOperationError",
+   "note": "one assignee at most"
+  },
+  {
+   "tag": "issues.create",
+   "payload": {
+    "projectId": "$PROJECT",
+    "tracker": "linear",
+    "scope": "ENG",
+    "title": "x",
+    "body": "",
+    "labels": [
+     "Nope"
+    ],
+    "assignees": []
+   },
+   "expect": "failure",
+   "error": "IssueOperationError"
+  },
+  {
+   "tag": "issues.create",
+   "payload": {
+    "projectId": "$PROJECT",
+    "tracker": "linear",
+    "scope": "ENG",
+    "title": "x",
+    "body": "",
+    "labels": [],
+    "assignees": [
+     "zed"
+    ]
+   },
+   "expect": "failure",
+   "error": "IssueOperationError"
+  },
+  {
+   "tag": "issues.create",
+   "payload": {
+    "projectId": "$PROJECT",
+    "tracker": "linear",
+    "scope": "OPS",
+    "title": "x",
+    "body": "",
+    "labels": [],
+    "assignees": []
+   },
+   "expect": "failure",
+   "error": "IssueOperationError",
+   "note": "read-only"
+  },
+  {
+   "tag": "issues.comment",
+   "payload": {
+    "projectId": "$PROJECT",
+    "tracker": "linear",
+    "scope": "ENG",
+    "key": "ENG-1",
+    "body": "On it."
+   }
+  },
+  {
+   "tag": "issues.comment",
+   "payload": {
+    "projectId": "$PROJECT",
+    "tracker": "linear",
+    "scope": "ENG",
+    "key": "ENG-7",
+    "body": "Hi"
+   },
+   "expect": "failure",
+   "error": "IssueOperationError",
+   "note": "the issue moved to another team"
+  },
+  {
+   "tag": "issues.update",
+   "payload": {
+    "projectId": "$PROJECT",
+    "tracker": "linear",
+    "scope": "ENG",
+    "key": "ENG-1",
+    "title": "Login button",
+    "labels": [
+     "UX"
+    ],
+    "assignees": []
+   }
+  },
+  {
+   "tag": "issues.setState",
+   "payload": {
+    "projectId": "$PROJECT",
+    "tracker": "linear",
+    "scope": "ENG",
+    "key": "ENG-1",
+    "state": "Done"
+   }
+  },
+  {
+   "tag": "issues.setState",
+   "payload": {
+    "projectId": "$PROJECT",
+    "tracker": "linear",
+    "scope": "ENG",
+    "key": "ENG-1",
+    "state": "Shipped"
+   },
+   "expect": "failure",
+   "error": "IssueOperationError"
+  },
+  {
+   "tag": "issues.react",
+   "payload": {
+    "projectId": "$PROJECT",
+    "tracker": "linear",
+    "scope": "ENG",
+    "key": "ENG-1",
+    "content": "rocket",
+    "reacted": true
+   }
+  },
+  {
+   "tag": "issues.react",
+   "payload": {
+    "projectId": "$PROJECT",
+    "tracker": "linear",
+    "scope": "ENG",
+    "key": "ENG-1",
+    "content": "thumbs-up",
+    "reacted": false
+   },
+   "note": "takes back the viewer's own"
+  },
+  {
+   "tag": "issues.react",
+   "payload": {
+    "projectId": "$PROJECT",
+    "tracker": "linear",
+    "scope": "ENG",
+    "key": "ENG-1",
+    "subjectId": "c-1",
+    "content": "heart",
+    "reacted": false
+   }
+  },
+  {
+   "tag": "issues.react",
+   "payload": {
+    "projectId": "$PROJECT",
+    "tracker": "linear",
+    "scope": "ENG",
+    "key": "ENG-1",
+    "subjectId": "c-9",
+    "content": "heart",
+    "reacted": true
+   },
+   "expect": "failure",
+   "error": "IssueOperationError",
+   "note": "ENG-2's comment"
+  },
+  {
+   "sh": "touch \"$DIR/linear-revoked\"",
+   "tag": "issueTrackers.list",
+   "payload": {},
+   "note": "a stored key Linear refuses now: status, not a failure"
+  },
+  {
+   "tag": "issues.list",
+   "payload": {
+    "state": "open",
+    "projectId": "$PROJECT"
+   },
+   "note": "Linear not configured; GitHub still read"
+  },
+  {
+   "tag": "issues.detail",
+   "payload": {
+    "projectId": "$PROJECT",
+    "tracker": "linear",
+    "scope": "ENG",
+    "key": "ENG-1"
+   },
+   "expect": "failure",
+   "error": "IssueUnavailableError",
+   "note": "unauthenticated"
+  },
+  {
+   "sh": "rm \"$DIR/linear-revoked\"",
+   "tag": "issueTrackers.bindProject",
+   "payload": {
+    "projectId": "plain",
+    "binding": null
+   },
+   "note": "unbinding"
+  },
+  {
+   "tag": "issueTrackers.bindProject",
+   "payload": {
+    "projectId": "never-bound",
+    "binding": null
+   }
+  },
+  {
+   "tag": "issueTrackers.connect",
+   "payload": {
+    "tracker": "linear",
+    "token": null
+   },
+   "note": "disconnecting unbinds every project"
+  },
+  {
+   "tag": "issueTrackers.list",
+   "payload": {}
+  },
+  {
+   "tag": "issues.list",
+   "payload": {
+    "state": "open",
+    "projectId": "$PROJECT"
+   },
+   "note": "GitHub alone again"
+  },
+  {
+   "tag": "projects.readFile",
+   "payload": {
+    "cwd": "$DIR",
+    "relativePath": "linear-log"
+   },
+   "note": "what Linear was asked"
+  }
+ ]
+}

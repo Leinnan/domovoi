@@ -1,0 +1,5 @@
+{
+  "schemaVersion": 1,
+  "organization": "Acme Corp",
+  "limits": { "maxRuntimeMode": "auto-accept-edits" }
+}

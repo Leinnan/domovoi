@@ -5,10 +5,16 @@
 //! Limits, each answered with t3code's typed error or empty state:
 //! - self-update, desktop updates and npm releases: Domovoi is not distributed
 //!   through npm or the desktop app;
-//! - provider CLI updates: Domovoi does not install or update provider CLIs;
-//! - the ACP registry: Domovoi runs no ACP agents;
-//! - trace diagnostics: Domovoi writes no trace file;
-//! - usage pricing: no rate table (tokens are reported unpriced).
+//! - provider CLI updates (`server.updateProvider`, `crate::provider_update`):
+//!   npm, Homebrew and the CLIs' own updaters, without version advisories;
+//! - the ACP registry: agents are searched, installed and removed
+//!   (`crate::acp_registry`) and their URL sign-ins accepted
+//!   (`crate::adapters::acp::url_auth`), but an agent's own sessions, model
+//!   providers and sign-out are not driven from here.
+//!
+//! Trace diagnostics read the trace file `crate::trace_writer` writes
+//! (`crate::trace_diagnostics`); usage is priced from LiteLLM's rate table
+//! (`crate::usage_pricing`).
 
 #![expect(clippy::disallowed_types, reason = "the model list a text generator's endpoint answers; request fields read leniently inside their readers")]
 
@@ -28,7 +34,7 @@ use serde_json::Value;
 use std::sync::{Arc, Mutex, OnceLock};
 use domovoi_model::typed::{
     AppThread, DatabaseStorageStatus, Run, RunStatus, SettledOverride, StorageCleanupCounts, StorageCleanupKind, StorageCleanupOutcome, StorageCleanupReport,
-    StorageCleanupReportEntry, StorageCleanupTrigger, TaggedOption, Timestamp,
+    StorageCleanupReportEntry, StorageCleanupTrigger, Timestamp,
 };
 use tokio::sync::broadcast;
 
@@ -49,6 +55,15 @@ async fn update_settings(ctx: Arc<ConnCtx>, input: UpdateSettingsInput) -> Resul
     let mut next = settings.patched(&input.patch);
     if let Some(mutation) = &input.provider_instance_mutation {
         next = next.with_instance(mutation);
+    }
+    // The managed policy vets the write before anything is stored (`vetWrite`).
+    let policy = crate::policy::current();
+    if policy.is_managed() {
+        let patch = crate::settings::Settings::patch_fields(&input.patch);
+        if let Err(refusal) = policy.vet_write(&settings.document_fields(), &next.document_fields(), patch) {
+            return Err(ConfigFailure::managed(&crate::settings::path(&ctx.state.paths.userdata), refusal));
+        }
+        next = next.with_locks();
     }
     // Credentials go to the secret store; the settings keep a mark in their place.
     let next = crate::secrets::stash(&ctx.state.paths.userdata, next);
@@ -81,13 +96,6 @@ struct AcpSearchResult {
 #[serde(rename_all = "camelCase")]
 struct AcpAgentInput {
     agent_id: String,
-}
-
-/// What `server.updateProvider` is asked (`ServerProviderUpdateInput`), of which only the driver is read.
-#[derive(serde::Deserialize)]
-struct UpdateProviderInput {
-    #[serde(default)]
-    provider: Option<String>,
 }
 
 // ---- reading what is sent ----
@@ -717,68 +725,13 @@ async fn prepare_triage(ctx: Arc<ConnCtx>, input: TriageInput) -> TriagePrompt {
     TriagePrompt { prompt }
 }
 
-/// Why trace diagnostics have nothing to show (`ServerTraceDiagnosticsErrorKind`).
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "kebab-case")]
-enum TraceErrorKind {
-    TraceFileNotFound,
-}
-
-#[derive(Debug, Serialize)]
-struct TraceError {
-    kind: TraceErrorKind,
-    message: &'static str,
-}
-
-/// `server.getTraceDiagnostics` (`ServerTraceDiagnosticsResult`) of a server
-/// that writes no trace file: every count 0, every list empty, and the error saying so.
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct TraceDiagnostics {
-    trace_file_path: String,
-    scanned_file_paths: [Never; 0],
-    read_at: String,
-    record_count: u32,
-    parse_error_count: u32,
-    first_span_at: TaggedOption<Never>,
-    last_span_at: TaggedOption<Never>,
-    failure_count: u32,
-    interruption_count: u32,
-    slow_span_threshold_ms: u32,
-    slow_span_count: u32,
-    /// By log level: none, with no record read.
-    log_level_counts: std::collections::BTreeMap<String, Never>,
-    top_spans_by_count: [Never; 0],
-    slowest_spans: [Never; 0],
-    common_failures: [Never; 0],
-    latest_failures: [Never; 0],
-    latest_warning_and_error_logs: [Never; 0],
-    partial_failure: TaggedOption<Never>,
-    error: TaggedOption<TraceError>,
-}
-
-fn trace_diagnostics(ctx: &ConnCtx) -> TraceDiagnostics {
-    TraceDiagnostics {
-        trace_file_path: ctx.state.paths.logs.join("server.trace.ndjson").to_string_lossy().into_owned(),
-        scanned_file_paths: [],
-        read_at: domovoi_contracts::iso_now(),
-        record_count: 0,
-        parse_error_count: 0,
-        first_span_at: TaggedOption::None,
-        last_span_at: TaggedOption::None,
-        failure_count: 0,
-        interruption_count: 0,
-        slow_span_threshold_ms: 1000,
-        slow_span_count: 0,
-        log_level_counts: Default::default(),
-        top_spans_by_count: [],
-        slowest_spans: [],
-        common_failures: [],
-        latest_failures: [],
-        latest_warning_and_error_logs: [],
-        partial_failure: TaggedOption::None,
-        error: TaggedOption::Some { value: TraceError { kind: TraceErrorKind::TraceFileNotFound, message: "This server does not write a trace file." } },
-    }
+/// `server.getTraceDiagnostics`: the trace file and its rotated files, summarized.
+async fn trace_diagnostics(ctx: &ConnCtx) -> crate::trace_diagnostics::TraceDiagnostics {
+    let path = ctx.state.paths.logs.join(crate::trace_writer::TRACE_FILE);
+    let read = path.clone();
+    tokio::task::spawn_blocking(move || crate::trace_diagnostics::read(&read, crate::trace_writer::MAX_FILES, crate::trace_diagnostics::SLOW_SPAN_THRESHOLD_MS))
+        .await
+        .unwrap_or_else(|e| crate::trace_diagnostics::unreadable(&path, crate::trace_writer::MAX_FILES, e.to_string()))
 }
 
 /// The window of history a call asks for, in buckets (`ResourceTelemetryHistoryInput`):
@@ -817,9 +770,19 @@ struct UrlAuthAccepted {
     accepted: bool,
 }
 
+/// `AcpRegistryAcceptUrlAuthInput`.
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UrlAuthInput {
+    instance_id: String,
+    elicitation_id: String,
+}
+
 pub fn register(r: Router<ConnCtx>) -> Router<ConnCtx> {
     let r = r
         .unary("server.getConfig", |ctx: Arc<ConnCtx>, _: serde::de::IgnoredAny| async move { Ok::<_, Never>(ctx.state.server_config().await) })
+        // Only installed Swift TestFlight builds of t3code still ask; the settings are also in `server.getConfig`.
+        .unary("server.getSettings", |ctx: Arc<ConnCtx>, _: IgnoredAny| async move { Ok::<_, Never>(ctx.state.settings.read().await.clone()) })
         .unary("server.updateSettings", update_settings)
         .unary("server.upsertKeybinding", |ctx: Arc<ConnCtx>, i: UpsertInput| async move {
             crate::keybindings::upsert(&ctx.state.paths.keybindings(), &i).map(domovoi_model::typed::ServerUpsertKeybindingResult::from)
@@ -841,13 +804,11 @@ pub fn register(r: Router<ConnCtx>) -> Router<ConnCtx> {
         .unary("server.prepareTriage", |ctx: Arc<ConnCtx>, Sent(i): Sent<TriageInput>| async move { Ok::<_, Never>(prepare_triage(ctx, i).await) })
         .unary("server.getUsageSummary", |ctx: Arc<ConnCtx>, super::shell::RecordOrNot(i): super::shell::RecordOrNot<crate::usage::SummaryInput>| async move {
             let settings = ctx.state.settings.read().await.clone();
-            let base = ctx.state.paths.home.clone();
-            tokio::task::spawn_blocking(move || crate::usage::summary(&crate::agent_sessions::ScanEnv::new(&settings, &base), &i))
-                .await
-                .unwrap_or_else(|e| Err(crate::usage::Failure::Read { reason: crate::usage::ReadFailure::ScanFailed, detail: e.to_string() }))
+            let env = crate::agent_sessions::ScanEnv::new(&settings, &ctx.state.paths.home);
+            crate::usage::read_summary(env, i, (*settings).clone()).await
         })
-        .unary("server.refreshUsageRates", |_ctx: Arc<ConnCtx>, _: serde::de::IgnoredAny| async move { Ok::<_, super::Never>(crate::usage::pricing()) })
-        .unary("server.getTraceDiagnostics", |ctx: Arc<ConnCtx>, _: IgnoredAny| async move { Ok::<_, Never>(trace_diagnostics(&ctx)) })
+        .unary("server.refreshUsageRates", |_ctx: Arc<ConnCtx>, _: serde::de::IgnoredAny| async move { Ok::<_, super::Never>(crate::usage::refresh_rates().await) })
+        .unary("server.getTraceDiagnostics", |ctx: Arc<ConnCtx>, _: IgnoredAny| async move { Ok::<_, Never>(trace_diagnostics(&ctx).await) })
         .unary("server.getProcessDiagnostics", |_ctx: Arc<ConnCtx>, _: IgnoredAny| async move { Ok::<_, Never>(super::telemetry::process_diagnostics().await) })
         .unary("server.getHostResources", |_ctx: Arc<ConnCtx>, _: IgnoredAny| async move { Ok::<_, Never>(super::telemetry::host_resources().await) })
         .unary("server.getProcessResourceHistory", |_ctx: Arc<ConnCtx>, Sent(i): Sent<HistoryInput>| async move {
@@ -867,11 +828,11 @@ pub fn register(r: Router<ConnCtx>) -> Router<ConnCtx> {
         .unary("server.updateServer", |_ctx: Arc<ConnCtx>, _: IgnoredAny| async move { Err::<Never, _>(Failure::self_update()) })
         .stream("server.updateServerWithProgress", |_ctx: Arc<ConnCtx>, _: IgnoredAny| futures::stream::once(async { Err::<Never, _>(Failure::self_update()) }))
         .unary("server.commitDesktopUpdate", |_ctx: Arc<ConnCtx>, _: IgnoredAny| async move { Err::<Never, _>(Failure::self_update()) })
-        .unary("server.updateProvider", |_ctx: Arc<ConnCtx>, i: UpdateProviderInput| async move {
-            Err::<Never, _>(ConfigFailure::ProviderUpdate { provider: i.provider, reason: "This server does not update provider CLIs; update them with their own installer.".into() })
-        });
-    // Domovoi's ACP agents never ask for URL authentication, so none is pending.
-    let r = r.unary("server.acceptAcpRegistryUrlAuth", |_ctx: Arc<ConnCtx>, _: IgnoredAny| async move { Ok::<_, Never>(UrlAuthAccepted { accepted: false }) });
+        .unary("server.updateProvider", |ctx: Arc<ConnCtx>, i: crate::provider_update::UpdateInput| async move { crate::provider_update::update(&ctx.state, i).await });
+    // The user opened the sign-in an ACP agent asked for (`elicitation/create`, mode `url`).
+    let r = r.unary("server.acceptAcpRegistryUrlAuth", |_ctx: Arc<ConnCtx>, Sent(i): Sent<UrlAuthInput>| async move {
+        Ok::<_, Never>(UrlAuthAccepted { accepted: crate::adapters::acp::url_auth::accept(&i.instance_id, &i.elicitation_id) })
+    });
     let r = r
         .unary("server.searchAcpRegistry", |_ctx: Arc<ConnCtx>, i: AcpSearchInput| async move {
             crate::acp_registry::search(&i.query, i.limit).await.map(|agents| AcpSearchResult { agents })

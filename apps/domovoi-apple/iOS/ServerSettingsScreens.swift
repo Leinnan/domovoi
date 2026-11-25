@@ -117,7 +117,7 @@ struct ScheduledTaskDetail: View {
                         Button("Run Now", systemImage: "play") { core.update(.runScheduledNow(id: task.id)) }
                     }
                     if let thread = task.openableThread {
-                        Button("Open Thread", systemImage: "bubble.left.and.text.bubble.right") { open(.thread(thread)) }
+                        Button(task.openThreadLabel, systemImage: "bubble.left.and.text.bubble.right") { open(.thread(thread)) }
                     }
                     Button("Edit", systemImage: "pencil") { editing = ScheduledTaskEditor.from(task) }
                 }
@@ -219,13 +219,13 @@ struct ScheduledTasksScreen: View {
                     }
                     .swipeActions(edge: .leading) {
                         if let thread = task.openableThread {
-                            Button("Open Thread") { open(.thread(thread)) }.tint(.indigo)
+                            Button(task.openThreadLabel) { open(.thread(thread)) }.tint(.indigo)
                         }
                     }
                     .contextMenu {
                         Button("Edit", systemImage: "pencil") { editing = ScheduledTaskEditor.from(task) }
                         if let thread = task.openableThread {
-                            Button("Open Thread", systemImage: "bubble.left.and.text.bubble.right") { open(.thread(thread)) }
+                            Button(task.openThreadLabel, systemImage: "bubble.left.and.text.bubble.right") { open(.thread(thread)) }
                         }
                         if task.scheduleKind != "webhook" {
                             Button("Run Now", systemImage: "play") { core.update(.runScheduledNow(id: task.id)) }
@@ -352,6 +352,11 @@ struct AccessScreen: View {
                     ))
                     .disabled(remote.busy || core.view.connection.remote)
                     if remote.running {
+                        // The server's iroh key: what a pairing link dials.
+                        LabeledContent("Endpoint") {
+                            Text(remote.endpointId).font(TypeRole.monoSmall).lineLimit(1).truncationMode(.middle).textSelection(.enabled)
+                        }
+                        .contextMenu { Button("Copy", systemImage: "doc.on.doc") { Platform.copy(remote.endpointId) } }
                         LabeledContent("Relay", value: remote.homeRelay.isEmpty ? (remote.relays.first ?? "connecting…") : remote.homeRelay)
                         if remote.link.isEmpty {
                             Button("Pair a Device…") { core.update(.createPairingLink) }

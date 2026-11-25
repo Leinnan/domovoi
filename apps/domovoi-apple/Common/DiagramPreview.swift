@@ -33,6 +33,8 @@ struct DiagramPreview: View {
 
     private var failed: Bool { core == nil || diagram?.failed == true || (loadFailed && picture == nil) }
     private var offline: Bool { diagram?.offline == true && picture == nil }
+    /// The server is drawing it.
+    private var rendering: Bool { diagram?.pending == true && !failed }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Space.s) {
@@ -42,6 +44,10 @@ struct DiagramPreview: View {
                 }
                 Button(showSource ? "View diagram" : "View source") { showSource.toggle() }
                 Button("Copy source", systemImage: "doc.on.doc") { Platform.copy(source) }
+                // Still drawing while the source shows.
+                if rendering && showSource {
+                    ProgressView().controlSize(.small).accessibilityLabel("Rendering diagram")
+                }
             }
             .font(.callout)
             if showSource || failed || offline {
@@ -69,7 +75,9 @@ struct DiagramPreview: View {
                         .accessibilityLabel("Mermaid diagram")
                 }
             } else {
-                ProgressView("Rendering diagram")
+                // Drawn on the server, then fetched.
+                ProgressView(rendering || diagram == nil ? "Rendering diagram" : "Loading diagram")
+                    .frame(maxWidth: .infinity, minHeight: 120)
             }
         }
         .padding(Space.m)

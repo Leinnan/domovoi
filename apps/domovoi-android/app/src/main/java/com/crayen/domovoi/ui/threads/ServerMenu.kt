@@ -11,8 +11,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.ArrowDropDown
-import androidx.compose.material.icons.outlined.Computer
-import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
@@ -31,6 +29,9 @@ import androidx.compose.ui.unit.dp
 import com.crayen.domovoi.app.ConnectionView
 import com.crayen.domovoi.app.Event
 import com.crayen.domovoi.core.Core
+import com.crayen.domovoi.ui.common.CompanionAvatar
+import com.crayen.domovoi.ui.common.CompanionMood
+import com.crayen.domovoi.ui.common.companionMood
 import com.crayen.domovoi.ui.common.watch
 import com.crayen.domovoi.ui.nav.Navigator
 import com.crayen.domovoi.ui.nav.Screen
@@ -44,16 +45,19 @@ fun routeLine(c: ConnectionView): String? = when (c.state) {
     else -> c.state.replaceFirstChar { it.uppercase() }
 }
 
-/** The server in use, as the app bar title; tap to switch or add one. */
+/** The server in use, as the app bar title, with its companion; tap to switch or add one. */
 @Composable
 fun ServerMenu(core: Core, nav: Navigator) {
     val c by core.view.connection.watch()
+    val mood = companionMood(c)
     var open by remember { mutableStateOf(false) }
     Box {
         Row(
             Modifier.clickable { open = true }.padding(vertical = Space.xs, horizontal = Space.xs),
             verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Space.s),
         ) {
+            CompanionAvatar(c.companion.look, mood, 32.dp, description = "${c.environmentLabel.ifEmpty { "Domovoi" }} companion", onPoke = {})
             Column {
                 Text(c.environmentLabel.ifEmpty { "Domovoi" }, style = MaterialTheme.typography.titleLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 routeLine(c)?.let { Text(it, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
@@ -69,7 +73,7 @@ fun ServerMenu(core: Core, nav: Navigator) {
                             Text(env.detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
                         }
                     },
-                    leadingIcon = { Icon(if (env.remote) Icons.Outlined.Public else Icons.Outlined.Computer, null) },
+                    leadingIcon = { CompanionAvatar(env.companion.look, if (env.active) mood else CompanionMood.Idle, 28.dp, still = !env.active) },
                     trailingIcon = { if (env.active) Icon(Icons.Filled.Check, "In use", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp)) },
                     onClick = { open = false; if (!env.active) core.update(Event.SelectEnvironment(env.id)) },
                 )

@@ -20,6 +20,8 @@ use crate::ui::tokens;
 use crate::views::markdown::MdAction;
 
 const FOCUS_NETWORK_CHECK: Duration = Duration::from_secs(60);
+/// A gap this long between 5 s ticks means the machine slept.
+const SLEEP_GAP_MS: i64 = 60_000;
 /// Loaded images kept before those nothing shows are let go.
 pub const IMAGE_CACHE_LIMIT: usize = 128;
 
@@ -144,10 +146,32 @@ pub enum ImageAction {
     OpenExternally,
 }
 
+/// A secret typed into a secret request's card: shows in no debug output,
+/// and is dropped once sent or once its card is gone.
+#[derive(Clone, Default, PartialEq)]
+pub struct SecretText(pub String);
+
+impl std::fmt::Debug for SecretText {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("SecretText(..)")
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct QuestionDraft {
     pub selected: Vec<String>,
     pub custom: String,
+}
+
+impl QuestionDraft {
+    /// The picked options, then the typed answer (when there is one).
+    pub fn values(&self) -> Vec<String> {
+        let mut values = self.selected.clone();
+        if !self.custom.trim().is_empty() {
+            values.push(self.custom.trim().to_owned());
+        }
+        values
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -188,6 +212,12 @@ pub struct App {
     pub tick_phase: f32,
     /// Wall clock (Unix ms) as of the last `Clock`/`Tick`, for elapsed times.
     pub clock_ms: i64,
+    /// Wall clock at the last `Tick`, to notice a sleep.
+    last_tick_ms: i64,
+    /// What the core was last told about the network (`None`: nothing yet),
+    /// and the address the default route leaves from.
+    online: Option<bool>,
+    route_from: Option<std::net::IpAddr>,
     pub background_expanded: bool,
     pub companion_reaction: crate::views::companion::Reaction,
     pub transcript: crate::scroll::Transcript,
@@ -207,7 +237,11 @@ pub struct App {
     pub expanded_items: HashSet<String>,
     pub find_input: String,
     pub question_drafts: HashMap<String, HashMap<String, QuestionDraft>>,
+    /// What is typed into each secret request's card, by its item id.
+    pub secret_drafts: HashMap<String, SecretText>,
     pub editing_queued: Option<(String, String)>,
+    /// The thread whose plan and checklist are open above the composer.
+    pub progress_open: Option<String>,
 
     // Composer local state
     pub draft: text_editor::Content,
@@ -253,6 +287,12 @@ pub enum Message {
     /// One-second clock while a turn runs (elapsed time, pulsing mark).
     Clock,
     RetryFired(u64),
+    /// A `domovoi://` link from the OS or a later launch.
+    DeepLink(String),
+    /// Back from a sleep: the core reconnects.
+    Woke,
+    /// Where the default route leaves from (`None`: no route, offline).
+    NetworkProbed(Option<std::net::IpAddr>),
     WindowFocused(bool),
     WindowResized(iced::Size),
     CloseRequested,
@@ -284,6 +324,19 @@ pub enum Message {
     QuestionToggleOption { request_id: String, question_id: String, value: String, multi: bool },
     QuestionCustomChanged { request_id: String, question_id: String, text: String },
     QuestionSubmit { request_id: String },
+    SecretChanged { item_id: String, value: SecretText },
+    /// Sends the typed secret (`AnswerSecret`) and forgets it here.
+    SecretSubmit { item_id: String },
+    /// Opens or closes the plan and checklist above the composer.
+    ToggleProgress,
+    /// Carries out the plan from the progress strip (and closes it).
+    ImplementPlan(String),
+    /// A checkpoint's turn in the Diff panel.
+    ViewDiff(String),
+    /// A workspace file an edit wrote, in the Artifacts panel.
+    PreviewArtifactFile(String),
+    /// Scrolls the transcript to the row an artifact came from.
+    ShowInThread(String),
     StartEditQueued { run_id: String, text: String },
     EditQueuedChanged(String),
     CommitEditQueued,
@@ -372,11 +425,13 @@ pub enum Message {
     // Utilities
     CopyText(String),
     OpenUrl(String),
+    /// An interactive artifact's preview (`webview` feature: in the app).
+    OpenPreview { url: String, title: String },
 }
 
 impl App {
     pub fn new() -> (Self, Task<Message>) {
-        let pending_deep_link = std::env::args().skip(1).find(|a| a.starts_with("domovoi://"));
+        let pending_deep_link = crate::links::from_args();
         let app = Self {
             host: None,
             vm: ViewModel::default(),
@@ -391,6 +446,9 @@ impl App {
             drag: None,
             tick_phase: 0.0,
             clock_ms: now_ms(),
+            last_tick_ms: now_ms(),
+            online: None,
+            route_from: None,
             background_expanded: false,
             companion_reaction: Default::default(),
             transcript: crate::scroll::Transcript::new(),
@@ -404,7 +462,9 @@ impl App {
             expanded_items: HashSet::new(),
             find_input: String::new(),
             question_drafts: HashMap::new(),
+            secret_drafts: HashMap::new(),
             editing_queued: None,
+            progress_open: None,
             draft: text_editor::Content::new(),
             last_draft_rev: 0,
             command_highlight: 0,
@@ -458,6 +518,12 @@ impl App {
         }
     }
 
+    /// Every required question of `req` has an answer in its draft.
+    pub fn questions_answered(&self, req: &domovoi_core::view::RequestView) -> bool {
+        let drafts = self.question_drafts.get(&req.id);
+        req.questions.iter().all(|q| !q.required || drafts.and_then(|d| d.get(&q.id)).is_some_and(|d| !d.values().is_empty()))
+    }
+
     pub fn send_core(&self, event: Event) {
         if let Some(host) = &self.host {
             host.send(event);
@@ -467,6 +533,7 @@ impl App {
     pub fn subscription(&self) -> Subscription<Message> {
         let mut subs = vec![
             host::subscription().map(Message::Host),
+            crate::links::subscription().map(Message::DeepLink),
             iced::time::every(Duration::from_secs(5)).map(|_| Message::Tick),
             iced::system::theme_changes().map(Message::SystemTheme),
             iced::event::listen().filter_map(map_global_event),
@@ -523,9 +590,43 @@ impl App {
                 self.background_expanded = !self.background_expanded;
             }
             Message::Tick => {
-                self.clock_ms = now_ms();
+                let now = now_ms();
+                let slept = now - self.last_tick_ms > SLEEP_GAP_MS;
+                self.last_tick_ms = now;
+                self.clock_ms = now;
                 self.tick_phase = (self.tick_phase + 1.0) % 1000.0;
-                self.send_core(Event::Tick { now_ms: now_ms() });
+                self.send_core(Event::Tick { now_ms: now });
+                let probe = Task::perform(probe_route(), Message::NetworkProbed);
+                if slept {
+                    // The socket died with the sleep; drop it now instead of
+                    // waiting out a ping, and reconnect once it is closed.
+                    self.send_core(Event::Suspend);
+                    return Task::batch([probe, Task::perform(tokio::time::sleep(Duration::from_millis(500)), |()| Message::Woke)]);
+                }
+                return probe;
+            }
+            Message::Woke => self.send_core(Event::Resume),
+            Message::DeepLink(link) => {
+                match &self.host {
+                    Some(host) => host.send(Event::ConnectRemote { link }),
+                    None => self.pending_deep_link = Some(link),
+                }
+                // The link was opened elsewhere: show where it went.
+                return iced::window::oldest().then(|id| id.map_or_else(Task::none, |id| Task::batch([iced::window::minimize(id, false), iced::window::gain_focus(id)])));
+            }
+            Message::NetworkProbed(from) => {
+                // A server on this machine is there with no network at all
+                // (a remote one is reached through a local port too, so not those).
+                let c = &self.vm.connection;
+                let online = from.is_some() || (!c.remote && is_loopback_url(&c.server_url));
+                if self.online != Some(online) {
+                    self.online = Some(online);
+                    self.send_core(Event::NetworkStatus { online });
+                } else if from.is_some() && self.route_from.is_some() && from != self.route_from {
+                    // Another network (Wi-Fi to Ethernet, a VPN).
+                    self.send_core(Event::NetworkChanged);
+                }
+                self.route_from = from;
             }
             Message::RetryFired(gen_id) => {
                 if self.vm.connection.retry_gen == gen_id {
@@ -695,19 +796,55 @@ impl App {
                 entry.custom = text;
             }
             Message::QuestionSubmit { request_id } => {
+                // Enter in an answer field goes through here too.
+                let request = self.vm.thread.as_ref().and_then(|t| t.pending_requests.iter().find(|r| r.id == request_id));
+                if request.is_some_and(|r| !self.questions_answered(r)) {
+                    return Task::none();
+                }
                 let drafts = self.question_drafts.remove(&request_id).unwrap_or_default();
                 let answers = drafts
                     .into_iter()
-                    .map(|(question_id, d)| {
-                        let mut values = d.selected;
-                        if !d.custom.trim().is_empty() {
-                            values.push(d.custom.trim().to_owned());
-                        }
-                        QuestionAnswer { question_id, values }
-                    })
+                    .map(|(question_id, d)| QuestionAnswer { values: d.values(), question_id })
                     .filter(|a| !a.values.is_empty())
                     .collect();
                 self.send_core(Event::RespondUserInput { request_id, answers });
+            }
+            Message::SecretChanged { item_id, value } => {
+                self.secret_drafts.insert(item_id, value);
+            }
+            Message::SecretSubmit { item_id } => {
+                let waiting = self.vm.thread.as_ref().and_then(|t| t.secret_requests.iter().find(|r| r.item_id == item_id)).is_some_and(|r| !r.sending);
+                if !waiting {
+                    return Task::none();
+                }
+                if let Some(SecretText(value)) = self.secret_drafts.remove(&item_id).filter(|v| !v.0.trim().is_empty()) {
+                    self.send_core(Event::AnswerSecret { item_id, value });
+                }
+            }
+            Message::ToggleProgress => {
+                let id = self.vm.thread.as_ref().map(|t| t.id.clone());
+                self.progress_open = if self.progress_open == id { None } else { id };
+            }
+            Message::ImplementPlan(plan_id) => {
+                self.progress_open = None;
+                self.send_core(Event::ImplementPlan { plan_id });
+            }
+            Message::ViewDiff(source) => {
+                self.send_core(Event::SelectDiffSource { source });
+                self.send_core(Event::ShowPanel { tab: "diff".into() });
+            }
+            Message::PreviewArtifactFile(path) => {
+                if let Some(thread_id) = self.vm.thread.as_ref().map(|t| t.id.clone()) {
+                    self.send_core(Event::ShowPanel { tab: "artifacts".into() });
+                    self.send_core(Event::OpenArtifactFile { thread_id, path });
+                }
+            }
+            Message::ShowInThread(item_id) => {
+                // Some ids name a part of a row (`row:block`).
+                let row = item_id.split(':').next().unwrap_or_default().to_owned();
+                if !row.is_empty() {
+                    return self.update(Message::RevealItem(row));
+                }
             }
             Message::StartEditQueued { run_id, text } => {
                 self.editing_queued = Some((run_id, text));
@@ -1127,6 +1264,15 @@ impl App {
             Message::OpenUrl(url) => {
                 let _ = open::that(&url);
             }
+            Message::OpenPreview { url, title } => {
+                // In a window of the app's own when built with it, else in the browser.
+                #[cfg(feature = "webview")]
+                if crate::webview::open(&url, &title).is_ok() {
+                    return Task::none();
+                }
+                let _ = title;
+                let _ = open::that(&url);
+            }
         }
         Task::none()
     }
@@ -1146,10 +1292,14 @@ impl App {
                 if let Some(link) = self.pending_deep_link.take() {
                     handle.send(Event::ConnectRemote { link });
                 }
+                return Task::perform(probe_route(), Message::NetworkProbed);
             }
             HostMsg::Delta(delta) => {
                 let prev_state = self.vm.connection.state.clone();
                 delta.apply(&mut self.vm);
+                // A card answered or gone (another thread, another device) keeps nothing typed.
+                let asked = self.vm.thread.as_ref().map(|t| &t.secret_requests);
+                self.secret_drafts.retain(|id, _| asked.is_some_and(|asked| asked.iter().any(|r| r.item_id == *id)));
 
                 if self.vm.connection.state == "connected" && prev_state != "connected" {
                     self.connect.adding_server = false;
@@ -1230,6 +1380,9 @@ impl App {
             }
             HostMsg::OpenThreadFromNotification { environment_id, thread_id } => {
                 self.send_core(Event::OpenNotification { environment_id, thread_id });
+            }
+            HostMsg::RespondFromNotification { environment_id, thread_id, request_id, decision } => {
+                self.send_core(Event::RespondFromNotification { environment_id, thread_id, request_id, decision });
             }
         }
         Task::none()
@@ -1443,6 +1596,40 @@ fn map_global_event(ev: event::Event) -> Option<Message> {
             None
         }
         _ => None,
+    }
+}
+
+/// The local address a packet to the internet would leave from, without
+/// sending one: a UDP `connect` only looks up the route. `None` when there
+/// is no route (no network).
+async fn probe_route() -> Option<std::net::IpAddr> {
+    async fn from(bind: &str, to: &str) -> Option<std::net::IpAddr> {
+        let socket = tokio::net::UdpSocket::bind(bind).await.ok()?;
+        socket.connect(to).await.ok()?;
+        socket.local_addr().ok().map(|a| a.ip())
+    }
+    match from("0.0.0.0:0", "1.1.1.1:53").await {
+        Some(ip) => Some(ip),
+        None => from("[::]:0", "[2606:4700:4700::1111]:53").await,
+    }
+}
+
+fn is_loopback_url(url: &str) -> bool {
+    let host = url.split_once("://").map_or(url, |(_, rest)| rest).split(['/', '?']).next().unwrap_or_default();
+    let host = host.strip_prefix('[').and_then(|h| h.split_once(']')).map_or_else(|| host.rsplit_once(':').map_or(host, |(h, _)| h), |(h, _)| h);
+    host.eq_ignore_ascii_case("localhost") || host.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback())
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn loopback_servers() {
+        for url in ["http://127.0.0.1:13773", "http://localhost:13773/", "http://[::1]:13773", "ws://127.0.0.1"] {
+            assert!(super::is_loopback_url(url), "{url}");
+        }
+        for url in ["http://192.168.1.4:13773", "https://example.com", "http://[2001:db8::1]:80", ""] {
+            assert!(!super::is_loopback_url(url), "{url}");
+        }
     }
 }
 

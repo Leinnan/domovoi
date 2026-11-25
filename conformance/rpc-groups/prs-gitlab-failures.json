@@ -1,0 +1,218 @@
+{
+ "fixture": false,
+ "env": {
+  "GIT_ALLOW_PROTOCOL": "file",
+  "GIT_TERMINAL_PROMPT": "0"
+ },
+ "normalize": [],
+ "cases": [
+  {
+   "tag": "projects.mutate",
+   "payload": {
+    "type": "project.create",
+    "commandId": "create-gl-one",
+    "projectId": "gl-one",
+    "title": "GitLab one",
+    "workspaceRoot": "$DIR/repos/gl-one",
+    "createWorkspaceRootIfMissing": false,
+    "defaultModelSelection": null
+   }
+  },
+  {
+   "tag": "projects.mutate",
+   "payload": {
+    "type": "project.create",
+    "commandId": "create-gl-self",
+    "projectId": "gl-self",
+    "title": "Self-managed app",
+    "workspaceRoot": "$DIR/repos/gl-self",
+    "createWorkspaceRootIfMissing": false,
+    "defaultModelSelection": null
+   }
+  },
+  {
+   "tag": "pullRequests.list",
+   "payload": {
+    "state": "open"
+   },
+   "expect": "failure",
+   "error": "PullRequestUnavailableError",
+   "note": "no glab: cli-missing, with the listing"
+  },
+  {
+   "tag": "pullRequests.summary",
+   "payload": {
+    "projectId": "gl-one",
+    "repository": "group/one",
+    "number": 1
+   },
+   "expect": "failure",
+   "error": "PullRequestUnavailableError",
+   "note": "no glab"
+  },
+  {
+   "tag": "pullRequests.routingIdentity",
+   "payload": {
+    "host": "gitlab.example.com"
+   },
+   "expect": "failure",
+   "error": "PullRequestUnavailableError"
+  },
+  {
+   "sh": "cp \"$DIR/tools/glab\" \"$DIR/bin/glab\" && glab-rule err 'api user' 'glab: To get started with GitLab CLI, please run: glab auth login'",
+   "tag": "pullRequests.routing",
+   "payload": {
+    "projectId": "gl-one",
+    "repository": "group/one",
+    "number": 1,
+    "host": "gitlab.com"
+   },
+   "expect": "failure",
+   "error": "PullRequestUnavailableError",
+   "note": "signed out: cli-unauthenticated"
+  },
+  {
+   "tag": "pullRequests.list",
+   "payload": {
+    "state": "open",
+    "host": "gitlab.com"
+   },
+   "expect": "failure",
+   "error": "PullRequestUnavailableError"
+  },
+  {
+   "sh": "glab-rule err 'merge_requests/1[?]' 'oauth2: cannot fetch token: 400 Bad Request: invalid_grant'",
+   "tag": "pullRequests.summary",
+   "payload": {
+    "projectId": "gl-one",
+    "repository": "group/one",
+    "number": 1
+   },
+   "expect": "failure",
+   "error": "PullRequestUnavailableError",
+   "note": "an expired login"
+  },
+  {
+   "sh": "glab-rule err 'merge_requests/1[?]' 'glab: 429 Too Many Requests'",
+   "tag": "pullRequests.summary",
+   "payload": {
+    "projectId": "gl-one",
+    "repository": "group/one",
+    "number": 1
+   },
+   "expect": "failure",
+   "error": "PullRequestOperationError",
+   "note": "rate limited"
+  },
+  {
+   "sh": "glab-rule out 'merge_requests/1[?]' 'not json'",
+   "tag": "pullRequests.detail",
+   "payload": {
+    "projectId": "gl-one",
+    "repository": "group/one",
+    "number": 1
+   },
+   "expect": "failure",
+   "error": "PullRequestOperationError",
+   "note": "an unreadable answer"
+  },
+  {
+   "sh": "glab-rule out 'merge_requests/1[?]' '{\"iid\": 1}'",
+   "tag": "pullRequests.detail",
+   "payload": {
+    "projectId": "gl-one",
+    "repository": "group/one",
+    "number": 1
+   },
+   "expect": "failure",
+   "error": "PullRequestOperationError",
+   "note": "a merge request without its required fields"
+  },
+  {
+   "sh": "glab-rule err 'api graphql' 'glab: 500 Internal Server Error'",
+   "tag": "pullRequests.summary",
+   "payload": {
+    "projectId": "gl-one",
+    "repository": "group/one",
+    "number": 1
+   },
+   "note": "GraphQL extras that fail cost only their fields"
+  },
+  {
+   "tag": "pullRequests.detail",
+   "payload": {
+    "projectId": "gl-one",
+    "repository": "group/one",
+    "number": 1
+   }
+  },
+  {
+   "tag": "pullRequests.activity",
+   "payload": {
+    "projectId": "gl-one",
+    "repository": "group/one",
+    "number": 1
+   },
+   "note": "awards unread"
+  },
+  {
+   "sh": "glab-rule err 'discussions' 'glab auth login'",
+   "tag": "pullRequests.activity",
+   "payload": {
+    "projectId": "gl-one",
+    "repository": "group/one",
+    "number": 1
+   },
+   "expect": "failure",
+   "error": "PullRequestUnavailableError",
+   "note": "an unusable login still fails an optional read"
+  },
+  {
+   "sh": "glab-rule err 'team%2Fsub%2Fapp/merge_requests' 'glab: 403 Forbidden'",
+   "tag": "pullRequests.list",
+   "payload": {
+    "state": "open"
+   },
+   "note": "one project unreadable: listed as its error"
+  },
+  {
+   "sh": "glab-rule clear",
+   "tag": "pullRequests.summary",
+   "payload": {
+    "projectId": "gl-one",
+    "repository": "group/one",
+    "number": 1,
+    "host": "gitlab.com",
+    "expectedAccountId": "999"
+   },
+   "expect": "failure",
+   "error": "PullRequestOperationError",
+   "note": "another account than the signed-in one"
+  },
+  {
+   "sh": "glab-rule err 'notes' 'glab: 403 Forbidden'",
+   "tag": "pullRequests.comment",
+   "payload": {
+    "projectId": "gl-one",
+    "repository": "group/one",
+    "number": 1,
+    "body": "hi"
+   },
+   "expect": "failure",
+   "error": "PullRequestOperationError"
+  },
+  {
+   "sh": "glab-rule err 'mr merge' 'ERROR: SHA does not match HEAD of source branch'",
+   "tag": "pullRequests.runAction",
+   "payload": {
+    "projectId": "gl-one",
+    "repository": "group/one",
+    "number": 1,
+    "action": "merge"
+   },
+   "expect": "failure",
+   "error": "PullRequestOperationError",
+   "note": "the head moved"
+  }
+ ]
+}

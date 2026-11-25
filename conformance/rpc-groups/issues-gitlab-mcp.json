@@ -1,0 +1,89 @@
+{
+ "fixture": true,
+ "env": {
+  "DOMOVOI_CLAUDE_BINARY": "$DIR/bin/claude",
+  "GIT_ALLOW_PROTOCOL": "file",
+  "GIT_TERMINAL_PROMPT": "0"
+ },
+ "normalize": [],
+ "cases": [
+  {
+   "sh": "mcp 01 '{\"jsonrpc\": \"2.0\", \"id\": 1, \"method\": \"tools/call\", \"params\": {\"name\": \"list_issues\", \"arguments\": {}}}'",
+   "tag": "projects.readFile",
+   "payload": {
+    "cwd": "$DIR/mcp-out",
+    "relativePath": "01.json"
+   },
+   "note": "this thread's GitLab project, open issues"
+  },
+  {
+   "sh": "mcp 02 '{\"jsonrpc\": \"2.0\", \"id\": 2, \"method\": \"tools/call\", \"params\": {\"name\": \"read_issue\", \"arguments\": {\"key\": \"1\"}}}'",
+   "tag": "projects.readFile",
+   "payload": {
+    "cwd": "$DIR/mcp-out",
+    "relativePath": "02.json"
+   },
+   "note": "by key: the project's tracker"
+  },
+  {
+   "sh": "mcp 03 '{\"jsonrpc\": \"2.0\", \"id\": 3, \"method\": \"tools/call\", \"params\": {\"name\": \"read_issue\", \"arguments\": {\"url\": \"https://gitlab.com/group/one/-/issues/3\"}}}'",
+   "tag": "projects.readFile",
+   "payload": {
+    "cwd": "$DIR/mcp-out",
+    "relativePath": "03.json"
+   },
+   "note": "by URL"
+  },
+  {
+   "sh": "mcp 04 '{\"jsonrpc\": \"2.0\", \"id\": 4, \"method\": \"tools/call\", \"params\": {\"name\": \"pull_request_read\", \"arguments\": {\"number\": 1}}}'",
+   "tag": "projects.readFile",
+   "payload": {
+    "cwd": "$DIR/mcp-out",
+    "relativePath": "04.json"
+   },
+   "note": "summary and checks of a merge request through glab"
+  },
+  {
+   "sh": "mcp 05 '{\"jsonrpc\": \"2.0\", \"id\": 5, \"method\": \"tools/call\", \"params\": {\"name\": \"pull_request_read\", \"arguments\": {\"number\": 3, \"sections\": [\"checks\"]}}}'",
+   "tag": "projects.readFile",
+   "payload": {
+    "cwd": "$DIR/mcp-out",
+    "relativePath": "05.json"
+   }
+  },
+  {
+   "sh": "mcp 06 '{\"jsonrpc\": \"2.0\", \"id\": 6, \"method\": \"tools/call\", \"params\": {\"name\": \"link_pull_request\", \"arguments\": {\"repository\": \"group/one\", \"number\": 1}}}'",
+   "tag": "projects.readFile",
+   "payload": {
+    "cwd": "$DIR/mcp-out",
+    "relativePath": "06.json"
+   },
+   "note": "the link's URL is GitLab's"
+  },
+  {
+   "sh": "mcp 07 '{\"jsonrpc\": \"2.0\", \"id\": 7, \"method\": \"tools/call\", \"params\": {\"name\": \"link_pull_request\", \"arguments\": {\"url\": \"https://gitlab.com/group/one/-/merge_requests/3\"}}}'",
+   "tag": "projects.readFile",
+   "payload": {
+    "cwd": "$DIR/mcp-out",
+    "relativePath": "07.json"
+   }
+  },
+  {
+   "sh": "mcp 08 '{\"jsonrpc\": \"2.0\", \"id\": 8, \"method\": \"tools/call\", \"params\": {\"name\": \"list_thread_pull_requests\", \"arguments\": {}}}'",
+   "tag": "projects.readFile",
+   "payload": {
+    "cwd": "$DIR/mcp-out",
+    "relativePath": "08.json"
+   }
+  },
+  {
+   "sh": "mcp 09 '{\"jsonrpc\": \"2.0\", \"id\": 9, \"method\": \"tools/call\", \"params\": {\"name\": \"pull_request_read\", \"arguments\": {}}}'",
+   "tag": "projects.readFile",
+   "payload": {
+    "cwd": "$DIR/mcp-out",
+    "relativePath": "09.json"
+   },
+   "note": "the thread's latest linked merge request"
+  }
+ ]
+}

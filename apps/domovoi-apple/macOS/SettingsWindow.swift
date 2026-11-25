@@ -214,7 +214,7 @@ struct ScheduledSettings: View {
                                 Button("Run Now") { core.update(.runScheduledNow(id: task.id)) }
                             }
                             if let thread = task.openableThread {
-                                Button("Open Thread") { core.update(.selectThread(threadId: thread)) }
+                                Button(task.openThreadLabel) { core.update(.selectThread(threadId: thread)) }
                             }
                             Button(core.view.settings.scheduledRunsTask == task.id ? "Hide Runs" : "Runs") {
                                 core.update(core.view.settings.scheduledRunsTask == task.id ? .loadScheduledRuns(id: "") : .loadScheduledRuns(id: task.id))
@@ -440,7 +440,11 @@ struct AccessSettings: View {
                     }
                     if remote.busy { ProgressView().controlSize(.small) }
                     if let error = remote.error {
-                        Label(error, systemImage: "exclamationmark.triangle.fill").foregroundStyle(Tint.danger)
+                        HStack {
+                            Label(error, systemImage: "exclamationmark.triangle.fill").foregroundStyle(Tint.danger)
+                            Spacer()
+                            Button("Try Again") { core.update(.loadRemoteAccess) }.disabled(remote.busy)
+                        }
                     }
                 } header: {
                     Text("Remote access")
@@ -473,6 +477,11 @@ struct AccessSettings: View {
             core.update(.revokeClient(sessionId: $0.id))
         }
         .onAppear { core.update(.loadSettings(section: "access")) }
+        // Remote access may have been turned on or off from the server's
+        // status bar icon meanwhile.
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            if core.view.connection.state == "connected" { core.update(.loadRemoteAccess) }
+        }
     }
 
     private func icon(_ entry: AccessEntryView) -> String {

@@ -971,6 +971,14 @@ fn exit_ok(model: &mut Model, route: Route, value: Value) -> Vec<Cmd> {
             });
             vec![]
         }
+        // The card goes once the item says how it ended.
+        Route::SecretAnswer { item_id, saved } => {
+            model.secrets_answering.remove(&item_id);
+            if saved {
+                model.toast("success", "Secret saved. The agent can use it now.");
+            }
+            vec![]
+        }
         Route::ScheduledRunNow(task) => vec![update::call(model, crate::requests::scheduled_tasks_list_runs(Some(&task), Some(1)), Route::ScheduledRunStarted(task))],
         Route::ScheduledRunStarted(task) => {
             let run = read::<ScheduledRuns>(model, "a scheduled task's run", value).and_then(|list| list.runs.into_iter().next());
@@ -1049,6 +1057,21 @@ fn exit_ok(model: &mut Model, route: Route, value: Value) -> Vec<Cmd> {
     }
 }
 
+/// What a `SecretRequestError` (which has no message) says, by its reason.
+fn secret_failure(cause: &Value) -> Option<&'static str> {
+    let error = &cause.as_array()?.first()?["error"];
+    if error["_tag"] != "SecretRequestError" {
+        return None;
+    }
+    Some(match error["reason"].as_str()? {
+        "not_found" => "the request is gone.",
+        "already_answered" => "it was already answered.",
+        "agent_stopped" => "the agent stopped waiting for it.",
+        "store_failed" | "record_failed" => "the server could not store it. Try again.",
+        _ => "the server could not take the answer.",
+    })
+}
+
 /// One folder of an import finished (or failed): the next one, or the summary.
 fn import_step_done(model: &mut Model) -> Cmd {
     model.sessions.done += 1;
@@ -1078,6 +1101,11 @@ fn import_step_done(model: &mut Model) -> Cmd {
 fn exit_failed(model: &mut Model, route: Route, cause: &Value) -> Vec<Cmd> {
     let message = failure_message(cause);
     match &route {
+        Route::SecretAnswer { item_id, .. } => {
+            model.secrets_answering.remove(item_id);
+            model.toast("error", format!("Secret: {}", secret_failure(cause).unwrap_or(&message)));
+            return vec![];
+        }
         Route::AgentScan => {
             model.sessions.scanning = false;
             model.sessions.error = Some(message);

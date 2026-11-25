@@ -109,8 +109,8 @@
     {"tag": "pullRequests.list", "payload": {"state": "open"}, "sh": "gh-rule err 'api user' 'To get started with GitHub CLI, please run:  gh auth login'", "expect": "failure", "error": "PullRequestUnavailableError", "note": "not signed in: the failure carries the empty list"},
     {"tag": "pullRequests.routingIdentity", "payload": {"host": "github.com"}, "sh": "gh-rule err 'api user' 'To get started with GitHub CLI, please run:  gh auth login'", "expect": "failure", "error": "PullRequestUnavailableError"},
     {"tag": "pullRequests.routing", "payload": {"projectId": "$PROJECT", "repository": "acme/calc", "number": 7}, "sh": "gh-rule err 'api user' 'To get started with GitHub CLI, please run:  gh auth login'", "expect": "failure", "error": "PullRequestUnavailableError"},
-    {"tag": "pullRequests.list", "payload": {"state": "open"}, "sh": "gh-rule err 'api user' 'API rate limit exceeded for 203.0.113.9.'", "expect": "failure", "error": "PullRequestOperationError", "note": "the failure carries the empty list"},
-    {"tag": "pullRequests.list", "payload": {"state": "open"}, "sh": "gh-rule err 'api user' 'gh: Not Found (HTTP 404)'", "expect": "failure", "error": "PullRequestOperationError"},
+    {"tag": "pullRequests.list", "payload": {"state": "open", "host": "github.com"}, "sh": "gh-rule err 'api user' 'API rate limit exceeded for 203.0.113.9.'", "expect": "failure", "error": "PullRequestOperationError", "note": "the failure carries the empty list"},
+    {"tag": "pullRequests.list", "payload": {"state": "open", "host": "github.com"}, "sh": "gh-rule err 'api user' 'gh: Not Found (HTTP 404)'", "expect": "failure", "error": "PullRequestOperationError"},
     {"tag": "pullRequests.routingIdentity", "payload": {"host": "github.com"}, "sh": "gh-rule err 'api user' 'gh: Not Found (HTTP 404)'", "expect": "failure", "error": "PullRequestOperationError"},
     {"tag": "pullRequests.routing", "payload": {"projectId": "$PROJECT", "repository": "acme/calc", "number": 7}, "sh": "gh-rule err 'api user' 'HTTP 502: Bad Gateway'", "expect": "failure", "error": "PullRequestOperationError"},
     {"tag": "pullRequests.list", "payload": {"state": "open"}, "sh": "gh-rule out 'api user' '{\"message\":\"no login here\"}'", "expect": "failure", "error": "PullRequestUnavailableError", "note": "an account with no login"},
@@ -197,6 +197,6 @@
     {"tag": "pullRequests.filterOptions", "payload": {"kind": "references"}},
     {"tag": "pullRequests.stack", "payload": {"projectId": "$PROJECT", "repository": "acme/calc", "number": 7}},
     {"tag": "pullRequests.summary", "payload": {"projectId": "$PROJECT", "repository": "acme/calc", "number": 7}, "sh": "cp tools/not-executable bin/gh && chmod 644 bin/gh", "expect": "failure", "error": "PullRequestOperationError", "note": "found, but not a program that may be run"},
-    {"tag": "pullRequests.list", "payload": {"state": "open"}, "expect": "failure", "error": "PullRequestOperationError"}
+    {"tag": "pullRequests.list", "payload": {"state": "open", "host": "github.com"}, "expect": "failure", "error": "PullRequestOperationError"}
   ]
 }

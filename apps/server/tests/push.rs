@@ -167,7 +167,7 @@ async fn socket(server: &Server, token: &str) -> Ws {
         .json()
         .await
         .unwrap();
-    let url = format!("ws://127.0.0.1:{}/ws?wsTicket={}", server.port, res["ticket"].as_str().unwrap());
+    let url = format!("ws://127.0.0.1:{}/ws?orchestrationProtocol=2&wsTicket={}", server.port, res["ticket"].as_str().unwrap());
     tokio_tungstenite::connect_async(url.into_client_request().unwrap()).await.unwrap().0
 }
 

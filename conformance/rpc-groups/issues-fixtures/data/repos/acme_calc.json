@@ -1,0 +1,524 @@
+{
+ "viewerPermission": "WRITE",
+ "issues": {
+  "7": {
+   "id": "I_acme_calc_7",
+   "number": 7,
+   "title": "Adding negative numbers fails",
+   "url": "https://github.com/acme/calc/issues/7",
+   "state": "OPEN",
+   "stateReason": null,
+   "createdAt": "2026-10-01T09:00:00Z",
+   "updatedAt": "2026-11-20T10:00:00Z",
+   "closedAt": null,
+   "author": {
+    "login": "ann",
+    "avatarUrl": "https://avatars.example/ann",
+    "name": "Ann"
+   },
+   "assignees": {
+    "pageInfo": {
+     "hasNextPage": false,
+     "endCursor": null
+    },
+    "nodes": [
+     {
+      "login": "octocat",
+      "avatarUrl": "https://avatars.example/octocat",
+      "name": "Octocat"
+     }
+    ]
+   },
+   "labels": {
+    "pageInfo": {
+     "hasNextPage": false,
+     "endCursor": null
+    },
+    "nodes": [
+     {
+      "name": "bug",
+      "color": "d73a4a"
+     }
+    ]
+   },
+   "body": "`add(-1, -2)` returns 3.",
+   "viewerCanUpdate": true,
+   "viewerCanClose": true,
+   "viewerCanReopen": true,
+   "reactionGroups": [
+    {
+     "content": "THUMBS_UP",
+     "viewerHasReacted": true,
+     "reactors": {
+      "totalCount": 2,
+      "nodes": [
+       {
+        "login": "octocat"
+       },
+       {
+        "login": "bob"
+       }
+      ]
+     }
+    },
+    {
+     "content": "ROCKET",
+     "viewerHasReacted": false,
+     "reactors": {
+      "totalCount": 0,
+      "nodes": []
+     }
+    },
+    {
+     "content": "HEART",
+     "viewerHasReacted": false,
+     "reactors": {
+      "totalCount": 14,
+      "nodes": [
+       {
+        "login": "bob"
+       }
+      ]
+     }
+    }
+   ],
+   "comments": {
+    "totalCount": 3,
+    "pageInfo": {
+     "hasPreviousPage": true,
+     "startCursor": "older-1"
+    },
+    "nodes": [
+     {
+      "id": "IC_2",
+      "author": {
+       "login": "octocat",
+       "avatarUrl": null
+      },
+      "body": "I can reproduce this.",
+      "createdAt": "2026-10-02T09:00:00Z",
+      "url": "https://github.com/acme/calc/issues/7#issuecomment-IC_2",
+      "reactionGroups": [
+       {
+        "content": "THUMBS_UP",
+        "viewerHasReacted": false,
+        "reactors": {
+         "totalCount": 1,
+         "nodes": [
+          {
+           "login": "ann"
+          }
+         ]
+        }
+       }
+      ]
+     },
+     {
+      "id": "IC_3",
+      "author": {
+       "login": "ann",
+       "avatarUrl": null
+      },
+      "body": "Thanks!",
+      "createdAt": "2026-10-03T09:00:00Z",
+      "url": "https://github.com/acme/calc/issues/7#issuecomment-IC_3",
+      "reactionGroups": []
+     }
+    ]
+   },
+   "closedByPullRequestsReferences": {
+    "pageInfo": {
+     "hasNextPage": false,
+     "endCursor": null
+    },
+    "nodes": [
+     {
+      "number": 12,
+      "title": "Handle negative numbers",
+      "url": "https://github.com/acme/calc/pull/12",
+      "state": "OPEN",
+      "isDraft": true,
+      "repository": {
+       "nameWithOwner": "acme/calc"
+      }
+     }
+    ]
+   },
+   "timelineItems": {
+    "nodes": [
+     {
+      "__typename": "LabeledEvent",
+      "id": "LE_1",
+      "createdAt": "2026-10-01T09:05:00Z",
+      "actor": {
+       "login": "ann",
+       "avatarUrl": null
+      },
+      "label": {
+       "name": "bug"
+      }
+     },
+     {
+      "__typename": "AssignedEvent",
+      "id": "AE_1",
+      "createdAt": "2026-10-01T09:06:00Z",
+      "actor": {
+       "login": "ann",
+       "avatarUrl": null
+      },
+      "assignee": {
+       "login": "octocat",
+       "name": "The Octocat"
+      }
+     },
+     {
+      "__typename": "RenamedTitleEvent",
+      "id": "RE_1",
+      "createdAt": "2026-10-01T09:07:00Z",
+      "actor": {
+       "login": "ann",
+       "avatarUrl": null
+      },
+      "currentTitle": "Adding negative numbers fails"
+     },
+     {
+      "__typename": "CrossReferencedEvent",
+      "id": "CE_1",
+      "createdAt": "2026-10-04T09:00:00Z",
+      "actor": {
+       "login": "octocat",
+       "avatarUrl": null
+      },
+      "source": {
+       "__typename": "PullRequest",
+       "number": 12,
+       "title": "Handle negative numbers",
+       "url": "https://github.com/acme/calc/pull/12",
+       "state": "OPEN",
+       "isDraft": true,
+       "repository": {
+        "nameWithOwner": "acme/calc"
+       }
+      }
+     },
+     {
+      "__typename": "CrossReferencedEvent",
+      "id": "CE_2",
+      "createdAt": "2026-10-05T09:00:00Z",
+      "actor": {
+       "login": "bob",
+       "avatarUrl": null
+      },
+      "source": {
+       "__typename": "PullRequest",
+       "number": 15,
+       "title": "Document negatives",
+       "url": "https://github.com/acme/docs/pull/15",
+       "state": "MERGED",
+       "isDraft": false,
+       "repository": {
+        "nameWithOwner": "acme/docs"
+       }
+      }
+     },
+     {
+      "__typename": "CrossReferencedEvent",
+      "id": "CE_3",
+      "createdAt": "2026-10-06T09:00:00Z",
+      "actor": null,
+      "source": {
+       "__typename": "Issue",
+       "number": 3,
+       "repository": {
+        "nameWithOwner": "other/lib"
+       }
+      }
+     },
+     {
+      "__typename": "PinnedEvent",
+      "id": "PE_1",
+      "createdAt": "2026-10-07T09:00:00Z"
+     }
+    ]
+   },
+   "mentions": [
+    "octocat"
+   ],
+   "olderComments": {
+    "older-1": {
+     "pageInfo": {
+      "hasPreviousPage": false,
+      "startCursor": null
+     },
+     "nodes": [
+      {
+       "id": "IC_1",
+       "author": {
+        "login": "bob",
+        "avatarUrl": null
+       },
+       "body": "Same here.",
+       "createdAt": "2026-10-01T10:00:00Z",
+       "url": "https://github.com/acme/calc/issues/7#issuecomment-IC_1",
+       "reactionGroups": []
+      }
+     ]
+    }
+   }
+  },
+  "8": {
+   "id": "I_acme_calc_8",
+   "number": 8,
+   "title": "Subtraction is slow",
+   "url": "https://github.com/acme/calc/issues/8",
+   "state": "CLOSED",
+   "stateReason": "COMPLETED",
+   "createdAt": "2026-09-01T09:00:00Z",
+   "updatedAt": "2026-11-22T10:00:00Z",
+   "closedAt": "2026-11-22T10:00:00Z",
+   "author": {
+    "login": "octocat",
+    "avatarUrl": "https://avatars.example/octocat",
+    "name": "Octocat"
+   },
+   "assignees": {
+    "pageInfo": {
+     "hasNextPage": false,
+     "endCursor": null
+    },
+    "nodes": []
+   },
+   "labels": {
+    "pageInfo": {
+     "hasNextPage": false,
+     "endCursor": null
+    },
+    "nodes": [
+     {
+      "name": "performance",
+      "color": "d73a4a"
+     }
+    ]
+   },
+   "body": "",
+   "viewerCanUpdate": true,
+   "viewerCanClose": true,
+   "viewerCanReopen": true,
+   "reactionGroups": [],
+   "comments": {
+    "totalCount": 0,
+    "pageInfo": {
+     "hasPreviousPage": false,
+     "startCursor": null
+    },
+    "nodes": []
+   },
+   "closedByPullRequestsReferences": {
+    "pageInfo": {
+     "hasNextPage": false,
+     "endCursor": null
+    },
+    "nodes": []
+   },
+   "timelineItems": {
+    "nodes": []
+   },
+   "mentions": []
+  },
+  "9": {
+   "id": "I_acme_calc_9",
+   "number": 9,
+   "title": "Add a divide button",
+   "url": "https://github.com/acme/calc/issues/9",
+   "state": "OPEN",
+   "stateReason": null,
+   "createdAt": "2026-11-01T09:00:00Z",
+   "updatedAt": "2026-11-10T10:00:00Z",
+   "closedAt": null,
+   "author": {
+    "login": "bob",
+    "avatarUrl": "https://avatars.example/bob",
+    "name": "Bob"
+   },
+   "assignees": {
+    "pageInfo": {
+     "hasNextPage": false,
+     "endCursor": null
+    },
+    "nodes": []
+   },
+   "labels": {
+    "pageInfo": {
+     "hasNextPage": false,
+     "endCursor": null
+    },
+    "nodes": [
+     {
+      "name": "good first issue",
+      "color": "d73a4a"
+     }
+    ]
+   },
+   "body": "Division would help.",
+   "viewerCanUpdate": true,
+   "viewerCanClose": true,
+   "viewerCanReopen": true,
+   "reactionGroups": [],
+   "comments": {
+    "totalCount": 0,
+    "pageInfo": {
+     "hasPreviousPage": false,
+     "startCursor": null
+    },
+    "nodes": []
+   },
+   "closedByPullRequestsReferences": {
+    "pageInfo": {
+     "hasNextPage": false,
+     "endCursor": null
+    },
+    "nodes": []
+   },
+   "timelineItems": {
+    "nodes": []
+   },
+   "mentions": []
+  },
+  "10": {
+   "id": "I_acme_calc_10",
+   "number": 10,
+   "title": "Old duplicate",
+   "url": "https://github.com/acme/calc/issues/10",
+   "state": "CLOSED",
+   "stateReason": "DUPLICATE",
+   "createdAt": "2026-08-01T09:00:00Z",
+   "updatedAt": "2026-08-02T10:00:00Z",
+   "closedAt": "2026-08-02T10:00:00Z",
+   "author": null,
+   "assignees": {
+    "pageInfo": {
+     "hasNextPage": false,
+     "endCursor": null
+    },
+    "nodes": []
+   },
+   "labels": {
+    "pageInfo": {
+     "hasNextPage": false,
+     "endCursor": null
+    },
+    "nodes": []
+   },
+   "body": "",
+   "viewerCanUpdate": true,
+   "viewerCanClose": true,
+   "viewerCanReopen": true,
+   "reactionGroups": [],
+   "comments": {
+    "totalCount": 0,
+    "pageInfo": {
+     "hasPreviousPage": false,
+     "startCursor": null
+    },
+    "nodes": []
+   },
+   "closedByPullRequestsReferences": {
+    "pageInfo": {
+     "hasNextPage": false,
+     "endCursor": null
+    },
+    "nodes": []
+   },
+   "timelineItems": {
+    "nodes": []
+   },
+   "mentions": []
+  }
+ },
+ "labels": {
+  "pageInfo": {
+   "hasNextPage": false
+  },
+  "nodes": [
+   {
+    "name": "bug",
+    "color": "d73a4a",
+    "description": "Something isn't working"
+   },
+   {
+    "name": "good first issue",
+    "color": "7057ff",
+    "description": null
+   }
+  ]
+ },
+ "assignableUsers": {
+  "pageInfo": {
+   "hasNextPage": true
+  },
+  "nodes": [
+   {
+    "login": "octocat",
+    "avatarUrl": "https://avatars.example/octocat",
+    "name": "The Octocat"
+   },
+   {
+    "login": "ann",
+    "avatarUrl": "https://avatars.example/ann",
+    "name": "Ann"
+   }
+  ]
+ },
+ "templateDirectory": {
+  "__typename": "Tree",
+  "entries": [
+   {
+    "name": "bug_report.md",
+    "object": {
+     "__typename": "Blob",
+     "text": "---\nname: Bug report\n---\n",
+     "isTruncated": false
+    }
+   },
+   {
+    "name": "config.yml",
+    "object": {
+     "__typename": "Blob",
+     "text": "blank_issues_enabled: false\ncontact_links: []\n",
+     "isTruncated": false
+    }
+   },
+   {
+    "name": "feature.yml",
+    "object": {
+     "__typename": "Blob",
+     "text": "name: Feature\ndescription: Ask for one\nbody: []\n",
+     "isTruncated": false
+    }
+   }
+  ]
+ },
+ "issueTemplates": [
+  {
+   "filename": "bug_report.md",
+   "name": "Bug report",
+   "about": "Something does not add up",
+   "title": "[bug] ",
+   "body": "## Steps\n\n1. ",
+   "assignees": {
+    "nodes": [
+     {
+      "login": "octocat"
+     }
+    ]
+   },
+   "labels": {
+    "nodes": [
+     {
+      "name": "bug"
+     }
+    ]
+   }
+  }
+ ]
+}

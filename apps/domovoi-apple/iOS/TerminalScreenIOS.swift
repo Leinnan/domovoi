@@ -85,7 +85,7 @@ struct TerminalScreenIOS: View {
                             Button {
                                 core.update(.terminalScroll(lines: -Int32(screen.scrollbackOffset)))
                             } label: {
-                                Label("\(screen.scrollbackOffset) lines back", systemImage: "arrow.down.to.line")
+                                Label("\(screen.scrollbackOffset) of \(max(screen.scrollbackMax, screen.scrollbackOffset)) lines back", systemImage: "arrow.down.to.line")
                                     .font(TypeRole.meta.weight(.medium))
                                     .padding(.horizontal, Space.m)
                                     .frame(minHeight: Size.chip)

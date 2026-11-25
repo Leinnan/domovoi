@@ -14,6 +14,23 @@ pub enum Failure {
     #[serde(rename = "ServerSettingsError", rename_all = "camelCase")]
     Settings { settings_path: String, operation: SettingsOperation, cause: String },
 
+    /// The managed policy refuses a settings write (`ServerSettingsError` with
+    /// `write-managed-setting` or `use-disallowed-provider`).
+    #[error("{}", managed_message(.operation, .managed_setting.as_deref(), .managed_by.as_deref(), .provider_label.as_deref().or(.provider_instance_id.as_deref())))]
+    #[serde(rename = "ServerSettingsError", rename_all = "camelCase")]
+    Managed {
+        settings_path: String,
+        operation: SettingsOperation,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        managed_setting: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        managed_by: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provider_instance_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provider_label: Option<String>,
+    },
+
     /// The keybindings file could not be read or written (`KeybindingsConfigError`).
     #[error("{config_path}: {detail}")]
     #[serde(rename = "KeybindingsConfigParseError", rename_all = "camelCase")]
@@ -61,13 +78,53 @@ pub enum Failure {
 #[serde(rename_all = "kebab-case")]
 pub enum SettingsOperation {
     WriteFile,
+    /// A write that moves a setting the managed policy locks.
+    WriteManagedSetting,
+    /// A write that turns on a provider the managed policy does not allow.
+    UseDisallowedProvider,
 }
 
 impl std::fmt::Display for SettingsOperation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
             SettingsOperation::WriteFile => "write-file",
+            SettingsOperation::WriteManagedSetting => "write-managed-setting",
+            SettingsOperation::UseDisallowedProvider => "use-disallowed-provider",
         })
+    }
+}
+
+/// `ServerSettingsError.message` for the managed policy's refusals.
+fn managed_message(operation: &SettingsOperation, setting: Option<&str>, by: Option<&str>, provider: Option<&str>) -> String {
+    match operation {
+        SettingsOperation::UseDisallowedProvider => crate::policy::disallowed_provider_message(by, provider.unwrap_or("this")),
+        _ => format!("{} is managed by {} and cannot be changed.", setting.unwrap_or("This setting"), by.unwrap_or("your organization")),
+    }
+}
+
+impl Failure {
+    /// The managed policy's refusal of a write to the settings at `settings_path`.
+    pub fn managed(settings_path: &std::path::Path, refusal: crate::policy::WriteRefusal) -> Self {
+        let managed_by = crate::policy::current().organization().map(str::to_owned);
+        let settings_path = settings_path.to_string_lossy().into_owned();
+        match refusal {
+            crate::policy::WriteRefusal::Locked(path) => Failure::Managed {
+                settings_path,
+                operation: SettingsOperation::WriteManagedSetting,
+                managed_setting: Some(path),
+                managed_by,
+                provider_instance_id: None,
+                provider_label: None,
+            },
+            crate::policy::WriteRefusal::Disallowed { instance_id, label } => Failure::Managed {
+                settings_path,
+                operation: SettingsOperation::UseDisallowedProvider,
+                managed_setting: None,
+                managed_by,
+                provider_instance_id: Some(instance_id),
+                provider_label: Some(label),
+            },
+        }
     }
 }
 
@@ -88,6 +145,17 @@ mod tests {
         assert_eq!(
             json!(Failure::Settings { settings_path: "/u/settings.json".into(), operation: SettingsOperation::WriteFile, cause: "Is a directory (os error 21)".into() }),
             json!({ "_tag": "ServerSettingsError", "settingsPath": "/u/settings.json", "operation": "write-file", "cause": "Is a directory (os error 21)" })
+        );
+        assert_eq!(
+            json!(Failure::Managed {
+                settings_path: "/u/settings.json".into(),
+                operation: SettingsOperation::WriteManagedSetting,
+                managed_setting: Some("enableAgentBrowserAccess".into()),
+                managed_by: Some("Acme".into()),
+                provider_instance_id: None,
+                provider_label: None,
+            }),
+            json!({ "_tag": "ServerSettingsError", "settingsPath": "/u/settings.json", "operation": "write-managed-setting", "managedSetting": "enableAgentBrowserAccess", "managedBy": "Acme" })
         );
         assert_eq!(
             json!(Failure::Keybindings { config_path: "/u/keybindings.json".into(), detail: "keybindings.json must contain an array of rules.".into() }),

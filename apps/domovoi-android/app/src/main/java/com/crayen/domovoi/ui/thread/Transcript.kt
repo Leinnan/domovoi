@@ -84,6 +84,7 @@ import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Share
+import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.SmartToy
 import androidx.compose.material.icons.outlined.StopCircle
 import androidx.compose.material.icons.outlined.Terminal
@@ -94,6 +95,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
+import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -102,6 +104,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.Surface
@@ -156,7 +159,10 @@ import com.crayen.domovoi.app.PendingSendView
 import com.crayen.domovoi.app.QueuedMessageView
 import com.crayen.domovoi.app.ThreadLinkView
 import com.crayen.domovoi.app.ThreadPageView
+import com.crayen.domovoi.app.WorkingActivityView
 import com.crayen.domovoi.ui.common.ArtifactCard
+import com.crayen.domovoi.ui.common.isHtmlPath
+import com.crayen.domovoi.ui.common.LocalCore
 import com.crayen.domovoi.ui.common.MarkdownBlocks
 import com.crayen.domovoi.ui.common.copyText
 import com.crayen.domovoi.ui.common.duration
@@ -176,6 +182,8 @@ class TranscriptActions(
     val openDiff: () -> Unit,
     val openArtifact: (artifactId: String, version: UInt?, codeMode: Boolean) -> Unit = { _, _, _ -> },
     val openWorkspaceArtifact: (path: String) -> Unit = {},
+    /** An HTML page an edit wrote, read from the workspace (`OpenArtifactFile`). */
+    val previewFile: (path: String) -> Unit = {},
 )
 
 /** One line of the transcript: an item, or a turn's steps folded together. */
@@ -219,15 +227,18 @@ fun Transcript(thread: ThreadPageView, retryBlocked: Boolean, actions: Transcrip
         if (atEnd) state.scrollToItem(0) else unseen = true
     }
     LaunchedEffect(atEnd) { if (atEnd) unseen = false }
+    // The step the working row points at, once tapped (again: a new count).
+    var step by remember(thread.id) { mutableStateOf<Pair<String, Int>?>(null) }
+    LaunchedEffect(atEnd) { if (atEnd) step = null }
     // Find: bring the active match into view.
-    val active = thread.find?.activeItemId ?: artifactJump
+    val active = thread.find?.activeItemId ?: artifactJump ?: step?.first
     suspend fun scrollTo(id: String?) {
         if (id == null) return
         val index = state.layoutInfo.totalItemsCount
         val target = lines.indexOfFirst { l -> l is Line.Item && l.item.id == id || l is Line.Group && l.items.any { it.id == id } }
         if (target >= 0 && index > 0) state.animateScrollToItem(tailCount(thread) + (lines.size - 1 - target))
     }
-    LaunchedEffect(active) { scrollTo(active) }
+    LaunchedEffect(active, step) { scrollTo(active) }
 
     Box(modifier) {
         LazyColumn(
@@ -254,7 +265,11 @@ fun Transcript(thread: ThreadPageView, retryBlocked: Boolean, actions: Transcrip
                 }
             }
             if (thread.working) {
-                item("working") { WorkingRow(thread.status, thread.workingSinceMs, thread.background.ifEmpty { liveSummary(lines) }) }
+                item("working") {
+                    WorkingRow(thread.status, thread.workingSinceMs, thread.workingActivity, thread.background.ifEmpty { liveSummary(lines) }) { id ->
+                        step = id to (step?.second ?: 0) + 1
+                    }
+                }
             } else if (thread.status == "interrupted" && thread.pendingSends.isEmpty() && thread.items.isNotEmpty()) {
                 item("stopped") { StoppedRow(retryBlocked) { actions.send(Event.Retry) } }
             }
@@ -747,6 +762,26 @@ private fun ToolRow(item: ItemView, actions: TranscriptActions) {
                     ) {
                         Text("Preview", style = MaterialTheme.typography.labelSmall)
                     }
+                } else if (item.kind == "file_change" && !item.streaming) {
+                    // Web pages the edit wrote, drawn from the workspace.
+                    val pages = item.artifactPaths.filter(::isHtmlPath)
+                    if (pages.isNotEmpty()) {
+                        var choosing by remember { mutableStateOf(false) }
+                        Box {
+                            TextButton(
+                                onClick = { if (pages.size == 1) actions.previewFile(pages.first()) else choosing = true },
+                                contentPadding = PaddingValues(horizontal = Space.s, vertical = 0.dp),
+                                modifier = Modifier.height(28.dp),
+                            ) {
+                                Text("Open preview", style = MaterialTheme.typography.labelSmall)
+                            }
+                            DropdownMenu(expanded = choosing, onDismissRequest = { choosing = false }) {
+                                pages.forEach { path ->
+                                    DropdownMenuItem(text = { Text(path.substringAfterLast('/'), fontFamily = Mono) }, onClick = { choosing = false; actions.previewFile(path) })
+                                }
+                            }
+                        }
+                    }
                 }
                 if (item.badge.isNotEmpty()) {
                     Text(
@@ -754,6 +789,10 @@ private fun ToolRow(item: ItemView, actions: TranscriptActions) {
                         color = if (item.badgeTone == "failed") MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 } else if (item.status == "interrupted") StatusDot(item.status)
+                // A failed exit is in the badge ("exit 101"); a clean one gets a quiet check.
+                if (item.kind == "command" && item.status != "running" && item.exitCode == 0L) {
+                    Icon(Icons.Outlined.Check, "Exited with code 0", tint = tints.success, modifier = Modifier.size(14.dp))
+                }
                 if (item.status == "running" || item.status == "waiting") StatusDot(item.status)
                 if (item.expandable) Icon(Icons.Outlined.ChevronRight, null, tint = MaterialTheme.colorScheme.outline, modifier = Modifier.size(16.dp).rotate(if (open) 90f else 0f))
             }
@@ -1194,24 +1233,37 @@ private fun QueuedSection(queued: List<QueuedMessageView>, held: Boolean, action
     }
 }
 
-/** "Working · 42 s" while a turn runs, with what the agent is on. */
+/** "Running a command · 42 s" while a turn runs, with what the agent is on;
+ *  "Show step" brings the step under way into view. */
 @Composable
-private fun WorkingRow(status: String, since: Long, doing: String?) {
-    Row(Modifier.padding(vertical = Space.xs), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Space.s)) {
+private fun WorkingRow(status: String, since: Long, activity: WorkingActivityView?, doing: String?, showStep: (String) -> Unit) {
+    Row(Modifier.fillMaxWidth().padding(vertical = Space.xs), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Space.s)) {
         if (status == "approval") {
             Icon(Icons.Filled.PanTool, null, tint = LocalTints.current.caution, modifier = Modifier.size(18.dp))
             Text("Waiting for you", color = MaterialTheme.colorScheme.onSurfaceVariant)
         } else {
             val pulse = rememberInfiniteTransition(label = "work").animateFloat(0.4f, 1f, infiniteRepeatable(tween(900), RepeatMode.Reverse), label = "a")
             Icon(Icons.Outlined.AutoAwesome, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp).alpha(pulse.value))
-            Column(verticalArrangement = Arrangement.spacedBy(Space.xxs)) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Space.xxs)) {
                 var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
                 LaunchedEffect(since) { while (true) { now = System.currentTimeMillis(); delay(1000) } }
+                val title = when (activity?.kind) {
+                    "starting" -> "Starting"
+                    "assistant" -> "Writing a reply"
+                    "command" -> "Running a command"
+                    "file_change" -> "Editing files"
+                    "tool" -> "Using a tool"
+                    "reasoning" -> "Thinking"
+                    else -> "Working"
+                }
                 Text(
-                    if (since > 0) "Working · ${duration(maxOf(0, now - since))}" else "Working…",
+                    if (since > 0) "$title · ${duration(maxOf(0, now - since))}" else "$title…",
                     style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 doing?.let { Text(it, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.outline, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+            }
+            activity?.stepItemId?.let { id ->
+                TextButton(onClick = { showStep(id) }) { Text("Show step") }
             }
         }
     }
@@ -1254,8 +1306,29 @@ private fun MessageImages(images: List<ImageView>, size: Dp = 96.dp) {
         }
     }
     shown?.let { image ->
+        val context = LocalContext.current
+        val core = LocalCore.current
+        val scope = rememberCoroutineScope()
+        // What saving or sharing came to, in the app's toast.
+        fun tell(kind: String, message: String) { core?.update(Event.ShowNotice(kind, message)) }
         ModalBottomSheet(onDismissRequest = { shown = null }) {
             AsyncImage(model = image.url, contentDescription = image.name, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxWidth().padding(Space.l))
+            Row(Modifier.fillMaxWidth().padding(horizontal = Space.l), horizontalArrangement = Arrangement.spacedBy(Space.s, Alignment.End)) {
+                OutlinedButton(onClick = {
+                    scope.launch {
+                        Images.share(context, image.url, image.name).onFailure { tell("error", "Couldn't share the image: ${it.message ?: "it didn't download."}") }
+                    }
+                }) { Icon(Icons.Outlined.Share, null, modifier = Modifier.size(18.dp)); Spacer(Modifier.width(Space.xs)); Text("Share") }
+                FilledTonalButton(onClick = {
+                    scope.launch {
+                        Images.save(context, image.url, image.name).fold(
+                            // Closed, so the toast that says where it went shows.
+                            onSuccess = { shown = null; tell("success", it) },
+                            onFailure = { tell("error", "Couldn't save the image: ${it.message ?: "it didn't download."}") },
+                        )
+                    }
+                }) { Icon(Icons.Outlined.Download, null, modifier = Modifier.size(18.dp)); Spacer(Modifier.width(Space.xs)); Text("Save") }
+            }
             Spacer(Modifier.height(Space.l))
         }
     }
@@ -1269,6 +1342,34 @@ private fun SelectTextSheet(text: String, onDismiss: () -> Unit) {
             Text(text, style = MaterialTheme.typography.bodyLarge)
         }
         Spacer(Modifier.height(Space.xl))
+    }
+}
+
+/** A diff file's name (`old → new` when renamed), how it changed when not
+ *  just edited (Added, Deleted, Renamed, Binary), and its counts. */
+@Composable
+fun DiffFileHeader(file: DiffFileView, modifier: Modifier = Modifier) {
+    val tints = LocalTints.current
+    val change = when (file.change) {
+        "added" -> "Added" to tints.success
+        "deleted" -> "Deleted" to MaterialTheme.colorScheme.error
+        "renamed" -> "Renamed" to MaterialTheme.colorScheme.tertiary
+        "binary" -> "Binary" to MaterialTheme.colorScheme.onSurfaceVariant
+        else -> null
+    }
+    val old = file.oldPath?.takeIf { it != file.path }
+    Row(modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Space.s)) {
+        Text(
+            if (old != null) "$old → ${file.path}" else file.path,
+            fontFamily = Mono, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.StartEllipsis, modifier = Modifier.weight(1f),
+        )
+        change?.let { (label, color) ->
+            Surface(color = color.copy(alpha = 0.14f), shape = RoundedCornerShape(6.dp)) {
+                Text(label, color = color, style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp))
+            }
+        }
+        Text("+${file.additions}", color = tints.success, style = MaterialTheme.typography.labelMedium)
+        Text("−${file.deletions}", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelMedium)
     }
 }
 

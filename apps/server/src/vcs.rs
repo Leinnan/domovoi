@@ -154,6 +154,8 @@ fn provider_kind(host: &str) -> Option<(&'static str, &'static str)> {
         "github.com" => Some(("github", "GitHub")),
         "gitlab.com" => Some(("gitlab", "GitLab")),
         "bitbucket.org" => Some(("bitbucket", "Bitbucket")),
+        // t3code's GitLab `recognizeRemote`: a host with a `gitlab` label.
+        _ if crate::glab::recognizes_host(host) => Some(("gitlab", "GitLab Self-Hosted")),
         _ => None,
     }
 }
@@ -229,14 +231,20 @@ pub async fn local_status(cwd: &str) -> VcsStatusLocal {
     let has_working_tree_changes = !list.is_empty();
     let files: Vec<VcsWorkingTreeFile> =
         list.into_iter().map(|(path, (insertions, deletions))| VcsWorkingTreeFile { path, insertions, deletions }).collect();
-    let provider = remote.as_ref().and_then(|r| parse_remote(&r.1)).and_then(|(h, _, _)| provider_kind(&h));
+    let remote_host = remote.as_ref().and_then(|r| parse_remote(&r.1)).map(|(h, _, _)| h);
+    let provider = remote_host.as_deref().and_then(provider_kind);
 
     VcsStatusLocal {
         is_repo: true,
         source_control_provider: provider.map(|(kind, label)| SourceControlProviderInfo {
             kind: kind.to_owned(),
             name: label.to_owned(),
-            base_url: format!("https://{}", match kind { "github" => "github.com", "gitlab" => "gitlab.com", _ => "bitbucket.org" }),
+            base_url: format!("https://{}", match kind {
+                "github" => "github.com",
+                "gitlab" if label != "GitLab" => remote_host.as_deref().unwrap_or("gitlab.com"),
+                "gitlab" => "gitlab.com",
+                _ => "bitbucket.org",
+            }),
         }),
         has_primary_remote: remote.is_some(),
         is_default_ref: match (&ref_name, &default) {

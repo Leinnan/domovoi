@@ -661,6 +661,8 @@ pub enum Answer {
     RejectedSignature,
     Disabled,
     RateLimited(&'static str),
+    /// The managed policy switches webhook tasks off.
+    BlockedByPolicy,
     Error,
 }
 
@@ -673,6 +675,7 @@ impl Answer {
             Answer::NotFound => error(404, "hook_not_found", "not_found"),
             Answer::RejectedSignature => error(401, "invalid_signature", "rejected_signature"),
             Answer::Disabled => error(409, "hook_disabled", "disabled"),
+            Answer::BlockedByPolicy => error(403, "blocked_by_policy", "blocked_by_policy"),
             Answer::RateLimited(outcome) => error(429, outcome, outcome),
             Answer::Error => error(500, "internal_error", "error"),
         }
@@ -739,6 +742,10 @@ fn frame_id() -> String {
 
 /// `triggerWebhook`: what a request to `/api/hooks/<task_id>/<token>` does.
 pub async fn trigger(service: Arc<ScheduledTasks>, task_id: &str, token: &str, request: WebhookRequest) -> Answer {
+    // Refused before any lookup or log, so a blocked hook neither runs nor records a delivery.
+    if crate::policy::current().webhook_block().is_some() {
+        return Answer::BlockedByPolicy;
+    }
     let store = service.store().clone();
     let Ok(Some((Some(stored_token), secret))) = crate::scheduled_tasks::webhook_credentials(&store, task_id) else { return Answer::NotFound };
     // A wrong token answers as an unknown hook does: the URL tells nobody which hooks exist.
@@ -974,6 +981,11 @@ pub fn run_closed_windows(service: &Arc<ScheduledTasks>) {
                 done(&store);
                 return;
             };
+            if let Some(block) = &task.blocked_by_policy {
+                set_outcome(&store, &delivery_id, "dispatch_failed", Some(block));
+                done(&store);
+                return;
+            }
             if !task.enabled {
                 set_outcome(&store, &delivery_id, "disabled", None);
                 done(&store);

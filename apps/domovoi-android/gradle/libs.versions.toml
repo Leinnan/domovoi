@@ -16,6 +16,7 @@ coroutines = "1.10.2"
 junit = "4.13.2"
 coil = "3.6.3"
 orgJson = "20250517"
+unifiedpush = "3.3.6"
 
 [libraries]
 androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "coreKtx" }
@@ -49,6 +50,7 @@ junit = { module = "junit:junit", version.ref = "junit" }
 coil-compose = { module = "io.coil-kt.coil3:coil-compose", version.ref = "coil" }
 coil-okhttp = { module = "io.coil-kt.coil3:coil-network-okhttp", version.ref = "coil" }
 org-json = { module = "org.json:json", version.ref = "orgJson" }
+unifiedpush-connector = { module = "org.unifiedpush.android:connector", version.ref = "unifiedpush" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

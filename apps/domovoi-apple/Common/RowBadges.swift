@@ -1,12 +1,16 @@
 import App
 import SwiftUI
 
-/// A thread row's marks: a plan waiting to be carried out, and its pull
-/// request (`#12`) in the colour of its state.
+/// A thread row's marks: a plan waiting to be carried out, its own
+/// worktree, and its pull request (`#12`) in the colour of its state.
 struct ThreadRowBadges: View {
     let thread: ThreadRowView
 
     var body: some View {
+        if thread.inWorktree {
+            Image(systemName: "square.stack.3d.up")
+                .help("In its own worktree")
+        }
         if thread.planReady {
             Image(systemName: "list.bullet.clipboard")
                 .foregroundStyle(Tint.plan)
@@ -47,7 +51,7 @@ enum PullRequestState {
 
 extension ThreadRowView {
     /// A run in plan mode ("Planning 6m").
-    var isPlanning: Bool { planMode && status == "working" }
+    var isPlanning: Bool { self.planMode && status == "working" }
 
     /// The colour of the row's status or age: plan, caution, danger, or quiet.
     var statusTint: Color {
@@ -59,7 +63,16 @@ extension ThreadRowView {
     /// The row's marks for VoiceOver ("pull request #12 merged").
     var spokenBadges: String {
         [planReady && statusLabel != "Plan ready" ? "Plan ready" : "",
+         inWorktree ? "in its own worktree" : "",
          pullRequest.isEmpty ? "" : "pull request \(pullRequest)\(pullRequestState.isEmpty ? "" : " \(pullRequestState)")"]
             .filter { !$0.isEmpty }.joined(separator: ", ")
+    }
+}
+
+extension View {
+    /// A run in plan mode: its status ("Planning 6m") as a plan-coloured pill.
+    @ViewBuilder
+    func planningPill(_ thread: ThreadRowView) -> some View {
+        if thread.isPlanning { badgeCapsule(tint: Tint.plan) } else { self }
     }
 }

@@ -3,8 +3,9 @@
 The acceptance test is t3code's own web client, unmodified, talking to `domovoi-server`,
 with every WebSocket message checked against t3code's Effect schemas.
 
-1. Check out t3code (`pingdotgg/t3code@f313d0a`) under `.reference/t3code` and run
-   `pnpm install` there (Node 26).
+1. Check out t3code (`pingdotgg/t3code` tag `v0.1.11`, commit `59651c1761`) under
+   `.reference/t3code` and run `pnpm install --frozen-lockfile` there (Node 26).
+   Until 2026-11-24 the pin was `f313d0a`; see "Re-pin to t3code v0.1.11" below for what changed.
 2. Start the Rust server with a throwaway home:
 
    ```sh
@@ -1144,9 +1145,12 @@ Android unit tests pass.
     worktree), `task_status`, `task_cancel`, `schedule_task`,
     `t3_project_info`. When a delegated task's work settles, the thread that
     delegated it gets a system message with its outcome and last reply.
-  - Since then (see "Agent tools and instructions" below): 27 tools, with
-    t3code's names and inputs. Not done: t3code's preview, device, HTML,
-    attachment, PR-link, environment-link and secret toolkits.
+  - Since then (see "Agent tools and instructions", "Secret requests, pull
+    request links and other agent toolkits" and "Issues" below): 50 tools,
+    with t3code's names and inputs. Not done: t3code's preview,
+    preview-controls, device, theme, project (list/create/update/delete/clone)
+    and environment-link toolkits, `html_preview`, and the pull request
+    toolkit's guides, create/update/review/merge and CI tools.
   - Verified: `provider_turns.rs` reads the endpoint and token from a
     scripted Claude's arguments, calls the tools over HTTP (refused without
     a token and outside the project), delegates a task that runs in a child
@@ -1166,8 +1170,44 @@ Android unit tests pass.
   runtime mode as t3code sets them. A message during a turn steers it;
   interrupt is `/interrupt`. The provider appears only when OpenCode is
   installed, with the models it can run (`providerID/modelID`).
-  - Not done: OpenCode forms (questions are cancelled so the turn doesn't
-    hang), native fork and rollback, subagents, and usage limits.
+  - Forms (the `question` tool) are `user_input` requests: answers go back to
+    `/form/{id}/reply` (a multiselect's values, other fields' joined), a
+    dismissal cancels the form (with a note to go on when a subagent asked),
+    and a form Domovoi can't show is cancelled with a note to ask in chat. A
+    declined permission is `reject` with a message and a steer note, so the
+    agent goes on; cancel stops it.
+  - Each prompt carries its own message id (`msg_t3_turn_<session>:<attempt>`,
+    t3code `turnPromptId`), the provider turn's native ref. OpenCode forks
+    natively: a forked thread's first turn calls `/fork` with `before` the
+    source's next run's prompt (none at the latest), sets its rules and moves
+    it to the thread's folder. A rollback stages and commits a revert to
+    before the first undone run's prompt (`files: false`; a failed one is
+    cleared).
+  - A `subagent` tool call is child work (`subagents.rs`): its child session
+    (`session.created` with `parentID`, named by the call's
+    `metadata.sessionID`) shows its text and tools in the child thread, its
+    approvals and questions open in the parent's turn and are answered to the
+    child session, and its answer is the result. `subagent.stop` interrupts
+    the child session. A background subagent keeps the turn open until its
+    inbox report and OpenCode's wake.
+  - Workspace usage limits (`/api/experimental/usage/limits`: Go's session,
+    weekly and monthly meters and Console spend limits, t3code
+    `readServerUsageLimits`) are read with the provider's probe and the
+    periodic refresh; a `provider.rate-limit` (or non-402 `provider.quota`)
+    failure fails as `usage_limit`, resetting with the used-up window.
+  - Not done: steered prompts are not marked (forks and rollbacks cut at turn
+    boundaries); a background report after its turn ended goes unrecorded;
+    nested subagent sessions show in the top subagent's thread; "allow for
+    session" is still OpenCode's `always`.
+  - Verified (scripted): `provider_turns.rs` `a_scripted_opencode_turn_records_every_kind_of_item`
+    (with the MCP server, rules, instructions, prompt id and the rollback's
+    revert), `an_opencode_fork_continues_a_copy_of_the_session_cut_at_the_run`,
+    `an_opencode_subagent_works_in_its_child_thread_and_can_be_stopped`,
+    `opencode_reports_workspace_limits_and_limited_turns`,
+    `opencode_questions_reply_retry_and_cancel`; 10,563 frames pass
+    `wire-check.ts`. The MCP, instruction, fork, revert and subagent calls are
+    checked against t3code's v2 driver and `@opencode/protocol` 2.0.28, not
+    live.
   - Verified live against `opencode serve` 2.1.3 with a free local Ollama
     model: `DOMOVOI_OPENCODE_BINARY=… DOMOVOI_LIVE_OPENCODE_MODEL=ollama/qwen3.5:4b
     cargo test -p domovoi-server --test provider_turns a_live_opencode` lists the
@@ -1302,7 +1342,7 @@ What the live runs found:
 
 ## Agent tools and instructions
 
-- `apps/server/src/mcp/` serves 27 tools: threads (`t3_thread_list`,
+- `apps/server/src/mcp/` serves 50 tools (the newer ones in the sections below): threads (`t3_thread_list`,
   `_read` with an `activity` view, `_search`, `_send` with modes and
   `freshContext`, `_wait` for a run, `_launch`, `_configure`, `_interrupt`,
   `_update`, `_organize`, `_transfer`, `t3_queue`, `t3_pending_request`),
@@ -1321,9 +1361,14 @@ What the live runs found:
 - `agent_instructions.rs`: two sections (each under Codex's 4,000 bytes,
   naming only tools the server has, which a unit test checks) go to Claude as
   `--append-system-prompt`, to Codex as `turn/start` `additionalContext`, and
-  to Pi through its extension's system prompt. Not done: OpenCode gets neither
-  the tools nor the instructions (Domovoi drives OpenCode's v2 API, whose MCP
-  and system-prompt calls are unverified).
+  to Pi through its extension's system prompt, and to OpenCode as the
+  session's `t3-code` instruction entry
+  (`PUT /api/experimental/session/{id}/instructions/entries/t3-code`). OpenCode
+  gets the tools as a remote MCP server added to the location of the thread's
+  folder (`PUT /api/experimental/mcp/t3-code-<thread>`, the session's bearer
+  token; t3code `t3McpServerName`), with the session's rules denying
+  `t3-code-*` but its own `t3-code-<thread>_*`; a thread whose server
+  OpenCode refused gets neither.
 - Verified: `provider_turns.rs` `agents_organize_threads_schedule_and_hand_off_to_a_worktree`
   (every new tool over HTTP, as the scripted Claude's session) and
   `a_handoff_in_the_first_turn_takes_the_conversation_along` (fails without
@@ -1371,7 +1416,7 @@ What the live runs found:
 - Limits are read before a turn reports them, and kept fresh:
   - Claude: `get_usage` when a session starts and after each turn. With no session, the probe asks a Claude Code of its own, started with no prompt, settings, MCP servers or saved session; it costs nothing.
   - Codex: `account/rateLimits/read` when the app-server starts, and from the model-discovery app-server.
-  - Antigravity: `RetrieveUserQuotaSummary` from a running agent's own language server. Its HTTP port is named in `<acp>/log/acp-server-<time>-<pid>.log`, so it works with a keychain sign-in. `acp_token.json` is still read for older runtimes.
+  - Antigravity: `RetrieveUserQuotaSummary` from a running agent's own language server. Its HTTP port is named in `<acp>/log/acp-server-<time>-<pid>.log`, so it works with a keychain sign-in. Domovoi never reads the account's Google credentials (an older runtime's `acp_token.json` included) and never calls a Google service itself; with no agent running the last reading stays. The agent is asked at most once a minute after a turn, and once every 5 minutes otherwise.
   - Every minute while a client watches the provider list, accounts whose limits are older than 5 minutes are read again.
   - Limits are kept in `userdata/provider-usage-limits.json` across restarts, and cleared on sign-out.
   - Claude stream events below a warning threshold carry their use only in `unifiedWindows`, and are read from there.
@@ -1390,7 +1435,7 @@ What the live runs found:
   instance of driver `acpRegistry` (t3code's) whose config names a local
   command (`source: "local"`, `commandPath`, `commandArgs`, and the
   instance's `environment`) or a registry agent (`agentId`). One process per
-  thread: `initialize` (protocol 1; no client file system or terminal),
+  thread: `initialize` (protocol 1; client capabilities per flavour, below),
   `session/new` in the thread's folder (`authenticate` with the instance's
   `authMethodId`, or the agent's first agent-side method, when it needs
   signing in), or `session/load` / `session/resume` of the thread's session
@@ -1405,8 +1450,9 @@ What the live runs found:
   is a mode whose id ends in `plan` or `architect`, and the previous mode
   comes back after. Domovoi's MCP tools go as an HTTP server when the agent
   takes one, else through `domovoi-server acp-mcp-bridge` (stdio); the first
-  prompt of a session carries the instructions about them. No steering
-  (ACP has none): a message sent while a turn runs waits for it. A
+  prompt of a session carries the instructions about them. A message sent
+  while a turn runs waits for it (t3code restarts the turn instead), except
+  for Grok and Kiro, which take it natively (below). A
   rollback restores the checkpoint and ends the agent's session: ACP can't
   truncate one, so the next turn starts a new session (t3code's
   `rollbackThread`). Sessions report the capabilities t3code's ACP adapter
@@ -1434,10 +1480,39 @@ What the live runs found:
   command, which instances of `source: "registry"` start.
   `uninstallAcpRegistryManagedBinary` is refused while an instance uses the
   agent. The agent's own sessions, model providers and sign-out are answered
-  with t3code's typed `*_unsupported` reasons; `acceptAcpRegistryUrlAuth`
-  accepts nothing (no agent asks for URL authentication). Grok and Kiro run
-  as the registry's `grok-build` and `kiro` agents (t3code's own flavours of
-  them are not ported).
+  with t3code's typed `*_unsupported` reasons.
+- `initialize` offers what t3code offers per flavour: registry agents get URL
+  sign-ins (`elicitation.url`): shown on the instance's entry as `auth.action`
+  for up to 10 minutes and accepted with `server.acceptAcpRegistryUrlAuth`,
+  otherwise declined. Devin alone also gets the client's terminals
+  (`terminal/*`, `adapters/acp_terminals.rs`): child processes with bounded
+  output (t3code's limits), refused unless the runtime mode runs commands or a
+  command was approved in the turn or for the session, and ended with the
+  session. Antigravity reads files of the thread's folder. No agent is offered
+  `fs/write_text_file` (t3code offers it to none) or elicitation forms.
+  Approvals follow t3code's `acpPermissionDisposition` and each flavour's
+  adjustment of it.
+- **Grok, Kiro, fx** (t3code's ACP drivers `grok`, `kiro`, `fx`) run in
+  `acp_cli/`. The built-in instance is listed when its CLI is found and is off
+  until settings turn it on. The probe runs `--version` under a 10 s limit,
+  then each CLI's own sign-in and model checks, never opening a session. Grok:
+  models and reasoning levels from `initialize`, `session/set_model` with the
+  level, `_x.ai/interject` steering, question forms, plan exit as a proposed
+  plan. Kiro: agent, model, effort and autopilot as config options, one-time
+  approvals only, `_session/steer` steering without the model's steering note,
+  its cloud-config call left out. fx: backend-qualified models, the session
+  mode written on the first turn, default effort `medium`. Not done: Cursor
+  (t3code drives the Node `@cursor/sdk`) and Muse (its own protocol) are not
+  ACP and are not run; Kiro fork, compaction and child threads; Grok
+  subagents, background tasks, skills and usage limits; fx `subProviders`;
+  Antigravity steering; version advisories and installs for the three CLIs;
+  a terminal's kill is SIGKILL at once (t3code: SIGTERM, then 5 s).
+- Verified: `provider_turns.rs` `a_grok_agent_runs_turns`,
+  `a_kiro_agent_runs_turns`, `an_fx_agent_runs_turns` and
+  `a_registry_agent_uses_the_clients_terminals_and_asks_for_a_url_sign_in`
+  (a scripted stand-in per CLI; a terminal refused before approval, then
+  opened, waited for, read, embedded and released; a URL sign-in shown and
+  accepted): 1798 frames pass `wire-check.ts`.
 - Verified: unit tests for the search (what runs here, ids, icons) and a
   binary install with its checksum (and a wrong one refused); the
   `rpc-calls` and `admin-server` cases search a fixture registry
@@ -1497,10 +1572,13 @@ What the live runs found:
   `_meta.antigravity.tier`, e.g. "Google AI Pro") is its label. The account
   (signed in or not, models, commands) is kept in the profile across
   restarts; the probe never starts the agent.
-- Limits, where the profile holds the sign-in (`acp_token.json`; with the
-  keychain it doesn't, and limits say so): the saved refresh token, Google's token and user info,
-  then Cloud Code's quota summary (Gemini and shared Claude & GPT, 5-hour
-  and weekly), read in the background. Usage history: the conversation
+- Limits: only through a running agent's own language server
+  (`RetrieveUserQuotaSummary`: Gemini and shared Claude & GPT, 5-hour and
+  weekly), read in the background. A sign-in saved in the profile
+  (`acp_token.json`) is never read, and Domovoi sends nothing to Google
+  itself: using Antigravity's sign-in from other software is against its
+  terms. The agent isn't told to save its sign-in in a file
+  (`AGY_ACP_FORCE_FILE_STORAGE` is only removed from what it inherits). Usage history: the conversation
   databases of the user's Antigravity apps and of the profiles. Skills:
   `SKILL.md` folders of `~/.gemini/config/skills`,
   `~/.gemini/antigravity-cli/skills` and a project's `.gemini/skills`,
@@ -1558,3 +1636,382 @@ What the live runs found:
   the Scheduled tab and the editor (`13-scheduled-editor`). Not driven on a
   device or emulator by hand.
 
+
+## Re-pin to t3code v0.1.11
+
+- The reference checkout moved from `f313d0a` (2026-11-13) to the `v0.1.11` release
+  (`59651c1761`, 2026-11-20). `conformance/t3code-pin` holds the pin; `just reference`
+  checks it out and installs its packages, and CI reads the same file.
+- What changed in the contract (`conformance/rpc-inventory.ts` before and after, and
+  `git diff f313d0a v0.1.11 -- packages/contracts`): 15 new methods and none removed —
+  `issues.list|detail|comments|templates|candidates|create|comment|update|setState|react|linkedThreads`,
+  `issueTrackers.list|connect|bindProject` and `server.getSettings`; two new commands,
+  `thread.issue.link` and `thread.issue.unlink`, with `issues` on the thread and its
+  shell and the `thread.issue-synced` event; five new settings
+  (`requireConnectDeviceApproval`, `enablePreviewTunnel`, `defaultAppearance`,
+  `defaultAppearanceSetAt`, `usageHistoryRetentionDays`); `server.updateSettings` now takes
+  `ClientServerSettingsPatch`, which leaves out the theme defaults; and optional fields
+  elsewhere (`ServerConfig.hostname`/`serverTime`, provider `subProviders`, run and turn
+  capabilities, `thread.visit-recorded`), which older servers may leave out.
+- Done: the new settings in `ServerSettings` and the bundled defaults
+  (`gen-settings-defaults.ts`), the permission table (`rpc-scopes.ts`, 235 methods),
+  `server.getSettings`, the theme keys dropped from a client's patch, the issue links on
+  threads (link once per tracker-level key, unlink by key, as t3code's orchestrator), and
+  the issue methods registered (see "Issues").
+- Verified: with Node 26 (`DOMOVOI_NODE`; Node 22 skips the schema checks without failing),
+  `cargo test -p domovoi-server -p domovoi-model -p domovoi-contracts -p effect-rpc` passes,
+  `every_listed_rpc_answers_with_its_expected_kind` decodes 644 messages of 226 methods with
+  v0.1.11's schemas, all 46 RPC groups (`just rpc-groups`) pass with their schema checks, and
+  both golden sessions still decode (`wire-check.ts`). Not done: a new recording of the
+  TypeScript server at v0.1.11 (the golden sessions are still the f313d0a ones), and the
+  manual acceptance run with the v0.1.11 web client.
+
+## Operations: `/health`, `/ready`, compression, protocol check, `doctor`, provider CLI updates
+
+- `/health` answers 200 `{"status":"ok"}` whenever the process serves HTTP;
+  `/ready` answers 200 `{"status":"ready"}` once the database answers and
+  startup recovery has settled the runs a stop left open, and 503
+  (`recovering` or `database_unavailable`) before that. Both are
+  unauthenticated and Domovoi's own (t3code has neither), for systemd and
+  monitoring; over iroh an unpaired peer still gets 401.
+- HTTP responses are gzip or brotli compressed when the client sends
+  `Accept-Encoding` (through iroh too), except the RPC socket, webhook URLs,
+  images other than SVG, event streams and already-compressed media.
+- As t3code's `ws.ts`, `/ws` refuses a URL without `orchestrationProtocol=2`
+  with HTTP 426 `orchestration_protocol_incompatible`, before any credential is
+  checked. The core and t3code 0.1.11 send it.
+- `domovoi-server doctor [--json]` checks a home folder without changing it:
+  the folder, database integrity, provider CLIs (`--version`, 10 s each), git,
+  git-lfs, gh and its sign-in, the iroh key and remote setting, autostart and
+  the systemd service, and the port; a failed check makes the exit code
+  nonzero. (t3code's `t3 doctor` is a database tool; this one differs.)
+- `server.updateProvider` updates the built-in Claude, Codex, OpenCode and pi
+  CLIs as t3code's maintenance runner does (`provider_update.rs`): npm global,
+  Homebrew or the CLI's own updater, chosen by where the CLI is installed,
+  with sampled progress in `updateState` on every client's provider list, one
+  update per installation, and the provider probed again afterwards.
+- Not done: managed Codex installation (`provider.install.*` for managed setup
+  mode still refuses); latest-version lookups and version advisories;
+  `targetVersion` (refused: no model manifest); draining running sessions
+  before an update; bun, pnpm, yarn, Volta and mise updaters; Windows
+  installers; the `x-t3-orchestration-protocol` header on HTTP snapshot
+  routes; relay dialling and database compaction in `doctor`.
+- Verified: `apps/server/tests/ops.rs` (health and ready; gzip and brotli
+  decoded and compared; the 426 cases; `doctor --json` against a temp home with
+  stand-in tools and against a running server; `updateProvider` with a fake
+  npm, its streamed progress, "already running", failure and refusals);
+  `remote_access` (gzip through the iroh bridge); RPC group
+  `config-provider-update` with the schema check; unit tests in `doctor.rs` and
+  `provider_update.rs`.
+
+## Secret requests, pull request links and other agent toolkits
+
+- `request_secret` shows a secret card (`secret_request.record`, server-only:
+  clients' `orchestration.dispatchCommand` refuses it) and waits for
+  `secrets.answerRequest`, which stores the value owner-only under
+  `<userdata>/secret-requests/` behind a one-use HMAC `secret-ref:`, then marks
+  the card saved or declined. Events, projections and tool results carry only
+  the status, the ref, or (`delivery: "file"`) the path of an owner-only file;
+  values and files go after 24 hours. A webhook `schedule_task` spends a
+  `signature.secretRef`. The card closes as cancelled on timeout, when its run
+  ends or restarts, or when the call goes away. Not done: secret providers
+  (`reference` answers fail with `reference_unreadable`); Domovoi's native
+  clients show the card without an answer field (the t3code web client
+  answers it).
+- `thread.pull-request.link` / `unlink` / `watch` follow t3code's
+  `Orchestrator.ts`: one link per lowercased host/repository/number, stack
+  members unlinked to `stack-dismissed` tombstones, watches that carry over
+  the last watch's news, `until: "merged"`, `checksPending`, and refusals for
+  settled, archived and subagent threads. The pull request tools
+  (`link_pull_request(s)`, `unlink_pull_request(s)`,
+  `list_thread_pull_requests`, `watch_pull_request`, `unwatch_pull_request`,
+  `pull_request_read`) read summary and checks through `rpc/source_control`
+  (`gh`). Not done: no watcher polls hosts or wakes threads; no derived stacks;
+  no guides, create, update, review, merge or CI tools.
+- Attachments (`t3_attachment_prepare_upload`, `t3_attachment_discard`,
+  `t3_thread_send_attachments`) go through signed upload URLs; only the
+  preparing thread can send or discard a pending upload (kept in memory, so
+  not across a restart). `html_render` publishes an `html` artifact (no
+  `html_preview`: no headless browser). `send_to_user` and `tool_search` as
+  t3code's.
+- Verified: `provider_turns.rs`
+  `agents_ask_for_secrets_link_pull_requests_and_send_attachments` (every new
+  tool over HTTP as a scripted Claude session; the saved value is found in no
+  event and no file outside the secret store); orchestrator and
+  `secrets::requests` unit tests.
+
+## Issues
+
+- `issues.*` and `issueTrackers.*` (t3code v0.1.11 `IssueService`,
+  `IssueTrackerConnections`), in `rpc/issues.rs` with `issues/github.rs`,
+  `issues/linear.rs` and `issues/trackers.rs`. A project's issues are its git
+  host's (GitHub, through `gh`: GraphQL reads, REST writes), beside the Linear
+  team it is bound to in Settings (Linear's GraphQL API; the API key is
+  checked before it is stored in `<userdata>/server-secrets/`; bindings in the
+  `issue_tracker_bindings` table; disconnecting unbinds every project). A
+  listing reads each scope once and carries per-scope cursors, viewers,
+  tracker summaries and per-project errors. Another repository on the same
+  host is read-only, and every write is checked. `issues.linkedThreads` comes
+  from the store (most recently active first). Agents get t3code's issues
+  toolkit (`list_issues`, `read_issue`, `create_issue`, `comment_on_issue`,
+  `set_issue_state`, `link_issue`, `unlink_issue`, `list_thread_issues`);
+  `link_issue` links with source `agent`.
+- Not done: Azure DevOps and Forgejo issues (GitLab: see "GitLab"; listed as hosts that
+  cannot be browsed yet); GitHub YAML issue forms; paging labels and assignees
+  past 100 and closing pull requests past 20; `retryAt` for GitHub rate
+  limits; read caches (`refresh` changes nothing).
+- Verified: RPC groups `issues-reads`, `issues-writes`, `issues-failures` (no
+  `gh`, signed out, rate-limited, unreadable answers), `issues-trackers`
+  (Linear against a local stand-in on port 47613: connect, reject, rate limit,
+  bind, list beside GitHub, every read and write, revoked key, disconnect) and
+  `issues-mcp` (all eight tools as an agent), each decoded with t3code's
+  schemas; unit tests in `rpc::issues`, `rpc::issues::{github,linear}`,
+  `mcp::issues` and `secrets`.
+
+## Managed policy
+
+- An administrator's policy file (t3code `ManagedPolicyDocument`, `policy/*.ts`;
+  `policy.rs`), read once at startup from `/Library/Application
+  Support/Domovoi/policy.json`, `/etc/domovoi/policy.json` or `C:\Program
+  Files\Domovoi\policy.json` (debug builds also `DOMOVOI_DEV_MANAGED_POLICY_PATH`,
+  as t3code's `T3CODE_DEV_MANAGED_POLICY_PATH`); no file, no policy. A file this
+  build cannot fully enforce (unknown keys at any level, schema mismatches,
+  settings entries t3code would refuse) stops the server with exit code 77 and
+  t3code's `ManagedPolicyFileError` message. Clients get `ManagedPolicySummary`
+  in `ServerConfig.managedPolicy`.
+- Settings: `settings` defaults replace the built-in ones and locks are laid over
+  the settings (in project overrides too); `server.updateSettings` refuses moving
+  a lock (`ServerSettingsError`, `write-managed-setting`); the user's own values
+  stay in `settings.json`. Remote clients: `limits.clients` without `remote`
+  refuses `--host` beyond loopback and `--remote`, never starts iroh, makes no
+  remote pairing links and signs out iroh-bound sessions; without
+  `local-browser` the server does not start. `connect: false` (or no `remote`)
+  refuses `cloud.installRelayClient`. `webhookTasks: false` sets
+  `blockedByPolicy`, refuses enabling such a task, and its URL answers 403
+  `blocked_by_policy`. `providers.allowedDrivers` shows other drivers as
+  unavailable, refuses their turns and refuses turning one on
+  (`use-disallowed-provider`).
+- Not done: `limits.maxRuntimeMode` and `limits.providers.instances` are refused
+  at startup (exit 77) rather than enforced; the macOS configuration profile and
+  Windows registry policy are not read; no `policy show`; `telemetry`,
+  `browserCookieImport` and `updates` are reported only (Domovoi has nothing they
+  switch off); `previewTunnel: false` switches the preview tunnel off; a value
+  the user chose equal to the policy default reverts to the built-in default when
+  the policy goes (t3code's `keepStored`).
+- Verified: `apps/server/tests/managed_policy.rs` (summary, locks with the file
+  left as the user wrote it, a disallowed provider, a blocked webhook task and its
+  403, the relay refusal, exit code 77 for an unknown limit and for a ceiling, the
+  `--host 0.0.0.0` and `--remote` refusals; every frame decoded with t3code's
+  schemas) and unit tests in `policy.rs`.
+
+## Peer links
+
+- `peerLinks.link`, `list` and `unlink` over iroh instead of HTTPS or T3 Connect
+  (`peer_links.rs`; Settings → Labs → Linked environments). A link is made from
+  another Domovoi server's `domovoi://connect` link or ticket and a pairing code
+  from it; the QUIC handshake proves the peer's key, so the code and the token
+  reach only that key. Links dial with their own key (`<home>/remote/peer.key`)
+  and are kept in `<userdata>/peer-links.json` (0600) with tokens in
+  `<userdata>/server-secrets/`. The session is narrowed to the access chosen
+  (`read-only`: `orchestration:read`; `full-access` adds operate,
+  `settings:write` and `source-control:write`). The peer lists the link as a
+  client (`Domovoi · <label>`) and can revoke it, after which it lists as
+  `expired` with `lastError`; unlinking signs the session out there too. Agents
+  get `t3_environment_links`, `t3_environment_unlink`, and `t3_thread_list` with
+  `environmentId`, which reads the peer's shell through the link.
+- Not done: link request cards (`t3_environment_link`; `answerRequest` only
+  checks the card), forwarding the other thread tools, `delegated_task.remote.*`
+  delegation, the middle access levels, http(s) addresses.
+- Verified: `apps/server/tests/peer_links.rs` with two servers on `--remote
+  --relay disabled` (disabled, web-address, ceiling, self, wrong-code,
+  wrong-environment and spent-code refusals; a read-only link, its listing and
+  scopes on the peer; revocation on the peer; a full-access relink; unlink signing
+  out on both sides; 40 frames decoded with t3code's schemas) and unit tests.
+
+## GitLab
+
+- Pull requests and issues of a project whose repository is on GitLab go through
+  the GitLab CLI (`glab api`, after t3code's `source-control-gitlab`:
+  `GitLabCli`, `GitLabPullRequestCli`, `GitLabPullRequestProvider`,
+  `GitLabIssueTracker`). `crate::glab` names the host in `GITLAB_HOST` and puts
+  JSON bodies on stdin. A repository identity's kind picks the driver
+  (`rpc/source_control/gitlab.rs` beside `github.rs`, `rpc/issues/gitlab.rs`
+  beside `issues/github.rs`); a host whose name has a `gitlab` label is GitLab
+  Self-Hosted, as t3code's `recognizeRemote` has it.
+- Merge requests: REST listings with GitLab-side filters, GraphQL approval and
+  pipeline states, line counts, summary, detail (merge settings, label
+  permission, divergence, rebase, auto-merge), checks as pipeline stage jobs,
+  activity (notes, line and overview threads, outdated threads, commits, awards,
+  edits, bots), diff file contents, change breakdown, filter options (`#` and `!`
+  references), reviewers and labels, edits, comments, replies, resolution,
+  reactions, reviews (request-changes, positioned discussions, note, approve),
+  and the actions merge, auto-merge on/off, ready, draft, close, reopen and
+  rebase. `glab` missing → `cli-missing`; signed out or an expired login →
+  `cli-unauthenticated`. Issues: listings with page cursors, detail with notes,
+  system and label events, closing and mentioning merge requests, awards,
+  comment pages, templates, candidates, create, comment, update, Open/Closed,
+  reactions and GitLab issue URLs. The agent's `pull_request_read`,
+  `link_pull_request`, `list_issues` and `read_issue` work for GitLab projects.
+- Not done: the pull request diff route (Domovoi serves none for any host),
+  `revert` and `delete-branch`, the merge head guard and credit removal, GraphQL
+  listing and list cursors, bridge-job checks, ranged review comment line codes,
+  the fork maintainer-edits permission, viewed files, paged review threads,
+  self-managed hosts known only through `glab auth status`, `retryAt` for rate
+  limits.
+- Verified: RPC groups `prs-gitlab-reads`, `prs-gitlab-writes`,
+  `prs-gitlab-failures`, `issues-gitlab` and `issues-gitlab-mcp` against a
+  stateful stand-in `glab` (`gitlab-fixtures/`), each decoded with t3code's
+  schemas; all other groups still pass (three listing cases now expect GitLab's
+  `cli-missing` where a GitLab project without `glab` is listed, as t3code ranks
+  host errors); unit tests in `glab`, `rpc::source_control::{gitlab,
+  pull_requests, pull_request_failure}` and `rpc::issues::gitlab`.
+
+## Preview
+
+- `/api/preview/tunnel?port=<n>` (t3code `PreviewTunnel.ts`, `preview/tunnel.rs`):
+  raw TCP from an authenticated client to this machine's loopback ports, one
+  connection per WebSocket, over TCP or iroh. As t3code's: `terminal:operate`
+  (ticket, bearer or cookie); 400 for a bad port or a non-upgrade; 403 with
+  `x-t3-tunnel-disabled: 1` while `enablePreviewTunnel` is off or the managed
+  policy sets `limits.previewTunnel: false`; 403 with
+  `x-t3-tunnel-port-refused: 1` for the server's own port; 502 with it when
+  nothing accepts on 127.0.0.1 or ::1 within 5 s. Only a port is read, never a
+  host. A tunnel closes with its session and when the tunnel is switched off.
+- The server's headless browser (`preview/browser.rs` over a minimal DevTools
+  client, cargo feature `preview-browser`, on by default: +0.9 MB release
+  binary, +1.65%): `DOMOVOI_PREVIEW_BROWSER_BINARY`, a `chrome-headless-shell`
+  t3code installed in the home, or a local Chrome, Chromium or Edge; without one
+  the browser answers t3code's unavailable message. (t3code downloads a pinned
+  `chrome-headless-shell` and drives it with Playwright; Domovoi uses a browser
+  already on the machine.) Server tabs (`runtime:"server"`) start at once, are
+  marked `headless` and report their status to the manager; resizes, zoom,
+  colour scheme, cookie/cache clearing and hard reloads apply; a page that
+  closes itself closes its tab; one process per persistent profile
+  (`<userdata>/server-browser/profiles/<id>`), incognito in a fresh context;
+  `preview.reportProfiles` is saved and `preview.clearProfile` deletes the
+  profile. Control as t3code's `SessionControl`; 8 tabs per agent, 32 per
+  server, idle agent tabs close after 30 minutes, idle browsers after 5.
+- `/api/preview-stream/ws` (t3code `ServerBrowserStream.ts`): screencast JPEGs
+  paced by the client's `ack`, `viewport` / `control` / `probe` messages and
+  t3code's viewer input; 4404 when the tab is missing or closes, 503 when the
+  browser cannot start; `interactive=false` or no `preview:operate` only
+  watches.
+- Agent tools: `preview_status`, `preview_open`, `preview_dialog`,
+  `preview_navigate`, `preview_resize`, `preview_set_appearance`,
+  `preview_snapshot` (bounded as t3code's; image content or a PNG under
+  `<userdata>/browser-artifacts/`), `preview_act`, `preview_evaluate`,
+  `preview_wait_for`, `t3_preview_list`, `t3_preview_close`, gated by "Agent
+  browser access"; `html_preview` (PNG, content height, console).
+- Not done: browser download/install; Linux sandbox and library diagnosis
+  (4503); recording; popups as tabs; file chooser interception (upload by
+  locator only); downloads; clipboard, pointer, popup and download stream
+  messages; desktop-rendered tabs and desktop automation hosts; reopening a
+  crashed page; Playwright's aria snapshot (refs come from a flat element list);
+  `html_preview` image inlining and theme fragment; subagents in one thread
+  share its tabs.
+- Verified: `apps/server/tests/preview.rs` (tunnel against a TCP echo server:
+  every refusal, ticket, switch-off and sign-out; through an iroh bridge; the
+  browser through RPC and the stream against a local site with the installed Google Chrome on
+  this Mac, its RPC answers and `subscribePreviewEvents` chunks decoded with
+  t3code's schemas; without a browser); `provider_turns`
+  `agents_drive_the_server_browser` (every tool as a scripted Claude session's
+  agent); browser tests skip without Chrome or Chromium; unit tests in
+  `preview::{tunnel,chrome,page,browser}`, `mcp::preview` and `rpc::preview`;
+  `rpc-calls/preview-device.json` and RPC group `admin-preview`.
+
+## Secret request cards, linked issues and pull requests in the native clients
+
+- The core shows a thread's pending `secret_request` items as cards
+  (`ThreadPageView.secret_requests`: label, reason, link, placeholder, and a line
+  on how the value is delivered) and answers them with `secrets.answerRequest`
+  (`AnswerSecret` saves, `DeclineSecret` declines). The value is sent once and
+  kept nowhere: not in the model, the outbox or anything saved; not sent again
+  after a dropped connection (the card can be answered again); left out of
+  `Request`'s debug output and of the Iced frame trace. The row says how the
+  request ended (saved, declined, no longer needed). macOS and iOS use a
+  `SecureField`, Android a password field (not `rememberSaveable`), Iced a secure
+  `text_input`; each clears it once sent.
+- `ThreadPageView.links`: the pull requests (number, title, state; stack members
+  the user dismissed left out) and issues (`displayKey`, title) linked to the
+  thread, shown as chips that open in the browser.
+- Not done: `reference` answers (secret providers); values are not zeroized in
+  memory.
+- Verified: `client_replay` `secret_requests_are_answered_once_and_kept_nowhere`
+  (payload as t3code's schema, no outbox or store, no resend, refusal reasons)
+  and `linked_pull_requests_and_issues_show_on_the_thread`; Iced UI test
+  `secret_requests_take_a_hidden_value_and_links_open_in_the_browser`;
+  `tools/parity.py`; macOS, iOS (simulator) and Android builds, Android unit
+  tests.
+
+## Interactive artifact previews in the desktop app (`webview` feature)
+
+- Built with `--features webview`, the Iced app opens interactive HTML, bundle
+  and React artifacts in a preview window of its own (system webview through
+  `wry`/`tao`, in a helper process that ends with the app), falling back to the
+  browser if that window can't start. Without the feature they open in the
+  browser as before. The window is not embedded in the panel: iced 0.14 owns the
+  only event loop, a webview can't leave the main thread, and a native child view
+  would cover iced's palette and menus (`apps/domovoi-iced/src/webview.rs`).
+- Not done: page errors back into the app; following a theme switch; Windows and
+  Linux builds (Linux needs WebKitGTK 4.1 and GTK 3 dev packages); a run by hand.
+- Verified: built and its unit test run on macOS; the lint gate with and without
+  the feature.
+
+## Android push over UnifiedPush (Web Push)
+
+- An Android device with a UnifiedPush distributor (ntfy, NextPush, …) registers
+  its endpoint and Web Push keys with each server through
+  `POST /api/domovoi/push/webpush` (`DELETE` removes it, `GET` gives the server's
+  VAPID key; `push_web.rs`). The server sends the same "Needs your approval",
+  "Finished" and "Failed" alerts as APNs to devices whose app has no socket open,
+  as RFC 8291 `aes128gcm` messages signed with VAPID (RFC 8292; the key is made on
+  first use, `<home>/webpush-vapid.p8`, owner-only), and forgets endpoints that
+  answer 404 or 410. Approvals can be allowed or declined from the notification.
+  No Google services; FCM is not used.
+- Not done: answering questions from the notification; badges; retries; passing
+  a VAPID key to the distributor; refusing plain-`http` endpoints; a run on a
+  device with a real distributor.
+- Verified: `apps/server/tests/webpush.rs` (mock push service: the failed turn's
+  message decrypted with the phone's key, VAPID audience and signature, an open
+  app skipped, a 410 endpoint forgotten, registration checks); `push_web` unit
+  tests (RFC 8291 Appendix A ciphertext, VAPID key reuse and file mode);
+  `client_replay` `push_endpoints_register_with_the_server_in_use`; Android
+  `UnifiedPushServiceTest`.
+
+## Usage pricing, the trace file and diagnostics, attachment document text
+
+- Usage summaries price every record from LiteLLM's rate table
+  (`usage_pricing.rs`, after t3code's `usagePricing.ts`): kept in
+  `<userdata>/usage-model-rates.json` with its ETag and Last-Modified, fetched
+  again after a day (or a minute after `server.refreshUsageRates` or a model the
+  table doesn't list); `usagePriceOverrides` win, `usageModelAliases` remap the
+  model (the filter matches the model as logged), and `pricing.status` is
+  `fresh`, `cached` or `unavailable`. Buckets carry cost, cache savings, category
+  costs, fast and premium amounts and unpriced counts as t3code's. Usage of
+  deleted transcripts keeps counting for `usageHistoryRetentionDays`.
+  `DOMOVOI_USAGE_RATES_URL` replaces the source (tests use
+  `conformance/usage-rates.json`, never the network).
+- Every RPC call is a `ws.rpc.<method>` span (`effect-rpc`), written by
+  `trace_writer.rs` to `<userdata>/logs/server.trace.ndjson` in t3code's
+  `EffectTraceRecord` format (bounded queue, batched off the request path,
+  10 MiB per file, 10 files kept); with `observability.otlpTracesUrl` set the
+  spans are also exported as OTLP/JSON. `server.getTraceDiagnostics` summarizes
+  the files (`trace_diagnostics.rs`, t3code's `TraceDiagnostics.ts`).
+- Uploaded PDF, DOCX, XLSX and PPTX attachments get a `<file>.txt` sidecar from a
+  hidden `__document-text` child process (`document_text.rs`: 15 s timeout, input,
+  output, archive and expansion caps after t3code's; a zip bomb is truncated, a
+  malformed file rejected), started at upload and awaited before a turn or steer
+  that carries the file; the prompt names it after the file ("text extracted
+  to: …").
+- Not done: Codex's fast tier and Claude advisor iterations as separate records;
+  the retention cache does not survive a restart; ODT/ODS/ODP, RTF, EPUB and
+  notebook text (PDF text is what `lopdf` gives; scans give none); span links,
+  URL credential redaction and `OTEL_*` resource attributes; spans other than RPC
+  calls; a release-profile overhead figure (dev profile: about 4–5 µs per span
+  with the trace file, measured in alternating pairs on a loaded machine).
+- Verified: unit tests for price math, tiers, speeds, aliases, overrides, unknown
+  models, ETag/304 against a local server, retention, trace records, rotation,
+  the OTLP body and export, the diagnostics aggregator, every document format,
+  zip-bomb and malformed input, a hung or oversized worker, and the prompt naming
+  the sidecar; `tests/document_text.rs` runs the real worker; RPC groups
+  `workspace-usage`, `admin-server` and `config-settings` pass t3code's schemas.

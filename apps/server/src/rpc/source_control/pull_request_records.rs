@@ -78,12 +78,13 @@ pub enum ReactionContent {
     Eyes,
 }
 
-/// `PullRequestCommentKind`, as far as an activity lists comments (a review
-/// comment is part of its thread).
+/// `PullRequestCommentKind`, as far as an activity lists comments (on GitHub a
+/// review comment is part of its thread; GitLab lists its diff notes as such).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum CommentKind {
     IssueComment,
+    ReviewComment,
     Review,
 }
 
@@ -105,17 +106,21 @@ pub enum FileViewedState {
 }
 
 /// Where the files a reader has seen are kept (`PullRequestViewedFilesStore`): GitHub keeps them.
+/// (GitLab keeps none; t3code keeps them in its own store, which this server has not.)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ViewedFilesStore {
     Host,
 }
 
-/// What a composer's reference starts with (`PullRequestReferenceSigil`): GitHub links `#`.
+/// What a composer's reference starts with (`PullRequestReferenceSigil`):
+/// `#` an issue (and on GitHub a pull request), `!` a GitLab merge request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum ReferenceSigil {
     #[serde(rename = "#")]
     Hash,
+    #[serde(rename = "!")]
+    Bang,
 }
 
 /// What a reference candidate is (`PullRequestReferenceCandidate.kind`).
@@ -175,12 +180,14 @@ pub struct Capabilities {
     pub actions: Vec<PullRequestAction>,
     pub merge_methods: [PullRequestMergeMethod; 3],
     pub delete_branch: bool,
-    pub update_methods: [UpdateMethod; 2],
+    pub update_methods: Vec<UpdateMethod>,
     pub search: bool,
     pub reactions: bool,
     pub mentions: bool,
-    pub reference_sigils: [ReferenceSigil; 1],
-    pub viewed_files: ViewedFilesStore,
+    pub reference_sigils: Vec<ReferenceSigil>,
+    /// Left out for a host whose viewed marks this server does not keep.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub viewed_files: Option<ViewedFilesStore>,
     pub review: ReviewCapabilities,
     pub reviewers: ReviewerCapabilities,
     pub edit: EditCapabilities,
@@ -205,7 +212,10 @@ pub struct ViewerPermissions {
     pub stack_rebase: Option<bool>,
     /// The ways the branch can be updated now; absent when it cannot be.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub update_methods: Option<[UpdateMethod; 2]>,
+    pub update_methods: Option<Vec<UpdateMethod>>,
+    /// Whether the viewer may change maintainer edits (GitLab says; GitHub leaves it out).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub maintainer_edits: Option<bool>,
 }
 
 /// The ways the repository lets a pull request land (`PullRequestMergeCapabilities`).
@@ -224,7 +234,7 @@ pub struct MergeCapabilities {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PullRequestDetail {
-    /// A source control provider kind: always `github` here.
+    /// A source control provider kind: `github` or `gitlab` here.
     pub provider: &'static str,
     pub capabilities: Capabilities,
     pub viewer_permissions: ViewerPermissions,
@@ -259,6 +269,12 @@ pub struct PullRequestDetail {
     pub labels: Vec<PullRequestLabel>,
     pub checks: Vec<PullRequestCheck>,
     pub merge_capabilities: MergeCapabilities,
+    /// Whether GitLab asks for a rebase before merging; GitHub leaves it out.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rebase_required: Option<bool>,
+    /// How many commits the base is ahead by, where the host counted them.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub behind_by: Option<u64>,
     /// The signed-in login, when it could be read.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub viewer: Option<String>,
@@ -306,8 +322,8 @@ pub struct Comment {
     pub created_at: Timestamp,
     pub edited_at: Option<Timestamp>,
     pub url: Option<String>,
-    /// Comments on a file are in their thread: these have no path.
-    pub path: Option<Never>,
+    /// The file a GitLab diff note is on; GitHub's comments on a file are in their thread.
+    pub path: Option<String>,
     /// GitHub's state of a review (`APPROVED`, …); `null` for a comment.
     pub review_state: Option<String>,
     pub reactions: Vec<Reaction>,
@@ -372,8 +388,28 @@ pub struct PullRequestActivity {
     pub comments_truncated: bool,
     pub review_threads_truncated: bool,
     pub review_threads: Vec<ReviewThread>,
+    /// GitLab's resolvable discussions on the merge request itself; GitHub has none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub overview_threads: Option<Vec<OverviewThread>>,
     pub commits: Vec<Commit>,
     pub reactions: Vec<Reaction>,
+}
+
+/// A resolvable conversation on the change rather than a line (an element of
+/// `PullRequestActivity.overviewThreads`: `path` and `line` are always null).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OverviewThread {
+    pub id: String,
+    pub path: Option<Never>,
+    pub line: Option<Never>,
+    pub side: DiffSide,
+    pub is_resolved: bool,
+    pub is_outdated: bool,
+    pub comments: Vec<ThreadComment>,
+    pub comment_count: u64,
+    pub next_comments_cursor: Option<String>,
+    pub can_resolve: bool,
 }
 
 /// The result of `pullRequests.threadComments` (`PullRequestThreadCommentsResult`): a later page of one thread.

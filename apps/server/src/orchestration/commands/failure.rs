@@ -6,7 +6,7 @@ use crate::orchestration::context::NoForkSource;
 use crate::store::StoreError;
 use serde::Serialize;
 use serde::ser::SerializeMap;
-use domovoi_model::typed::{CommandId, PlanId, ProjectId, RunId, ThreadId};
+use domovoi_model::typed::{CommandId, NodeId, PlanId, ProjectId, RunId, ThreadId, TurnItemId};
 
 /// Why a handler refused a command, or could not carry it out. Its text is
 /// the `message` the client gets.
@@ -60,6 +60,10 @@ pub enum Refusal {
     AdoptMissingProject { thread: ThreadId, project: ProjectId },
     #[error("Thread {thread} does not work in {root}.")]
     AdoptOtherFolder { thread: ThreadId, root: String },
+    #[error("Thread {0} is settled or archived and cannot watch pull requests.")]
+    WatchOnSettledThread(ThreadId),
+    #[error("Thread {0} is a subagent; its parent thread watches pull requests.")]
+    WatchFromSubagent(ThreadId),
 
     // Runs, requests and checkpoints.
     #[error("Unknown subagent.")]
@@ -76,6 +80,12 @@ pub enum Refusal {
     InvalidQuestionAnswer,
     #[error("The thread has no active run.")]
     NoActiveRun,
+    #[error("Node {node} is not the root of run {run}.")]
+    NotRunRoot { node: NodeId, run: RunId },
+    #[error("Turn item {0} is not a secret request.")]
+    NotASecretRequest(TurnItemId),
+    #[error("Secret request {0} belongs to another run.")]
+    SecretRequestOfAnotherRun(TurnItemId),
     #[error("Unknown checkpoint.")]
     UnknownCheckpoint,
     #[error("Stop the active run before reverting.")]

@@ -247,7 +247,8 @@ pub(crate) fn status_label(model: &Model, t: &ThreadShell) -> String {
 /// The thread's pull request (linked by hand first, else its branch's) and
 /// its state: `("#12", "open")`.
 pub(crate) fn pull_request_badge(t: &ThreadShell) -> (String, String) {
-    if let Some(link) = t.pull_requests.iter().flatten().next() {
+    // A stack member the user dismissed stays as a tombstone, not a link.
+    if let Some(link) = t.pull_requests.iter().flatten().find(|link| link.source != domovoi_model::typed::PullRequestLinkSource::StackDismissed) {
         let state = link.snapshot.as_ref().map(|s| if s.is_draft && s.state.as_str() == "open" { "draft" } else { s.state.as_str() }).unwrap_or_default();
         return (format!("#{}", link.number), state.to_owned());
     }

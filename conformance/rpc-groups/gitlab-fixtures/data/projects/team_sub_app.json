@@ -1,0 +1,107 @@
+{
+ "id": 12,
+ "path_with_namespace": "team/sub/app",
+ "merge_method": "ff",
+ "squash_option": "always",
+ "enterprise": true,
+ "canAdmin": false,
+ "labels": [
+  {
+   "name": "backend",
+   "color": "#00aa00",
+   "description": null,
+   "archived": false
+  }
+ ],
+ "users": [
+  {
+   "id": 101,
+   "username": "me",
+   "name": "Me",
+   "avatar_url": "https://gitlab.com/uploads/me.png"
+  },
+  {
+   "id": 21,
+   "username": "ops",
+   "name": "Ops",
+   "avatar_url": null
+  }
+ ],
+ "mergeRequests": [
+  {
+   "iid": 5,
+   "id": 1005,
+   "project_id": 12,
+   "source_project_id": 12,
+   "target_project_id": 12,
+   "title": "Deploy script",
+   "description": "",
+   "web_url": "https://gitlab.example.com/team/sub/app/-/merge_requests/5",
+   "state": "opened",
+   "draft": false,
+   "author": {
+    "id": 21,
+    "username": "ops",
+    "name": "Ops"
+   },
+   "source_branch": "feature-5",
+   "target_branch": "main",
+   "sha": "1111111111111111111111111111111111111111",
+   "merge_status": "can_be_merged",
+   "detailed_merge_status": "mergeable",
+   "has_conflicts": false,
+   "created_at": "2026-01-05T10:00:00Z",
+   "updated_at": "2026-01-15T10:00:00Z",
+   "merged_at": null,
+   "closed_at": null,
+   "reviewers": [],
+   "labels": [
+    "backend"
+   ],
+   "changes_count": "1",
+   "head_pipeline": {
+    "id": 7,
+    "project_id": 12,
+    "status": "running",
+    "web_url": "https://gitlab.example.com/team/sub/app/-/pipelines/7",
+    "source": "merge_request_event"
+   },
+   "user": {
+    "can_merge": true
+   },
+   "merge_when_pipeline_succeeds": true,
+   "squash_on_merge": true,
+   "allow_collaboration": null,
+   "diff_refs": {
+    "base_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "head_sha": "1111111111111111111111111111111111111111",
+    "start_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+   },
+   "stats": null,
+   "approved": false,
+   "approvedBy": []
+  }
+ ],
+ "issues": [
+  {
+   "iid": 1,
+   "title": "Deploy fails on Mondays",
+   "description": "",
+   "state": "opened",
+   "web_url": "https://gitlab.example.com/team/sub/app/-/issues/1",
+   "author": {
+    "id": 21,
+    "username": "ops"
+   },
+   "assignees": [],
+   "labels": [
+    "backend"
+   ],
+   "created_at": "2026-01-06T00:00:00Z",
+   "updated_at": "2026-01-16T00:00:00Z",
+   "closed_at": null,
+   "user_notes_count": 0
+  }
+ ],
+ "templates": []
+}

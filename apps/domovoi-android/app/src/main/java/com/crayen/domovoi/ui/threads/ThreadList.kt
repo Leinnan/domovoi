@@ -37,6 +37,7 @@ import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.CreateNewFolder
 import androidx.compose.material.icons.outlined.Inventory2
+import androidx.compose.material.icons.outlined.Layers
 import androidx.compose.material.icons.outlined.MarkChatUnread
 import androidx.compose.material.icons.outlined.PanTool
 import androidx.compose.material.icons.outlined.PushPin
@@ -512,6 +513,7 @@ private fun ThreadRow(
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(Space.xs), verticalAlignment = Alignment.CenterVertically) {
                         if (thread.relation == "fork") Icon(Icons.AutoMirrored.Outlined.CallSplit, "Fork", modifier = Modifier.size(12.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        if (thread.inWorktree) Icon(Icons.Outlined.Layers, "In its own worktree", modifier = Modifier.size(12.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
                         SourceBadge(thread.source)
                         if (thread.pinned) Icon(Icons.Filled.PushPin, "Pinned", modifier = Modifier.size(12.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
                         if (thread.pullRequest.isNotEmpty()) PullRequestBadge(thread.pullRequest, thread.pullRequestState)

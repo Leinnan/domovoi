@@ -104,6 +104,11 @@ pub enum Event {
     /// The device's APNs token (`environment`: `sandbox` | `production`);
     /// registered with each server this device connects to.
     PushToken { token: String, environment: String },
+    /// A UnifiedPush endpoint this device got from its distributor, with its
+    /// Web Push keys (`p256dh`, `auth`, base64url); registered with each
+    /// server this device connects to (`/api/domovoi/push/webpush`). An empty
+    /// endpoint: the distributor dropped it.
+    PushEndpoint { endpoint: String, p256dh: String, auth: String },
     /// A Live Activity started for a thread, and its push token (APNs host
     /// `environment`: `sandbox` or `production`).
     ActivityToken { thread_id: String, token: String, environment: String },
@@ -188,6 +193,13 @@ pub enum Event {
     RespondUserInput { request_id: String, answers: Vec<QuestionAnswer> },
     /// Leaves a question unanswered (the agent carries on).
     DismissUserInput { request_id: String },
+    /// Answers the open thread's secret request (`SecretRequestView.item_id`)
+    /// with `value`, sent once (`secrets.answerRequest`) and kept nowhere:
+    /// not in the model, the outbox or anything saved, and not sent again
+    /// after a dropped connection. The shell clears its field once sent.
+    AnswerSecret { item_id: String, value: String },
+    /// Declines a secret request: the agent is told no value comes.
+    DeclineSecret { item_id: String },
     Interrupt,
     Revert { checkpoint_id: String },
     /// Sends the draft into the turn under way (`can_steer`), instead of

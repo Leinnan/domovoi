@@ -8,10 +8,16 @@
 //! - `Interrupt` cancels the request and replies with an interrupt `Exit`;
 //! - `Ping` is answered with `Pong`;
 //! - a closed transport interrupts everything still running.
+//!
+//! Each call runs in a root `tracing` span `ws.rpc` named `ws.rpc.<tag>`
+//! (`otel.name`; t3code's `RpcInstrumentation`), with `rpc.method`,
+//! `rpc.transport` and `rpc.system`; a failed exit records `otel.status_code`
+//! `ERROR` and the cause, an interrupted one `otel.interrupted`.
 
 use crate::frame_parts::{SOCKET_FRAME_PART_BYTES, split_socket_frame_owned};
 use crate::message::{FromClient, FromServer, RequestEncoded, RequestId, decode_client_frame, encode_server_message};
-use crate::message::ExitEncoded;
+use crate::message::{CauseEncoded, ExitEncoded};
+use tracing::Instrument;
 use crate::router::{Failure, Reply, Router};
 use futures::{FutureExt, Sink, SinkExt, Stream, StreamExt};
 use serde_json::Value;
@@ -197,7 +203,22 @@ fn start_request<C: Send + Sync + 'static>(
         map.insert(id.clone(), Inflight { cancel: cancel.clone(), ack: ack.clone() });
     }
 
-    let reply = router.dispatch(ctx.clone(), &mut request);
+    let span = if router.traced(&request.tag) {
+        tracing::info_span!(
+            parent: None,
+            "ws.rpc",
+            "otel.name" = %format!("ws.rpc.{}", request.tag),
+            "rpc.method" = %request.tag,
+            "rpc.transport" = "websocket",
+            "rpc.system" = "effect-rpc",
+            "otel.status_code" = tracing::field::Empty,
+            "otel.status_message" = tracing::field::Empty,
+            "otel.interrupted" = tracing::field::Empty,
+        )
+    } else {
+        tracing::Span::none()
+    };
+    let reply = span.in_scope(|| router.dispatch(ctx.clone(), &mut request));
     let tx = tx.clone();
     let inflight = inflight.clone();
     let supports_ack = options.supports_ack && !silent && !discard;
@@ -259,10 +280,43 @@ fn start_request<C: Send + Sync + 'static>(
             }
         };
         inflight.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(&id);
+        if let Some(ExitEncoded::Failure { cause }) = &exit {
+            record_failure(&tracing::Span::current(), cause);
+        }
         if let Some(exit) = exit
             && !discard
         {
             send_exit(exit).await;
         }
-    });
+    }.instrument(span));
+}
+
+/// Marks the call's span failed (with the cause's tag and message) or interrupted.
+fn record_failure(span: &tracing::Span, cause: &[CauseEncoded]) {
+    if span.is_disabled() {
+        return;
+    }
+    if cause.iter().all(|c| matches!(c, CauseEncoded::Interrupt { .. })) {
+        span.record("otel.interrupted", true);
+        span.record("otel.status_message", "Interrupted");
+        return;
+    }
+    let text = |v: &Value| v.as_str().map(str::to_owned);
+    let described: Vec<String> = cause
+        .iter()
+        .filter_map(|c| match c {
+            CauseEncoded::Fail { error } => {
+                let tag = error.get("_tag").and_then(Value::as_str).unwrap_or("Error");
+                let message = error.get("message").or_else(|| error.get("detail")).and_then(text);
+                Some(match message {
+                    Some(m) => format!("{tag}: {m}"),
+                    None => tag.to_owned(),
+                })
+            }
+            CauseEncoded::Die { defect } => Some(text(defect).unwrap_or_else(|| defect.to_string())),
+            CauseEncoded::Interrupt { .. } => None,
+        })
+        .collect();
+    span.record("otel.status_code", "ERROR");
+    span.record("otel.status_message", described.join("\n").as_str());
 }

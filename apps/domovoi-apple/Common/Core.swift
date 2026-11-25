@@ -64,6 +64,7 @@ final class Core: NSObject, ObservableObject, UNUserNotificationCenterDelegate {
     private var tunnelRequest: UInt32?
     private var keepAlive: Timer?
     private var launched = false
+    private var dismissedToast: UInt32?
     #if os(macOS)
     enum KeychainState {
         case notChecked, checking, unavailable, ready
@@ -118,6 +119,17 @@ final class Core: NSObject, ObservableObject, UNUserNotificationCenterDelegate {
         center.addObserver(forName: inactive, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in self?.update(.appFocus(focused: false)) }
         }
+        // The user moved or changed the clock's zone: Usage buckets by local day and hour.
+        center.addObserver(forName: .NSSystemTimeZoneDidChange, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.sendTimeZone() }
+        }
+    }
+
+    /// The local zone, for Usage's "Today" and its hours.
+    private func sendTimeZone() {
+        NSTimeZone.resetSystemTimeZone()
+        let zone = TimeZone.current
+        update(.setTimeZone(iana: zone.identifier, utcOffsetSecs: Int32(zone.secondsFromGMT())))
     }
 
     /// Restores saved environments and reconnects to the last one (once:
@@ -137,6 +149,7 @@ final class Core: NSObject, ObservableObject, UNUserNotificationCenterDelegate {
             return
         }
         launched = true
+        sendTimeZone()
         update(.launch(surface: "desktop", deviceLabel: Host.current().localizedName ?? "Mac", deviceOs: "macOS"))
         if let event = pendingPairingLink {
             pendingPairingLink = nil
@@ -144,6 +157,7 @@ final class Core: NSObject, ObservableObject, UNUserNotificationCenterDelegate {
         }
         #else
         launched = true
+        sendTimeZone()
         update(.launch(surface: "mobile", deviceLabel: UIDevice.current.name, deviceOs: "iOS"))
         #endif
     }
@@ -158,6 +172,14 @@ final class Core: NSObject, ObservableObject, UNUserNotificationCenterDelegate {
         #else
         update(.appFocus(focused: UIApplication.shared.applicationState == .active))
         #endif
+    }
+
+    /// Dismisses the toast showing, once: a viewer over the window shows
+    /// the same toast, and both time out together.
+    func dismissToast(_ id: UInt32) {
+        guard view.toast?.id == id, dismissedToast != id else { return }
+        dismissedToast = id
+        update(.dismissToast)
     }
 
     private func tick() {
@@ -866,6 +888,8 @@ final class LiveView {
     private(set) var header: ThreadHeader?
     /// The open thread's approvals and questions waiting for an answer.
     private(set) var pendingRequests: [RequestView] = []
+    /// The open thread's secret requests waiting for an answer.
+    private(set) var secretRequests: [SecretRequestView] = []
     /// What the menu bar's composer items need.
     private(set) var composerMenu = ComposerMenu()
     private(set) var panelOpen = false
@@ -907,6 +931,8 @@ final class LiveView {
         if self.header != header { self.header = header }
         let requests = thread?.pendingRequests ?? []
         if pendingRequests != requests { pendingRequests = requests }
+        let secrets = thread?.secretRequests ?? []
+        if secretRequests != secrets { secretRequests = secrets }
     }
 
     private func narrowComposer(_ composer: ComposerView) {

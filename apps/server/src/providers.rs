@@ -1,5 +1,6 @@
 //! Provider status probes (`ServerProvider` entries) for the Codex, Claude,
-//! OpenCode, Pi, ACP and Antigravity drivers. Probes only read version, login state and what
+//! OpenCode, Pi, ACP and Antigravity drivers (Grok, Kiro and fx in
+//! [`crate::acp_cli`]). Probes only read version, login state and what
 //! the provider offers; they never open a session that is kept (t3code:
 //! "setup must not happen as a health-check side effect").
 
@@ -161,7 +162,7 @@ pub fn executable(tool: Tool) -> Result<PathBuf, String> {
     executable_in(tool, std::env::var(tool.env).ok().filter(|v| !v.trim().is_empty()), &search_dirs())
 }
 
-fn executable_in(tool: Tool, overridden: Option<String>, dirs: &[PathBuf]) -> Result<PathBuf, String> {
+pub(crate) fn executable_in(tool: Tool, overridden: Option<String>, dirs: &[PathBuf]) -> Result<PathBuf, String> {
     let resolve = |p: PathBuf| std::fs::canonicalize(&p).unwrap_or(p);
     if let Some(given) = overridden {
         let given = expand_home(given.trim());
@@ -201,7 +202,7 @@ async fn run(exe: &Path, args: &[&str]) -> Option<String> {
     out.status.success().then_some(text)
 }
 
-fn first_version(s: &str) -> Option<String> {
+pub(crate) fn first_version(s: &str) -> Option<String> {
     s.split_whitespace()
         .find(|w| w.chars().next().is_some_and(|c| c.is_ascii_digit()) && w.contains('.'))
         .map(|w| w.trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != '.' && c != '-').to_owned())
@@ -364,7 +365,7 @@ pub async fn refresh_stale_limits(providers: &[ServerProvider]) {
             continue;
         }
         if p.driver.as_str() == crate::antigravity::DRIVER {
-            crate::antigravity::limits::refresh(id);
+            crate::antigravity::limits::refresh(id, LIMITS_FRESH);
             continue;
         }
         match id {
@@ -383,6 +384,12 @@ pub async fn refresh_stale_limits(providers: &[ServerProvider]) {
                             tokio::spawn(async move { codex::refresh_limits(&exe).await });
                         }
                     }
+                }
+            }
+            OPENCODE => {
+                if let Some(h) = crate::adapters::HOST.get() {
+                    let host = h.clone();
+                    tokio::spawn(async move { host.read_opencode_limits().await });
                 }
             }
             _ => {}
@@ -453,7 +460,14 @@ pub async fn probe_opencode() -> Option<ServerProvider> {
     let host = crate::adapters::HOST.get()?;
     match host.opencode().await {
         Ok(server) => match server.models().await {
-            Ok((models, _)) if !models.is_empty() => v.models = models,
+            Ok((models, _)) if !models.is_empty() => {
+                v.models = models;
+                // The workspace's usage limits (t3code reads them with the provider's status).
+                if crate::usage_limits::stale(OPENCODE, LIMITS_FRESH) {
+                    let host = host.clone();
+                    tokio::spawn(async move { host.read_opencode_limits().await });
+                }
+            }
             Ok(_) => failed(&mut v, "OpenCode has no models. Connect a provider with `opencode auth login`, or set one up in OpenCode.".to_owned()),
             Err(e) => failed(&mut v, format!("Could not list OpenCode's models: {e}")),
         },
@@ -501,7 +515,7 @@ pub fn clamp_pi_thinking_level<'a>(wanted: &str, levels: &[&'a str]) -> Option<&
     has(wanted).or_else(|| all[at + 1..].iter().find_map(|l| has(l))).or_else(|| all[..at].iter().rev().find_map(|l| has(l))).or(levels.first().copied())
 }
 
-fn select(id: &str, label: &str, options: Vec<ProviderOptionChoice>, current_value: Option<String>) -> ProviderOptionDescriptor {
+pub(crate) fn select(id: &str, label: &str, options: Vec<ProviderOptionChoice>, current_value: Option<String>) -> ProviderOptionDescriptor {
     ProviderOptionDescriptor::Select(SelectProviderOptionDescriptor {
         id: id.into(),
         label: label.into(),
@@ -513,7 +527,7 @@ fn select(id: &str, label: &str, options: Vec<ProviderOptionChoice>, current_val
     })
 }
 
-fn choice(id: &str, label: &str, description: Option<&str>, is_default: bool) -> ProviderOptionChoice {
+pub(crate) fn choice(id: &str, label: &str, description: Option<&str>, is_default: bool) -> ProviderOptionChoice {
     ProviderOptionChoice { id: id.into(), label: label.into(), description: description.map(str::to_owned), is_default: is_default.then_some(true) }
 }
 
@@ -766,6 +780,25 @@ fn overlay(current: &mut [ServerProvider]) {
         if let Some(limits) = crate::usage_limits::get(p.instance_id.as_str()) {
             p.usage_limits = Some(limits);
         }
+        if let Some(update) = crate::provider_update::state(p.instance_id.as_str()) {
+            p.update_state = Some(update);
+        }
+        // A driver the managed policy leaves out shows why instead of running (`blockedReason`).
+        if let Some(reason) = crate::policy::current().disallowed_driver_reason(p.driver.as_str()) {
+            p.enabled = false;
+            p.installed = false;
+            p.version = None;
+            p.status = ServerProviderState::Error;
+            p.auth = auth(ServerProviderAuthStatus::Unknown, None, None);
+            p.models = vec![];
+            p.skills = Some(vec![]);
+            p.slash_commands = Some(vec![]);
+            p.setup = None;
+            p.message = Some(reason.clone());
+            p.availability = Some(domovoi_model::typed::ServerProviderAvailability::Unavailable);
+            p.unavailable_reason = Some(reason);
+            continue;
+        }
         if p.driver.as_str() == crate::antigravity::DRIVER {
             crate::antigravity::overlay(p);
             continue;
@@ -780,6 +813,10 @@ fn overlay(current: &mut [ServerProvider]) {
             id => {
                 if let Some(commands) = ACP_COMMANDS.read().unwrap_or_else(|e| e.into_inner()).get(id) {
                     p.slash_commands = Some(commands.clone());
+                }
+                // A URL sign-in an ACP agent waits for.
+                if p.driver.as_str() == "acpRegistry" {
+                    p.auth.action = crate::adapters::acp::url_auth::action(id);
                 }
             }
         }
@@ -911,6 +948,14 @@ impl ProviderRegistry {
                 }
             }
         }
+        // Grok, Kiro and fx: the built-in instances whose CLI is found, and those settings add.
+        let cli = crate::acp_cli::instances();
+        current.retain(|p| crate::acp_cli::Kind::from_driver(p.driver.as_str()).is_none() || cli.iter().any(|(id, _)| id == p.instance_id.as_str()));
+        for (id, kind) in &cli {
+            if wanted(id) {
+                fresh.push(crate::acp_cli::probe(id, *kind, only == Some(id.as_str())).await);
+            }
+        }
         for f in fresh {
             match current.iter_mut().find(|c| c.instance_id == f.instance_id) {
                 Some(slot) => *slot = f,
@@ -923,6 +968,7 @@ impl ProviderRegistry {
             // After OpenCode, which recorded answers already list third.
             PI => 3,
             _ if p.driver.as_str() == crate::antigravity::DRIVER => 4,
+            _ if crate::acp_cli::Kind::from_driver(p.driver.as_str()).is_some() => 5,
             _ => 2,
         });
         *self.statuses.write().await = current.clone();

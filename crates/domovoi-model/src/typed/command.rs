@@ -29,7 +29,7 @@ use super::ids::{
 use super::macros::{string_enum, tagged_union_deserialize};
 use super::message::{DelegatedCompletionReport, MessageContext, Notification, PullRequestWakeSection};
 use super::provider::ProviderThreadNativeMetadata;
-use super::pull_request::{LinkedPullRequest, PullRequestLinkSource, PullRequestSnapshot, PullRequestStack, PullRequestWatch};
+use super::pull_request::{LinkedPullRequest, PullRequestLinkSource, PullRequestSnapshot, PullRequestStack, PullRequestWatch, PullRequestWatchUntil};
 use super::run::{CompletionWake, RemoteTaskChild, SourcePlanRef, WorkspaceStrategy};
 use super::stream::ThreadProjection;
 use super::thread::{LinkOrigin, TitleRegenerationStatus};
@@ -156,6 +156,8 @@ commands! {
     "thread.pull-request.link" => ThreadPullRequestLink(ThreadPullRequestLink) on thread_id,
     "thread.pull-request.unlink" => ThreadPullRequestUnlink(ThreadPullRequestUnlink) on thread_id,
     "thread.pull-request-link.sync" => ThreadPullRequestLinkSync(ThreadPullRequestLinkSync) on thread_id,
+    "thread.issue.link" => ThreadIssueLinkCommand(ThreadIssueLinkCommand) on thread_id,
+    "thread.issue.unlink" => ThreadIssueUnlink(ThreadIssueUnlink) on thread_id,
     "thread.pull-request.watch" => ThreadPullRequestWatch(ThreadPullRequestWatch) on thread_id,
     "thread.pull-request.sync" => ThreadPullRequestSync(ThreadPullRequestSync) on thread_id,
     "thread.title.regeneration.complete" => ThreadTitleRegenerationComplete(ThreadTitleRegenerationComplete) on thread_id,
@@ -581,6 +583,36 @@ command! {
     }
 }
 
+// ---- issues
+
+command! {
+    /// `thread.issue.link`: named apart from the link record it makes ([`super::ThreadIssueLink`]).
+    ThreadIssueLinkCommand {
+        command_id: CommandId,
+        thread_id: ThreadId,
+        tracker: String,
+        host: String,
+        scope: String,
+        key: String,
+        project_id: ProjectId,
+        url: String,
+        display_key: String,
+        title: String,
+        source: super::issue::ThreadIssueLinkSource,
+    }
+}
+
+command! {
+    ThreadIssueUnlink {
+        command_id: CommandId,
+        thread_id: ThreadId,
+        tracker: String,
+        host: String,
+        scope: String,
+        key: String,
+    }
+}
+
 // ---- pull requests
 
 command! {
@@ -626,6 +658,8 @@ command! {
         repository: String,
         number: u64,
         watching: bool,
+        until?: PullRequestWatchUntil,
+        checks_pending?: bool,
         link?: PullRequestToLink,
     }
 }

@@ -21,10 +21,25 @@ use domovoi_model::typed::{
 };
 
 /// A request of one RPC method, ready to be written.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Request {
     method: &'static str,
     payload: Payload,
+}
+
+/// What a request carries, except an answer to a secret request: its
+/// payload holds the value, which is never written anywhere but its frame.
+impl std::fmt::Debug for Request {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut out = f.debug_struct("Request");
+        out.field("method", &self.method);
+        if self.method == SECRETS_ANSWER_REQUEST {
+            out.field("payload", &"(left out)");
+        } else {
+            out.field("payload", &self.payload);
+        }
+        out.finish()
+    }
 }
 
 /// What a request carries.
@@ -147,6 +162,26 @@ pub fn orchestration_search_thread(thread: &ThreadId, query: &str, step: Option<
         }
     }
     built("orchestration.searchThread", payload)
+}
+
+// ---- secret requests ----
+
+const SECRETS_ANSWER_REQUEST: &str = "secrets.answerRequest";
+
+/// The user's answer to a secret the agent asked for (`SecretRequestAnswer`).
+pub enum SecretAnswer<'a> {
+    /// The value, stored by the server; the agent gets a reference or a file.
+    Save(&'a str),
+    Decline,
+}
+
+/// Answers the secret request that is the turn item `item` of `thread`.
+pub fn secrets_answer_request(thread: &ThreadId, item: &str, answer: SecretAnswer) -> Request {
+    let answer = match answer {
+        SecretAnswer::Save(secret) => json!({ "type": "save", "secret": secret }),
+        SecretAnswer::Decline => json!({ "type": "decline" }),
+    };
+    built(SECRETS_ANSWER_REQUEST, json!({ "threadId": thread, "turnItemId": item, "answer": answer }))
 }
 
 // ---- the server ----
@@ -439,7 +474,11 @@ pub fn assets_create_url(image: &ImageAttachment) -> Request {
 }
 
 /// A URL to show an image a tool call looked at (`media-file`, `tool-output-image`).
-pub fn assets_create_url_for(resource: Value) -> Request {
+pub(crate) fn assets_create_url_for(source: &crate::tools::ImageSource, thread_id: &str, item_id: &str) -> Request {
+    let resource = match source {
+        crate::tools::ImageSource::File(path) => json!({ "_tag": "media-file", "threadId": thread_id, "path": path }),
+        crate::tools::ImageSource::Output(index) => json!({ "_tag": "tool-output-image", "threadId": thread_id, "itemId": item_id, "index": index }),
+    };
     built("assets.createUrl", json!({ "resource": resource }))
 }
 
@@ -694,6 +733,11 @@ pub fn push_device(token: &str, environment: &str) -> Body {
     Body(json!({ "token": token, "environment": environment }))
 }
 
+/// `POST /api/domovoi/push/webpush`: a UnifiedPush endpoint and its Web Push keys.
+pub fn push_webpush(endpoint: &str, p256dh: &str, auth: &str) -> Body {
+    Body(json!({ "endpoint": endpoint, "p256dh": p256dh, "auth": auth }))
+}
+
 /// `POST /api/domovoi/push/activities`: where a thread's Live Activity is updated.
 pub fn push_activity(token: &str, thread: &ThreadId, environment: &str) -> Body {
     Body(json!({ "token": token, "threadId": thread, "environment": environment }))
@@ -741,6 +785,18 @@ mod tests {
         assert_eq!(sent(&server_update_settings(SettingsPatch::Settings(&nothing))), json!({ "method": "server.updateSettings", "payload": { "patch": {} } }));
         let one = ServerSettings { default_auto_pull: Some(true), ..ServerSettings::default() };
         assert_eq!(sent(&server_update_settings(SettingsPatch::Settings(&one)))["payload"], json!({ "patch": { "defaultAutoPull": true } }));
+    }
+
+    /// `secrets.answerRequest` as t3code's schema has it; its value shows in
+    /// no debug output.
+    #[test]
+    fn a_secret_answer_carries_the_value_only_in_its_payload() {
+        let thread = ThreadId::from("t1");
+        let request = secrets_answer_request(&thread, "item-1", SecretAnswer::Save("hunter2"));
+        assert_eq!(sent(&request), json!({ "method": "secrets.answerRequest", "payload": { "threadId": "t1", "turnItemId": "item-1", "answer": { "type": "save", "secret": "hunter2" } } }));
+        assert!(!format!("{request:?}").contains("hunter2"), "{request:?}");
+        let declined = secrets_answer_request(&thread, "item-1", SecretAnswer::Decline);
+        assert_eq!(sent(&declined)["payload"]["answer"], json!({ "type": "decline" }));
     }
 
     #[test]

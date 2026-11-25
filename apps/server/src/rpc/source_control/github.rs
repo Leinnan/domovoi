@@ -658,12 +658,12 @@ fn capabilities() -> Capabilities {
         actions: all_actions(),
         merge_methods: [PullRequestMergeMethod::Merge, PullRequestMergeMethod::Squash, PullRequestMergeMethod::Rebase],
         delete_branch: true,
-        update_methods: UPDATE_METHODS,
+        update_methods: UPDATE_METHODS.to_vec(),
         search: true,
         reactions: true,
         mentions: true,
-        reference_sigils: [ReferenceSigil::Hash],
-        viewed_files: ViewedFilesStore::Host,
+        reference_sigils: vec![ReferenceSigil::Hash],
+        viewed_files: Some(ViewedFilesStore::Host),
         review: ReviewCapabilities { inline_comment: true, range_comment: true, reply: true, resolve: true, verdicts: ALL_VERDICTS },
         reviewers: ReviewerCapabilities { request: true, list_candidates: true, search_candidates: true },
         edit: EditCapabilities { change_request: true, comment: true, maintainer_edits: true },
@@ -714,7 +714,8 @@ fn to_viewer_permissions(access: &RepoAccess, facts: &ViewerFacts) -> ViewerPerm
         request_reviewers: access.can_write,
         labels: access.can_triage,
         stack_rebase: access.can_write.then_some(true),
-        update_methods: can_update_branch.then_some(UPDATE_METHODS),
+        update_methods: can_update_branch.then(|| UPDATE_METHODS.to_vec()),
+        maintainer_edits: None,
     }
 }
 
@@ -805,6 +806,8 @@ fn to_detail(p: &Supported, raw: &GhPullRequest, access: &RepoAccess, viewer: Op
         labels: labels(&raw.labels),
         checks: checks(raw.checks()),
         merge_capabilities: MergeCapabilities { merge: access.merge_commit, squash: access.squash, rebase: access.rebase },
+        rebase_required: None,
+        behind_by: None,
         viewer: viewer.filter(|v| !v.trim().is_empty()).map(str::to_owned),
         base_comparison,
         auto_merge_enabled: raw.auto_merge().is_some(),
@@ -1168,6 +1171,7 @@ fn to_activity(pr: &GhActivity, host: &str) -> PullRequestActivity {
         comments_truncated: pr.comments.has_more() || pr.reviews.has_more(),
         review_threads_truncated: pr.review_threads.has_more(),
         review_threads: rows(&pr.review_threads.nodes).map(|t| review_thread(t, host)).collect(),
+        overview_threads: None,
         commits,
         reactions: reactions(&pr.reaction_groups),
     }
@@ -1388,17 +1392,23 @@ fn classify_changed_file(path: &str) -> FileKind {
 
 /// The lines of a change by what its files are.
 fn to_breakdown(files: &Rows<GhFile>) -> ChangeBreakdown {
+    breakdown(rows(files).map(|f| (f.path.as_deref().unwrap_or(""), f.additions.unwrap_or(0), f.deletions.unwrap_or(0))))
+}
+
+/// The lines of a change by what its files are, from each file's `(path, additions, deletions)`
+/// (t3code's `toChangeBreakdown`).
+pub fn breakdown<'a>(files: impl Iterator<Item = (&'a str, u64, u64)>) -> ChangeBreakdown {
     let mut breakdown = ChangeBreakdown::default();
-    for f in rows(files) {
-        let bucket: &mut LineCount = match classify_changed_file(f.path.as_deref().unwrap_or("")) {
+    for (path, additions, deletions) in files {
+        let bucket: &mut LineCount = match classify_changed_file(path) {
             FileKind::Code => &mut breakdown.code,
             FileKind::Tests => &mut breakdown.tests,
             FileKind::Mocks => &mut breakdown.mocks,
             FileKind::Generated => &mut breakdown.generated,
             FileKind::Docs => &mut breakdown.docs,
         };
-        bucket.additions += f.additions.unwrap_or(0);
-        bucket.deletions += f.deletions.unwrap_or(0);
+        bucket.additions += additions;
+        bucket.deletions += deletions;
     }
     breakdown
 }
@@ -1538,7 +1548,7 @@ mod tests {
     use serde_json::{Value, json};
 
     fn project() -> Supported {
-        Supported { project_id: "p1".into(), title: "P".into(), workspace_root: "/w".into(), repository: "o/r".into(), host: "github.com".into() }
+        Supported { project_id: "p1".into(), title: "P".into(), workspace_root: "/w".into(), repository: "o/r".into(), host: "github.com".into(), provider: super::super::pull_request_failure::Provider::GitHub }
     }
 
     fn pull_request(raw: Value) -> GhPullRequest {

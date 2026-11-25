@@ -61,10 +61,16 @@ pub struct ServerSettings {
     /// Defaults to `true`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub keep_awake_while_agents_work: Option<bool>,
+    /// New T3 Connect device keys wait for approval from someone already trusted. Defaults to `false`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub require_connect_device_approval: Option<bool>,
 
     /// Defaults to `true`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enable_agent_browser_access: Option<bool>,
+    /// Lets clients reach this machine's loopback ports over `/api/preview/tunnel`. Defaults to `true`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enable_preview_tunnel: Option<bool>,
     /// Defaults to three empty credentials.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cloud_speech_credentials: Option<CloudSpeechCredentials>,
@@ -194,6 +200,13 @@ pub struct ServerSettings {
     /// Tells two sets of the same theme apart. Defaults to `""`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_theme_set_at: Option<String>,
+    /// The appearance clients apply once each time it is set (`DefaultAppearancePreference`).
+    /// Defaults to `""`, which sets none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_appearance: Option<DefaultAppearance>,
+    /// Tells two sets of the same appearance apart. Defaults to `""`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_appearance_set_at: Option<String>,
     /// Defaults to `null`; a kind this build does not know reads as `null` too.
     #[serde(default, deserialize_with = "double_option", skip_serializing_if = "Option::is_none")]
     pub environment_icon: Option<Option<EnvironmentMachineKind>>,
@@ -273,6 +286,10 @@ pub struct ServerSettings {
     /// By secret provider id (`SecretProviderId`). Defaults to `{}`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub secret_providers: Option<BTreeMap<String, SecretProviderConfig>>,
+
+    /// How long token usage history is kept. Defaults to 92 days.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage_history_retention_days: Option<UsageHistoryRetentionDays>,
 
     /// By model id. Defaults to `{}`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -479,6 +496,55 @@ string_enum! {
     ResponseStreamingMode {
         Turn = "turn",
         Paragraph = "paragraph",
+    }
+}
+
+string_enum! {
+    /// The appearance clients apply once per set, like the default theme (`DefaultAppearancePreference`).
+    DefaultAppearance {
+        Unset = "",
+        Light = "light",
+        Dark = "dark",
+        System = "system",
+    }
+}
+
+/// How long token usage history is kept (`UsageHistoryRetentionDays`): a
+/// positive number of days, or `unlimited`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UsageHistoryRetentionDays {
+    Days(u32),
+    Unlimited,
+}
+
+impl UsageHistoryRetentionDays {
+    /// t3code's default.
+    pub const DEFAULT: UsageHistoryRetentionDays = UsageHistoryRetentionDays::Days(92);
+}
+
+impl Serialize for UsageHistoryRetentionDays {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            UsageHistoryRetentionDays::Days(days) => serializer.serialize_u32(*days),
+            UsageHistoryRetentionDays::Unlimited => serializer.serialize_str("unlimited"),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for UsageHistoryRetentionDays {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Wire {
+            Days(u32),
+            Text(String),
+        }
+        match Wire::deserialize(deserializer)? {
+            Wire::Days(0) => Err(serde::de::Error::custom("usageHistoryRetentionDays must be greater than 0")),
+            Wire::Days(days) => Ok(UsageHistoryRetentionDays::Days(days)),
+            Wire::Text(text) if text == "unlimited" => Ok(UsageHistoryRetentionDays::Unlimited),
+            Wire::Text(text) => Err(serde::de::Error::custom(format!("unknown usageHistoryRetentionDays `{text}`"))),
+        }
     }
 }
 

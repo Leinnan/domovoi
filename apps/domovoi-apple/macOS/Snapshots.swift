@@ -160,6 +160,14 @@ enum Snapshots {
         core.update(.showRoute(route: "pull-requests"))
         await settle(4)
         await capture("09-pull-requests", dir)
+        core.update(.showRoute(route: "usage"))
+        await wait(20) { !core.view.usage.loading }
+        await settle(2)
+        await capture("09b-usage", dir)
+        core.update(.loadUsage(days: 1))
+        await wait(20) { !core.view.usage.loading }
+        await settle(2)
+        await capture("09c-usage-today", dir)
         openSettings()
         await settle(2)
         await capture("10-settings", dir)

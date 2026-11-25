@@ -1,0 +1,432 @@
+{
+ "fixture": true,
+ "env": {
+  "GIT_ALLOW_PROTOCOL": "file",
+  "GIT_TERMINAL_PROMPT": "0"
+ },
+ "normalize": [],
+ "cases": [
+  {
+   "tag": "projects.mutate",
+   "payload": {
+    "type": "project.create",
+    "commandId": "create-calc-again",
+    "projectId": "calc-again",
+    "title": "Calc again",
+    "workspaceRoot": "$DIR/repos/calc-again",
+    "createWorkspaceRootIfMissing": false,
+    "defaultModelSelection": null
+   }
+  },
+  {
+   "tag": "projects.mutate",
+   "payload": {
+    "type": "project.create",
+    "commandId": "create-widgets",
+    "projectId": "widgets",
+    "title": "Widgets",
+    "workspaceRoot": "$DIR/repos/widgets",
+    "createWorkspaceRootIfMissing": false,
+    "defaultModelSelection": null
+   }
+  },
+  {
+   "tag": "projects.mutate",
+   "payload": {
+    "type": "project.create",
+    "commandId": "create-locked",
+    "projectId": "locked",
+    "title": "Locked",
+    "workspaceRoot": "$DIR/repos/locked",
+    "createWorkspaceRootIfMissing": false,
+    "defaultModelSelection": null
+   }
+  },
+  {
+   "tag": "projects.mutate",
+   "payload": {
+    "type": "project.create",
+    "commandId": "create-gl-one",
+    "projectId": "gl-one",
+    "title": "GitLab one",
+    "workspaceRoot": "$DIR/repos/gl-one",
+    "createWorkspaceRootIfMissing": false,
+    "defaultModelSelection": null
+   }
+  },
+  {
+   "tag": "projects.mutate",
+   "payload": {
+    "type": "project.create",
+    "commandId": "create-plain",
+    "projectId": "plain",
+    "title": "No remote",
+    "workspaceRoot": "$DIR/repos/plain",
+    "createWorkspaceRootIfMissing": false,
+    "defaultModelSelection": null
+   }
+  },
+  {
+   "tag": "issues.list",
+   "payload": {
+    "state": "open"
+   },
+   "note": "every project: calc read once for two checkouts, widgets fails, GitLab cannot be browsed"
+  },
+  {
+   "tag": "issues.list",
+   "payload": {
+    "state": "all",
+    "limit": 2,
+    "projectId": "$PROJECT"
+   },
+   "save": {
+    "CURSOR": "/nextCursors/github.com acme~1calc"
+   },
+   "note": "more than the limit: a cursor"
+  },
+  {
+   "tag": "issues.list",
+   "payload": {
+    "state": "all",
+    "limit": 2,
+    "projectId": "$PROJECT",
+    "cursors": {
+     "github.com acme/calc": "$CURSOR"
+    }
+   },
+   "note": "the next slice"
+  },
+  {
+   "tag": "issues.list",
+   "payload": {
+    "state": "all",
+    "cursors": {
+     "github.com elsewhere/none": "x"
+    }
+   },
+   "note": "a continuation of no scope here reads nothing"
+  },
+  {
+   "tag": "issues.list",
+   "payload": {
+    "state": "closed",
+    "projectId": "$PROJECT",
+    "sort": "created"
+   }
+  },
+  {
+   "tag": "issues.list",
+   "payload": {
+    "state": "open",
+    "involvement": "assigned",
+    "projectId": "$PROJECT"
+   },
+   "note": "viewers names the signed-in account"
+  },
+  {
+   "tag": "issues.list",
+   "payload": {
+    "state": "all",
+    "involvement": "authored",
+    "excludeProjectIds": [
+     "widgets",
+     "locked",
+     "calc-again"
+    ]
+   }
+  },
+  {
+   "tag": "issues.list",
+   "payload": {
+    "state": "open",
+    "involvement": "mentioned",
+    "host": "GitHub.com",
+    "excludeProjectIds": [
+     "widgets"
+    ]
+   }
+  },
+  {
+   "tag": "issues.list",
+   "payload": {
+    "state": "all",
+    "query": " negative  numbers ",
+    "labels": [
+     "bug"
+    ],
+    "assignee": "octocat",
+    "projectId": "$PROJECT"
+   }
+  },
+  {
+   "tag": "issues.list",
+   "payload": {
+    "state": "open",
+    "host": "gitlab.com"
+   },
+   "note": "narrowed to a host without a driver: trackers only"
+  },
+  {
+   "tag": "issues.list",
+   "payload": {
+    "state": "open",
+    "projectId": "plain"
+   },
+   "note": "a project with no remote has no tracker"
+  },
+  {
+   "tag": "issues.list",
+   "payload": {
+    "state": "open",
+    "limit": 0
+   },
+   "expect": "defect",
+   "skip_schema": true,
+   "note": "outside t3code's schema: the decode refuses it"
+  },
+  {
+   "tag": "issues.detail",
+   "payload": {
+    "projectId": "$PROJECT",
+    "tracker": "github",
+    "scope": "acme/calc",
+    "key": "7"
+   },
+   "note": "comments with an older page, events, linked pull requests, reactions"
+  },
+  {
+   "tag": "issues.detail",
+   "payload": {
+    "projectId": "$PROJECT",
+    "tracker": "github",
+    "scope": "acme/calc",
+    "host": "github.com",
+    "key": "8"
+   }
+  },
+  {
+   "tag": "issues.detail",
+   "payload": {
+    "projectId": "$PROJECT",
+    "tracker": "github",
+    "scope": "acme/calc",
+    "key": "10"
+   },
+   "note": "closed as a duplicate, by an account that is gone"
+  },
+  {
+   "tag": "issues.detail",
+   "payload": {
+    "projectId": "$PROJECT",
+    "tracker": "github",
+    "scope": "acme/calc",
+    "key": "999"
+   },
+   "expect": "failure",
+   "error": "IssueOperationError",
+   "note": "not-found"
+  },
+  {
+   "tag": "issues.detail",
+   "payload": {
+    "projectId": "$PROJECT",
+    "tracker": "github",
+    "scope": "acme/calc",
+    "key": "07"
+   },
+   "expect": "failure",
+   "error": "IssueOperationError",
+   "note": "not a number GitHub writes: not-found"
+  },
+  {
+   "tag": "issues.detail",
+   "payload": {
+    "projectId": "$PROJECT",
+    "tracker": "github",
+    "host": "github.com",
+    "scope": "other/lib",
+    "key": "3"
+   },
+   "note": "another repository on the host: read-only"
+  },
+  {
+   "tag": "issues.detail",
+   "payload": {
+    "projectId": "$PROJECT",
+    "tracker": "github",
+    "scope": "acme/../x",
+    "key": "3"
+   },
+   "expect": "failure",
+   "error": "IssueOperationError"
+  },
+  {
+   "tag": "issues.detail",
+   "payload": {
+    "projectId": "gl-one",
+    "tracker": "gitlab",
+    "scope": "group/one",
+    "key": "1"
+   },
+   "expect": "failure",
+   "error": "IssueUnavailableError",
+   "note": "no GitLab driver"
+  },
+  {
+   "tag": "issues.detail",
+   "payload": {
+    "projectId": "plain",
+    "tracker": "github",
+    "scope": "acme/calc",
+    "key": "7"
+   },
+   "expect": "failure",
+   "error": "IssueUnavailableError"
+  },
+  {
+   "tag": "issues.detail",
+   "payload": {
+    "projectId": "nope",
+    "tracker": "github",
+    "scope": "acme/calc",
+    "key": "7"
+   },
+   "expect": "failure",
+   "error": "IssueUnavailableError"
+  },
+  {
+   "tag": "issues.comments",
+   "payload": {
+    "projectId": "$PROJECT",
+    "tracker": "github",
+    "scope": "acme/calc",
+    "key": "7",
+    "cursor": "older-1"
+   }
+  },
+  {
+   "tag": "issues.comments",
+   "payload": {
+    "projectId": "$PROJECT",
+    "tracker": "github",
+    "scope": "acme/calc",
+    "key": "999",
+    "cursor": "older-1"
+   },
+   "expect": "failure",
+   "error": "IssueOperationError"
+  },
+  {
+   "tag": "issues.templates",
+   "payload": {
+    "projectId": "$PROJECT",
+    "tracker": "github",
+    "scope": "acme/calc"
+   },
+   "note": "a markdown template; config.yml turns blank issues off"
+  },
+  {
+   "tag": "issues.templates",
+   "payload": {
+    "projectId": "locked",
+    "tracker": "github",
+    "scope": "acme/locked"
+   }
+  },
+  {
+   "tag": "issues.candidates",
+   "payload": {
+    "projectId": "$PROJECT",
+    "tracker": "github",
+    "scope": "acme/calc"
+   }
+  },
+  {
+   "tag": "issues.candidates",
+   "payload": {
+    "projectId": "widgets",
+    "tracker": "github",
+    "scope": "acme/widgets"
+   },
+   "expect": "failure",
+   "error": "IssueOperationError"
+  },
+  {
+   "tag": "issues.linkedThreads",
+   "payload": {
+    "tracker": "github",
+    "host": "github.com",
+    "scope": "acme/calc",
+    "key": "7"
+   },
+   "note": "nothing linked yet"
+  },
+  {
+   "tag": "orchestration.dispatchCommand",
+   "payload": {
+    "type": "thread.issue.link",
+    "commandId": "link-7",
+    "threadId": "$THREAD",
+    "tracker": "github",
+    "host": "GitHub.com",
+    "scope": "acme/calc",
+    "key": "7",
+    "projectId": "$PROJECT",
+    "url": "https://github.com/acme/calc/issues/7",
+    "displayKey": "#7",
+    "title": "Adding negative numbers fails",
+    "source": "manual"
+   }
+  },
+  {
+   "tag": "issues.linkedThreads",
+   "payload": {
+    "tracker": "github",
+    "host": "github.com",
+    "scope": "ACME/Calc",
+    "key": " 7"
+   },
+   "note": "keys compare loosely"
+  },
+  {
+   "tag": "issues.linkedThreads",
+   "payload": {
+    "tracker": "github",
+    "host": "github.com",
+    "scope": "acme/calc",
+    "key": "9"
+   }
+  },
+  {
+   "tag": "orchestration.dispatchCommand",
+   "payload": {
+    "type": "thread.issue.unlink",
+    "commandId": "unlink-7",
+    "threadId": "$THREAD",
+    "tracker": "github",
+    "host": "github.com",
+    "scope": "acme/calc",
+    "key": "7"
+   }
+  },
+  {
+   "tag": "issues.linkedThreads",
+   "payload": {
+    "tracker": "github",
+    "host": "github.com",
+    "scope": "acme/calc",
+    "key": "7"
+   },
+   "note": "unlinked"
+  },
+  {
+   "tag": "projects.readFile",
+   "payload": {
+    "cwd": "$DIR/gh-data",
+    "relativePath": "log"
+   },
+   "note": "what gh was asked"
+  }
+ ]
+}

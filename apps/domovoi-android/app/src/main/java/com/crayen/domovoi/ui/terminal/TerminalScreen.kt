@@ -8,6 +8,7 @@ import android.view.inputmethod.BaseInputConnection
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputMethodManager
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.horizontalScroll
@@ -15,7 +16,12 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.width
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -268,11 +274,22 @@ fun TerminalScreen(core: Core, onBack: (() -> Unit)?) {
                     },
                     modifier = Modifier.fillMaxSize(),
                 )
-                // Looking back through the history: the way down to the live screen.
+                // Looking back through the history: where in it (a scrollbar on the
+                // right, the live screen at its foot), and the way down.
+                screen?.takeIf { it.scrollbackOffset > 0u && it.scrollbackMax > 0u }?.let { s ->
+                    val thumb = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)
+                    Canvas(Modifier.align(Alignment.CenterEnd).fillMaxHeight().width(4.dp).padding(vertical = Space.xs)) {
+                        val total = (s.scrollbackMax + s.rows).toFloat()
+                        val length = (size.height * s.rows.toFloat() / total).coerceAtLeast(12.dp.toPx())
+                        val back = s.scrollbackOffset.coerceAtMost(s.scrollbackMax).toFloat() / s.scrollbackMax.toFloat()
+                        val top = (size.height - length) * (1f - back)
+                        drawRoundRect(thumb, Offset(0f, top), Size(size.width, length), CornerRadius(size.width / 2))
+                    }
+                }
                 screen?.takeIf { it.scrollbackOffset > 0u }?.let { s ->
                     AssistChip(
                         onClick = { core.update(Event.TerminalScroll(-s.scrollbackOffset.toInt())) },
-                        label = { Text("${s.scrollbackOffset} lines back") },
+                        label = { Text(if (s.scrollbackMax > 0u) "${s.scrollbackOffset} of ${s.scrollbackMax} lines back" else "${s.scrollbackOffset} lines back") },
                         leadingIcon = { Icon(Icons.Outlined.VerticalAlignBottom, null, modifier = Modifier.size(16.dp)) },
                         colors = AssistChipDefaults.assistChipColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
                         modifier = Modifier.align(Alignment.BottomCenter)

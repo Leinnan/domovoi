@@ -879,6 +879,9 @@ pub struct ManagedPolicySummaryLimits {
     pub telemetry: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub browser_cookie_import: Option<bool>,
+    /// `false` turns the preview tunnel off: no client reaches this machine's loopback ports.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preview_tunnel: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub providers: Option<ManagedPolicySummaryProviders>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

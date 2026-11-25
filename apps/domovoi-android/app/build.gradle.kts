@@ -85,6 +85,7 @@ dependencies {
     implementation(libs.camera.view)
     implementation(libs.mlkit.barcode)
     implementation(libs.zxing.core)
+    implementation(libs.unifiedpush.connector)
     implementation(libs.glance.appwidget)
     implementation(libs.glance.material3)
 

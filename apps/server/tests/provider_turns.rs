@@ -457,10 +457,14 @@ while True:
 "##;
 
 /// A stand-in for `opencode`: answers the version check, and as `serve`
-/// speaks the v2 HTTP API with its event stream. A prompt is scripted by a
+/// speaks the v2 HTTP API with its event stream. It keeps each session's
+/// prompts (`opencode-sessions.json`: forks copy them, reverts cut them) and
+/// logs every request to `opencode-requests.log`. A prompt is scripted by a
 /// word in it: `ALL` (text, reasoning, tools, a permission waited for,
-/// tokens, a compaction, a form), `FAIL`, `WAIT` (until interrupted);
-/// anything else is answered `Done.`.
+/// tokens, a compaction, a form), `FAIL`, `LIMIT` (a rate limit), `WAIT`
+/// (until interrupted), `FORMS`, `AGENT` (a subagent in a child session that
+/// asks first; `STOP`: until it is stopped; `BACKGROUND`: it reports back
+/// after the turn's execution ended); anything else is answered `Done.`.
 const FAKE_OPENCODE: &str = r##"#!/usr/bin/python3
 import json, sys, os, threading, queue, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -473,6 +477,22 @@ streams = []
 replies = queue.Queue()
 interrupts = queue.Queue()
 counter = {"session": 0, "message": 0, "event": 0, "running": False}
+# Each session's folder and prompts ({"id", "text"}), and a staged revert.
+sessions = {}
+lock = threading.Lock()
+def save():
+    with open(os.path.join(out, "opencode-sessions.json"), "w") as f:
+        json.dump(sessions, f)
+def new_session(directory, prompts):
+    counter["session"] += 1
+    sid = "ses_%d" % counter["session"]
+    sessions[sid] = {"directory": directory, "prompts": prompts, "staged": None}
+    save()
+    return sid
+def said(text):
+    if "<user_request>\n" in text:
+        return text.split("<user_request>\n", 1)[1].rsplit("\n</user_request>", 1)[0]
+    return text
 def emit(session, ty, **data):
     counter["event"] += 1
     data["sessionID"] = session
@@ -485,16 +505,59 @@ def run(session, message, text):
         script(session, message, text)
     finally:
         counter["running"] = False
+def subagent(session, message, text):
+    child = new_session(sessions[session]["directory"], [])
+    background = "BACKGROUND" in text
+    emit(session, "session.tool.input.started", id="tool_sub", name="subagent", assistantMessageID=message)
+    emit(session, "session.tool.called", id="tool_sub", assistantMessageID=message, executed=True,
+        input={"prompt": "List the files here", "description": "Find files", "agent": "explore", "background": background})
+    emit(child, "session.created", parentID=session, projectID="prj", location={"directory": "/w"}, slug="child", version="2")
+    # The child works before the call names it.
+    emit(child, "session.text.started", assistantMessageID="msg_c1", ordinal=0)
+    emit(child, "session.text.ended", assistantMessageID="msg_c1", ordinal=0, text="Looking around.")
+    emit(session, "session.tool.progress", id="tool_sub", assistantMessageID=message, metadata={"sessionID": child})
+    emit(child, "session.tool.input.started", id="tool_c1", name="shell", assistantMessageID="msg_c1")
+    emit(child, "session.tool.called", id="tool_c1", assistantMessageID="msg_c1", input={"command": "ls"}, executed=True)
+    if background:
+        emit(session, "session.tool.success", id="tool_sub", assistantMessageID=message, executed=True,
+            content=[{"type": "text", "text": "Started in the background."}], metadata={"sessionID": child, "status": "running"})
+        emit(session, "session.text.started", assistantMessageID=message, ordinal=8)
+        emit(session, "session.text.ended", assistantMessageID=message, ordinal=8, text="It runs in the background.")
+        counter["running"] = False
+        emit(session, "session.execution.succeeded")
+        time.sleep(0.5)
+    emit(child, "permission.asked", id="perm_c1", action="shell", resources=["ls"], source={"id": "tool_c1"})
+    replies.get()
+    emit(child, "session.tool.success", id="tool_c1", assistantMessageID="msg_c1", content=[{"type": "text", "text": "a.txt"}], metadata={"exit": 0}, executed=True)
+    if "STOP" in text:
+        interrupts.get()
+        emit(child, "session.execution.interrupted")
+        return emit(session, "session.tool.failed", id="tool_sub", assistantMessageID=message, executed=True, error={"type": "aborted", "message": "The subagent was stopped."})
+    emit(child, "session.execution.succeeded")
+    if background:
+        emit(session, "session.inbox.enqueued", inboxID="msg_report", item={"type": "synthetic", "delivery": "queue",
+            "payload": {"text": "<subagent id=\"%s\">\nBackground done.\n</subagent>" % child, "metadata": {"source": "subagent", "childID": child, "state": "completed"}}})
+        emit(session, "session.execution.started")
+        counter["running"] = True
+        emit(session, "session.text.started", assistantMessageID="msg_wake", ordinal=0)
+        emit(session, "session.text.ended", assistantMessageID="msg_wake", ordinal=0, text="Got the report.")
+        return
+    emit(session, "session.tool.success", id="tool_sub", assistantMessageID=message, executed=True,
+        content=[{"type": "text", "text": "<subagent id=\"%s\">\nFound a.txt\n</subagent>" % child}], metadata={"sessionID": child})
 def script(session, message, text):
     part = lambda n: {"assistantMessageID": message, "ordinal": n}
     if "FAIL" in text:
-        return emit(session, "session.execution.failed", error={"data": {"message": "The model is overloaded."}})
+        return emit(session, "session.execution.failed", error={"type": "provider.overloaded", "data": {"message": "The model is overloaded."}})
+    if "LIMIT" in text:
+        return emit(session, "session.execution.failed", error={"type": "provider.rate-limit", "message": "Rate limit reached."})
     if "WAIT" in text:
         emit(session, "session.text.started", **part(0))
         emit(session, "session.text.delta", delta="Working on it", **part(0))
         interrupts.get()
         counter["running"] = False
         return emit(session, "session.execution.interrupted")
+    if "AGENT" in text:
+        subagent(session, message, text)
     if "FORMS" in text:
         fid = "form_" + message
         fields = [
@@ -504,6 +567,8 @@ def script(session, message, text):
         ]
         if "UNSUPPORTED" in text:
             fields = [{"type": "external", "key": "url"}]
+        emit(session, "session.tool.input.started", id="tool_q", name="question", **part(5))
+        emit(session, "session.tool.called", id="tool_q", input={"questions": []}, executed=True, **part(5))
         frame = "data: " + json.dumps({"id": "evt_" + fid, "type": "form.created", "data": {"form": {"id": fid, "sessionID": session, "fields": fields}}}) + "\n\n"
         for stream in list(streams):
             stream.put(frame)
@@ -513,6 +578,7 @@ def script(session, message, text):
             emit(session, "form.cancelled", id=fid)
         else:
             replies.get()
+        emit(session, "session.tool.success", id="tool_q", content=[{"type": "text", "text": "answered"}], executed=True, **part(5))
     if "ALL" in text:
         emit(session, "session.reasoning.delta", delta="Thinking ", **part(0))
         emit(session, "session.reasoning.ended", text="Thinking it over.", **part(0))
@@ -546,6 +612,9 @@ def script(session, message, text):
     emit(session, "session.text.ended", text="Done.", **part(9))
     counter["running"] = False
     emit(session, "session.execution.succeeded")
+USAGE = {"location": {"directory": "/"}, "data": {"workspace": {"id": "wrk_1", "name": "Team", "usageURL": "https://opencode.ai/workspace/wrk_1"},
+    "go": {"rolling": {"percent": 30, "limited": False, "resetsAt": 4102444800000}, "weekly": {"percent": 100, "limited": True, "resetsAt": 4102444800000},
+        "monthly": {"percent": 50, "limited": False, "resetsAt": 4102444800000}}, "budgets": []}}
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     def log_message(self, *args):
@@ -562,6 +631,8 @@ class Handler(BaseHTTPRequestHandler):
         return json.loads(self.rfile.read(n)) if n else None
     def note(self, body):
         open(os.path.join(out, "opencode-requests.log"), "a").write(json.dumps({"method": self.command, "path": self.path, "body": body}) + "\n")
+    def parts(self):
+        return self.path.split("?")[0].strip("/").split("/")
     def do_GET(self):
         if self.path == "/api/event":
             self.send_response(200)
@@ -582,26 +653,56 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply({"data": [{"providerID": "fake", "id": "m1", "name": "Fake One", "enabled": True}, {"providerID": "fake", "id": "off", "enabled": False}]})
         if self.path == "/api/model/default":
             return self.reply({"data": {"providerID": "fake", "id": "m1"}})
+        if self.path.startswith("/api/experimental/usage/limits"):
+            self.note(None)
+            return self.reply(USAGE)
+        self.reply({})
+    def do_PUT(self):
+        self.note(self.body())
         self.reply({})
     def do_POST(self):
-        body = self.body()
+        body = self.body() or {}
         self.note(body)
-        parts = self.path.strip("/").split("/")
-        if self.path == "/api/session":
-            counter["session"] += 1
-            return self.reply({"data": {"id": "ses_%d" % counter["session"]}})
+        parts = self.parts()
+        with lock:
+            if self.path == "/api/session":
+                return self.reply({"data": {"id": new_session(body.get("location", {}).get("directory"), [])}})
+            if len(parts) == 4 and parts[3] == "fork":
+                source = sessions[parts[2]]
+                prompts = source["prompts"]
+                if body.get("before"):
+                    cut = [p["id"] for p in prompts].index(body["before"])
+                    prompts = prompts[:cut]
+                sid = new_session(source["directory"], list(prompts))
+                return self.reply({"data": {"id": sid, "location": {"directory": source["directory"]}}})
+            if len(parts) == 4 and parts[3] == "move":
+                sessions[parts[2]]["directory"] = body["directory"]
+                save()
+                return self.reply({})
+            if len(parts) == 5 and parts[3] == "revert":
+                s = sessions[parts[2]]
+                if parts[4] == "stage":
+                    s["staged"] = body["messageID"]
+                elif s["staged"]:
+                    s["prompts"] = s["prompts"][:[p["id"] for p in s["prompts"]].index(s["staged"])]
+                    s["staged"] = None
+                save()
+                return self.reply({})
         if len(parts) == 4 and parts[3] == "prompt":
             if not streams:
                 time.sleep(1.0)
             counter["message"] += 1
-            message = "msg_%d" % counter["message"]
+            message = body.get("id") or "msg_%d" % counter["message"]
+            with lock:
+                sessions[parts[2]]["prompts"].append({"id": message, "text": said(body.get("text", ""))})
+                save()
             if counter["running"]:
                 # A prompt while it works goes into the running execution.
                 emit(parts[2], "session.text.started", assistantMessageID="msg_steer", ordinal=0)
-                emit(parts[2], "session.text.ended", assistantMessageID="msg_steer", ordinal=0, text="Steered: " + (body or {}).get("text", ""))
+                emit(parts[2], "session.text.ended", assistantMessageID="msg_steer", ordinal=0, text="Steered: " + body.get("text", ""))
                 return self.reply({"data": {"id": message}})
             counter["running"] = True
-            threading.Thread(target=run, args=(parts[2], message, (body or {}).get("text", "")), daemon=True).start()
+            threading.Thread(target=run, args=(parts[2], message, body.get("text", "")), daemon=True).start()
             return self.reply({"data": {"id": message}})
         if len(parts) == 6 and parts[3] == "form":
             if not counter.get("failed_form_reply"):
@@ -614,7 +715,7 @@ class Handler(BaseHTTPRequestHandler):
             replies.put(body)
             return self.reply({})
         if len(parts) == 4 and parts[3] == "interrupt":
-            interrupts.put(True)
+            interrupts.put(parts[2])
             return self.reply({})
         self.reply({})
     def do_PATCH(self):
@@ -622,10 +723,14 @@ class Handler(BaseHTTPRequestHandler):
         self.reply({})
     def do_DELETE(self):
         self.note(None)
-        parts = self.path.split("?")[0].strip("/").split("/")
+        parts = self.parts()
         if len(parts) == 5 and parts[3] == "form" and parts[4].startswith("form_msg"):
             emit(parts[2], "form.cancelled", id=parts[4])
             replies.put(None)
+        if len(parts) == 4 and parts[3] == "revert":
+            with lock:
+                sessions[parts[2]]["staged"] = None
+                save()
         self.reply({})
 ThreadingHTTPServer(("127.0.0.1", port), Handler).serve_forever()
 "##;
@@ -896,6 +1001,179 @@ for line in sys.stdin:
         send({"id": pid, "result": {"stopReason": "end_turn"}})
 "#;
 
+/// Stand-ins for the agent CLIs t3code drives over ACP as drivers of their
+/// own, and for Devin (a registry agent): one script, which CLI by the name
+/// it runs under. `grok`: `--version`, `models` (logged in), `agent stdio`;
+/// `kiro-cli`: `--version`, `whoami`, `chat --list-models`, `acp`
+/// (`_kiro/config/template`, config options for its agent, model, effort and
+/// autopilot); `fx`: `--version`, `status --json` and `models --json` by
+/// `FX_PROVIDER`, `acp` (modes, backend, model, effort); `devin`: an ACP agent
+/// that runs a command in the client's terminal and asks for a URL sign-in.
+/// Turns by a word: `ASK` (Grok's question, then its plan exit), `WAIT`
+/// (until steered or cancelled), `TOOLS` (an approval), `TERM` (a terminal),
+/// `LOGIN` (a URL sign-in), anything else a short reply. Each logs its argv
+/// and what it is sent to `out/<name>.log`.
+const FAKE_ACP_CLI: &str = r##"#!/usr/bin/python3
+import json, sys, os
+name = os.path.basename(sys.argv[0])
+args = sys.argv[1:]
+out = os.environ.get("FAKE_CLAUDE_OUT", "/tmp")
+log = open(os.path.join(out, name + ".log"), "a")
+log.write(json.dumps({"argv": args, "fxProvider": os.environ.get("FX_PROVIDER"), "referrer": os.environ.get("GROK_OAUTH2_REFERRER")}) + "\n"); log.flush()
+if args == ["--version"]:
+    print({"grok": "grok 1.0.60", "kiro-cli": "kiro-cli 2.32.0", "fx": "fx 0.0.14", "devin": "devin 1.0.0"}[name]); sys.exit(0)
+if name == "grok" and args == ["models"]:
+    print("You are logged in as test@x.ai\n\nAvailable models:\n  * grok-4 (default)\n  * grok-code"); sys.exit(0)
+if name == "kiro-cli" and args[:1] == ["whoami"]:
+    print(json.dumps({"accountType": "Social", "email": "k@example.com"})); sys.exit(0)
+if name == "kiro-cli" and args[:2] == ["chat", "--list-models"]:
+    print(json.dumps({"models": [{"model_id": "auto", "model_name": "Auto"}, {"model_id": "claude-opus-4.6", "model_name": "Claude Opus 4.6"}], "default_model": "auto"})); sys.exit(0)
+if name == "fx" and args == ["status", "--json"]:
+    p = os.environ.get("FX_PROVIDER")
+    if p is None:
+        print(json.dumps({"auth": "gateway key", "model": "gpt-6", "modes": [{"id": "ask"}, {"id": "auto"}, {"id": "full-access"}]}))
+    else:
+        print(json.dumps({"auth": "gateway key" if p == "gateway" else "missing"}))
+    sys.exit(0)
+if name == "fx" and args == ["models", "--json"]:
+    print(json.dumps({"ids": ["gpt-6", "gpt-6-mini"]})); sys.exit(0)
+def send(m):
+    m["jsonrpc"] = "2.0"
+    sys.stdout.write(json.dumps(m) + "\n"); sys.stdout.flush()
+def update(sid, u):
+    send({"method": "session/update", "params": {"sessionId": sid, "update": u}})
+def text(sid, t):
+    update(sid, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": t}})
+grok_models = {"currentModelId": "grok-4", "availableModels": [
+    {"modelId": "grok-4", "name": "Grok 4", "_meta": {"reasoningEffort": "high", "reasoningEfforts": [{"value": "high", "default": True}, {"value": "low"}]}},
+    {"modelId": "grok-code", "name": "Grok Code", "_meta": {"supportsReasoningEffort": False}}]}
+def select(id, current, values, category=None):
+    o = {"id": id, "name": id, "type": "select", "currentValue": current, "options": [{"value": v, "name": v} for v in values]}
+    if category: o["category"] = category
+    return o
+options = {
+    "kiro-cli": [select("mode", "kiro_default", ["kiro_default", "reviewer"]), select("autopilot", "on", ["on", "off"]),
+        select("model", "auto", ["auto", "claude-opus-4.6"], "model"), select("effortLevel", "high", ["low", "medium", "high", "max"])],
+    "fx": [select("provider", "gateway", ["gateway", "codex"]), select("model", "gpt-6", ["gpt-6", "gpt-6-mini"], "model"), select("effort", "auto", ["auto", "low", "medium", "high"])],
+}.get(name, [])
+pending = {}
+asked = {}
+for line in sys.stdin:
+    m = json.loads(line)
+    log.write(json.dumps(m) + "\n"); log.flush()
+    method, mid, p = m.get("method"), m.get("id"), m.get("params", {})
+    if method == "initialize":
+        result = {"protocolVersion": 1, "agentCapabilities": {"loadSession": True, "mcpCapabilities": {"http": True}, "promptCapabilities": {"image": name == "kiro-cli"}},
+            "authMethods": [{"id": "cached_token", "name": "Cached token"}], "agentInfo": {"name": name, "version": "1.0.0"}}
+        if name == "grok":
+            result["_meta"] = {"modelState": grok_models, "availableCommands": [{"name": "review", "description": "Review changes"}, {"name": "context", "description": "Context"}]}
+        send({"id": mid, "result": result})
+    elif method == "_kiro/config/template":
+        send({"id": mid, "result": {"configOptions": [select("mode", "kiro_default", ["kiro_default", "reviewer"])]}})
+    elif method == "session/new":
+        r = {"sessionId": name + "-session"}
+        if name == "grok": r["models"] = grok_models
+        if options: r["configOptions"] = options
+        if name == "fx": r["modes"] = {"availableModes": [{"id": "ask", "name": "Ask"}, {"id": "auto", "name": "Auto"}, {"id": "full-access", "name": "Full access"}], "currentModeId": "ask"}
+        send({"id": mid, "result": r})
+    elif method == "session/set_config_option":
+        for o in options:
+            if o["id"] == p["configId"]: o["currentValue"] = p["value"]
+        send({"id": mid, "result": {"configOptions": options}})
+    elif method in ("session/set_model", "session/set_mode"):
+        send({"id": mid, "result": {}})
+    elif method == "session/cancel":
+        if "wait" in pending:
+            pid, sid = pending.pop("wait")
+            send({"id": pid, "result": {"stopReason": "cancelled"}})
+    elif method == "_x.ai/interject":
+        send({"id": mid, "result": {"status": "queued"}})
+        pid, sid = pending.pop("wait")
+        text(sid, "Interjected: " + p["text"])
+        send({"id": pid, "result": {"stopReason": "end_turn"}})
+    elif method == "_session/steer":
+        send({"id": mid, "result": {"queued": True, "messageId": "steer-1"}})
+        pid, sid = pending.pop("wait")
+        update(sid, {"sessionUpdate": "session_info_update", "_meta": {"kiro": {"kind": "steering_injected", "messageId": "steer-1"}}})
+        text(sid, "Steered: " + p["message"] + " [STEERING steer-1: noted]")
+        send({"id": pid, "result": {"stopReason": "end_turn"}})
+    elif method == "session/prompt":
+        sid = p["sessionId"]
+        said = " ".join(b.get("text", "") for b in p["prompt"] if b.get("type") == "text")
+        if "ASK" in said:
+            send({"id": 700, "method": "_x.ai/ask_user_question", "params": {"sessionId": sid, "toolCallId": "q1", "mode": "default",
+                "questions": [{"question": "Which?", "options": [{"label": "A"}, {"label": "B"}]}]}})
+            pending["ask"] = (mid, sid)
+        elif "WAIT" in said:
+            text(sid, "Working")
+            pending["wait"] = (mid, sid)
+        elif "TOOLS" in said:
+            update(sid, {"sessionUpdate": "tool_call", "toolCallId": "cloud", "title": "fetch", "kind": "fetch", "status": "in_progress", "_meta": {"kiro": {"toolId": "fetch_cloud_config"}}})
+            update(sid, {"sessionUpdate": "tool_call_update", "toolCallId": "cloud", "status": "completed"})
+            update(sid, {"sessionUpdate": "tool_call", "toolCallId": "call-1", "title": "Read a.txt", "kind": "read", "status": "pending"})
+            opts = [{"optionId": "always", "name": "Always", "kind": "allow_always"}, {"optionId": "no", "name": "No", "kind": "reject_once"}] if name == "kiro-cli" else \
+                [{"optionId": "yes", "name": "Yes", "kind": "allow_once"}, {"optionId": "no", "name": "No", "kind": "reject_once"}]
+            send({"id": 701, "method": "session/request_permission", "params": {"sessionId": sid, "toolCall": {"toolCallId": "call-1", "title": "Read a.txt", "kind": "read"}, "options": opts}})
+            pending["tools"] = (mid, sid)
+        elif "TERM" in said:
+            send({"id": 710, "method": "terminal/create", "params": {"sessionId": sid, "command": "echo early"}})
+            pending["term"] = (mid, sid)
+        elif "LOGIN" in said:
+            send({"id": 720, "method": "elicitation/create", "params": {"sessionId": sid, "mode": "url", "elicitationId": "login-1", "url": "https://example.com/login", "message": "Sign in to Devin"}})
+            pending["login"] = (mid, sid)
+        else:
+            text(sid, "Hi there.")
+            send({"id": mid, "result": {"stopReason": "end_turn"}})
+    elif mid == 700:
+        pid, sid = pending.pop("ask")
+        asked["question"] = m.get("result")
+        text(sid, "You chose " + m["result"]["answers"]["Which?"][0] + ".")
+        send({"id": 702, "method": "_x.ai/exit_plan_mode", "params": {"sessionId": sid, "toolCallId": "p1", "planContent": "# Plan\n\n- Do it"}})
+        pending["plan"] = (pid, sid)
+    elif mid == 702:
+        pid, sid = pending.pop("plan")
+        send({"id": pid, "result": {"stopReason": "end_turn"}})
+    elif mid == 701:
+        pid, sid = pending.pop("tools")
+        chosen = m["result"]["outcome"].get("optionId")
+        update(sid, {"sessionUpdate": "tool_call_update", "toolCallId": "call-1", "status": "completed" if chosen in ("yes", "always") else "failed",
+            "content": [{"type": "content", "content": {"type": "text", "text": "read" if chosen in ("yes", "always") else "declined"}}]})
+        text(sid, "Done.")
+        send({"id": pid, "result": {"stopReason": "end_turn"}})
+    elif mid == 710:
+        # Refused before any command was approved: ask, then open it.
+        pid, sid = pending["term"]
+        asked["early"] = m.get("error")
+        update(sid, {"sessionUpdate": "tool_call", "toolCallId": "call-t", "title": "echo hi", "kind": "execute", "status": "pending", "rawInput": {"command": "echo hi"}})
+        send({"id": 711, "method": "session/request_permission", "params": {"sessionId": sid, "toolCall": {"toolCallId": "call-t", "title": "echo hi", "kind": "execute"},
+            "options": [{"optionId": "yes", "name": "Yes", "kind": "allow_once"}, {"optionId": "no", "name": "No", "kind": "reject_once"}]}})
+    elif mid == 711:
+        pid, sid = pending["term"]
+        send({"id": 712, "method": "terminal/create", "params": {"sessionId": sid, "command": "echo hi-from-terminal; exit 2", "outputByteLimit": 1000}})
+    elif mid == 712:
+        pid, sid = pending["term"]
+        asked["terminal"] = m["result"]["terminalId"]
+        send({"id": 713, "method": "terminal/wait_for_exit", "params": {"sessionId": sid, "terminalId": asked["terminal"]}})
+    elif mid == 713:
+        pid, sid = pending["term"]
+        asked["exit"] = m["result"]
+        send({"id": 714, "method": "terminal/output", "params": {"sessionId": sid, "terminalId": asked["terminal"]}})
+    elif mid == 714:
+        pid, sid = pending["term"]
+        asked["output"] = m["result"]
+        update(sid, {"sessionUpdate": "tool_call_update", "toolCallId": "call-t", "status": "completed", "content": [{"type": "terminal", "terminalId": asked["terminal"]}]})
+        send({"id": 715, "method": "terminal/release", "params": {"sessionId": sid, "terminalId": asked["terminal"]}})
+    elif mid == 715:
+        pid, sid = pending.pop("term")
+        open(os.path.join(out, "terminal.json"), "w").write(json.dumps(asked))
+        text(sid, "Ran it.")
+        send({"id": pid, "result": {"stopReason": "end_turn"}})
+    elif mid == 720:
+        pid, sid = pending.pop("login")
+        text(sid, "Login: " + m["result"]["action"])
+        send({"id": pid, "result": {"stopReason": "end_turn"}})
+"##;
+
 /// A stand-in for Google's `agy` (Antigravity's CLI) serving ACP like
 /// `agy acp` 1.5: `--version`; `initialize`; `authenticate`, which needs a
 /// sign-in unless `out/agy-signed-in` or the profile's `acp_token.json`
@@ -906,7 +1184,10 @@ for line in sys.stdin:
 /// word: `TOOLS` (a command to approve, a native question, a file it reads
 /// from the client), `WAIT` (until cancelled), `STUCK` (ignores the cancel),
 /// `SIGNOUT` (needs signing in), anything else a short reply with usage.
-/// Logs its launch and what it is sent to `out/agy.log`.
+/// Logs its launch and what it is sent to `out/agy.log`. With
+/// `out/agy-language-server`, serves its language server's quota on a
+/// loopback port named in `<acp>/log/acp-server-<time>-<pid>.log`, as
+/// `agy acp` 1.5.14 does, and logs each quota request to `out/agy-quota.log`.
 const FAKE_AGY: &str = r###"#!/usr/bin/python3
 import json, sys, os, uuid, shlex, subprocess, threading, http.server, urllib.parse, socket
 if sys.argv[1:] == ["--version"]:
@@ -924,6 +1205,24 @@ def send(m):
 def update(sid, u):
     send({"method": "session/update", "params": {"sessionId": sid, "update": u}})
 token = os.path.join(home, "antigravity-acp", "acp_token.json")
+if sys.argv[1:2] == ["acp"] and os.path.exists(os.path.join(out, "agy-language-server")):
+    class Quota(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a): pass
+        def do_POST(self):
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            ok = self.path == "/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary"
+            if ok:
+                with open(os.path.join(out, "agy-quota.log"), "a") as q: q.write(self.path + "\n")
+            body = json.dumps({"response": {"groups": [{"displayName": "Gemini", "buckets": [
+                {"bucketId": "gemini-5h", "window": "5h", "remainingFraction": 0.4, "resetTime": "2099-01-01T00:00:00Z"},
+                {"bucketId": "3p-weekly", "window": "weekly", "remainingFraction": 0.75, "resetTime": "2099-01-02T00:00:00Z"}]}]}} if ok else {}).encode()
+            self.send_response(200 if ok else 404); self.send_header("Content-Type", "application/json"); self.end_headers(); self.wfile.write(body)
+    ls = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Quota)
+    threading.Thread(target=ls.serve_forever, daemon=True).start()
+    logs = os.path.join(home, "antigravity-acp", "log")
+    os.makedirs(logs, exist_ok=True)
+    with open(os.path.join(logs, "acp-server-20261122_001622-%d.log" % os.getpid()), "w") as f:
+        f.write("I1122 00:16:23.000935      42 server.go:1313] Language server listening on random port at %d for HTTP\n" % ls.server_address[1])
 def signed_in():
     return os.path.exists(os.path.join(out, "agy-signed-in")) or os.path.exists(token)
 def options(model, level, mode):
@@ -1253,7 +1552,7 @@ fn start_with_env(name: &str, scripted: bool, env: &[(&str, &str)]) -> Server {
     if scripted {
         std::fs::write(dir.join("scripted"), "").unwrap();
     }
-    for (name, script) in [("claude", FAKE_CLAUDE), ("codex", FAKE_CODEX), ("opencode", FAKE_OPENCODE), ("pi", FAKE_PI), ("acp-agent", FAKE_ACP), ("agy", FAKE_AGY)] {
+    for (name, script) in [("claude", FAKE_CLAUDE), ("codex", FAKE_CODEX), ("opencode", FAKE_OPENCODE), ("pi", FAKE_PI), ("acp-agent", FAKE_ACP), ("agy", FAKE_AGY), ("grok", FAKE_ACP_CLI), ("kiro-cli", FAKE_ACP_CLI), ("fx", FAKE_ACP_CLI), ("devin", FAKE_ACP_CLI)] {
         let path = dir.join(name);
         std::fs::write(&path, script).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -1373,7 +1672,7 @@ async fn socket(server: &Server, token: &str) -> Ws {
         .json()
         .await
         .unwrap();
-    let url = format!("ws://127.0.0.1:{}/ws?wsTicket={}", server.port, res["ticket"].as_str().unwrap());
+    let url = format!("ws://127.0.0.1:{}/ws?orchestrationProtocol=2&wsTicket={}", server.port, res["ticket"].as_str().unwrap());
     tokio_tungstenite::connect_async(url.into_client_request().unwrap()).await.unwrap().0
 }
 
@@ -2806,9 +3105,183 @@ async fn a_scripted_opencode_turn_records_every_kind_of_item() {
     let sent: Vec<Value> = std::fs::read_to_string(server.dir.join("out").join("opencode-requests.log")).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
     let decisions: Vec<&str> = sent.iter().filter(|r| r["path"].as_str().is_some_and(|p| p.contains("/permission/"))).filter_map(|r| r["body"]["decision"].as_str()).collect();
     assert_eq!(decisions, ["once", "always", "reject"]);
-    assert_eq!(sent[0]["body"]["model"], json!({ "providerID": "fake", "id": "m1" }), "{}", sent[0]);
+    let declined = sent.iter().find(|r| r["path"].as_str().is_some_and(|p| p.ends_with("/permission/perm_3/reply"))).unwrap();
+    assert_eq!(declined["body"]["message"], "The user declined this request.", "a decline lets the agent go on");
+    assert!(sent.iter().any(|r| r["path"] == "/api/session/ses_1/synthetic" && r["body"]["delivery"] == "steer"), "the agent hears why");
+    let created = sent.iter().find(|r| r["method"] == "POST" && r["path"] == "/api/session").expect("the session");
+    assert_eq!(created["body"]["model"], json!({ "providerID": "fake", "id": "m1" }), "{created}");
+
+    // Domovoi's MCP server, for this thread only, and what its tools are for.
+    let added = sent.iter().find(|r| r["method"] == "PUT" && r["path"].as_str().is_some_and(|p| p.starts_with("/api/experimental/mcp/"))).expect("the MCP server");
+    let (path, query) = added["path"].as_str().unwrap().split_once('?').unwrap();
+    assert_eq!(path, "/api/experimental/mcp/t3-code-t1");
+    let location: Vec<(String, String)> = url::form_urlencoded::parse(query.as_bytes()).into_owned().collect();
+    assert_eq!(location, [("location[directory]".to_owned(), workspace.to_string_lossy().into_owned())]);
+    let config = &added["body"]["config"];
+    assert_eq!((config["type"].as_str(), config["oauth"].as_bool()), (Some("remote"), Some(false)));
+    let token = config["headers"]["Authorization"].as_str().unwrap().strip_prefix("Bearer ").unwrap();
+    let (_, r) = mcp(config["url"].as_str().unwrap(), Some(token), "tools/call", json!({ "name": "t3_project_info", "arguments": {} })).await;
+    assert_eq!(r["result"]["structuredContent"]["threadId"], "t1", "{r}");
+    let rules = created["body"]["permissions"].as_array().unwrap();
+    assert_eq!(rules[rules.len() - 2..], [json!({ "action": "t3-code-*", "resource": "*", "effect": "deny" }), json!({ "action": "t3-code-t1_*", "resource": "*", "effect": "allow" })]);
+    let instructed = sent.iter().find(|r| r["method"] == "PUT" && r["path"] == "/api/experimental/session/ses_1/instructions/entries/t3-code").expect("the instructions");
+    assert!(instructed["body"]["value"].as_str().unwrap().contains("## T3 Code orchestration"));
+    let prompt = sent.iter().find(|r| r["path"] == "/api/session/ses_1/prompt").unwrap();
+    assert!(prompt["body"]["id"].as_str().unwrap().starts_with("msg_t3_turn_ses_1:"), "{prompt}");
 
     fail_steer_stop_and_roll_back(&mut ws, false).await;
+    // The session is cut back to before the first undone turn's prompt.
+    let sent: Vec<Value> = std::fs::read_to_string(server.dir.join("out").join("opencode-requests.log")).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    let stage = sent.iter().find(|r| r["path"] == "/api/session/ses_1/revert/stage").expect("a revert");
+    assert_eq!(stage["body"]["files"], false, "files are the checkpoint's");
+    assert!(sent.iter().any(|r| r["path"] == "/api/session/ses_1/revert/commit"));
+    assert_eq!(opencode_prompts(&server, "ses_1"), ["ALL of it"]);
+    assert!(stage["body"]["messageID"].as_str().unwrap().starts_with("msg_t3_turn_ses_1:"));
+}
+
+/// What the scripted `opencode serve` holds as a session's prompts.
+fn opencode_prompts(server: &Server, session: &str) -> Vec<String> {
+    let sessions: Value = serde_json::from_str(&std::fs::read_to_string(server.dir.join("out").join("opencode-sessions.json")).unwrap()).unwrap();
+    sessions[session]["prompts"].as_array().unwrap_or_else(|| panic!("no {session}: {sessions}")).iter().map(|p| p["text"].as_str().unwrap().to_owned()).collect()
+}
+
+/// The OpenCode session a thread's provider thread names.
+fn opencode_session(all: &[Value]) -> String {
+    let pt = all.iter().filter(|e| e["type"] == "provider-thread.updated" && e["payload"]["nativeThreadRef"]["nativeId"].is_string()).last().expect("a provider thread");
+    pt["payload"]["nativeThreadRef"]["nativeId"].as_str().unwrap().to_owned()
+}
+
+/// An OpenCode thread forked at a run continues a fork of its session made
+/// before the source's next turn; forked at the latest run, all of it.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_opencode_fork_continues_a_copy_of_the_session_cut_at_the_run() {
+    let server = start_scripted("opencode-fork");
+    let token = signed_in(&server).await;
+    let mut ws = socket(&server, &token).await;
+    let workspace = server.dir.join("w").canonicalize().unwrap();
+    launched(&mut ws, &workspace, "opencode", "fake/m1", "one").await;
+    until(&mut ws, "t1", "run 1", |all| run_status(all, 1).as_deref() == Some("completed")).await;
+    say(&mut ws, 2, "two", json!({ "type": "queue_after_active" })).await;
+    let all = until(&mut ws, "t1", "run 2", |all| run_status(all, 2).as_deref() == Some("completed")).await;
+    let source = opencode_session(&all);
+    for (target, point, next, kept) in [
+        ("t2", json!({ "type": "run", "runId": "run:thread:t1:ordinal:1" }), "three", vec!["one", "three"]),
+        ("t3", json!({ "type": "latest_stable" }), "four", vec!["one", "two", "four"]),
+    ] {
+        let r = call(&mut ws, &format!("f-{target}"), "orchestration.dispatchCommand", json!({ "type": "thread.fork", "commandId": format!("fork-{target}"), "sourceThreadId": "t1",
+            "targetThreadId": target, "sourcePoint": point, "createdBy": "user", "creationSource": "web" })).await;
+        assert_eq!(r["exit"]["_tag"], "Success", "{r}");
+        let r = call(&mut ws, &format!("s-{target}"), "orchestration.dispatchCommand", json!({ "type": "message.dispatch", "commandId": format!("say-{target}"), "threadId": target,
+            "createdBy": "user", "creationSource": "web", "dispatchMode": { "type": "queue_after_active" }, "messageId": format!("m-{target}"), "text": next, "attachments": [] })).await;
+        assert_eq!(r["exit"]["_tag"], "Success", "{r}");
+        let all = until(&mut ws, target, "the forked thread's run", |all| all.iter().any(|e| e["type"] == "run.updated" && e["payload"]["status"] == "completed")).await;
+        let forked = opencode_session(&all);
+        assert_ne!(forked, source);
+        assert_eq!(opencode_prompts(&server, &forked), kept, "{target}");
+        let transfer = last(&all, "context-transfer.updated").or_else(|| last(&all, "context-transfer.created")).expect("the transfer");
+        assert_eq!(transfer["resolution"]["strategy"], "native_fork", "{transfer}");
+    }
+    let sent: Vec<Value> = std::fs::read_to_string(server.dir.join("out").join("opencode-requests.log")).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    let forks: Vec<&Value> = sent.iter().filter(|r| r["path"] == format!("/api/session/{source}/fork")).map(|r| &r["body"]).collect();
+    assert_eq!(forks.len(), 2);
+    assert!(forks[0]["before"].as_str().unwrap().starts_with(&format!("msg_t3_turn_{source}:")), "cut before run 2's prompt: {}", forks[0]);
+    assert_eq!(*forks[1], json!({}), "all of it");
+    // The source thread's session is untouched.
+    assert_eq!(opencode_prompts(&server, &source), ["one", "two"]);
+}
+
+/// An OpenCode subagent (the `subagent` tool and its child session) works in
+/// its child thread, asks through the parent's turn, and returns its answer;
+/// one is stopped; one in the background keeps the turn open until it reports.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_opencode_subagent_works_in_its_child_thread_and_can_be_stopped() {
+    let server = start_scripted("opencode-subagent");
+    let token = signed_in(&server).await;
+    let mut ws = socket(&server, &token).await;
+    let workspace = server.dir.join("w").canonicalize().unwrap();
+    launched(&mut ws, &workspace, "opencode", "fake/m1", "AGENT").await;
+    let all = answering(&mut ws, &[json!({ "decision": "accept" })], 1, "completed").await;
+    let sub = last(&all, "subagent.updated").unwrap().clone();
+    assert_eq!((sub["status"].as_str(), sub["prompt"].as_str(), sub["title"].as_str(), sub["result"].as_str()), (Some("completed"), Some("List the files here"), Some("Find files"), Some("Found a.txt")), "{sub}");
+    assert!(!all.iter().any(|e| e["type"] == "message.updated" && e["payload"]["text"] == "Looking around."), "the subagent's words stay out of the parent");
+    assert!(!all.iter().any(|e| e["type"] == "turn-item.updated" && e["payload"]["toolName"] == "subagent"), "the call is the subagent item, not a tool");
+    let child = sub["childThreadId"].as_str().unwrap().to_owned();
+    let work = events(&mut ws, "child", &child).await;
+    let created = work.iter().find(|e| e["type"] == "thread.created").unwrap();
+    assert_eq!(created["payload"]["lineage"]["relationshipToParent"], "subagent");
+    let texts: Vec<&str> = work.iter().filter(|e| e["type"] == "message.updated").filter_map(|e| e["payload"]["text"].as_str()).collect();
+    assert_eq!(texts, ["List the files here", "Looking around.", "Found a.txt"]);
+    let ls = work.iter().filter(|e| e["type"] == "turn-item.updated" && e["payload"]["type"] == "command_execution").last().unwrap();
+    assert_eq!((ls["payload"]["input"].as_str(), ls["payload"]["output"].as_str()), (Some("ls"), Some("a.txt")));
+    let sent: Vec<Value> = std::fs::read_to_string(server.dir.join("out").join("opencode-requests.log")).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    assert!(sent.iter().any(|r| r["path"] == "/api/session/ses_2/permission/perm_c1/reply"), "the child session is answered");
+
+    say(&mut ws, 2, "AGENT STOP", json!({ "type": "queue_after_active" })).await;
+    let open_request = |all: &[Value]| -> Option<Value> {
+        let mut open: Vec<&Value> = vec![];
+        for r in all.iter().filter(|e| e["type"] == "runtime-request.updated") {
+            open.retain(|o| o["id"] != r["payload"]["id"]);
+            if r["payload"]["status"] == "pending" {
+                open.push(&r["payload"]);
+            }
+        }
+        open.pop().map(|r| r["id"].clone())
+    };
+    let all = until(&mut ws, "t1", "the subagent's question", |all| open_request(all).is_some()).await;
+    let r = call(&mut ws, "allow", "orchestration.dispatchCommand", json!({ "type": "runtime-request.respond", "commandId": "allow-2", "threadId": "t1",
+        "requestId": open_request(&all).unwrap(), "decision": "accept" })).await;
+    assert_eq!(r["exit"]["_tag"], "Success", "{r}");
+    let sub = until(&mut ws, "t1", "the second subagent", |all| all.iter().filter(|e| e["type"] == "subagent.updated").last().is_some_and(|e| e["payload"]["runId"] == "run:thread:t1:ordinal:2")).await;
+    let sub = last(&sub, "subagent.updated").unwrap().clone();
+    let r = call(&mut ws, "stop", "orchestration.dispatchCommand", json!({ "type": "subagent.stop", "commandId": "stop-sub", "threadId": "t1",
+        "runId": "run:thread:t1:ordinal:2", "subagentId": sub["id"] })).await;
+    assert_eq!(r["exit"]["_tag"], "Success", "{r}");
+    let all = until(&mut ws, "t1", "the stopped subagent", |all| run_status(all, 2).as_deref() == Some("completed")).await;
+    let stopped = all.iter().filter(|e| e["type"] == "subagent.updated" && e["payload"]["id"] == sub["id"]).last().unwrap();
+    assert_eq!(stopped["payload"]["status"], "interrupted", "{stopped}");
+    let sent: Vec<Value> = std::fs::read_to_string(server.dir.join("out").join("opencode-requests.log")).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    assert!(sent.iter().any(|r| r["path"] == "/api/session/ses_3/interrupt"), "the child session is interrupted");
+    assert!(!sent.iter().any(|r| r["path"] == "/api/session/ses_1/interrupt"), "not the parent");
+
+    say(&mut ws, 3, "AGENT BACKGROUND", json!({ "type": "queue_after_active" })).await;
+    // Its question comes after the turn's own execution ended: the turn waits for its report.
+    let all = until(&mut ws, "t1", "the background subagent's question", |all| open_request(all).is_some()).await;
+    assert_eq!(run_status(&all, 3).as_deref(), Some("running"));
+    let r = call(&mut ws, "allow3", "orchestration.dispatchCommand", json!({ "type": "runtime-request.respond", "commandId": "allow-3", "threadId": "t1",
+        "requestId": open_request(&all).unwrap(), "decision": "accept" })).await;
+    assert_eq!(r["exit"]["_tag"], "Success", "{r}");
+    let all = until(&mut ws, "t1", "the background subagent's report", |all| run_status(all, 3).as_deref() == Some("completed")).await;
+    let bg = all.iter().filter(|e| e["type"] == "subagent.updated" && e["payload"]["runId"] == "run:thread:t1:ordinal:3").last().unwrap();
+    assert_eq!((bg["payload"]["status"].as_str(), bg["payload"]["result"].as_str()), (Some("completed"), Some("Background done.")), "{bg}");
+    let report = all.iter().find(|e| e["type"] == "message.updated" && e["payload"]["text"] == "Got the report.").expect("the wake's reply");
+    assert_eq!(report["payload"]["runId"], "run:thread:t1:ordinal:3", "the report's wake is the same turn");
+}
+
+/// OpenCode's workspace limits are read, and a turn a rate limit stopped
+/// fails as `usage_limit`, resetting when the used-up window does.
+#[tokio::test(flavor = "multi_thread")]
+async fn opencode_reports_workspace_limits_and_limited_turns() {
+    let server = start_scripted("opencode-limits");
+    let token = signed_in(&server).await;
+    let mut ws = socket(&server, &token).await;
+    let workspace = server.dir.join("w").canonicalize().unwrap();
+    launched(&mut ws, &workspace, "opencode", "fake/m1", "LIMIT now").await;
+    let all = until(&mut ws, "t1", "the limited run", |all| run_status(all, 1).as_deref() == Some("failed")).await;
+    let error = all.iter().filter(|e| e["type"] == "turn-item.updated" && e["payload"]["type"] == "error").last().expect("an error item");
+    assert_eq!(error["payload"]["failure"]["class"], "usage_limit", "{error}");
+    assert_eq!(error["payload"]["failure"]["resetAt"], "2100-01-01T00:00:00.000Z", "{error}");
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    let p = loop {
+        let p = antigravity_config(&mut ws, "opencode").await;
+        if p["usageLimits"]["windows"].as_array().is_some_and(|w| !w.is_empty()) {
+            break p;
+        }
+        assert!(tokio::time::Instant::now() < deadline, "no limits: {p}");
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    };
+    let windows: Vec<(&str, f64)> = p["usageLimits"]["windows"].as_array().unwrap().iter().map(|w| (w["id"].as_str().unwrap(), w["usedPercent"].as_f64().unwrap())).collect();
+    assert_eq!(windows, [("go_rolling", 30.0), ("go_weekly", 100.0), ("go_monthly", 50.0)]);
+    assert_eq!(p["usageLimits"]["externalUsage"]["url"], "https://opencode.ai/workspace/wrk_1");
 }
 
 /// A pi turn end to end against a scripted `pi --mode rpc`: every kind of
@@ -3648,6 +4121,227 @@ async fn an_acp_agent_runs_turns() {
     assert_eq!(sent.iter().filter(|m| m["method"] == "session/new").count(), 3, "the probe's, the thread's first, the one after the rollback");
 }
 
+/// What a stand-in CLI logged: its launches (`argv`) and every message it was sent.
+fn cli_log(server: &Server, name: &str) -> Vec<Value> {
+    std::fs::read_to_string(server.dir.join("out").join(format!("{name}.log"))).unwrap_or_default().lines().map(|l| serde_json::from_str(l).unwrap()).collect()
+}
+
+/// A provider instance of `driver` on the stand-in CLI `name`, turned on, then probed.
+async fn cli_instance(ws: &mut Ws, server: &Server, id: &str, driver: &str, config: Value, environment: Value) -> Value {
+    let mut config = config;
+    config["binaryPath"] = json!(server.dir.join(if driver == "kiro" { "kiro-cli" } else { driver }).to_string_lossy());
+    let r = call(ws, "s", "server.updateSettings", json!({ "patch": {}, "providerInstanceMutation": { "operation": "upsert", "instanceId": id,
+        "instance": { "driver": driver, "enabled": true, "config": config, "environment": environment } } })).await;
+    assert_eq!(r["exit"]["_tag"], "Success", "{r}");
+    let r = call(ws, "p", "server.refreshProviders", json!({ "instanceId": id })).await;
+    r["exit"]["value"]["providers"].as_array().unwrap().iter().find(|p| p["instanceId"] == id).cloned().unwrap_or_else(|| panic!("no {id}: {r}"))
+}
+
+/// Thread `t1` of project `p1` on `instance`.
+async fn launch_on(ws: &mut Ws, workspace: &std::path::Path, instance: &str, model: &str, options: Value, runtime: &str, text: &str) {
+    let r = call(ws, "1", "projects.mutate", json!({ "type": "project.create", "commandId": "c1", "projectId": "p1", "title": "w",
+        "workspaceRoot": workspace, "createWorkspaceRootIfMissing": false, "defaultModelSelection": null })).await;
+    assert_eq!(r["exit"]["_tag"], "Success", "{r}");
+    let r = call(ws, "2", "orchestration.launchThread", json!({ "commandId": "c2", "creationSource": "web", "threadId": "t1", "projectId": "p1",
+        "title": "CLI", "generateTitle": false, "modelSelection": { "instanceId": instance, "model": model, "options": options },
+        "runtimeMode": runtime, "interactionMode": "default", "workspaceStrategy": { "type": "root" },
+        "initialMessage": { "messageId": "m1", "text": text, "attachments": [] } })).await;
+    assert_eq!(r["exit"]["_tag"], "Success", "{r}");
+}
+
+/// A message steered into run 2 (`WAIT`) is read by the agent in the same run.
+async fn steered(ws: &mut Ws, reply: &str) -> Vec<Value> {
+    say(ws, 2, "WAIT for me", json!({ "type": "queue_after_active" })).await;
+    until(ws, "t1", "the reply to start", |all| all.iter().any(|e| e["type"] == "message.updated" && e["payload"]["text"] == "Working")).await;
+    say(ws, 3, "use tabs", json!({ "type": "steer_active", "targetRunId": "run:thread:t1:ordinal:2" })).await;
+    let all = until(ws, "t1", "the steered run", |all| run_status(all, 2).as_deref() == Some("completed")).await;
+    // One reply: what the agent said before the steer, then after it.
+    let reply = all.iter().filter(|e| e["type"] == "message.updated" && e["payload"]["text"].as_str() == Some(&format!("Working{reply}"))).last().unwrap_or_else(|| panic!("no {reply:?}"));
+    assert_eq!(reply["payload"]["runId"], "run:thread:t1:ordinal:2");
+    assert!(!all.iter().any(|e| e["type"] == "run.created" && e["payload"]["ordinal"] == 3), "steered, not queued");
+    all
+}
+
+/// xAI's Grok CLI (t3code `provider-grok`): probed with `--version`,
+/// `grok models` and `initialize` (models with reasoning levels, slash
+/// commands); a turn launched in full access with the model and its level set
+/// on `session/set_model`, Grok's question answered as a form and its plan
+/// exit captured as a proposed plan; a message steered in with `_x.ai/interject`.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_grok_agent_runs_turns() {
+    let server = start("grok");
+    let token = signed_in(&server).await;
+    let mut ws = socket(&server, &token).await;
+    let p = cli_instance(&mut ws, &server, "grok", "grok", json!({ "customModels": ["grok-mine"] }), json!([])).await;
+    assert_eq!((p["status"].as_str(), p["driver"].as_str(), p["version"].as_str(), p["installed"].as_bool()), (Some("ready"), Some("grok"), Some("1.0.60"), Some(true)), "{p}");
+    assert_eq!(p["auth"], json!({ "status": "authenticated", "type": "cached_token", "label": "Grok account" }));
+    let models: Vec<&str> = p["models"].as_array().unwrap().iter().filter_map(|m| m["slug"].as_str()).collect();
+    assert_eq!(models, ["grok-4", "grok-code", "grok-mine"]);
+    let effort = &p["models"][0]["capabilities"]["optionDescriptors"][0];
+    assert_eq!((effort["id"].as_str(), effort["options"][0]["id"].as_str(), effort["currentValue"].as_str()), (Some("reasoningEffort"), Some("low"), Some("high")), "{effort}");
+    let commands: Vec<&str> = p["slashCommands"].as_array().unwrap().iter().filter_map(|c| c["name"].as_str()).collect();
+    assert_eq!(commands, ["compact", "review"]);
+    assert_eq!(p["supportedRuntimeModes"], json!(["approval-required", "auto", "full-access"]));
+    let probed: Vec<Value> = cli_log(&server, "grok").into_iter().filter_map(|m| m.get("argv").cloned()).collect();
+    assert_eq!(probed, [json!(["--version"]), json!(["models"]), json!(["agent", "stdio"])], "no session in the probe");
+
+    let workspace = workspace_repository(&server);
+    launch_on(&mut ws, &workspace, "grok", "grok-4", json!([{ "id": "reasoningEffort", "value": "low" }]), "full-access", "ASK me").await;
+    let all = answering(&mut ws, &[json!({ "answers": { "Which?": ["B"] } })], 1, "completed").await;
+    assert_eq!(last(&all, "message.updated").unwrap()["text"], "You chose B.");
+    let plan = all.iter().filter(|e| e["type"] == "turn-item.updated" && e["payload"]["type"] == "proposed_plan").last().expect("the plan Grok exited plan mode with");
+    assert_eq!(plan["payload"]["markdown"], "# Plan\n\n- Do it");
+    let log = cli_log(&server, "grok");
+    let launch = log.iter().filter(|m| m.get("argv").is_some()).last().unwrap();
+    assert_eq!((&launch["argv"], &launch["referrer"]), (&json!(["agent", "--always-approve", "stdio"]), &json!("t3code")), "full access, launched so");
+    let init = log.iter().filter(|m| m["method"] == "initialize").last().unwrap();
+    assert_eq!(init["params"]["_meta"], json!({ "clientType": "extension" }));
+    let set = log.iter().find(|m| m["method"] == "session/set_model").expect("the model set");
+    assert_eq!((&set["params"]["modelId"], &set["params"]["_meta"]), (&json!("grok-4"), &json!({ "reasoningEffort": "low" })));
+    assert_eq!(log.iter().find(|m| m["id"] == 700).unwrap()["result"], json!({ "outcome": "accepted", "answers": { "Which?": ["B"] } }));
+    assert_eq!(log.iter().find(|m| m["id"] == 702).unwrap()["result"]["outcome"], "abandoned");
+
+    steered(&mut ws, "Interjected: use tabs").await;
+    let interject = cli_log(&server, "grok").into_iter().find(|m| m["method"] == "_x.ai/interject").expect("the interjection");
+    assert_eq!((interject["params"]["sessionId"].as_str(), interject["params"]["text"].as_str()), (Some("grok-session"), Some("use tabs")));
+}
+
+/// Kiro's CLI (t3code `provider-kiro`): probed with `--version`, `whoami`,
+/// `chat --list-models` and `_kiro/config/template` (its agents offered on
+/// every model); a turn's agent, model, effort and autopilot set as config
+/// options in that order; a read asked about since Kiro offers only a
+/// workspace-wide grant; its cloud-config call left out; a steer with
+/// `_session/steer`, without the note Kiro's model adds.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_kiro_agent_runs_turns() {
+    let server = start("kiro");
+    let token = signed_in(&server).await;
+    let mut ws = socket(&server, &token).await;
+    let p = cli_instance(&mut ws, &server, "kiro", "kiro", json!({}), json!([])).await;
+    assert_eq!((p["status"].as_str(), p["version"].as_str(), p["auth"]["email"].as_str()), (Some("ready"), Some("2.32.0"), Some("k@example.com")), "{p}");
+    assert_eq!((p["models"][0]["slug"].as_str(), p["models"][0]["name"].as_str(), &p["models"][0]["aliases"]), (Some("default"), Some("Auto"), &json!(["auto"])));
+    let opus = &p["models"][1];
+    let ids: Vec<&str> = opus["capabilities"]["optionDescriptors"].as_array().unwrap().iter().filter_map(|d| d["id"].as_str()).collect();
+    assert_eq!(ids, ["reasoningEffort", "mode"], "{opus}");
+    assert_eq!(p["supportedRuntimeModes"], json!(["approval-required", "full-access"]));
+    assert_eq!(p["slashCommands"], json!([{ "name": "compact", "description": "Summarize the conversation and reduce context usage" }]));
+
+    let workspace = workspace_repository(&server);
+    let options = json!([{ "id": "mode", "value": "reviewer" }, { "id": "reasoningEffort", "value": "max" }]);
+    launch_on(&mut ws, &workspace, "kiro", "claude-opus-4.6", options, "approval-required", "TOOLS").await;
+    let all = answering(&mut ws, &[json!({ "decision": "accept" })], 1, "completed").await;
+    assert_eq!(last(&all, "message.updated").unwrap()["text"], "Done.");
+    assert!(!all.iter().any(|e| e["type"] == "turn-item.updated" && e["payload"]["title"] == "fetch"), "Kiro's cloud-config call is not the turn's");
+    let log = cli_log(&server, "kiro-cli");
+    let launch = log.iter().filter(|m| m.get("argv").is_some()).last().unwrap();
+    assert_eq!(launch["argv"], json!(["acp", "--agent-engine=v3", "--auth-method=cli"]));
+    let init = log.iter().filter(|m| m["method"] == "initialize").last().unwrap();
+    assert_eq!(init["params"]["clientCapabilities"]["_meta"], json!({ "kiro": { "hooks": { "enabled": true, "v2": true } } }));
+    let writes: Vec<(String, String)> = log.iter().filter(|m| m["method"] == "session/set_config_option")
+        .map(|m| (m["params"]["configId"].as_str().unwrap().to_owned(), m["params"]["value"].as_str().unwrap().to_owned())).collect();
+    let expected: Vec<(String, String)> = [("mode", "reviewer"), ("model", "claude-opus-4.6"), ("effortLevel", "max"), ("autopilot", "off")].iter().map(|(a, b)| (a.to_string(), b.to_string())).collect();
+    assert_eq!(writes, expected);
+    assert_eq!(log.iter().find(|m| m["id"] == 701).unwrap()["result"], json!({ "outcome": { "outcome": "selected", "optionId": "always" } }));
+
+    steered(&mut ws, "Steered: use tabs").await;
+    let steer = cli_log(&server, "kiro-cli").into_iter().find(|m| m["method"] == "_session/steer").expect("the steer");
+    assert_eq!(steer["params"], json!({ "sessionId": "kiro-cli-session", "message": "use tabs" }));
+}
+
+/// Vercel's fx (t3code `provider-fx`): probed with `--version` and each
+/// backend's `status --json` and `models --json`; an Auto turn writes the
+/// mode fx already reports (fx enforces its own until a client does), the
+/// model on its backend and the default effort, asks about a read (Auto asks
+/// about everything fx raises), and its sessions bring the user's MCP servers.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_fx_agent_runs_turns() {
+    let server = start("fx");
+    let token = signed_in(&server).await;
+    let mut ws = socket(&server, &token).await;
+    let fx_home = server.dir.join("fx-home");
+    std::fs::create_dir_all(&fx_home).unwrap();
+    let p = cli_instance(&mut ws, &server, "fx", "fx", json!({}), json!([{ "name": "FX_HOME", "value": fx_home.to_string_lossy() }])).await;
+    assert_eq!((p["status"].as_str(), p["version"].as_str(), p["auth"]["label"].as_str()), (Some("ready"), Some("0.0.14"), Some("gateway key")), "{p}");
+    let models: Vec<(&str, &str)> = p["models"].as_array().unwrap().iter().map(|m| (m["slug"].as_str().unwrap(), m["name"].as_str().unwrap())).collect();
+    assert_eq!(models, [("default", "Default (gpt-6)"), ("gateway:gpt-6", "gpt-6"), ("gateway:gpt-6-mini", "gpt-6-mini")], "signed-out backends list nothing");
+    assert_eq!(p["models"][1]["subProvider"], "Vercel AI Gateway");
+    assert_eq!(p["supportedRuntimeModes"], json!(["approval-required", "auto", "full-access"]));
+    assert_eq!(p["supportsTextGeneration"], false);
+    let backends: Vec<Value> = cli_log(&server, "fx").into_iter().filter(|m| m["argv"] == json!(["models", "--json"])).map(|m| m["fxProvider"].clone()).collect();
+    assert_eq!(backends, [json!("gateway")], "models asked only of the signed-in backend");
+
+    let workspace = workspace_repository(&server);
+    launch_on(&mut ws, &workspace, "fx", "gateway:gpt-6-mini", json!([]), "auto", "TOOLS").await;
+    let all = answering(&mut ws, &[json!({ "decision": "accept" })], 1, "completed").await;
+    assert_eq!(last(&all, "message.updated").unwrap()["text"], "Done.");
+    let log = cli_log(&server, "fx");
+    let new = log.iter().filter(|m| m["method"] == "session/new").last().unwrap();
+    assert_eq!(new["params"]["_meta"], json!({ "fx": { "profileMcpServers": true } }));
+    assert_eq!(log.iter().find(|m| m["method"] == "session/set_mode").unwrap()["params"]["modeId"], "auto");
+    let writes: Vec<(String, String)> = log.iter().filter(|m| m["method"] == "session/set_config_option")
+        .map(|m| (m["params"]["configId"].as_str().unwrap().to_owned(), m["params"]["value"].as_str().unwrap().to_owned())).collect();
+    assert_eq!(writes, [("model".to_owned(), "gpt-6-mini".to_owned()), ("effort".to_owned(), "medium".to_owned())], "the backend is the session's already");
+    assert_eq!(log.iter().find(|m| m["id"] == 701).unwrap()["result"], json!({ "outcome": { "outcome": "selected", "optionId": "yes" } }));
+}
+
+/// Devin from the ACP registry runs its commands in the client's terminals
+/// (t3code gives only Devin `clientTerminals`): one opened before any command
+/// was approved is refused; after an approval it runs, is waited for, read,
+/// embedded in its tool call and released. Then the agent asks for a URL
+/// sign-in: shown on the instance's entry until the user opens it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_registry_agent_uses_the_clients_terminals_and_asks_for_a_url_sign_in() {
+    let server = start("devin");
+    let token = signed_in(&server).await;
+    let mut ws = socket(&server, &token).await;
+    let installs = server.dir.join("home").join("acp-registry").join("installs");
+    std::fs::create_dir_all(&installs).unwrap();
+    std::fs::write(installs.join("devin.json"), json!({ "agentId": "devin", "version": "1.0.0", "distribution": "binary",
+        "program": server.dir.join("devin").to_string_lossy(), "args": [], "env": [] }).to_string()).unwrap();
+    let r = call(&mut ws, "s", "server.updateSettings", json!({ "patch": {}, "providerInstanceMutation": { "operation": "upsert", "instanceId": "devin",
+        "instance": { "driver": "acpRegistry", "config": { "source": "registry", "agentId": "devin" } } } })).await;
+    assert_eq!(r["exit"]["_tag"], "Success", "{r}");
+    let r = call(&mut ws, "p", "server.refreshProviders", json!({ "instanceId": "devin" })).await;
+    let p = r["exit"]["value"]["providers"].as_array().unwrap().iter().find(|p| p["instanceId"] == "devin").cloned().unwrap();
+    assert_eq!(p["status"], "ready", "{p}");
+
+    let workspace = workspace_repository(&server);
+    launch_on(&mut ws, &workspace, "devin", "default", json!([]), "approval-required", "TERM").await;
+    let all = answering(&mut ws, &[json!({ "decision": "accept" })], 1, "completed").await;
+    assert_eq!(last(&all, "message.updated").unwrap()["text"], "Ran it.");
+    let ran: Value = serde_json::from_str(&std::fs::read_to_string(server.dir.join("out").join("terminal.json")).unwrap()).unwrap();
+    assert!(ran["early"]["message"].as_str().unwrap().contains("requires approval for terminal/create"), "{ran}");
+    assert_eq!(ran["exit"], json!({ "exitCode": 2, "signal": null }));
+    assert_eq!((ran["output"]["output"].as_str(), ran["output"]["truncated"].as_bool(), &ran["output"]["exitStatus"]["exitCode"]), (Some("hi-from-terminal\n"), Some(false), &json!(2)));
+    let cmd = all.iter().filter(|e| e["type"] == "turn-item.updated" && e["payload"]["type"] == "command_execution").last().expect("the command");
+    assert_eq!((cmd["payload"]["input"].as_str(), cmd["payload"]["output"].as_str()), (Some("echo hi"), Some("hi-from-terminal\n")), "the terminal's output, embedded");
+    let init = cli_log(&server, "devin").into_iter().filter(|m| m["method"] == "initialize").last().unwrap();
+    assert_eq!((&init["params"]["clientCapabilities"]["terminal"], &init["params"]["clientCapabilities"]["elicitation"]), (&json!(true), &json!({ "url": {} })));
+
+    say(&mut ws, 2, "LOGIN now", json!({ "type": "queue_after_active" })).await;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    let action = loop {
+        let r = call(&mut ws, &fresh_id("cfg"), "server.getConfig", json!({})).await;
+        let p = r["exit"]["value"]["providers"].as_array().unwrap().iter().find(|p| p["instanceId"] == "devin").cloned().unwrap();
+        if !p["auth"]["action"].is_null() {
+            break p["auth"]["action"].clone();
+        }
+        assert!(tokio::time::Instant::now() < deadline, "no sign-in shown: {p}");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+    assert_eq!((action["elicitationId"].as_str(), action["url"].as_str(), action["message"].as_str()), (Some("login-1"), Some("https://example.com/login"), Some("Sign in to Devin")));
+    assert!(action["expiresAt"].is_string());
+    let r = call(&mut ws, "no", "server.acceptAcpRegistryUrlAuth", json!({ "instanceId": "devin", "elicitationId": "other" })).await;
+    assert_eq!(r["exit"]["value"], json!({ "accepted": false }));
+    let r = call(&mut ws, "yes", "server.acceptAcpRegistryUrlAuth", json!({ "instanceId": "devin", "elicitationId": "login-1" })).await;
+    assert_eq!(r["exit"]["value"], json!({ "accepted": true }));
+    let all = until(&mut ws, "t1", "the signed-in run", |all| run_status(all, 2).as_deref() == Some("completed")).await;
+    assert_eq!(last(&all, "message.updated").unwrap()["text"], "Login: accept");
+    let r = call(&mut ws, "cfg", "server.getConfig", json!({})).await;
+    let p = r["exit"]["value"]["providers"].as_array().unwrap().iter().find(|p| p["instanceId"] == "devin").cloned().unwrap();
+    assert!(p["auth"]["action"].is_null(), "done with: {p}");
+}
+
 /// What the stand-in `agy` logged: its launches and every message it was sent.
 fn agy_log(server: &Server) -> Vec<Value> {
     std::fs::read_to_string(server.dir.join("out").join("agy.log")).unwrap_or_default().lines().map(|l| serde_json::from_str(l).unwrap()).collect()
@@ -3697,7 +4391,7 @@ async fn an_antigravity_agent_runs_turns() {
     assert!(home.starts_with(server.dir.join("home").join("userdata").join("providers").join("antigravity").to_str().unwrap()), "{launch}");
     assert_eq!(launch["argv"], json!(["acp", "--gemini-dir", home, "--app-data-dir", "antigravity-acp"]));
     assert_eq!(launch["env"]["GEMINI_API_KEY"], Value::Null, "the server's own Google key is not the instance's: {launch}");
-    assert_eq!(launch["env"]["AGY_ACP_FORCE_FILE_STORAGE"], "1");
+    assert_eq!(launch["env"]["AGY_ACP_FORCE_FILE_STORAGE"], Value::Null, "the sign-in stays where the agent keeps it");
     assert!(launch["env"]["BROWSER"].as_str().unwrap().contains("antigravity-browser-url"), "{launch}");
     assert_eq!(std::fs::read_to_string(std::path::Path::new(&home).join("antigravity-acp/settings.json")).unwrap(), "{\"auth\":{\"type\":\"oauth-personal\"}}\n");
     let tmp = launch["env"]["TMPDIR"].as_str().unwrap().to_owned();
@@ -3961,42 +4655,80 @@ async fn antigravity_turns_show_edits_reads_and_limits() {
     assert!(!agy_log(&server).iter().any(|m| m["method"] == "session/prompt" && m.to_string().contains("/goal clear")), "never sent to the agent");
 }
 
-/// A stand-in for Google's OAuth token, user info and Cloud Code quota
-/// services, on a loopback port; it records the paths it was asked.
-async fn fake_google() -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
-    let asked = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
-    let seen = asked.clone();
-    let app = axum::Router::new().fallback(move |uri: axum::http::Uri| {
-        let seen = seen.clone();
-        async move {
-            let path = uri.path().to_owned();
-            seen.lock().unwrap().push(path.clone());
-            let body = match path.as_str() {
-                "/token" => json!({ "access_token": "at-1", "expires_in": 3600 }),
-                "/userinfo" => json!({ "id": "g-123" }),
-                "/v1internal:retrieveUserQuotaSummary" => json!({ "groups": [{ "displayName": "Gemini", "buckets": [
-                    { "bucketId": "gemini-5h", "window": "5h", "remainingFraction": 0.4, "resetTime": "2099-01-01T00:00:00Z" },
-                    { "bucketId": "3p-weekly", "window": "weekly", "remainingFraction": 0.75, "resetTime": "2099-01-02T00:00:00Z" }] }] }),
-                _ => json!({}),
-            };
-            axum::Json(body)
-        }
-    });
+/// An HTTP(S) proxy on a loopback port that records the host of every
+/// request sent through it (`CONNECT host:port` or an absolute URL) and
+/// forwards none.
+async fn recording_proxy() -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+    let hosts = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let seen = hosts.clone();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
-    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    (url, asked)
+    tokio::spawn(async move {
+        while let Ok((mut conn, _)) = listener.accept().await {
+            let seen = seen.clone();
+            tokio::spawn(async move {
+                let mut head = vec![0u8; 4096];
+                let n = conn.read(&mut head).await.unwrap_or(0);
+                let line = String::from_utf8_lossy(&head[..n]).lines().next().unwrap_or_default().to_owned();
+                let target = line.split_whitespace().nth(1).unwrap_or_default();
+                let host = target.split_once("://").map_or(target, |(_, rest)| rest).split(['/', ':']).next().unwrap_or_default().to_owned();
+                seen.lock().unwrap().push(host);
+                let _ = conn.write_all(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await;
+            });
+        }
+    });
+    (url, hosts)
 }
 
-/// Antigravity's account limits read from Google with its saved sign-in, its
-/// skills by folder, a thread title it writes, and a subagent batch whose
-/// child is read from the parent session's log.
+/// A signed-in Antigravity account with no agent running and a sign-in
+/// saved in its profile (as older runtimes left it): the provider list asks
+/// nothing of Google with it, and says limits show once a session runs.
+#[tokio::test(flavor = "multi_thread")]
+async fn antigravity_never_uses_a_saved_sign_in_itself() {
+    use sha2::Digest as _;
+    let (proxy, proxied) = recording_proxy().await;
+    let proxy_env = [("HTTPS_PROXY", proxy.as_str()), ("HTTP_PROXY", proxy.as_str()), ("ALL_PROXY", proxy.as_str()), ("NO_PROXY", "127.0.0.1,localhost")];
+    let server = start_with_env("antigravity-saved-sign-in", false, &proxy_env);
+    let profile = server.dir.join("home/userdata/providers/antigravity").join(hex::encode(sha2::Sha256::digest(b"antigravity")));
+    std::fs::create_dir_all(profile.join("antigravity-acp")).unwrap();
+    std::fs::write(profile.join("antigravity-acp/acp_token.json"), json!({ "client_id": "c", "client_secret": "s", "refresh_token": "r", "project_id": "p" }).to_string()).unwrap();
+    std::fs::write(profile.join("domovoi-account.json"), json!({ "auth": "authenticated", "method": "oauth-personal" }).to_string()).unwrap();
+    let token = signed_in(&server).await;
+    let mut ws = socket(&server, &token).await;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    let p = loop {
+        let p = antigravity_config(&mut ws, "antigravity").await;
+        if p["usageLimits"]["unavailable"]["message"].is_string() {
+            break p;
+        }
+        assert!(tokio::time::Instant::now() < deadline, "the limits were never read: {p}");
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    };
+    assert_eq!(p["auth"]["status"], "authenticated", "{p}");
+    assert_eq!(p["usageLimits"]["unavailable"]["message"], "Antigravity's limits show once one of its sessions has run.", "{p}");
+    // Probes again, as a watching client does.
+    for _ in 0..3 {
+        antigravity_config(&mut ws, "antigravity").await;
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    }
+    let google: Vec<String> = proxied.lock().unwrap().iter().filter(|h| h.ends_with("google.com") || h.ends_with("googleapis.com")).cloned().collect();
+    assert!(google.is_empty(), "the server itself reached Google with the saved sign-in: {google:?}");
+    assert!(agy_log(&server).is_empty(), "the status probe starts no agent");
+}
+
+/// Antigravity's account limits read from its own language server (never
+/// from Google with a saved sign-in, though one is in the profile, and at
+/// most once a minute), its skills by folder, a thread title it writes, and
+/// a subagent batch whose child is read from the parent session's log.
 #[tokio::test(flavor = "multi_thread")]
 async fn antigravity_reports_limits_skills_titles_and_batches() {
     use sha2::Digest as _;
-    let (google, asked) = fake_google().await;
-    let server = start_with_env("antigravity-extras", false, &[("DOMOVOI_ANTIGRAVITY_GOOGLE_API", &google)]);
+    let (proxy, proxied) = recording_proxy().await;
+    let proxy_env = [("HTTPS_PROXY", proxy.as_str()), ("HTTP_PROXY", proxy.as_str()), ("ALL_PROXY", proxy.as_str()), ("NO_PROXY", "127.0.0.1,localhost")];
+    let server = start_with_env("antigravity-extras", false, &proxy_env);
     std::fs::write(server.dir.join("out").join("agy-signed-in"), "").unwrap();
+    std::fs::write(server.dir.join("out").join("agy-language-server"), "").unwrap();
     let profile = server.dir.join("home/userdata/providers/antigravity").join(hex::encode(sha2::Sha256::digest(b"antigravity")));
     std::fs::create_dir_all(profile.join("antigravity-acp")).unwrap();
     std::fs::write(profile.join("antigravity-acp/acp_token.json"), json!({ "client_id": "c", "client_secret": "s", "refresh_token": "r" }).to_string()).unwrap();
@@ -4053,8 +4785,11 @@ async fn antigravity_reports_limits_skills_titles_and_batches() {
     };
     let windows: Vec<(&str, &str, f64)> = p["usageLimits"]["windows"].as_array().unwrap().iter().map(|w| (w["id"].as_str().unwrap(), w["label"].as_str().unwrap(), w["usedPercent"].as_f64().unwrap())).collect();
     assert_eq!(windows, [("gemini-5h", "Gemini \u{b7} 5-hour", 60.0), ("3p-weekly", "Claude & GPT (shared) \u{b7} Weekly", 25.0)].map(|(a, b, c)| (a, b, c as f64)));
-    assert_eq!(p["usageLimits"]["credentialFingerprint"], hex::encode(sha2::Sha256::digest(b"google-account\0g-123")));
-    assert!(asked.lock().unwrap().iter().any(|a| a == "/token"));
+    assert_eq!(p["usageLimits"]["credentialFingerprint"], Value::Null, "no Google account is looked up: {p}");
+    let quota_reads = std::fs::read_to_string(server.dir.join("out").join("agy-quota.log")).unwrap_or_default().lines().count();
+    assert_eq!(quota_reads, 1, "the session's start and its turn's end ask the agent once within a minute");
+    let google: Vec<String> = proxied.lock().unwrap().iter().filter(|h| h.ends_with("google.com") || h.ends_with("googleapis.com")).cloned().collect();
+    assert!(google.is_empty(), "the server itself reached Google: {google:?}");
     assert_eq!(p["supportsTextGeneration"], true);
     let skills: Vec<&str> = p["skills"].as_array().unwrap().iter().filter_map(|s| s["name"].as_str()).collect();
     assert_eq!(skills, ["review"], "the user's skills: {p}");
@@ -4434,4 +5169,338 @@ async fn opencode_questions_reply_retry_and_cancel() {
     assert_eq!(replies.len(), 2);
     assert_eq!(replies[1]["body"], json!({ "answer": { "scope": "all", "features": ["tags"], "notes": "Include accessibility." } }));
     assert!(sent.iter().any(|r| r["method"] == "DELETE" && r["path"].as_str().unwrap_or("").contains("message=")));
+}
+
+/// The secret card an agent's `request_secret` with `clientRequestId` `key` shows, as the thread last has it.
+fn secret_card(all: &[Value], key: &str) -> Option<Value> {
+    all.iter()
+        .filter(|e| e["type"] == "turn-item.updated" && e["payload"]["type"] == "secret_request")
+        .filter(|e| e["payload"]["id"].as_str().is_some_and(|id| id.ends_with(key)))
+        .last()
+        .map(|e| e["payload"].clone())
+}
+
+/// Files under `dir` (but not under `skip`) whose bytes hold `needle`.
+fn files_holding(dir: &std::path::Path, skip: &str, needle: &[u8]) -> Vec<PathBuf> {
+    let mut found = vec![];
+    let Ok(entries) = std::fs::read_dir(dir) else { return found };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.file_name().is_some_and(|n| n == skip) {
+            continue;
+        }
+        if path.is_dir() {
+            found.extend(files_holding(&path, skip, needle));
+        } else if std::fs::read(&path).is_ok_and(|bytes| bytes.windows(needle.len()).any(|w| w == needle)) {
+            found.push(path);
+        }
+    }
+    found
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn agents_ask_for_secrets_link_pull_requests_and_send_attachments() {
+    let server = start("mcp-secrets");
+    let token = signed_in(&server).await;
+    let mut ws = socket(&server, &token).await;
+    let workspace = workspace_repository(&server);
+    launched(&mut ws, &workspace, "claudeAgent", "claude-haiku-5-5", "keep working").await;
+    until(&mut ws, "t1", "the first turn", |all| all.iter().any(|e| e["type"] == "provider-turn.updated" && e["payload"]["status"] == "running")).await;
+    let sessions = mcp_sessions(&server, 1).await;
+    let (url, tok) = sessions["t1"].clone();
+    let raw = |name: &'static str, args: Value| {
+        let (url, tok) = (url.clone(), tok.clone());
+        async move { mcp(&url, Some(&tok), "tools/call", json!({ "name": name, "arguments": args })).await.1["result"].clone() }
+    };
+    let tool = |name: &'static str, args: Value| {
+        let call = raw(name, args);
+        async move {
+            let r = call.await;
+            assert_ne!(r["isError"], true, "{name}: {r}");
+            r["structuredContent"].clone()
+        }
+    };
+    let ask = |key: &'static str, args: Value| {
+        let mut args = args;
+        args["clientRequestId"] = json!(key);
+        tokio::spawn(raw("request_secret", args))
+    };
+    let card_of = |key: &'static str| move |all: &[Value]| secret_card(all, key).is_some_and(|c| c["secretStatus"] == "pending");
+
+    // A file card: the user's value reaches only an owner-only file the agent reads.
+    let asking = ask("k1", json!({ "label": "Sudo password", "reason": "To install the toolchain", "delivery": "file" }));
+    let all = until(&mut ws, "t1", "the file card", card_of("k1")).await;
+    let card = secret_card(&all, "k1").unwrap();
+    assert_eq!((card["label"].as_str(), card["status"].as_str(), card["delivery"].as_str()), (Some("Sudo password"), Some("waiting"), Some("file")), "{card}");
+    let r = call(&mut ws, "s1", "secrets.answerRequest", json!({ "threadId": "t1", "turnItemId": card["id"], "answer": { "type": "save", "secret": "hunter2-sudo-value" } })).await;
+    assert_eq!(r["exit"]["_tag"], "Success", "{r}");
+    let answered = asking.await.unwrap();
+    assert_eq!(answered["structuredContent"]["status"], "saved", "{answered}");
+    let file = answered["structuredContent"]["file"].as_str().unwrap().to_owned();
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "hunter2-sudo-value");
+    assert!(!answered.to_string().contains("hunter2"), "the tool result names the file, not the value");
+    let r = call(&mut ws, "s2", "secrets.answerRequest", json!({ "threadId": "t1", "turnItemId": card["id"], "answer": { "type": "save", "secret": "again" } })).await;
+    assert_eq!(r["exit"]["cause"][0]["error"]["reason"], "already_answered", "{r}");
+    let all = until(&mut ws, "t1", "the card saved", |all| secret_card(all, "k1").is_some_and(|c| c["secretStatus"] == "saved")).await;
+    assert!(!serde_json::to_string(&all).unwrap().contains("hunter2"), "no event holds the value");
+    assert_eq!(files_holding(&server.dir, "secret-requests", b"hunter2-sudo-value"), Vec::<PathBuf>::new(), "only the secret store holds it");
+
+    // Declined: the agent is told not to ask again.
+    let asking = ask("k2", json!({ "label": "API token", "reason": "To call the API", "url": "https://example.com/tokens" }));
+    let all = until(&mut ws, "t1", "the token card", card_of("k2")).await;
+    let r = call(&mut ws, "s3", "secrets.answerRequest", json!({ "threadId": "t1", "turnItemId": secret_card(&all, "k2").unwrap()["id"], "answer": { "type": "decline" } })).await;
+    assert_eq!(r["exit"]["_tag"], "Success", "{r}");
+    let declined = asking.await.unwrap()["structuredContent"].clone();
+    assert_eq!(declined["status"], "declined", "{declined}");
+    assert!(declined["note"].as_str().unwrap().starts_with("The user declined"));
+
+    // A secretRef is spent once, by the webhook task that names it.
+    let asking = ask("k3", json!({ "label": "Webhook secret", "reason": "To check deliveries" }));
+    let all = until(&mut ws, "t1", "the webhook card", card_of("k3")).await;
+    let r = call(&mut ws, "s4", "secrets.answerRequest", json!({ "threadId": "t1", "turnItemId": secret_card(&all, "k3").unwrap()["id"], "answer": { "type": "save", "secret": "whsec-value" } })).await;
+    assert_eq!(r["exit"]["_tag"], "Success", "{r}");
+    let secret_ref = asking.await.unwrap()["structuredContent"]["secretRef"].as_str().unwrap().to_owned();
+    assert!(secret_ref.starts_with("secret-ref:"), "{secret_ref}");
+    let hook = |secret_ref: &str| json!({ "prompt": "check {{body.action}}", "title": "Hook", "schedule": { "type": "webhook",
+        "signature": { "header": "X-Hub-Signature-256", "encoding": "hex", "prefix": "sha256=", "secretRef": secret_ref } } });
+    let task = tool("schedule_task", hook(&secret_ref)).await;
+    assert_eq!(task["task"]["webhook"]["hasSecret"], true, "the signing secret is the user's: {task}");
+    let again = raw("schedule_task", hook(&secret_ref)).await;
+    assert_eq!(again["isError"], true, "a ref is spent once: {again}");
+
+    // Pull requests: linked once, listed, watched until merged, unlinked.
+    let pr = "https://github.com/Acme/App/pull/42";
+    let linked = tool("link_pull_request", json!({ "url": pr })).await;
+    assert_eq!((linked["number"].as_u64(), linked["alreadyLinked"].as_bool()), (Some(42), Some(false)), "{linked}");
+    assert_eq!(tool("link_pull_request", json!({ "url": pr })).await["alreadyLinked"], true);
+    let many = tool("link_pull_requests", json!({ "urls": [pr, "https://github.com/acme/app/pull/43", "https://example.com/not-a-pr"] })).await;
+    assert_eq!((many["linked"][0]["numbers"].clone(), many["alreadyLinked"][0]["numbers"].clone()), (json!([43]), json!([42])), "{many}");
+    assert_eq!(many["invalidUrls"], json!(["https://example.com/not-a-pr"]));
+    let listed = tool("list_thread_pull_requests", json!({})).await;
+    assert_eq!(listed["pullRequests"].as_array().unwrap().len(), 2, "{listed}");
+    let watched = tool("watch_pull_request", json!({ "url": pr, "until": "merged" })).await;
+    assert_eq!((watched["watching"].as_bool(), watched["wasWatching"].as_bool()), (Some(true), Some(false)), "{watched}");
+    let all = until(&mut ws, "t1", "the watch", |all| {
+        last(all, "thread.pull-request-synced").is_some_and(|t| t["pullRequests"].as_array().is_some_and(|l| l.iter().any(|l| l["watch"]["until"] == "merged")))
+    })
+    .await;
+    assert!(last(&all, "thread.pull-request-synced").unwrap()["pullRequests"][0]["watch"]["awaitingBaseline"] == "all");
+    assert_eq!(tool("unwatch_pull_request", json!({ "url": pr })).await["watching"], false);
+    let unlinked = tool("unlink_pull_request", json!({ "repository": "acme/app", "number": 43, "host": "github.com" })).await;
+    assert_eq!(unlinked["wasLinked"], true, "{unlinked}");
+    assert_eq!(tool("list_thread_pull_requests", json!({})).await["pullRequests"].as_array().unwrap().len(), 1);
+    assert_eq!(raw("pull_request_read", json!({ "number": 42, "repository": "acme/app" })).await["isError"], true, "no gh here");
+
+    // Attachments: prepared, uploaded, sent as a message; one discarded.
+    let prepared = tool("t3_attachment_prepare_upload", json!({ "upload": { "type": "file", "name": "notes.txt", "mimeType": "text/plain", "sizeBytes": 5 } })).await;
+    let upload_url = prepared["uploadUrl"].as_str().unwrap();
+    let put = http().post(upload_url).body("hello").send().await.unwrap();
+    assert!(put.status().is_success(), "{}", put.status());
+    let sent = tool("t3_thread_send_attachments", json!({ "message": "See the notes", "attachments": [{ "type": "file", "id": prepared["attachmentId"], "name": "notes.txt", "mimeType": "text/plain", "sizeBytes": 5 }] })).await;
+    assert_eq!(sent["status"], "queued", "{sent}");
+    let bogus = raw("t3_thread_send_attachments", json!({ "attachments": [{ "type": "file", "id": "pending-not-mine", "name": "x", "mimeType": "text/plain", "sizeBytes": 1 }] })).await;
+    assert_eq!(bogus["isError"], true);
+    let other = tool("t3_attachment_prepare_upload", json!({ "upload": { "type": "image", "name": "a.png", "mimeType": "image/png", "sizeBytes": 3 } })).await;
+    assert_eq!(tool("t3_attachment_discard", json!({ "attachmentId": other["attachmentId"] })).await, json!({}));
+
+    // HTML pages become artifacts; messages and tool search answer at once.
+    let rendered = tool("html_render", json!({ "html": "<!doctype html><p>Chart</p>", "title": "Chart", "height": 5000 })).await;
+    assert_eq!(rendered["htmlRender"]["height"], 2000, "{rendered}");
+    let artifacts = tool("t3_artifact_list", json!({})).await;
+    assert!(artifacts["artifacts"].as_array().unwrap().iter().any(|a| a["id"] == rendered["htmlRender"]["attachmentId"] && a["kind"] == "html"), "{artifacts}");
+    assert_eq!(raw("html_render", json!({ "path": "/etc/hosts", "title": "x", "height": 100 })).await["isError"], true, "a supervised thread passes html");
+    assert_eq!(tool("send_to_user", json!({ "message": "**Draft**" })).await["sentMessage"], "**Draft**");
+    let found = tool("tool_search", json!({ "query": "secret" })).await;
+    assert!(found["tools"].as_array().unwrap().iter().any(|t| t["name"] == "request_secret"), "{found}");
+
+    // A card closes when its run stops.
+    let asking = ask("k4", json!({ "label": "PIN", "reason": "To pair" }));
+    until(&mut ws, "t1", "the PIN card", card_of("k4")).await;
+    let r = call(&mut ws, "stop", "orchestration.dispatchCommand", json!({ "type": "thread.stop", "commandId": "stop-t1", "threadId": "t1" })).await;
+    assert_eq!(r["exit"]["_tag"], "Success", "{r}");
+    let stopped = asking.await.unwrap()["structuredContent"].clone();
+    assert_eq!(stopped["status"], "cancelled", "{stopped}");
+    until(&mut ws, "t1", "the card closed", |all| secret_card(all, "k4").is_some_and(|c| c["secretStatus"] == "cancelled")).await;
+}
+
+/// A page for the browser tools: a title, a field, a button that greets.
+async fn greeting_site() -> u16 {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        while let Ok((mut socket, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                let mut buf = vec![0u8; 8192];
+                let Ok(n) = socket.read(&mut buf).await else { return };
+                let head = String::from_utf8_lossy(&buf[..n]).into_owned();
+                let body = if head.starts_with("GET /two ") {
+                    "<!doctype html><html><head><title>Second</title></head><body><p>two</p></body></html>"
+                } else {
+                    r#"<!doctype html><html><head><title>Preview Home</title></head><body>
+<h1>Hello preview</h1>
+<label>Your name <input id="name"></label>
+<button id="go" onclick="document.getElementById('out').textContent = 'Hi ' + document.getElementById('name').value">Greet</button>
+<p id="out"></p>
+<div style="height:3000px"></div>
+<script>console.log('hello from the page')</script>
+</body></html>"#
+                };
+                let res = format!("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+                let _ = socket.write_all(res.as_bytes()).await;
+            });
+        }
+    });
+    port
+}
+
+/// The browser the server would run, if this machine has one.
+fn installed_chrome() -> Option<String> {
+    let mac = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+    if std::path::Path::new(mac).exists() {
+        return Some(mac.to_owned());
+    }
+    ["chromium", "chromium-browser", "google-chrome"].iter().find_map(|name| {
+        let out = Command::new("which").arg(name).output().ok()?;
+        out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().to_owned())
+    })
+}
+
+/// The ref a snapshot's accessibility list gives the element of `role` named `name`.
+fn snapshot_ref(snapshot: &Value, role: &str, name: &str) -> String {
+    let tree = snapshot["accessibilityTree"].as_str().unwrap_or_default();
+    let line = tree.lines().find(|l| l.starts_with(&format!("- {role} \"{name}"))).unwrap_or_else(|| panic!("no {role} {name} in {tree}"));
+    let r = line.rsplit("[ref=").next().unwrap().trim_end_matches(']');
+    format!("aria-ref={r}")
+}
+
+/// The browser tools (`preview_*`, `t3_preview_*`, `html_preview`) as thread `t1`'s agent, on
+/// the server's headless browser. Skipped without Chrome or Chromium.
+#[tokio::test(flavor = "multi_thread")]
+async fn agents_drive_the_server_browser() {
+    let Some(chrome) = installed_chrome() else {
+        eprintln!("SKIPPED agents_drive_the_server_browser: no /Applications/Google Chrome.app and no chromium or google-chrome on PATH");
+        return;
+    };
+    let server = start_with_env("browser", false, &[("DOMOVOI_PREVIEW_BROWSER_BINARY", &chrome)]);
+    let token = signed_in(&server).await;
+    let mut ws = socket(&server, &token).await;
+    let workspace = server.dir.join("w").canonicalize().unwrap();
+    let r = call(&mut ws, "1", "projects.mutate", json!({ "type": "project.create", "commandId": "c1", "projectId": "p1", "title": "w",
+        "workspaceRoot": workspace, "createWorkspaceRootIfMissing": false, "defaultModelSelection": null })).await;
+    assert_eq!(r["exit"]["_tag"], "Success", "{r}");
+    let r = call(&mut ws, "2", "orchestration.launchThread", json!({ "commandId": "l-t1", "creationSource": "web", "threadId": "t1", "projectId": "p1",
+        "title": "Browser", "modelSelection": { "instanceId": "claudeAgent", "model": "claude-haiku-5-5" },
+        "runtimeMode": "full-access", "interactionMode": "default", "workspaceStrategy": { "type": "root" },
+        "initialMessage": { "messageId": "m-t1", "text": "DONE", "attachments": [] } })).await;
+    assert_eq!(r["exit"]["_tag"], "Success", "{r}");
+    let log = server.dir.join("out").join("args.log");
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    let config = loop {
+        let found = std::fs::read_to_string(&log).unwrap_or_default().lines().find_map(|line| {
+            let a: Vec<String> = serde_json::from_str(line).unwrap_or_default();
+            a.iter().find_map(|x| x.strip_prefix("--mcp-config=").map(str::to_owned))
+        });
+        if let Some(c) = found {
+            break serde_json::from_str::<Value>(&c).unwrap();
+        }
+        assert!(tokio::time::Instant::now() < deadline, "no --mcp-config");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
+    let url = config["mcpServers"]["t3"]["url"].as_str().unwrap().to_owned();
+    let tok = config["mcpServers"]["t3"]["headers"]["Authorization"].as_str().unwrap().trim_start_matches("Bearer ").to_owned();
+    let tool = async |name: &str, arguments: Value| -> Value {
+        let (_, r) = mcp(&url, Some(&tok), "tools/call", json!({ "name": name, "arguments": arguments })).await;
+        r["result"].clone()
+    };
+    let ok = |r: &Value| -> Value {
+        assert_ne!(r["isError"], true, "{r}");
+        r["structuredContent"].clone()
+    };
+    let site = greeting_site().await;
+    let home = format!("http://127.0.0.1:{site}/");
+
+    // No tab yet; then one of the agent's own, loaded.
+    let status = ok(&tool("preview_status", json!({})).await);
+    assert_eq!((status["available"].clone(), status["tabId"].clone()), (json!(false), Value::Null), "{status}");
+    assert_eq!(status["profiles"][0]["id"], "default", "{status}");
+    let opened = ok(&tool("preview_open", json!({ "url": format!("127.0.0.1:{site}/"), "open": false })).await);
+    assert_eq!((opened["url"].clone(), opened["title"].clone(), opened["control"]["owner"].clone(), opened["control"]["ownedByCaller"].clone()),
+        (json!(home), json!("Preview Home"), json!("agent"), json!(true)), "{opened}");
+    let tab = opened["tabId"].as_str().unwrap().to_owned();
+
+    // A snapshot: text, elements with refs, the console, and the screenshot's size only.
+    let snap = ok(&tool("preview_snapshot", json!({})).await);
+    assert!(snap["visibleText"].as_str().unwrap().contains("Hello preview"), "{snap}");
+    assert!(snap["consoleEntries"].as_array().unwrap().iter().any(|e| e["text"] == "hello from the page"), "{snap}");
+    assert!(snap["networkEntries"].as_array().unwrap().iter().any(|e| e["url"] == json!(home) && e["status"] == 200), "{snap}");
+    assert!(snap["screenshot"]["width"].as_u64().unwrap() > 0 && snap["screenshot"].get("data").is_none(), "{snap}");
+    let field = snapshot_ref(&snap, "textbox", "Your name");
+    let button = snapshot_ref(&snap, "button", "Greet");
+
+    // Acting: type into the field, click the button, wait for the page, read it.
+    ok(&tool("preview_act", json!({ "action": "type", "locator": field, "text": "Ada" })).await);
+    let clicked = ok(&tool("preview_act", json!({ "action": "click", "locator": button })).await);
+    assert_eq!(clicked["toolIcon"], json!({ "_tag": "website", "pageUrl": home }), "{clicked}");
+    ok(&tool("preview_wait_for", json!({ "text": "Hi Ada", "timeoutMs": 5000 })).await);
+    let read = ok(&tool("preview_evaluate", json!({ "expression": "document.getElementById('out').textContent" })).await);
+    assert_eq!(read["value"], "Hi Ada");
+    ok(&tool("preview_act", json!({ "action": "scroll", "deltaY": 400 })).await);
+    let scrolled = ok(&tool("preview_evaluate", json!({ "expression": "Math.round(window.scrollY)" })).await);
+    assert_eq!(scrolled["value"], 400, "{scrolled}");
+    ok(&tool("preview_act", json!({ "action": "press", "key": "Tab" })).await);
+    let bad = tool("preview_act", json!({ "action": "click", "x": 3 })).await;
+    assert!(bad["isError"] == true && bad["content"][0]["text"].as_str().unwrap().contains("Coordinates require both x and y"), "{bad}");
+    let invalid = tool("preview_act", json!({ "action": "click", "selector": "button[", "timeoutMs": 1000 })).await;
+    assert!(invalid["content"][0]["text"].as_str().unwrap().starts_with("PreviewAutomationInvalidSelectorError"), "{invalid}");
+
+    // Pixels when asked: image content, or a PNG saved for the user.
+    let seen = tool("preview_snapshot", json!({ "includeImage": true })).await;
+    let image = seen["content"].as_array().unwrap().iter().find(|c| c["type"] == "image").expect("image content");
+    assert_eq!(image["mimeType"], "image/png");
+    let saved = ok(&tool("preview_snapshot", json!({ "save": true })).await);
+    let path = saved["screenshotPath"].as_str().expect("a path");
+    assert!(std::fs::read(path).unwrap().starts_with(b"\x89PNG"), "{saved}");
+
+    // Size, appearance, a dev-server target, history-changing navigation.
+    let resized = ok(&tool("preview_resize", json!({ "mode": "preset", "preset": "iphone-se" })).await);
+    assert_eq!((resized["setting"].clone(), resized["viewport"].clone()), (json!({ "_tag": "preset", "width": 375, "height": 667, "presetId": "iphone-se" }), json!({ "width": 375, "height": 667 })), "{resized}");
+    ok(&tool("preview_set_appearance", json!({ "colorScheme": "dark" })).await);
+    let dark = ok(&tool("preview_evaluate", json!({ "expression": "matchMedia('(prefers-color-scheme: dark)').matches" })).await);
+    assert_eq!(dark["value"], true);
+    let moved = ok(&tool("preview_navigate", json!({ "target": { "kind": "environment-port", "port": site, "path": "two" } })).await);
+    assert_eq!((moved["url"].clone(), moved["title"].clone()), (json!(format!("http://localhost:{site}/two")), json!("Second")), "{moved}");
+    let stale = tool("preview_act", json!({ "action": "click", "locator": button })).await;
+    assert!(stale["content"][0]["text"].as_str().unwrap().contains("This element ref is stale"), "{stale}");
+
+    // A dialog the page opens is reported and answered.
+    ok(&tool("preview_evaluate", json!({ "expression": "setTimeout(() => alert('hey'), 10); 1" })).await);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let pending = ok(&tool("preview_status", json!({})).await);
+    assert_eq!(pending["dialog"], json!({ "type": "alert", "message": "hey", "defaultValue": "" }), "{pending}");
+    let refused = tool("preview_evaluate", json!({ "expression": "1" })).await;
+    assert!(refused["content"][0]["text"].as_str().unwrap().contains("A browser dialog is pending"), "{refused}");
+    let answered = ok(&tool("preview_dialog", json!({ "accept": true })).await);
+    assert_eq!(answered["dialog"], Value::Null);
+
+    // The thread's tabs, and closing the agent's own.
+    let listed = ok(&tool("t3_preview_list", json!({})).await);
+    let session = &listed["sessions"][0];
+    assert_eq!((session["tabId"].clone(), session["runtime"].clone(), session["headless"].clone(), session["automationOwner"].clone()), (json!(tab), json!("server"), json!(true), json!("t1")), "{listed}");
+    assert_eq!(listed["nextCursor"], Value::Null);
+    ok(&tool("t3_preview_close", json!({ "tabId": tab })).await);
+    assert_eq!(ok(&tool("t3_preview_list", json!({})).await)["sessions"], json!([]));
+
+    // An HTML page checked before it is shown.
+    let checked = tool("html_preview", json!({ "html": "<body style='margin:0'><div style='height:1200px'>Chart</div><script>console.warn('careful')</script></body>", "width": 400, "appearance": "light" })).await;
+    let meta = ok(&checked);
+    assert_eq!((meta["width"].clone(), meta["contentHeight"].clone(), meta["capturedHeight"].clone()), (json!(400), json!(1200), json!(1200)), "{meta}");
+    assert_eq!(meta["consoleMessages"], json!([{ "level": "warning", "text": "careful" }]), "{meta}");
+    assert!(checked["content"].as_array().unwrap().iter().any(|c| c["type"] == "image"), "{checked}");
+
+    // With "Agent browser access" off the tools say so.
+    let r = call(&mut ws, "3", "server.updateSettings", json!({ "patch": { "enableAgentBrowserAccess": false } })).await;
+    assert_eq!(r["exit"]["_tag"], "Success", "{r}");
+    let off = tool("preview_status", json!({})).await;
+    assert!(off["isError"] == true && off["content"][0]["text"].as_str().unwrap().contains("does not grant the preview capability"), "{off}");
 }

@@ -19,7 +19,7 @@
     {"tag": "pullRequests.list", "payload": {"state": "all", "involvement": "all", "query": "  widget ", "projectIds": ["widgets", "widgets-again", "gl-one"]}},
     {"tag": "pullRequests.list", "payload": {"state": "open", "involvement": "reviewing", "query": "subtraction", "host": "GitHub.com", "limit": 1, "cursors": {}}},
     {"tag": "pullRequests.list", "payload": {"state": "open", "projectId": "$PROJECT", "limit": 0}, "note": "payload outside t3code's schema (limit 0): read as 1", "skip_schema": true},
-    {"tag": "pullRequests.list", "payload": {"state": "open", "host": "gitlab.com"}, "note": "no host that can be read: nothing listed, no failure"},
+    {"tag": "pullRequests.list", "payload": {"state": "open", "host": "gitlab.com"}, "expect": "failure", "error": "PullRequestUnavailableError", "note": "GitLab projects without glab: cli-missing, with the listing"},
     {"tag": "pullRequests.list", "payload": {"state": "open", "projectId": "plain"}, "note": "a project with no remote"},
     {"tag": "pullRequests.list", "payload": {"state": "open", "projectId": "elsewhere"}, "note": "a host of no known kind"},
     {"tag": "pullRequests.list", "payload": {"state": "open", "filters": {"draft": "only"}}},

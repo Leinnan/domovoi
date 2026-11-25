@@ -402,6 +402,12 @@ impl Auth {
         Ok(Revoke::Done(hash))
     }
 
+    /// Ends every session bound to an iroh device (the managed policy allows
+    /// no remote clients); returns how many.
+    pub fn revoke_remote(&self) -> Result<usize, AuthError> {
+        Ok(self.db.with(|c| c.execute("DELETE FROM auth_sessions WHERE bound_endpoint IS NOT NULL", []))?)
+    }
+
     /// Ends every session except `keep` (a token hash), sparing local ones
     /// with `remote_only`. Returns the revoked hashes.
     pub fn revoke_others(&self, keep: &str, remote_only: bool) -> Result<Vec<String>, AuthError> {

@@ -53,6 +53,7 @@ struct RootView: View {
             if !showMain || connection.serverChanged { ToastCapsule(core: core) }
         }
         .environmentObject(companion)
+        .environment(\.notice, NoticeSink(core: core))
         .modifier(CompanionWindow(brain: companion, connection: connection))
         .task { await IOSSnapshots.run(core) }
         .onChange(of: connection.state) { _, state in

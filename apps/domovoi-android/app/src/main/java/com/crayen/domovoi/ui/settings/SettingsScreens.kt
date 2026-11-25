@@ -33,15 +33,18 @@ import androidx.compose.material.icons.outlined.Computer
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.CreateNewFolder
 import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Devices
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Key
 import androidx.compose.material.icons.outlined.Memory
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Notifications
+import androidx.compose.material.icons.outlined.PhoneAndroid
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material.icons.outlined.Share
+import androidx.compose.material.icons.outlined.TabletAndroid
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material.icons.outlined.Unarchive
 import androidx.compose.material3.AlertDialog
@@ -90,6 +93,10 @@ import com.crayen.domovoi.app.ScheduledTaskView
 import com.crayen.domovoi.app.SettingFieldView
 import com.crayen.domovoi.core.Core
 import com.crayen.domovoi.ui.common.ProjectIconTile
+import com.crayen.domovoi.ui.common.CompanionAvatar
+import com.crayen.domovoi.ui.common.CompanionEditor
+import com.crayen.domovoi.ui.common.CompanionMood
+import com.crayen.domovoi.ui.common.companionMood
 import com.crayen.domovoi.ui.common.EmptyState
 import com.crayen.domovoi.ui.common.SectionHeader
 import com.crayen.domovoi.ui.common.copyText
@@ -126,6 +133,7 @@ fun SettingsScreen(core: Core, nav: Navigator) {
     val context = LocalContext.current
     var renamingEnv by remember { mutableStateOf<com.crayen.domovoi.app.EnvironmentView?>(null) }
     var forgetting by remember { mutableStateOf<com.crayen.domovoi.app.EnvironmentView?>(null) }
+    var editingCompanion by remember { mutableStateOf<String?>(null) }
     var pickingProject by remember(connection.activeEnvironmentId) { mutableStateOf<String?>(null) }
     var renamingProject by remember { mutableStateOf<com.crayen.domovoi.app.ProjectSettingsView?>(null) }
     var removing by remember { mutableStateOf<com.crayen.domovoi.app.ProjectSettingsView?>(null) }
@@ -136,10 +144,28 @@ fun SettingsScreen(core: Core, nav: Navigator) {
                 SectionHeader("Connected server")
                 ListItem(
                     headlineContent = { Text(connection.environmentLabel.ifEmpty { "—" }) },
-                    supportingContent = { Text(listOf(connection.state, connection.serverVersion.ifEmpty { null }, connection.platform.ifEmpty { null }).filterNotNull().joinToString(" · ")) },
+                    supportingContent = {
+                        Column {
+                            Text(listOf(connection.state, connection.serverVersion.ifEmpty { null }, connection.platform.ifEmpty { null }).filterNotNull().joinToString(" · "))
+                            // A remote server's URL is the local end of the tunnel: not worth showing.
+                            if (!connection.remote && connection.serverUrl.isNotEmpty()) {
+                                Text(connection.serverUrl, fontFamily = Mono, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                        }
+                    },
                     leadingContent = { Icon(if (connection.remote) Icons.Outlined.Public else Icons.Outlined.Computer, null) },
                     colors = ListItemDefaults.colors(containerColor = clear),
                 )
+                if (connection.activeEnvironmentId.isNotEmpty()) {
+                    ListItem(
+                        headlineContent = { Text("Companion") },
+                        supportingContent = { Text(if (connection.companion.custom) "Your own look" else "Drawn from the server's key") },
+                        leadingContent = { CompanionAvatar(connection.companion.look, companionMood(connection), 28.dp) },
+                        trailingContent = { Icon(Icons.AutoMirrored.Outlined.ArrowForward, null, modifier = Modifier.size(18.dp)) },
+                        colors = ListItemDefaults.colors(containerColor = clear),
+                        modifier = Modifier.clickable { editingCompanion = connection.activeEnvironmentId },
+                    )
+                }
                 Row(Modifier.padding(horizontal = Space.l), horizontalArrangement = Arrangement.spacedBy(Space.s)) {
                     if (connection.state == "connected") OutlinedButton(onClick = { core.update(Event.Disconnect) }) { Text("Disconnect") }
                     else FilledTonalButton(onClick = { core.update(Event.Reconnect) }) { Text("Reconnect") }
@@ -159,6 +185,11 @@ fun SettingsScreen(core: Core, nav: Navigator) {
                                 IconButton(onClick = { menu = true }) { Icon(Icons.Outlined.MoreVert, "Actions for ${env.label}") }
                                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                                     DropdownMenuItem(text = { Text("Rename…") }, onClick = { menu = false; renamingEnv = env })
+                                    DropdownMenuItem(
+                                        text = { Text("Companion…") },
+                                        leadingIcon = { CompanionAvatar(env.companion.look, CompanionMood.Idle, 24.dp, still = true) },
+                                        onClick = { menu = false; editingCompanion = env.id },
+                                    )
                                     DropdownMenuItem(text = { Text("Move up") }, onClick = { menu = false; core.update(Event.MoveEnvironment(env.id, -1)) })
                                     DropdownMenuItem(text = { Text("Move down") }, onClick = { menu = false; core.update(Event.MoveEnvironment(env.id, 1)) })
                                     DropdownMenuItem(text = { Text("Forget", color = MaterialTheme.colorScheme.error) }, onClick = { menu = false; forgetting = env })
@@ -237,6 +268,7 @@ fun SettingsScreen(core: Core, nav: Navigator) {
     settings.projects.firstOrNull { it.id == pickingProject }?.let { project ->
         ProjectIconPicker(project, settings.projectIconFiles, core, connection.state == "connected") { pickingProject = null }
     }
+    editingCompanion?.let { id -> CompanionEditor(core, id) { editingCompanion = null } }
     renamingEnv?.let { env ->
         NameDialog("Rename server", "Name", "Rename", env.label, onDismiss = { renamingEnv = null }) { renamingEnv = null; core.update(Event.RenameEnvironment(env.id, it)) }
     }
@@ -508,12 +540,46 @@ fun AccessScreen(core: Core, onBack: () -> Unit) {
                     trailingContent = { Switch(checked = remote.enabled, enabled = remote.available && !remote.busy, onCheckedChange = { core.update(Event.SetRemoteAccess(it)) }) },
                     colors = ListItemDefaults.colors(containerColor = clear),
                 )
+                // How devices find the server: its iroh key and the relay it is reached through.
+                if (remote.endpointId.isNotEmpty()) {
+                    ListItem(
+                        headlineContent = { Text("Endpoint ID") },
+                        supportingContent = { Text(remote.endpointId, fontFamily = Mono, maxLines = 2, overflow = TextOverflow.MiddleEllipsis) },
+                        trailingContent = { IconButton(onClick = { copyText(context, remote.endpointId, "Endpoint ID") }) { Icon(Icons.Outlined.ContentCopy, "Copy endpoint ID") } },
+                        colors = ListItemDefaults.colors(containerColor = clear),
+                    )
+                }
+                if (remote.running) {
+                    val relay = remote.homeRelay.ifEmpty { remote.relays.firstOrNull() ?: "Connecting…" }
+                    val others = remote.relays.filter { it != relay }
+                    ListItem(
+                        headlineContent = { Text("Relay") },
+                        supportingContent = {
+                            Text(
+                                if (others.isEmpty()) relay else "$relay\n${others.size} more: ${others.joinToString()}",
+                                maxLines = 3, overflow = TextOverflow.Ellipsis,
+                            )
+                        },
+                        colors = ListItemDefaults.colors(containerColor = clear),
+                    )
+                }
                 remote.error?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(horizontal = Space.l)) }
                 Button(onClick = { pairing = true; core.update(Event.CreatePairingLink) }, enabled = !remote.busy, modifier = Modifier.padding(horizontal = Space.l, vertical = Space.s)) { Text("Pair a device…") }
             }
             item("devices-h") { SectionHeader("Signed-in devices") }
             items(settings.access, key = { it.id }) { entry ->
                 ListItem(
+                    leadingContent = {
+                        Icon(
+                            when (entry.deviceType) {
+                                "mobile" -> Icons.Outlined.PhoneAndroid
+                                "tablet" -> Icons.Outlined.TabletAndroid
+                                "desktop" -> Icons.Outlined.Computer
+                                else -> if (entry.kind == "session") Icons.Outlined.Devices else Icons.Outlined.Key
+                            },
+                            null,
+                        )
+                    },
                     headlineContent = { Text(entry.label + if (entry.current) " (this device)" else "") },
                     supportingContent = { Text(listOf(entry.detail, if (entry.connected) "connected" else null).filterNotNull().filter { it.isNotEmpty() }.joinToString(" · ")) },
                     trailingContent = { if (!entry.current && entry.kind == "session") TextButton(onClick = { revoking = entry }) { Text("Sign out") } },

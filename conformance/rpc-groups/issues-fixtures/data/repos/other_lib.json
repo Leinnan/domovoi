@@ -1,0 +1,73 @@
+{
+ "viewerPermission": "READ",
+ "issues": {
+  "3": {
+   "id": "I_other_lib_3",
+   "number": 3,
+   "title": "Rounding is off",
+   "url": "https://github.com/other/lib/issues/3",
+   "state": "OPEN",
+   "stateReason": null,
+   "createdAt": "2026-07-01T09:00:00Z",
+   "updatedAt": "2026-07-02T09:00:00Z",
+   "closedAt": null,
+   "author": {
+    "login": "carol",
+    "avatarUrl": "https://avatars.example/carol",
+    "name": "Carol"
+   },
+   "assignees": {
+    "pageInfo": {
+     "hasNextPage": false,
+     "endCursor": null
+    },
+    "nodes": []
+   },
+   "labels": {
+    "pageInfo": {
+     "hasNextPage": false,
+     "endCursor": null
+    },
+    "nodes": []
+   },
+   "body": "",
+   "viewerCanUpdate": true,
+   "viewerCanClose": true,
+   "viewerCanReopen": true,
+   "reactionGroups": [],
+   "comments": {
+    "totalCount": 0,
+    "pageInfo": {
+     "hasPreviousPage": false,
+     "startCursor": null
+    },
+    "nodes": []
+   },
+   "closedByPullRequestsReferences": {
+    "pageInfo": {
+     "hasNextPage": false,
+     "endCursor": null
+    },
+    "nodes": []
+   },
+   "timelineItems": {
+    "nodes": []
+   },
+   "mentions": []
+  }
+ },
+ "labels": {
+  "pageInfo": {
+   "hasNextPage": false,
+   "endCursor": null
+  },
+  "nodes": []
+ },
+ "assignableUsers": {
+  "pageInfo": {
+   "hasNextPage": false,
+   "endCursor": null
+  },
+  "nodes": []
+ }
+}

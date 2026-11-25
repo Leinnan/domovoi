@@ -14,8 +14,10 @@
 //! - `launch`: `orchestration.launchThread`;
 //! - `message`: `message.dispatch`, steering, and the handoff a run starts with;
 //! - `thread`: the thread's own fields, stamps, settling and snoozing;
+//! - `pull_requests`: the pull requests linked to a thread, and its watches on them;
 //! - `queue`: queued runs, and starting the next one;
-//! - `runtime`: answers to runtime requests, stops, rollback;
+//! - `runtime`: answers to runtime requests, the cards an agent asks the
+//!   user through (`secret_request.record`), stops, rollback;
 //! - `fork`: `thread.fork` and `thread.merge_back`.
 
 #![expect(clippy::disallowed_types, reason = "`Answers`: each answer to a question has a shape the schema leaves open")]
@@ -24,6 +26,7 @@ mod failure;
 mod fork;
 mod launch;
 mod message;
+pub mod pull_requests;
 mod queue;
 mod runtime;
 #[cfg(test)]
@@ -324,6 +327,12 @@ impl Orchestrator {
             Command::ThreadUnsettle(c) => self.settle(&c.thread_id, &c.command_id, false),
             Command::ThreadAutoSettleSet(c) => self.auto_settle_set(c),
             Command::ThreadTagSet(c) => self.tag_set(c),
+            Command::ThreadIssueLinkCommand(c) => self.issue_link(c),
+            Command::ThreadIssueUnlink(c) => self.issue_unlink(c),
+            Command::ThreadPullRequestLink(c) => self.pull_request_link(c),
+            Command::ThreadPullRequestUnlink(c) => self.pull_request_unlink(c),
+            Command::ThreadPullRequestWatch(c) => self.pull_request_watch(c),
+            Command::SecretRequestRecord(c) => self.secret_request_record(c),
             Command::ThreadPinReorder(c) => {
                 self.edit_thread(&c.thread_id, &c.command_id, Change::PinReordered, true, |t| t.pin_order_key = Some(Some(c.order_key.clone())))
             }

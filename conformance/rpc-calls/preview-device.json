@@ -11,6 +11,10 @@
   { "tag": "preview.close", "payload": { "threadId": "$THREAD", "tabId": "tab_1" }, "expect": "success" },
   { "tag": "preview.reportProfiles", "payload": { "profiles": [{ "id": "default", "name": "Default", "kind": "persistent" }], "defaultProfileId": "default" }, "expect": "success" },
   { "tag": "preview.clearProfile", "payload": { "profileId": "default" }, "expect": "success" },
+  { "tag": "preview.clearProfile", "payload": { "profileId": "incognito" }, "expect": "success" },
+  { "tag": "preview.open", "payload": { "threadId": "$THREAD", "url": "localhost:5173", "runtime": "server", "colorScheme": "dark", "zoomFactor": 1.25, "reveal": false }, "expect": "success" },
+  { "tag": "preview.list", "payload": { "threadId": "$THREAD" }, "expect": "success" },
+  { "tag": "preview.close", "payload": { "threadId": "$THREAD" }, "expect": "success" },
   { "tag": "preview.stopLocalServer", "payload": { "pid": 999999, "port": 1 }, "expect": "failure", "error": "PreviewStopLocalServerError" },
   { "tag": "subscribeDiscoveredLocalServers", "payload": { "configuredUrls": ["http://localhost:1/", "https://example.com/"] }, "expect": "chunk" },
 

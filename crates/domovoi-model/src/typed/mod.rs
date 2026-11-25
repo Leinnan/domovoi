@@ -52,6 +52,7 @@ mod context;
 mod derive;
 mod event;
 mod ids;
+mod issue;
 mod live;
 mod message;
 mod notify;
@@ -103,6 +104,7 @@ pub use shell::*;
 pub use state::*;
 pub use stream::*;
 pub use thread::*;
+pub use issue::*;
 pub use turn_item::*;
 
 pub use environment::*;

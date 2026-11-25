@@ -3,7 +3,6 @@ package com.crayen.domovoi.ui.common
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
-import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -35,6 +34,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.crayen.domovoi.app.Event
 import com.crayen.domovoi.core.Core
 import com.crayen.domovoi.ui.theme.LocalTints
 import com.crayen.domovoi.ui.theme.Space
@@ -73,16 +73,30 @@ fun StatusIcon(status: String, unread: Boolean = false, modifier: Modifier = Mod
 @Composable
 fun SourceBadge(source: String) {
     if (source.isEmpty() || source == "domovoi") return
-    val tints = LocalTints.current
-    val (label, color) = when (source) {
-        "Claude Code", "claude", "claudeAgent", "claude-code" -> "Claude" to tints.claude
-        "Codex", "codex" -> "Codex" to tints.codex
-        "Pi", "pi" -> "Pi" to tints.pi
-        "Antigravity", "antigravity" -> "Antigravity" to tints.antigravity
-        else -> source.replaceFirstChar { it.uppercase() } to MaterialTheme.colorScheme.onSurfaceVariant
+    val label = when (source) {
+        "Claude Code", "claude", "claudeAgent", "claude-code" -> "Claude"
+        "Codex", "codex" -> "Codex"
+        "Pi", "pi" -> "Pi"
+        "Antigravity", "antigravity" -> "Antigravity"
+        else -> source.replaceFirstChar { it.uppercase() }
     }
+    val color = agentColor(source) ?: MaterialTheme.colorScheme.onSurfaceVariant
     Surface(color = color.copy(alpha = 0.14f), shape = RoundedCornerShape(6.dp)) {
         Text(label, color = color, style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp))
+    }
+}
+
+/** An agent's own colour (Claude, Codex, Pi, Antigravity), by its label or
+ *  provider key; null for the others. */
+@Composable
+fun agentColor(source: String): androidx.compose.ui.graphics.Color? {
+    val tints = LocalTints.current
+    return when (source) {
+        "Claude Code", "Claude", "claude", "claudeAgent", "claude-code" -> tints.claude
+        "Codex", "codex" -> tints.codex
+        "Pi", "pi" -> tints.pi
+        "Antigravity", "antigravity" -> tints.antigravity
+        else -> null
     }
 }
 
@@ -119,8 +133,8 @@ fun EmptyState(icon: ImageVector, title: String, message: String? = null, modifi
 
 fun copyText(context: Context, text: String, label: String = "Domovoi") {
     context.getSystemService(ClipboardManager::class.java)?.setPrimaryClip(ClipData.newPlainText(label, text))
-    // Android 13+ shows its own confirmation.
-    if (android.os.Build.VERSION.SDK_INT < 33) Toast.makeText(context, "Copied", Toast.LENGTH_SHORT).show()
+    // Android 13+ shows its own confirmation; before, the app's toast says it.
+    if (android.os.Build.VERSION.SDK_INT < 33) com.crayen.domovoi.DomovoiApp.core(context).update(Event.ShowNotice("success", "Copied"))
 }
 
 fun clipboardText(context: Context): String? =

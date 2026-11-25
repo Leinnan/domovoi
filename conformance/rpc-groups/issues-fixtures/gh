@@ -1,0 +1,175 @@
+#!/usr/bin/python3
+# Stand-in for the GitHub CLI in the `issues-*` RPC groups: answers the commands
+# domovoi-server's issue tracker runs (`apps/server/src/rpc/issues/github.rs`) from
+# the repositories described in `$DIR/gh-data/repos/<owner>_<name>.json`, in the
+# shapes GitHub's GraphQL and REST APIs answer with.
+#
+# `$DIR/gh-data/rules` makes chosen commands misbehave, as in the `prs-*` groups:
+# each line is `<extended regex>\t<kind>\t<text>`; the first whose regex matches
+# the command line (its arguments joined by spaces, then ` <<< ` and its stdin)
+# wins: `err` prints <text> on stderr and exits 1, `out` prints it and exits 0.
+#
+# Every command line is appended to `$DIR/gh-data/log`.
+import json, os, re, sys
+
+D = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "gh-data")
+args = sys.argv[1:]
+stdin = sys.stdin.read() if "--input" in args else ""
+line = " ".join(args) + (" <<< " + stdin if stdin else "")
+with open(os.path.join(D, "log"), "a") as log:
+    log.write("gh " + line.replace("\n", " ") + "\n")
+
+rules = os.path.join(D, "rules")
+if os.path.exists(rules):
+    for rule in open(rules).read().splitlines():
+        if not rule.strip():
+            continue
+        pattern, kind, text = (rule.split("\t") + ["", ""])[:3]
+        if re.search(pattern, line):
+            text = text.replace("\\n", "\n")
+            if kind == "err":
+                sys.stderr.write(text + "\n")
+                sys.exit(1)
+            if kind == "out":
+                print(text)
+                sys.exit(0)
+            break
+
+
+def out(value):
+    print(json.dumps(value))
+    sys.exit(0)
+
+
+def fail(text):
+    sys.stderr.write(text + "\n")
+    sys.exit(1)
+
+
+def repo(owner, name):
+    path = os.path.join(D, "repos", ("%s_%s" % (owner, name)).lower() + ".json")
+    if not os.path.exists(path):
+        fail("GraphQL: Could not resolve to a Repository with the name '%s/%s'. (repository)" % (owner, name))
+    return json.load(open(path))
+
+
+def all_repos():
+    folder = os.path.join(D, "repos")
+    for file in sorted(os.listdir(folder)):
+        yield file[:-5], json.load(open(os.path.join(folder, file)))
+
+
+user = json.load(open(os.path.join(D, "user.json")))
+
+if args[:2] == ["api", "user"]:
+    out(user)
+
+if args[:2] == ["api", "graphql"]:
+    v = {}
+    i = 2
+    while i < len(args):
+        if args[i] in ("-f", "-F") and i + 1 < len(args):
+            key, _, value = args[i + 1].partition("=")
+            if args[i] == "-F":
+                value = None if value == "null" else int(value) if value.isdigit() else value
+            v[key] = value
+            i += 2
+        else:
+            i += 1
+    query = v.get("query", "")
+    op = re.match(r"\s*(query|mutation)\s+(\w+)", query)
+    op = op.group(2) if op else ""
+    viewer = {"login": user["login"]}
+
+    if op == "IssueSearch":
+        q = v.get("q", "")
+        scope = re.search(r"repo:(\S+)", q).group(1)
+        owner, name = scope.split("/", 1)
+        r = repo(owner, name)
+        rest = re.sub(r"(is|repo|sort|label|assignee|author|mentions):(\"(?:[^\"\\]|\\.)*\"|\S+)", "", q).strip()
+        words = [w.strip('"').lower() for w in re.findall(r"\"(?:[^\"\\]|\\.)*\"|\S+", rest)]
+        def qualifier(name):
+            return [m.strip('"') for m in re.findall(name + r":(\"(?:[^\"\\]|\\.)*\"|\S+)", q)]
+        rows = []
+        for number, issue in r["issues"].items():
+            if "is:open" in q and issue["state"] != "OPEN":
+                continue
+            if "is:closed" in q and issue["state"] != "CLOSED":
+                continue
+            names = [l["name"] for l in issue["labels"]["nodes"]]
+            if any(l not in names for l in qualifier("label")):
+                continue
+            logins = [a["login"] for a in issue["assignees"]["nodes"]]
+            if any(a not in logins for a in qualifier("assignee")):
+                continue
+            if any((issue.get("author") or {}).get("login") != a for a in qualifier("author")):
+                continue
+            if any(m not in issue.get("mentions", []) for m in qualifier("mentions")):
+                continue
+            if any(w not in (issue["title"] + " " + issue.get("body", "")).lower() for w in words):
+                continue
+            rows.append(issue)
+        key = "createdAt" if "sort:created-desc" in q else "updatedAt"
+        rows.sort(key=lambda issue: issue[key], reverse=True)
+        start = int((v.get("cursor") or "cursor:0").split(":")[1])
+        page = rows[start:start + int(v.get("rows") or 20)]
+        more = start + len(page) < len(rows)
+        nodes = [dict({k: x[k] for k in x if k not in ("comments", "body", "mentions", "timelineItems", "reactionGroups", "closedByPullRequestsReferences")},
+                      __typename="Issue", comments={"totalCount": x["comments"]["totalCount"]}) for x in page]
+        out({"data": {"search": {"pageInfo": {"hasNextPage": more, "endCursor": "cursor:%d" % (start + len(page)) if more else None}, "nodes": nodes}}})
+
+    owner, name = v.get("owner", ""), v.get("name", "")
+    if op == "IssueViewer":
+        out({"data": {"viewer": viewer}})
+    if op in ("AddReaction", "RemoveReaction"):
+        field = "addReaction" if op == "AddReaction" else "removeReaction"
+        out({"data": {field: {"reaction": {"content": v.get("content")}}}})
+    if op == "IssueCommentScope":
+        r = repo(owner, name)
+        issue = r["issues"].get(str(v.get("number")))
+        node = None
+        for _, other in all_repos():
+            for candidate in other["issues"].values():
+                if any(c["id"] == v.get("commentId") for c in candidate["comments"]["nodes"]):
+                    node = {"__typename": "IssueComment", "issue": {"id": candidate["id"]}}
+        out({"data": {"repository": {"issue": {"id": issue["id"]} if issue else None}, "node": node}})
+
+    r = repo(owner, name)
+    issue = r["issues"].get(str(v.get("number")))
+    if op == "IssueDetail":
+        detail = {k: issue[k] for k in issue if k != "mentions"} if issue else None
+        out({"data": {"viewer": viewer, "repository": {"viewerPermission": r.get("viewerPermission", "READ"), "issue": detail}}})
+    if op == "IssueComments":
+        older = (issue or {}).get("olderComments", {}).get(v.get("cursor"))
+        if issue is None:
+            out({"data": {"viewer": viewer, "repository": {"issue": None}}})
+        out({"data": {"viewer": viewer, "repository": {"issue": {"comments": older or {"pageInfo": {"hasPreviousPage": False, "startCursor": None}, "nodes": []}}}}})
+    if op == "IssueNodeId":
+        out({"data": {"repository": {"issue": {"id": issue["id"], "state": issue["state"], "stateReason": issue.get("stateReason")} if issue else None}}})
+    if op == "IssueCandidates":
+        out({"data": {"repository": {"labels": r["labels"], "assignableUsers": r["assignableUsers"]}}})
+    if op == "IssueTemplates":
+        out({"data": {"repository": {"templateDirectory": r.get("templateDirectory"), "issueTemplates": r.get("issueTemplates", [])}}})
+    fail("gh: unexpected query %s" % op)
+
+if args[:2] == ["api", "-X"]:
+    method, path = args[2], args[3]
+    body = json.loads(stdin or "{}")
+    m = re.match(r"repos/([^/]+)/([^/]+)/issues(?:/(\d+))?(/comments)?$", path)
+    if not m:
+        fail("gh: Not Found (HTTP 404)")
+    owner, name, number, comments = m.groups()
+    r = repo(owner, name)
+    if method == "POST" and number is None:
+        new = max(int(n) for n in r["issues"]) + 1
+        out({"number": new, "html_url": "https://github.com/%s/%s/issues/%d" % (owner, name, new), "title": body.get("title")})
+    issue = r["issues"].get(number)
+    if issue is None:
+        fail("gh: Not Found (HTTP 404)")
+    if comments:
+        out({"id": 1001, "body": body.get("body")})
+    labels = issue["labels"]["nodes"] if "labels" not in body or r.get("dropsLabels") else [{"name": n} for n in body["labels"]]
+    assignees = issue["assignees"]["nodes"] if "assignees" not in body or r.get("dropsLabels") else [{"login": n} for n in body["assignees"]]
+    out({"number": int(number), "state": body.get("state", issue["state"].lower()), "labels": labels, "assignees": [{"login": a["login"]} for a in assignees]})
+
+fail("gh: unknown command %s" % " ".join(args))

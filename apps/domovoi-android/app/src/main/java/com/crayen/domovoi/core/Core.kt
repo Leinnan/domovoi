@@ -1,6 +1,9 @@
 package com.crayen.domovoi.core
 
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.os.Build
 import android.provider.Settings
 import android.util.Log
@@ -29,6 +32,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.time.ZoneId
+import java.time.ZonedDateTime
 
 /**
  * Bridges the Rust core: forwards events, runs effects (HTTP, WebSocket, the
@@ -66,6 +71,9 @@ class Core(
     private val tunnel = Tunnel()
     private val notifier = Notifier(context)
 
+    /** A notice the server pushed (UnifiedPush) while the app had no connection. */
+    fun notifyFromPush(note: com.crayen.domovoi.app.NotifyOperation) = notifier.post(note, foreground = false, page = null)
+
     /** From the core's first view, which carries every part. */
     val view = LiveView(ViewDelta.bincodeDeserialize(ffi.view()))
 
@@ -96,6 +104,21 @@ class Core(
             }
         }
         NetworkWatcher(context, online = { update(Event.NetworkStatus(it)) }, changed = { update(Event.NetworkChanged) }).start()
+        // Usage's "Today" and hours follow the device's zone, and move with it.
+        val zoneChanges = IntentFilter().apply {
+            addAction(Intent.ACTION_TIMEZONE_CHANGED)
+            addAction(Intent.ACTION_TIME_CHANGED)
+        }
+        val zoneReceiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) = onCore { now(timeZone()) }
+        }
+        androidx.core.content.ContextCompat.registerReceiver(context, zoneReceiver, zoneChanges, androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
+    }
+
+    /** The device's zone and its offset now (which daylight saving moves). */
+    private fun timeZone(): Event {
+        val zone = ZoneId.systemDefault()
+        return Event.SetTimeZone(zone.id, ZonedDateTime.now(zone).offset.totalSeconds)
     }
 
     /** Restores saved environments and reconnects to the last one (once per process). */
@@ -103,6 +126,8 @@ class Core(
         if (launched) return@onCore
         launched = true
         val name = Settings.Global.getString(context.contentResolver, Settings.Global.DEVICE_NAME)
+        // Before Launch: the first Usage load already has the local day.
+        now(timeZone())
         now(Event.Launch("mobile", name ?: Build.MODEL, "Android"))
     }
 
@@ -137,7 +162,7 @@ class Core(
                 SocketOperation.Close -> socket.close()
             }
             is Effect.Notify -> {
-                notifier.post(effect.value, foreground)
+                notifier.post(effect.value, foreground, view.thread.value)
                 resolve(request.id, NotifyOutput.POSTED.bincodeSerialize())
             }
             is Effect.Tunnel -> runTunnel(effect.value, request.id)
@@ -165,6 +190,7 @@ class Core(
     /** What changed in the view (on the core's thread). */
     private fun show(delta: ViewDelta) {
         view.apply(delta)
+        if (delta.thread != null) notifier.pageShown(view.thread.value)
         scheduleReconnectIfNeeded()
     }
 
@@ -249,6 +275,8 @@ class Core(
     }
 
     fun enterForeground() = onCore {
+        // The offset may have moved (daylight saving) while away.
+        now(timeZone())
         val since = backgroundAt ?: return@onCore
         backgroundAt = null
         graceJob?.cancel()
@@ -279,8 +307,20 @@ class Core(
 
     /** Allow or Decline from a notification; `done` runs once the answer had
      *  time to go out (the receiver keeps the process up until then). */
-    fun respondFromNotification(environment: String, thread: String, request: String, decision: String, done: () -> Unit) {
-        update(Event.RespondFromNotification(environment, thread, request, decision))
+    fun respondFromNotification(environment: String, thread: String, request: String, decision: String, done: () -> Unit) =
+        answerInBackground(Event.RespondFromNotification(environment, thread, request, decision), done)
+
+    /** Allow or Decline from the turn notification, which knows the thread
+     *  but not the request: the core answers the approval the thread waits on. */
+    fun respondToThread(environment: String, thread: String, decision: String, done: () -> Unit) =
+        answerInBackground(Event.RespondToThread(environment, thread, decision), done)
+
+    /** A question's answer typed in its notification. */
+    fun answerFromNotification(environment: String, thread: String, request: String, question: String, text: String, done: () -> Unit) =
+        answerInBackground(Event.AnswerFromNotification(environment, thread, request, question, text), done)
+
+    private fun answerInBackground(event: Event, done: () -> Unit) {
+        update(event)
         scope.launch {
             delay(8_000)
             withContext(Dispatchers.Main) { done() }

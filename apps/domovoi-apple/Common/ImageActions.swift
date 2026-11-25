@@ -41,13 +41,29 @@ struct SharedImage: Transferable {
     }
 }
 
-/// What an image action did, shown for a moment over the images.
-struct ImageNotice: Identifiable, Equatable {
-    let id = UUID()
-    let text: String
-    var failed = false
-    /// Photos access was refused: the notice offers Settings.
-    var opensSettings = false
+/// What a native action did, for the core's toast (`ShowNotice`).
+struct Notice {
+    /// `success` | `error` | `info`
+    let kind: String
+    let message: String
+
+    static func success(_ message: String) -> Notice { Notice(kind: "success", message: message) }
+    static func error(_ message: String) -> Notice { Notice(kind: "error", message: message) }
+}
+
+/// Hands notices to the core, which shows them in the same toast as its own.
+struct NoticeSink {
+    /// Also read by full-screen covers and sheets, which show the toast themselves.
+    let core: Core?
+
+    @MainActor func callAsFunction(_ notice: Notice) {
+        core?.update(.showNotice(kind: notice.kind, message: notice.message))
+    }
+}
+
+extension EnvironmentValues {
+    /// Where native actions (copy, save, share) report how they went.
+    @Entry var notice = NoticeSink(core: nil)
 }
 
 @MainActor
@@ -55,7 +71,7 @@ enum ImageActions {
     /// Kinds other apps paste as they are; others go as PNG.
     private static let pastable: [UTType] = [.png, .jpeg, .heic, .gif, .tiff]
 
-    static func copy(_ file: ImageFile) -> ImageNotice {
+    static func copy(_ file: ImageFile) -> Notice {
         #if os(macOS)
         let board = NSPasteboard.general
         board.clearContents()
@@ -72,34 +88,41 @@ enum ImageActions {
         } else if let png = UIImage(data: file.data)?.pngData() {
             UIPasteboard.general.setItems([[UTType.png.identifier: png]])
         } else {
-            return ImageNotice(text: "Couldn’t copy the image.", failed: true)
+            return .error("Couldn’t copy the image.")
         }
         #endif
-        return ImageNotice(text: "Image copied")
+        return .success("Image copied")
     }
 
     #if os(iOS)
     /// Adds the image to Photos with add-only access (the picker never shows
     /// the library). The original bytes go, so the format and its metadata stay.
-    static func saveToPhotos(_ file: ImageFile) async -> ImageNotice {
+    static func saveToPhotos(_ file: ImageFile) async -> Notice {
         let status = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
         guard status == .authorized || status == .limited else {
-            return ImageNotice(text: "Domovoi can’t add to Photos.", failed: true, opensSettings: true)
+            return .error("Domovoi can’t add to Photos. Allow it in Settings > Privacy & Security > Photos.")
         }
         let data = pastable.contains(file.type) ? file.data : (UIImage(data: file.data)?.pngData() ?? file.data)
         do {
-            try await PHPhotoLibrary.shared().performChanges {
-                PHAssetCreationRequest.forAsset().addResource(with: .photo, data: data, options: nil)
-            }
+            try await addToPhotos(data)
             Platform.answered(true)
-            return ImageNotice(text: "Saved to Photos")
+            return .success("Saved to Photos")
         } catch {
-            return ImageNotice(text: "Couldn’t save to Photos.", failed: true)
+            return .error("Couldn’t save to Photos.")
+        }
+    }
+
+    /// Photos runs the change block on its own queue. Made here, outside the
+    /// main actor, so Swift 6 doesn't take it for main-actor code and trap
+    /// when Photos calls it off the main thread.
+    nonisolated private static func addToPhotos(_ data: Data) async throws {
+        try await PHPhotoLibrary.shared().performChanges { @Sendable in
+            PHAssetCreationRequest.forAsset().addResource(with: .photo, data: data, options: nil)
         }
     }
     #else
     /// Writes the original bytes where the user picks; nil when cancelled.
-    static func saveAs(_ file: ImageFile, name: String) async -> ImageNotice? {
+    static func saveAs(_ file: ImageFile, name: String) async -> Notice? {
         let panel = NSSavePanel()
         panel.nameFieldStringValue = file.fileName(name)
         panel.allowedContentTypes = [file.type]
@@ -113,9 +136,9 @@ enum ImageActions {
         guard response == .OK, let url = panel.url else { return nil }
         do {
             try file.data.write(to: url, options: .atomic)
-            return ImageNotice(text: "Saved \(url.lastPathComponent)")
+            return .success("Saved \(url.lastPathComponent)")
         } catch {
-            return ImageNotice(text: "Couldn’t save: \(error.localizedDescription)", failed: true)
+            return .error("Couldn’t save: \(error.localizedDescription)")
         }
     }
     #endif
@@ -128,7 +151,7 @@ struct ImageActionItems: View {
     let name: String
     /// What the share sheet shows of it.
     let preview: PlatformImage?
-    @Binding var notice: ImageNotice?
+    @Environment(\.notice) private var notice
 
     var body: some View {
         let shared = SharedImage(file: file, name: name)
@@ -141,60 +164,15 @@ struct ImageActionItems: View {
                 Label("Share…", systemImage: "square.and.arrow.up")
             }
         }
-        Button("Copy Image", systemImage: "doc.on.doc") { notice = ImageActions.copy(file) }
+        Button("Copy Image", systemImage: "doc.on.doc") { notice(ImageActions.copy(file)) }
         #if os(iOS)
         Button("Save to Photos", systemImage: "square.and.arrow.down") {
-            Task { notice = await ImageActions.saveToPhotos(file) }
+            Task { notice(await ImageActions.saveToPhotos(file)) }
         }
         #else
         Button("Save As…", systemImage: "square.and.arrow.down") {
-            Task { if let saved = await ImageActions.saveAs(file, name: name) { notice = saved } }
+            Task { if let saved = await ImageActions.saveAs(file, name: name) { notice(saved) } }
         }
         #endif
-    }
-}
-
-extension View {
-    /// Shows an image action's notice over this view for a moment.
-    func imageNotice(_ notice: Binding<ImageNotice?>) -> some View {
-        modifier(ImageNoticeCapsule(notice: notice))
-    }
-}
-
-private struct ImageNoticeCapsule: ViewModifier {
-    @Binding var notice: ImageNotice?
-    @Environment(\.openURL) private var openURL
-
-    func body(content: Content) -> some View {
-        content
-            .overlay(alignment: .top) {
-                if let shown = notice {
-                    HStack(spacing: Space.s) {
-                        Image(systemName: shown.failed ? "exclamationmark.octagon.fill" : "checkmark.circle.fill")
-                            .foregroundStyle(shown.failed ? Tint.danger : Tint.success)
-                        Text(shown.text).font(.footnote).lineLimit(3)
-                        #if os(iOS)
-                        if shown.opensSettings, let settings = URL(string: UIApplication.openSettingsURLString) {
-                            Button("Settings") { openURL(settings) }
-                                .font(.footnote.weight(.semibold))
-                                .buttonStyle(.borderless)
-                        }
-                        #endif
-                    }
-                    .padding(.horizontal, Space.l)
-                    .padding(.vertical, Space.s)
-                    .glassPanel(in: Capsule())
-                    .fixedSize()
-                    .padding(.top, Space.s)
-                    .transition(.opacity.combined(with: .scale(scale: 0.95)))
-                    .accessibilityElement(children: .combine)
-                    .task(id: shown.id) {
-                        AccessibilityNotification.Announcement(shown.text).post()
-                        try? await Task.sleep(for: .seconds(shown.opensSettings ? 5 : 2))
-                        if !Task.isCancelled, notice?.id == shown.id { notice = nil }
-                    }
-                }
-            }
-            .animation(.snappy, value: notice)
     }
 }

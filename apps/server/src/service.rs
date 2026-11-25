@@ -159,6 +159,18 @@ fn state(query: &str) -> String {
         .unwrap_or_else(|| "unknown".into())
 }
 
+/// `doctor`: whether the unit is installed, enabled and running; `None` off Linux.
+pub fn summary() -> Option<String> {
+    if !cfg!(target_os = "linux") {
+        return None;
+    }
+    let path = unit_path()?;
+    if !path.exists() {
+        return Some("not installed".into());
+    }
+    Some(format!("installed, {}, {}", state("is-enabled"), state("is-active")))
+}
+
 fn lingering() -> Option<bool> {
     let user = std::env::var("USER").ok()?;
     run("loginctl", &["show-user", &user, "--property=Linger", "--value"]).ok().map(|v| v == "yes")

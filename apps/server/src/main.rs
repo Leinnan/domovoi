@@ -1,5 +1,6 @@
 //! domovoi-server: Rust execution server, wire-compatible with t3code's `apps/server`.
 
+mod acp_cli;
 mod acp_registry;
 mod adapters;
 mod agent_instructions;
@@ -21,8 +22,11 @@ mod connections;
 mod control;
 mod db;
 mod diagrams;
+mod doctor;
+mod document_text;
 mod folder_access;
 mod gh;
+mod glab;
 mod http;
 mod file_images;
 mod jsonrpc;
@@ -36,13 +40,18 @@ mod mcp;
 mod orchestration;
 #[cfg(test)]
 mod perf_tests;
+mod peer_links;
 mod permissions;
 mod pi_rpc;
+mod policy;
+mod preview;
 mod project_icons;
 mod project_scripts;
 mod process;
+mod provider_update;
 mod providers;
 mod push;
+mod push_web;
 #[cfg(test)]
 mod record_dumps;
 mod remote;
@@ -63,9 +72,12 @@ mod test_records;
 mod text_gen;
 mod thread_permissions;
 mod tool_images;
+mod trace_diagnostics;
+mod trace_writer;
 #[cfg(feature = "tray")]
 mod tray;
 mod usage;
+mod usage_pricing;
 mod usage_limits;
 mod usage_recovery;
 mod util;
@@ -176,10 +188,22 @@ enum Cmd {
     },
     /// Stop the running server using this home directory.
     Stop,
+    /// Check what a server using this home directory needs: the home
+    /// folder, database, provider CLIs, git, gh, remote access, launch at
+    /// login and the port. Exits nonzero when a check fails.
+    Doctor {
+        /// Print the checks as JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Domovoi's agent tools over stdio, for an ACP agent that starts MCP
     /// servers only as commands (started by the server, not by hand).
     #[command(hide = true)]
     AcpMcpBridge,
+    /// Writes a document's text to stdout, for an attachment (started by
+    /// the server, in a child of its own: `document_text.rs`).
+    #[command(hide = true, name = "__document-text")]
+    DocumentText { path: PathBuf, extension: String },
     /// `BROWSER` for Antigravity's agent: hands the Google sign-in link to
     /// the server instead of opening a browser (started by the agent).
     #[command(hide = true, name = "antigravity-browser-url")]
@@ -281,6 +305,13 @@ fn base(args: &Args, paths: &state::Paths) -> Fallible<Base> {
 fn main() -> std::process::ExitCode {
     match run() {
         Ok(()) => std::process::ExitCode::SUCCESS,
+        // `doctor` has printed what failed.
+        Err(e) if e.is::<doctor::Failed>() => std::process::ExitCode::FAILURE,
+        // A policy this build cannot enforce: t3code's exit code, so a supervisor can tell.
+        Err(e) if e.is::<policy::PolicyFileError>() => {
+            eprintln!("error: {e}");
+            std::process::ExitCode::from(policy::EXIT_CODE)
+        }
         Err(e) => {
             eprintln!("error: {e}");
             std::process::ExitCode::FAILURE
@@ -301,6 +332,9 @@ fn run() -> Fallible {
     if matches!(args.command, Some(Cmd::AcpMcpBridge)) {
         return runtime()?.block_on(mcp::bridge::run()).map_err(Into::into);
     }
+    if let Some(Cmd::DocumentText { path, extension }) = &args.command {
+        std::process::exit(document_text::worker_main(path, extension));
+    }
     if let Some(Cmd::AntigravityBrowserUrl { url, to }) = &args.command {
         use std::io::Write;
         let line = antigravity::browser_url_line(url);
@@ -311,6 +345,12 @@ fn run() -> Fallible {
         }
         return Ok(());
     }
+    // Before the home directory is touched: doctor changes nothing.
+    if let Some(Cmd::Doctor { json }) = &args.command {
+        let _log = logging::init(None);
+        shell_env::hydrate();
+        return runtime()?.block_on(doctor::run(&args.home_dir, &args.host, args.port, &args.relays, *json));
+    }
     let paths = state::Paths::new(args.home_dir.clone())?;
     match &args.command {
         Some(Cmd::Connect { link, bridge_port }) => {
@@ -319,17 +359,22 @@ fn run() -> Fallible {
         }
         Some(Cmd::Pair { ttl_minutes, permissions, remote, light, json }) => {
             let _log = logging::init(None);
+            let policy = policy::install_from_system()?;
+            if *remote && !policy.allows_remote_clients() {
+                return Err(policy.refuse_remote_clients(Some("so no link for another device is made".into())).into());
+            }
             let base = base(&args, &paths)?;
             let output = if *json { PairOutput::Json } else if *remote { PairOutput::Remote { light: *light } } else { PairOutput::Local };
             runtime()?.block_on(pair(&base, *ttl_minutes, permissions, output))
         }
         Some(Cmd::Remote { action }) => {
             let _log = logging::init(None);
+            policy::install_from_system()?;
             let base = base(&args, &paths)?;
             runtime()?.block_on(cli::remote(&base, &args.host, args.port, action))
         }
         // Run before the home directory is touched (above).
-        Some(Cmd::AcpMcpBridge | Cmd::AntigravityBrowserUrl { .. }) => Ok(()),
+        Some(Cmd::AcpMcpBridge | Cmd::AntigravityBrowserUrl { .. } | Cmd::Doctor { .. } | Cmd::DocumentText { .. }) => Ok(()),
         Some(Cmd::Stop) => {
             let _log = logging::init(None);
             let base = base(&args, &paths)?;
@@ -364,7 +409,17 @@ fn run() -> Fallible {
             let _log = logging::init(Some(&paths.logs));
             tracing::info!(version = env!("CARGO_PKG_VERSION"), commit = env!("DOMOVOI_BUILD_COMMIT"), "domovoi-server starting");
             shell.log();
+            // Before anything listens: a refused configuration never serves, not even briefly.
+            let policy = policy::install_from_system()?;
+            policy.check_reachability(&args.host, args.remote)?;
             let base = base(&args, &paths)?;
+            if !policy.allows_remote_clients() {
+                // Devices paired before the policy came are signed out (`revokePairedClientsThePolicyDisallows`).
+                let revoked = base.auth.revoke_remote()?;
+                if revoked > 0 {
+                    tracing::info!(revoked, "signed out remote devices the managed policy does not allow");
+                }
+            }
             let shutdown = tokio_util::sync::CancellationToken::new();
             #[cfg(feature = "tray")]
             if args.tray {
@@ -551,6 +606,8 @@ async fn serve(args: &Args, paths: state::Paths, base: Base, shutdown: tokio_uti
         tracing::info!("Push notifications on (APNs)");
         push::spawn(state.clone(), apns);
     }
+    // Web Push to UnifiedPush endpoints needs no setup: its VAPID key is made on first use.
+    push_web::spawn(state.clone());
     if args.remote || remote.settings().enabled {
         let state = state.clone();
         tokio::spawn(async move {
@@ -600,6 +657,21 @@ async fn serve(args: &Args, paths: state::Paths, base: Base, shutdown: tokio_uti
                 }
                 let all = state.providers.snapshot().await;
                 providers::refresh_stale_limits(&all).await;
+            }
+        });
+    }
+    {
+        // Spans go to `observability.otlpTracesUrl` too, from the moment it is saved.
+        let otlp = |s: &settings::Settings| s.observability.as_ref().and_then(|o| o.otlp_traces_url.clone());
+        trace_writer::set_otlp_traces_url(otlp(&*state.settings.read().await));
+        let mut saved = settings::subscribe();
+        tokio::spawn(async move {
+            loop {
+                match saved.recv().await {
+                    Ok(s) => trace_writer::set_otlp_traces_url(otlp(&s)),
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
             }
         });
     }

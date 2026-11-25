@@ -143,6 +143,7 @@ fn settle_thread(store: &Store, tid: &str, outline: &Outline) {
 pub fn recover(orch: std::sync::Arc<Orchestrator>) {
     let found = interrupt_orphaned_runs(orch.store());
     if found.interrupted.is_empty() && found.unfinalized.is_empty() {
+        RECOVERED.store(true, std::sync::atomic::Ordering::Release);
         return;
     }
     tracing::info!(interrupted = found.interrupted.len(), unfinalized = found.unfinalized.len(), "settled runs a server stop left open");
@@ -153,7 +154,16 @@ pub fn recover(orch: std::sync::Arc<Orchestrator>) {
         for (tid, _) in &found.interrupted {
             let _ = orch.start_next_queued(tid).await;
         }
+        RECOVERED.store(true, std::sync::atomic::Ordering::Release);
     });
+}
+
+/// Set once `recover` has settled every run a stop left open (`/ready`).
+static RECOVERED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Startup recovery has finished.
+pub fn recovered() -> bool {
+    RECOVERED.load(std::sync::atomic::Ordering::Acquire)
 }
 
 const RESTART_CONTINUATION: &str = "restart_continuation";

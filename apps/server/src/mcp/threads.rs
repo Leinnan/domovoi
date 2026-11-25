@@ -24,6 +24,7 @@ pub fn tools() -> Vec<Value> {
                 "includeSubagents": b("Include subagents' child threads (default false)."),
                 "cursor": n("From `nextCursor`."),
                 "limit": n("At most this many (default 20, at most 100)."),
+                "environmentId": s("Linked environment to list (every project there). Omit for this one. Ids are then that environment's."),
             }), &[], true),
         tool("t3_thread_read", "Read a thread of this project: its settings, status, recent runs and latest messages (view `messages`, default) or latest work items (view `activity`).",
             json!({

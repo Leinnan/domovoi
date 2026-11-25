@@ -10,10 +10,14 @@ name = "domovoi-server"
 path = "src/main.rs"
 
 [features]
-default = ["tray"]
+default = ["tray", "preview-browser"]
 # The status bar icon (`--tray`). On Linux it needs GTK 3 and an
 # appindicator library to build; a headless build can leave it out with
 # `--no-default-features`.
+# The server's headless preview browser (`preview/browser.rs`): Chrome driven
+# over the DevTools protocol. Without it server preview tabs, the agents'
+# preview tools and `html_preview` answer that the browser is unavailable.
+preview-browser = ["dep:cdp-tungstenite"]
 tray = ["dep:tray-icon", "dep:tiny-skia", "dep:arboard", "dep:open", "dep:winit", "dep:gtk", "dep:dark-light"]
 
 [dependencies]
@@ -78,6 +82,15 @@ tiny-skia = { version = "0.11.4", optional = true }
 arboard = { version = "3.6.1", optional = true, default-features = false }
 open = { version = "5.3.2", optional = true }
 similar = { version = "2", default-features = false, features = ["text"] }
+# Attachment document text (`document_text.rs`): OOXML archives (deflate only,
+# pure Rust) and PDF text (no rayon or chrono).
+zip = { version = "9.4.2", default-features = false, features = ["deflate-flate2"] }
+lopdf = { version = "0.46.0", default-features = false }
+# The DevTools client of the preview browser: the version axum's WebSockets
+# already build, renamed apart from the tests' newer one.
+cdp-tungstenite = { package = "tokio-tungstenite", version = "0.29.0", default-features = false, features = ["handshake"], optional = true }
+# gzip and brotli for HTTP responses (`http::compression`), not the RPC socket.
+tower-http = { version = "0.6.11", default-features = false, features = ["compression-gzip", "compression-br"] }
 
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
 winit = { version = "0.30.13", optional = true }
@@ -110,4 +123,6 @@ winresource = { version = "0.1.34", default-features = false }
 # Measurements only: counting commits and listing the statements a workload runs.
 rusqlite = { version = "0.42.0", features = ["bundled", "hooks", "trace"] }
 tokio-tungstenite = "0.30.0"
+# Reads the gzip bodies the compression tests ask for.
+flate2 = "1.1.11"
 

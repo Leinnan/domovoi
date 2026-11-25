@@ -5,6 +5,12 @@
 //! Files live in `<userdata>/attachments/<attachmentId><ext>`. Upload tokens
 //! are `<base64url claims>.<base64url HMAC-SHA256>`, keyed by a random secret
 //! kept in `<userdata>/attachment-signing-key`.
+//!
+//! An uploaded PDF, DOCX, XLSX or PPTX starts its text extraction
+//! (`crate::document_text`) at once, into `<attachmentId><ext>.txt` beside it
+//! (t3code extracts when the message claims the upload); deleting a pending
+//! upload deletes that too. `document_text::extracted_text_path` names it for
+//! the prompt.
 
 use crate::rpc::shell::{RecordOrNot, count_or_zero, if_fits, list_if_list, text_or_empty};
 use base64::Engine;
@@ -318,6 +324,9 @@ pub fn store_upload(userdata: &Path, claims: &Claims, body: &[u8]) -> Result<(),
         Err(e) => Err(internal(e)),
     };
     let _ = std::fs::remove_file(&part);
+    if result.is_ok() && claims.attachment_type == "file" {
+        crate::document_text::prepare(&final_path);
+    }
     result
 }
 

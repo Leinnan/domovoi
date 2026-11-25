@@ -90,7 +90,7 @@ async fn session_cookie(base: &str, code: &str) -> (String, Value) {
 }
 
 async fn open_socket(port: u16, cookie: &str) -> Ws {
-    let mut req = format!("ws://127.0.0.1:{port}/ws").into_client_request().unwrap();
+    let mut req = format!("ws://127.0.0.1:{port}/ws?orchestrationProtocol=2").into_client_request().unwrap();
     req.headers_mut().insert("cookie", cookie.parse().unwrap());
     tokio_tungstenite::connect_async(req).await.unwrap().0
 }

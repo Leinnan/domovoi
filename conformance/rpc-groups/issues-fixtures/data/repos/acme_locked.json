@@ -1,0 +1,75 @@
+{
+ "viewerPermission": "READ",
+ "dropsLabels": true,
+ "issues": {
+  "1": {
+   "id": "I_acme_locked_1",
+   "number": 1,
+   "title": "Triage me",
+   "url": "https://github.com/acme/locked/issues/1",
+   "state": "OPEN",
+   "stateReason": null,
+   "createdAt": "2026-06-01T09:00:00Z",
+   "updatedAt": "2026-06-02T09:00:00Z",
+   "closedAt": null,
+   "author": {
+    "login": "ann",
+    "avatarUrl": "https://avatars.example/ann",
+    "name": "Ann"
+   },
+   "assignees": {
+    "pageInfo": {
+     "hasNextPage": false,
+     "endCursor": null
+    },
+    "nodes": []
+   },
+   "labels": {
+    "pageInfo": {
+     "hasNextPage": false,
+     "endCursor": null
+    },
+    "nodes": []
+   },
+   "body": "",
+   "viewerCanUpdate": true,
+   "viewerCanClose": true,
+   "viewerCanReopen": true,
+   "reactionGroups": [],
+   "comments": {
+    "totalCount": 0,
+    "pageInfo": {
+     "hasPreviousPage": false,
+     "startCursor": null
+    },
+    "nodes": []
+   },
+   "closedByPullRequestsReferences": {
+    "pageInfo": {
+     "hasNextPage": false,
+     "endCursor": null
+    },
+    "nodes": []
+   },
+   "timelineItems": {
+    "nodes": []
+   },
+   "mentions": []
+  }
+ },
+ "labels": {
+  "pageInfo": {
+   "hasNextPage": false,
+   "endCursor": null
+  },
+  "nodes": []
+ },
+ "assignableUsers": {
+  "pageInfo": {
+   "hasNextPage": false,
+   "endCursor": null
+  },
+  "nodes": []
+ },
+ "templateDirectory": null
+}

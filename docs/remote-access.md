@@ -170,6 +170,18 @@ can live in `<home>/push.json` (`keyPath`, `keyId`, `teamId`, `topic`,
 `privateAlerts`). The topic defaults to the iPhone app's bundle id,
 `com.crayen.domovoi`.
 
+## Push notifications (Android)
+
+Android needs no keys on the server. Install a UnifiedPush distributor on the
+phone (ntfy, NextPush or another) and open the Domovoi app once: it registers
+the distributor's endpoint with each server it connects to
+(`POST /api/domovoi/push/webpush`). The server then sends "Needs your
+approval", "Finished" and "Failed" as encrypted Web Push messages (RFC 8291,
+signed with the server's own VAPID key, made on first use at
+`<home>/webpush-vapid.p8`) whenever the app has no connection open. Approvals
+can be allowed or declined from the notification. Without a distributor the app
+keeps its local notifications while it runs.
+
 ## Webhook tasks
 
 A scheduled task can run when a URL receives a request (GitHub, CI, any

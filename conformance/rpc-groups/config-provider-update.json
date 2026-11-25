@@ -1,0 +1,22 @@
+{
+ "env": {
+  "DOMOVOI_CLAUDE_BINARY": "$DIR/bin/claude",
+  "DOMOVOI_CODEX_BINARY": "$DIR/bin/codex"
+ },
+ "normalize": [
+  ["\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z", "<time>"],
+  ["/[^\" ]*/domovoi-group-config-provider-update-\\d+", "$DIR"]
+ ],
+ "cases": [
+  { "tag": "server.updateProvider", "payload": { "provider": "claudeAgent" }, "save": { "STATUS": "/providers/1/updateState/status", "VERSION": "/providers/1/version" },
+    "note": "npm install -g into the prefix that owns the CLI, then probed again" },
+  { "sh": "test \"$STATUS\" = succeeded && test \"$VERSION\" = 2.2.0 && grep -qx -- \"install -g --prefix $DIR/npm --allow-scripts=@anthropic-ai/claude-code @anthropic-ai/claude-code@latest\" state/npm-args || { echo \"$STATUS $VERSION\"; cat state/npm-args; exit 1; }" },
+  { "sh": "touch state/npm-fail", "tag": "server.updateProvider", "payload": { "provider": "claudeAgent", "instanceId": "claudeAgent" }, "save": { "FAILED": "/providers/1/updateState/status" },
+    "note": "a failing installer is a failed update state, not an error" },
+  { "sh": "test \"$FAILED\" = failed" },
+  { "tag": "server.updateProvider", "payload": { "provider": "claudeAgent", "targetVersion": "2.2.1" }, "note": "no model manifest recommends a version" },
+  { "tag": "server.updateProvider", "payload": { "provider": "codex" }, "expect": "failure", "error": "ServerProviderUpdateError", "note": "installed by no package manager Domovoi drives" },
+  { "tag": "server.updateProvider", "payload": { "provider": "claudeAgent", "instanceId": "claude_work" }, "expect": "failure", "error": "ServerProviderUpdateError" },
+  { "tag": "server.updateProvider", "payload": { "provider": "antigravity" }, "expect": "failure", "error": "ServerProviderUpdateError" }
+ ]
+}

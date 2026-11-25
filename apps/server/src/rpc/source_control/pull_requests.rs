@@ -1,14 +1,18 @@
 //! `pullRequests.*` RPCs, after t3code's `PullRequestService`,
 //! `PullRequestReviewGuideService` and `linkedThreads`: which project a pull
 //! request is read through, what a viewer may do, and what is refused. What
-//! GitHub says is read in `github`; the answers are `pull_request_records`
-//! and `domovoi_model::typed` records, the failures `pull_request_failure`'s.
+//! the host says is read by its driver: GitHub's in `github` (through `gh`,
+//! `crate::gh`), GitLab's merge requests in `gitlab` (through `glab`,
+//! `crate::glab`); the answers are `pull_request_records` and
+//! `domovoi_model::typed` records, the failures `pull_request_failure`'s.
 //!
 //! Projects are routed to a repository the way t3code does (`requireProject`):
-//! the project's repository identity names the host and `owner/name`. Only
-//! GitHub is served, through the `gh` CLI (see `crate::gh`); GitLab, Bitbucket
-//! and other hosts are listed as "cannot be browsed here yet", which is what
-//! t3code says for hosts without a provider.
+//! the project's repository identity names the host, the path and the
+//! provider kind, which picks the driver ([`Provider`], t3code's
+//! `PullRequestProviderRegistry`). A host whose kind the identity leaves out
+//! is GitLab when its name says so (`gitlab.com`, or a `gitlab` label: t3code's
+//! GitLab Self-Hosted). Bitbucket and other hosts are listed as "cannot be
+//! browsed here yet", which is what t3code says for hosts without a provider.
 //!
 //! Differences from t3code, all answered in its wire shapes:
 //! - no read caches: every read asks `gh` again, so `allowStale` and
@@ -20,13 +24,17 @@
 //! - review guides (`review_guides`) are written from a scratch worktree at
 //!   the head and kept per pull request; the settled review discussion is
 //!   not passed to the model;
+//! - GitLab's limits are in `gitlab`'s header; its viewed files are not kept
+//!   (`filesViewed` answers none, `setFilesViewed` refuses) and its review
+//!   threads are not paged (`threadComments` refuses, as t3code does);
 //! - the linked-thread change detector starts with the first pull request RPC
 //!   rather than at boot, so "unknown since start" counts from then.
 
 #![expect(clippy::disallowed_types, reason = "a request buffered to be read twice: as the pull request reference (whose error text is the failure's detail) and as the method's fields")]
 
 use super::github::{self, FileOfDiff, ListRow, Listing};
-use super::pull_request_failure::{Failure, PROVIDER, provider_detail};
+use super::gitlab;
+use super::pull_request_failure::{Failure, Provider, cli_detail};
 use super::pull_request_records::{
     ChangeBreakdown, DiffFileContents, DiffStat, FilesViewed, FilterOptions, LabelCandidate, LabelCandidates, LinkedThread, LinkedThreads, ListStats,
     PullRequestActivity, PullRequestDetail, PullRequestPreview, ReferenceKind, ReviewGuideResult, ReviewerCandidate, ReviewerCandidates, ReviewerKind, Routing,
@@ -147,11 +155,21 @@ pub struct Supported {
     pub workspace_root: String,
     pub repository: String,
     pub host: String,
+    /// The driver the host is read through.
+    pub provider: Provider,
 }
 
 impl Supported {
     pub fn cwd(&self) -> Option<&str> {
         Some(self.workspace_root.as_str())
+    }
+
+    /// `(accountId, viewer)` of the account the host is read as.
+    async fn identity(&self) -> Result<(String, String), GhError> {
+        match self.provider {
+            Provider::GitHub => gh::identity(self.cwd(), &self.host).await,
+            Provider::GitLab => crate::glab::identity(self.cwd(), &self.host).await,
+        }
     }
 }
 
@@ -170,6 +188,12 @@ fn identity_route(identity: &RepositoryIdentity) -> Option<(String, String, Opti
         _ => path.to_owned(),
     };
     Some((host.to_lowercase(), repository, identity.provider.clone()))
+}
+
+/// The provider kind of a routed identity: as the identity says, or GitLab
+/// for a host whose name says it is one (`recognizeRemote`).
+fn route_kind(host: &str, kind: Option<String>) -> Option<String> {
+    kind.filter(|k| k != "unknown").or_else(|| crate::glab::recognizes_host(host).then(|| "gitlab".to_owned()))
 }
 
 /// The repository a project is of: as its row says, or as its folder says now.
@@ -197,7 +221,7 @@ async fn workspace_projects(
             continue;
         }
         let Some((repo_host, repository, kind)) = project_identity(&project).await.as_ref().and_then(identity_route) else { continue };
-        let Some(kind) = kind else { continue };
+        let Some(kind) = route_kind(&repo_host, kind) else { continue };
         if host.is_some_and(|h| h.to_lowercase() != repo_host) {
             continue;
         }
@@ -205,19 +229,20 @@ async fn workspace_projects(
         if !seen.insert(key) {
             continue;
         }
-        if kind != PROVIDER {
+        let Some(provider) = Provider::of(&kind) else {
             match ws.unimplemented.iter_mut().find(|(h, _, _)| *h == repo_host) {
                 Some(slot) => slot.2 += 1,
                 None => ws.unimplemented.push((repo_host, kind, 1)),
             }
             continue;
-        }
+        };
         ws.supported.push(Supported {
             project_id: project.id.clone(),
             title: project.title.clone(),
             workspace_root: project.workspace_root.clone(),
             repository,
             host: repo_host,
+            provider,
         });
     }
     Ok(ws)
@@ -262,6 +287,7 @@ async fn require_project(state: &AppState, r: &PrRef) -> Result<Supported, Failu
                 workspace_root: project.workspace_root,
                 repository: repository.to_owned(),
                 host,
+                provider: Provider::GitHub,
             });
         }
     }
@@ -276,7 +302,7 @@ async fn verify_account(state: &AppState, r: &PrRef) -> Result<(), Failure> {
     if r.host.as_deref().map(str::to_lowercase).as_deref() != Some(project.host.as_str()) {
         return Err(rejected());
     }
-    match gh::identity(project.cwd(), &project.host).await {
+    match project.identity().await {
         Ok((account, _)) if &account == expected => Ok(()),
         _ => Err(rejected()),
     }
@@ -288,6 +314,54 @@ async fn routed(state: &AppState, reference: Reference) -> Result<(PrRef, Suppor
     verify_account(state, &r).await?;
     let project = require_project(state, &r).await?;
     Ok((r, project))
+}
+
+/// For the agent's pull request tools (`crate::mcp::pull_requests`): the
+/// host and path of the project's own GitHub or GitLab repository.
+pub(crate) async fn project_repository(state: &AppState, project_id: &str) -> Option<(String, String)> {
+    let ws = workspace_projects(state, Some(project_id), None, None).await.ok()?;
+    ws.supported.into_iter().next().map(|p| (p.host, p.repository))
+}
+
+/// For the agent's pull request tools: a pull request's summary (and its
+/// checks with `with_checks`), read through `project_id` as RPC reads are.
+pub(crate) async fn read_for_agent(
+    state: &AppState,
+    project_id: &str,
+    host: &str,
+    repository: &str,
+    number: u64,
+    with_checks: bool,
+) -> Result<(PullRequestSummary, Option<PullRequestChecks>), Failure> {
+    let r = PrRef { project_id: project_id.to_owned(), host: Some(host.to_owned()), expected_account_id: None, repository: repository.to_owned(), number };
+    let p = require_project(state, &r).await?;
+    let summary = read_summary(&p, number, false).await.map_err(failed(&p, "summary"))?;
+    let checks = if with_checks { Some(read_checks(&p, number).await.map_err(failed(&p, "checks"))?) } else { None };
+    Ok((summary, checks))
+}
+
+/// The web address of a pull request on `host` (t3code's `changeRequestUrl`):
+/// GitLab's `/-/merge_requests/N` on a host whose name says it is GitLab, else GitHub's `/pull/N`.
+pub(crate) fn change_request_url(host: &str, repository: &str, number: u64) -> String {
+    if crate::glab::recognizes_host(host) {
+        format!("https://{host}/{repository}/-/merge_requests/{number}")
+    } else {
+        format!("https://{host}/{repository}/pull/{number}")
+    }
+}
+
+async fn read_summary(p: &Supported, number: u64, reply: bool) -> Result<PullRequestSummary, GhError> {
+    match p.provider {
+        Provider::GitHub => github::summary(p, number, reply).await,
+        Provider::GitLab => gitlab::summary(p, number).await,
+    }
+}
+
+async fn read_checks(p: &Supported, number: u64) -> Result<PullRequestChecks, GhError> {
+    match p.provider {
+        Provider::GitHub => github::pull_request_checks(p, number).await,
+        Provider::GitLab => gitlab::pull_request_checks(p, number).await,
+    }
 }
 
 fn now_ms() -> u64 {
@@ -541,6 +615,19 @@ struct ListFilters {
     author: Loose<String>,
 }
 
+/// What of a listing's filters GitLab narrows itself (`listableLabels`,
+/// `filterParams`): groups of one label, excluded labels, author, draft and review.
+fn narrowing(f: &ListFilters) -> gitlab::Narrowing<'_> {
+    let one_label_groups = f.labels.iter().flatten().filter_map(|g| g.as_ref().filter(|g| g.len() == 1)).filter_map(|g| g[0].as_deref());
+    gitlab::Narrowing {
+        labels: one_label_groups.collect(),
+        excluded_labels: f.excluded_labels.iter().flatten().filter_map(|l| l.as_deref()).collect(),
+        author: f.author.as_deref(),
+        draft: f.draft.as_deref().filter(|d| matches!(*d, "only" | "hide")),
+        review: f.review.as_deref(),
+    }
+}
+
 /// t3code's `matchesRowFilters`.
 fn matches_filters(row: &ListRow, f: &ListFilters, viewer: &str) -> bool {
     let e = &row.entry;
@@ -576,26 +663,30 @@ async fn list(state: &AppState, input: ListInput) -> Result<PullRequestListResul
     }
     let mut viewers: BTreeMap<String, String> = BTreeMap::new();
     let mut providers: Vec<PullRequestProviderSummary> = vec![];
-    let mut errors: Vec<(String, GhError)> = vec![];
+    let mut errors: Vec<(String, Provider, GhError)> = vec![];
     for host in &hosts {
         let first = ws.supported.iter().find(|p| &p.host == host).expect("hosts come from the supported providers");
         let count = ws.supported.iter().filter(|p| &p.host == host).count();
-        let identity = gh::identity(first.cwd(), host).await;
+        let identity = first.identity().await;
         let detail = match &identity {
             Ok((_, login)) => {
                 viewers.insert(host.clone(), login.clone());
                 None
             }
             Err(e) => {
-                errors.push((host.clone(), e.clone()));
-                Some(provider_detail(e))
+                errors.push((host.clone(), first.provider, e.clone()));
+                Some(cli_detail(first.provider, e))
             }
+        };
+        let actions = match first.provider {
+            Provider::GitHub => github::all_actions(),
+            Provider::GitLab => gitlab::all_actions(),
         };
         providers.push(PullRequestProviderSummary {
             host: host.clone(),
-            kind: PROVIDER.to_owned(),
+            kind: first.provider.kind().to_owned(),
             searches_on_host: true,
-            actions: Some(github::all_actions().into()),
+            actions: Some(actions.into()),
             project_count: count as u64,
             project_ids: None,
             configured: identity.is_ok(),
@@ -620,16 +711,26 @@ async fn list(state: &AppState, input: ListInput) -> Result<PullRequestListResul
         ws.supported.iter().filter(|p| !viewers.contains_key(&p.host)).map(|p| project_error(p, format!("{} could not be read.", p.repository))).collect();
     if readable.is_empty() {
         let list_result = PullRequestListResult { viewers, providers, entries: vec![], errors: list_errors, truncated: false, next_cursors: BTreeMap::new() };
-        let blocking = errors.iter().find(|(_, e)| e.is_unusable()).or(errors.first());
+        let blocking = errors.iter().find(|(_, _, e)| e.is_unusable()).or(errors.first());
         return match blocking {
-            Some((_, e)) => Err(Failure::from_gh("list", e).with_list(list_result)),
+            Some((_, provider, e)) => Err(Failure::from_cli("list", *provider, e).with_list(list_result)),
             None => Ok(list_result),
         };
     }
     let limit = input.limit.unwrap_or(DEFAULT_LIST_LIMIT).max(1);
     let observed = now_ms();
     let listing = Listing { state: &input.state, involvement: input.involvement.as_deref(), query: input.query.as_deref(), fetch: limit + 1 };
-    let reads = futures::future::join_all(readable.iter().map(|p| github::list(p, &listing, observed))).await;
+    let narrowing = narrowing(&input.filters);
+    let reads = futures::future::join_all(readable.iter().map(|p| {
+        let (listing, narrowing, viewer) = (&listing, &narrowing, viewers.get(&p.host).map(String::as_str).unwrap_or(""));
+        async move {
+            match p.provider {
+                Provider::GitHub => github::list(p, listing, observed).await,
+                Provider::GitLab => gitlab::list(p, listing, viewer, narrowing, observed).await,
+            }
+        }
+    }))
+    .await;
     let mut entries = vec![];
     let mut truncated = false;
     for (p, read) in readable.iter().zip(reads) {
@@ -647,7 +748,7 @@ async fn list(state: &AppState, input: ListInput) -> Result<PullRequestListResul
                     entries.push(entry);
                 }
             }
-            Err(e) => list_errors.push(project_error(p, provider_detail(&e))),
+            Err(e) => list_errors.push(project_error(p, cli_detail(p.provider, &e))),
         }
     }
     entries.sort_by(|a, b| b.updated_at.as_str().cmp(a.updated_at.as_str()));
@@ -675,7 +776,13 @@ async fn list_stats(state: &AppState, input: ListStatsInput) -> Result<ListStats
             }
         }
     }
-    let reads = futures::future::join_all(wanted.iter().map(|(p, n)| github::line_counts(p, *n))).await;
+    let reads = futures::future::join_all(wanted.iter().map(|(p, n)| async move {
+        match p.provider {
+            Provider::GitHub => github::line_counts(p, *n).await,
+            Provider::GitLab => gitlab::line_counts(p, *n).await,
+        }
+    }))
+    .await;
     let stats = wanted
         .iter()
         .zip(reads)
@@ -742,8 +849,12 @@ async fn filter_options(state: &AppState, input: FilterOptionsInput) -> Result<F
         Some("labels") => {
             let mut items = vec![];
             for p in &ws.supported {
-                if let Ok(page) = github::repository_labels(p, "100", q).await {
-                    truncated |= page.len() >= 100;
+                let page = match p.provider {
+                    Provider::GitHub => github::repository_labels(p, "100", q).await.map(|page| (page.len() >= 100, page)),
+                    Provider::GitLab => gitlab::repository_labels(p, q).await.map(|(page, more)| (more, page)),
+                };
+                if let Ok((more, page)) = page {
+                    truncated |= more;
                     items.extend(page);
                 }
             }
@@ -754,7 +865,11 @@ async fn filter_options(state: &AppState, input: FilterOptionsInput) -> Result<F
             let mut items = vec![];
             for p in &ws.supported {
                 for (command, kind) in [("issue", ReferenceKind::Issue), ("pr", ReferenceKind::ChangeRequest)] {
-                    if let Ok(found) = github::references(p, command, kind, q).await {
+                    let found = match p.provider {
+                        Provider::GitHub => github::references(p, command, kind, q).await,
+                        Provider::GitLab => gitlab::references(p, kind, q).await,
+                    };
+                    if let Ok(found) = found {
                         items.extend(found);
                     }
                 }
@@ -765,7 +880,11 @@ async fn filter_options(state: &AppState, input: FilterOptionsInput) -> Result<F
         _ => {
             let mut items = vec![];
             for p in &ws.supported {
-                if let Ok((users, more)) = github::assignable_users(p, q).await {
+                let users = match p.provider {
+                    Provider::GitHub => github::assignable_users(p, q).await,
+                    Provider::GitLab => gitlab::assignable_users(p, q).await,
+                };
+                if let Ok((users, more)) = users {
                     truncated |= more;
                     items.extend(users);
                 }
@@ -788,31 +907,32 @@ async fn routing_identity(state: &AppState, input: HostInput) -> Result<RoutingI
     let host = input.host.as_deref().unwrap_or("").to_lowercase();
     let ws = workspace_projects(state, None, None, Some(&host)).await?;
     let Some(p) = ws.supported.first() else { return Err(Failure::unsupported()) };
-    let (account_id, viewer) = gh::identity(p.cwd(), &host).await.map_err(|e| Failure::from_gh("routeIdentity", &e))?;
-    Ok(RoutingIdentity { account_id, viewer, host, provider: PROVIDER })
+    let (account_id, viewer) = p.identity().await.map_err(failed(p, "routeIdentity"))?;
+    Ok(RoutingIdentity { account_id, viewer, host, provider: p.provider.kind() })
 }
 
 async fn routing(state: &AppState, reference: Reference) -> Result<Routing, Failure> {
     let r = reference.resolve()?;
     let p = require_project(state, &r).await?;
-    let (account_id, viewer) = gh::identity(p.cwd(), &p.host).await.map_err(|e| Failure::from_gh("routeIdentity", &e))?;
+    let (account_id, viewer) = p.identity().await.map_err(failed(&p, "routeIdentity"))?;
     if account_id.trim().is_empty() || viewer.trim().is_empty() {
         return Err(Failure::operation("routeIdentity", "The signed-in account could not be verified."));
     }
-    Ok(Routing { host: p.host, provider: PROVIDER, account_id, viewer, project_title: p.title, workspace_root: p.workspace_root })
+    Ok(Routing { host: p.host, provider: p.provider.kind(), account_id, viewer, project_title: p.title, workspace_root: p.workspace_root })
 }
 
 // ---------------------------------------------------------------------------
 // Reads of one pull request
 // ---------------------------------------------------------------------------
 
-/// A failed `gh` as the failure of `operation`.
-fn failed(operation: &'static str) -> impl Fn(GhError) -> Failure {
-    move |e| Failure::from_gh(operation, &e)
+/// A failed `gh` or `glab` of `p`'s host under `operation`.
+fn failed(p: &Supported, operation: &'static str) -> impl Fn(GhError) -> Failure + use<> {
+    let provider = p.provider;
+    move |e| Failure::from_cli(operation, provider, &e)
 }
 
 async fn summary(p: Supported, r: PrRef, _: NoFields) -> Result<PullRequestSummary, Failure> {
-    github::summary(&p, r.number, false).await.map_err(failed("summary"))
+    read_summary(&p, r.number, false).await.map_err(failed(&p, "summary"))
 }
 
 /// Stacks are not read: no pull request is said to be in one.
@@ -821,19 +941,31 @@ async fn stack(_: Supported, _: PrRef, _: NoFields) -> Result<Option<Never>, Fai
 }
 
 async fn detail(p: Supported, r: PrRef, _: NoFields) -> Result<PullRequestDetail, Failure> {
-    github::detail(&p, r.number).await.map_err(failed("detail"))
+    match p.provider {
+        Provider::GitHub => github::detail(&p, r.number).await,
+        Provider::GitLab => gitlab::detail(&p, r.number).await,
+    }
+    .map_err(failed(&p, "detail"))
 }
 
 async fn preview(p: Supported, r: PrRef, _: NoFields) -> Result<PullRequestPreview, Failure> {
-    github::preview(&p, r.number).await.map_err(failed("preview"))
+    match p.provider {
+        Provider::GitHub => github::preview(&p, r.number).await,
+        Provider::GitLab => gitlab::preview(&p, r.number).await,
+    }
+    .map_err(failed(&p, "preview"))
 }
 
 async fn checks(p: Supported, r: PrRef, _: NoFields) -> Result<PullRequestChecks, Failure> {
-    github::pull_request_checks(&p, r.number).await.map_err(failed("checks"))
+    read_checks(&p, r.number).await.map_err(failed(&p, "checks"))
 }
 
 async fn activity(p: Supported, r: PrRef, _: NoFields) -> Result<PullRequestActivity, Failure> {
-    let found = github::activity(&p, r.number).await.map_err(failed("activity"))?;
+    let found = match p.provider {
+        Provider::GitHub => github::activity(&p, r.number).await,
+        Provider::GitLab => gitlab::activity(&p, r.number).await,
+    }
+    .map_err(failed(&p, "activity"))?;
     found.ok_or_else(|| Failure::not_found("activity", "The pull request was not found."))
 }
 
@@ -846,7 +978,10 @@ struct ThreadCommentsInput {
 }
 
 async fn thread_comments(p: Supported, _: PrRef, input: ThreadCommentsInput) -> Result<ThreadCommentsPage, Failure> {
-    let page = github::thread_comments(&p, var(&input.thread_id), var(&input.cursor)).await.map_err(failed("threadComments"))?;
+    if p.provider == Provider::GitLab {
+        return Err(Failure::operation("threadComments", "This host does not page review thread comments."));
+    }
+    let page = github::thread_comments(&p, var(&input.thread_id), var(&input.cursor)).await.map_err(failed(&p, "threadComments"))?;
     page.ok_or_else(|| Failure::operation("threadComments", "The review conversation was not found."))
 }
 
@@ -867,15 +1002,34 @@ async fn diff_file_contents(p: Supported, r: PrRef, input: DiffFileInput) -> Res
         old_path: input.old_path.as_deref().unwrap_or(""),
         new_path: input.new_path.as_deref().unwrap_or(""),
     };
-    github::diff_file_contents(&p, r.number, &file).await.map_err(failed("diffFileContents"))
+    match p.provider {
+        Provider::GitHub => github::diff_file_contents(&p, r.number, &file).await,
+        Provider::GitLab => gitlab::diff_file_contents(&p, r.number, &file).await,
+    }
+    .map_err(failed(&p, "diffFileContents"))
 }
 
 async fn files_viewed(p: Supported, r: PrRef, _: NoFields) -> Result<FilesViewed, Failure> {
-    github::files_viewed(&p, r.number).await.map_err(failed("filesViewed"))
+    match p.provider {
+        Provider::GitHub => github::files_viewed(&p, r.number).await.map_err(failed(&p, "filesViewed")),
+        // GitLab keeps no viewed marks, and this server keeps none of its own.
+        Provider::GitLab => Ok(FilesViewed { files: vec![], truncated: false }),
+    }
 }
 
 async fn change_breakdown(p: Supported, r: PrRef, _: NoFields) -> Result<Option<ChangeBreakdown>, Failure> {
-    github::change_breakdown(&p, r.number).await.map_err(failed("changeBreakdown"))
+    match p.provider {
+        Provider::GitHub => github::change_breakdown(&p, r.number).await,
+        Provider::GitLab => gitlab::change_breakdown(&p, r.number).await,
+    }
+    .map_err(failed(&p, "changeBreakdown"))
+}
+
+async fn head_sha(p: &Supported, number: u64) -> Result<Option<String>, GhError> {
+    match p.provider {
+        Provider::GitHub => github::head_sha(p, number).await,
+        Provider::GitLab => gitlab::head_sha(p, number).await,
+    }
 }
 
 /// t3code's `reviewGuides.get`: the guide's key first, then the head commit.
@@ -885,7 +1039,7 @@ async fn review_guide(state: &AppState, r: &PrRef) -> Result<ReviewGuideResult, 
         return Err(Failure::operation("reviewGuide", "Could not identify this pull request's host."));
     }
     let p = require_project(state, r).await?;
-    let head = github::head_sha(&p, r.number).await.map_err(failed("detail"))?;
+    let head = head_sha(&p, r.number).await.map_err(failed(&p, "detail"))?;
     let key = super::review_guides::key(&p.host, &p.repository, r.number);
     Ok(super::review_guides::result(&state.paths.userdata, &key, head.as_deref()))
 }
@@ -900,7 +1054,11 @@ async fn generate_review_guide(state: &AppState, reference: Reference) -> Result
     let r = reference.resolve()?;
     review_guide(state, &r).await?;
     let p = require_project(state, &r).await?;
-    let source = github::guide_source(&p, r.number).await.map_err(failed("detail"))?;
+    let source = match p.provider {
+        Provider::GitHub => github::guide_source(&p, r.number).await,
+        Provider::GitLab => gitlab::guide_source(&p, r.number).await,
+    }
+    .map_err(failed(&p, "detail"))?;
     let head = source.head.ok_or_else(|| Failure::operation("generateReviewGuide", "The pull request has no head commit."))?;
     let key = super::review_guides::key(&p.host, &p.repository, r.number);
     let userdata = state.paths.userdata.clone();
@@ -910,7 +1068,11 @@ async fn generate_review_guide(state: &AppState, reference: Reference) -> Result
     let base_branch = source.base_branch;
     // Fetching the head first lets the merge base be found locally.
     let mut fetch = crate::process::git(&p.workspace_root);
-    fetch.args(["fetch", "--quiet", "origin", &format!("pull/{}/head", r.number)]);
+    let head_ref = match p.provider {
+        Provider::GitHub => format!("pull/{}/head", r.number),
+        Provider::GitLab => format!("merge-requests/{}/head", r.number),
+    };
+    fetch.args(["fetch", "--quiet", "origin", &head_ref]);
     let _ = crate::process::output(fetch, crate::process::SLOW).await;
     let base_commit = super::review_guides::base_commit(&p.workspace_root, &base_branch, &head).await
         .ok_or_else(|| Failure::operation("generateReviewGuide", format!("Could not find where this change branches from {base_branch}.")))?;
@@ -953,9 +1115,9 @@ struct ActionInput {
     expected_stack_heads: Option<IgnoredAny>,
 }
 
-/// Validates `pullRequests.runAction` against GitHub's capabilities (before
-/// any read): the action to run, when it is one GitHub has.
-fn check_action(input: &ActionInput) -> Result<PullRequestAction, Failure> {
+/// Validates `pullRequests.runAction` against the host's capabilities (before
+/// any read): the action to run, when it is one the host has.
+fn check_action(provider: Provider, input: &ActionInput) -> Result<PullRequestAction, Failure> {
     let named = input.action.as_deref().unwrap_or("");
     if input.stack_number.is_some() {
         let ok = ["merge", "update-branch"].contains(&named)
@@ -967,7 +1129,11 @@ fn check_action(input: &ActionInput) -> Result<PullRequestAction, Failure> {
         return Err(Failure::operation("runAction", "domovoi-server cannot run stack actions yet."));
     }
     let action = PullRequestAction::from(named);
-    if matches!(action, PullRequestAction::Other(_)) {
+    let offered = match provider {
+        Provider::GitHub => !matches!(action, PullRequestAction::Other(_)),
+        Provider::GitLab => gitlab::all_actions().contains(&action),
+    };
+    if !offered {
         return Err(Failure::operation("runAction", format!("This host cannot {named} a change request.")));
     }
     if let Some(m) = input.merge_method.as_deref() {
@@ -976,11 +1142,23 @@ fn check_action(input: &ActionInput) -> Result<PullRequestAction, Failure> {
         }
     }
     if let Some(m) = input.update_method.as_deref() {
-        if !["merge", "rebase"].contains(&m) {
+        let methods: &[&str] = match provider {
+            Provider::GitHub => &["merge", "rebase"],
+            Provider::GitLab => &["rebase"],
+        };
+        if !methods.contains(&m) {
             return Err(Failure::operation("runAction", format!("This host cannot update a branch by {m}.")));
         }
     }
     Ok(action)
+}
+
+/// What the viewer may do to one pull request, as the host says now.
+async fn viewer_permissions(p: &Supported, number: u64) -> Result<super::pull_request_records::ViewerPermissions, GhError> {
+    match p.provider {
+        Provider::GitHub => github::viewer_permissions(p, number).await,
+        Provider::GitLab => gitlab::viewer_permissions(p, number).await,
+    }
 }
 
 async fn run_gh(p: &Supported, args: &[&str]) -> Result<(), GhError> {
@@ -995,9 +1173,9 @@ async fn mutate(p: &Supported, query: &str, vars: &[(&str, Var<'_>)]) -> Result<
 async fn run_action(p: Supported, r: PrRef, input: ActionInput) -> Result<PullRequestSummary, Failure> {
     let p = &p;
     let number = r.number;
-    let action = check_action(&input)?;
-    let fail = failed("runAction");
-    let viewer = github::viewer_permissions(p, number).await.map_err(&fail)?;
+    let action = check_action(p.provider, &input)?;
+    let fail = failed(p, "runAction");
+    let viewer = viewer_permissions(p, number).await.map_err(&fail)?;
     if !viewer.actions.contains(&action) {
         return Err(Failure::operation("runAction", refusal(action.as_str())));
     }
@@ -1005,6 +1183,12 @@ async fn run_action(p: Supported, r: PrRef, input: ActionInput) -> Result<PullRe
         if !viewer.update_methods.is_some_and(|offered| offered.iter().any(|method| method.as_str() == m)) {
             return Err(Failure::operation("runAction", refusal("update-branch")));
         }
+    }
+    if p.provider == Provider::GitLab {
+        gitlab::run_action(p, number, &action, input.merge_method.as_deref()).await.map_err(&fail)?;
+        let summary = gitlab::summary(p, number).await.map_err(&fail)?;
+        notify_refresh();
+        return Ok(summary);
     }
     let n = number.to_string();
     let repo = p.repository.as_str();
@@ -1063,7 +1247,10 @@ async fn update(p: Supported, r: PrRef, input: UpdateInput) -> Result<(), Failur
         return Err(Failure::operation("update", "Nothing was changed."));
     }
     let n = r.number.to_string();
-    let fail = failed("update");
+    let fail = failed(&p, "update");
+    if p.provider == Provider::GitLab {
+        return gitlab::update(&p, r.number, title, body, maintainer).await.map_err(&fail);
+    }
     if title.is_some() || body.is_some() {
         let mut args = vec!["pr", "edit", n.as_str(), "--repo", p.repository.as_str()];
         if let Some(t) = title {
@@ -1091,10 +1278,13 @@ struct CommentInput {
 
 async fn comment(p: Supported, r: PrRef, input: CommentInput) -> Result<(), Failure> {
     let body = input.body.as_deref().unwrap_or("");
+    if p.provider == Provider::GitLab {
+        return gitlab::comment(&p, r.number, body).await.map_err(failed(&p, "comment"));
+    }
     gh::run(p.cwd(), &p.host, &["pr", "comment", &r.number.to_string(), "--repo", &p.repository, "--body-file", "-"], Some(body))
         .await
         .map(|_| ())
-        .map_err(failed("comment"))
+        .map_err(failed(&p, "comment"))
 }
 
 /// `PullRequestCommentUpdateInput`, beside the reference.
@@ -1107,14 +1297,27 @@ struct CommentUpdateInput {
     body: Loose<String>,
 }
 
-async fn update_comment(p: Supported, _: PrRef, input: CommentUpdateInput) -> Result<(), Failure> {
+/// An id a payload handed on as a string or a number, as text (GitLab's note and discussion ids).
+fn id_text(given: &Loose<Scalar>) -> Option<String> {
+    match &given.0 {
+        Some(Scalar::Text(text)) => Some(text.clone()),
+        Some(Scalar::Number(number)) => Some(number.to_string()),
+        _ => None,
+    }
+}
+
+async fn update_comment(p: Supported, r: PrRef, input: CommentUpdateInput) -> Result<(), Failure> {
+    if p.provider == Provider::GitLab {
+        let id = id_text(&input.comment_id).ok_or_else(|| Failure::operation("updateComment", "The comment was not named."))?;
+        return gitlab::update_comment(&p, r.number, &id, input.body.as_deref().unwrap_or("")).await.map_err(failed(&p, "updateComment"));
+    }
     let query = if input.kind.as_deref() == Some("review-comment") {
         "mutation($id: ID!, $body: String!) { updatePullRequestReviewComment(input: { pullRequestReviewCommentId: $id, body: $body }) { clientMutationId } }"
     } else {
         "mutation($id: ID!, $body: String!) { updateIssueComment(input: { id: $id, body: $body }) { clientMutationId } }"
     };
     // The body is text: an empty one was refused before.
-    mutate(&p, query, &[("id", var(&input.comment_id)), ("body", Var::Text(input.body.as_deref().unwrap_or("")))]).await.map_err(failed("updateComment"))
+    mutate(&p, query, &[("id", var(&input.comment_id)), ("body", Var::Text(input.body.as_deref().unwrap_or("")))]).await.map_err(failed(&p, "updateComment"))
 }
 
 /// `PullRequestThreadReplyInput`, beside the reference.
@@ -1125,10 +1328,14 @@ struct ThreadReplyInput {
     body: Loose<String>,
 }
 
-async fn reply_to_thread(p: Supported, _: PrRef, input: ThreadReplyInput) -> Result<(), Failure> {
+async fn reply_to_thread(p: Supported, r: PrRef, input: ThreadReplyInput) -> Result<(), Failure> {
+    if p.provider == Provider::GitLab {
+        let id = id_text(&input.thread_id).ok_or_else(|| Failure::operation("replyToThread", "The review conversation was not named."))?;
+        return gitlab::reply_to_thread(&p, r.number, &id, input.body.as_deref().unwrap_or("")).await.map_err(failed(&p, "replyToThread"));
+    }
     let q = "mutation($id: ID!, $body: String!) { addPullRequestReviewThreadReply(input: { pullRequestReviewThreadId: $id, body: $body }) { clientMutationId } }";
     // The body is text: an empty one was refused before.
-    mutate(&p, q, &[("id", var(&input.thread_id)), ("body", Var::Text(input.body.as_deref().unwrap_or("")))]).await.map_err(failed("replyToThread"))
+    mutate(&p, q, &[("id", var(&input.thread_id)), ("body", Var::Text(input.body.as_deref().unwrap_or("")))]).await.map_err(failed(&p, "replyToThread"))
 }
 
 /// A place in a diff (`PullRequestReviewPosition`): an `added` line by its
@@ -1149,6 +1356,8 @@ pub struct ReviewPosition {
 pub struct ReviewCommentDraft {
     /// Handed on to GitHub as it came.
     pub path: Loose<Scalar>,
+    /// The name the file had before the change (GitLab resolves a place against both sides).
+    pub old_path: Loose<String>,
     pub body: Loose<Scalar>,
     pub position: Fields<ReviewPosition>,
     pub start_position: Fields<ReviewPosition>,
@@ -1170,15 +1379,20 @@ async fn submit_review(p: Supported, r: PrRef, input: SubmitReviewInput) -> Resu
     let label = VERDICT_LABELS.iter().find(|(v, _)| *v == verdict).map(|(_, l)| *l).unwrap_or("review");
     let body = input.body.as_deref().unwrap_or("");
     let comments: Vec<ReviewCommentDraft> = input.comments.0.unwrap_or_default().into_iter().map(|c| c.0).collect();
-    if verdict != "approve" && body.trim().is_empty() && comments.is_empty() {
+    // GitLab asks for no summary (`reviewSummaryRequired`).
+    if p.provider == Provider::GitHub && verdict != "approve" && body.trim().is_empty() && comments.is_empty() {
         return Err(Failure::operation("submitReview", "A review needs a summary or at least one comment."));
     }
-    let fail = failed("submitReview");
-    let viewer = github::viewer_permissions(&p, r.number).await.map_err(&fail)?;
+    let fail = failed(&p, "submitReview");
+    let viewer = viewer_permissions(&p, r.number).await.map_err(&fail)?;
     if !viewer.verdicts.iter().any(|allowed| allowed.as_str() == verdict) {
         return Err(Failure::operation("submitReview", format!("You need write access on this repository to {label} a change request.")));
     }
-    github::submit_review(&p, r.number, verdict, body, &comments).await.map_err(&fail)
+    match p.provider {
+        Provider::GitHub => github::submit_review(&p, r.number, verdict, body, &comments).await,
+        Provider::GitLab => gitlab::submit_review(&p, r.number, verdict, body, &comments).await,
+    }
+    .map_err(&fail)
 }
 
 /// `PullRequestThreadResolutionInput`, beside the reference.
@@ -1190,13 +1404,17 @@ struct ThreadResolutionInput {
 }
 
 async fn set_thread_resolution(p: Supported, r: PrRef, input: ThreadResolutionInput) -> Result<(), Failure> {
-    let fail = failed("setThreadResolution");
-    let viewer = github::viewer_permissions(&p, r.number).await.map_err(&fail)?;
+    let fail = failed(&p, "setThreadResolution");
+    let viewer = viewer_permissions(&p, r.number).await.map_err(&fail)?;
     if !viewer.resolve {
         return Err(Failure::operation(
             "setThreadResolution",
             "You need write access on this repository, or to have opened this change request, to resolve a review conversation.",
         ));
+    }
+    if p.provider == Provider::GitLab {
+        let id = id_text(&input.thread_id).ok_or_else(|| Failure::operation("setThreadResolution", "The review conversation was not named."))?;
+        return gitlab::set_thread_resolution(&p, r.number, &id, input.resolved.0 == Some(true)).await.map_err(&fail);
     }
     let query = if input.resolved.0 == Some(true) {
         "mutation($id: ID!) { resolveReviewThread(input: { threadId: $id }) { clientMutationId } }"
@@ -1217,7 +1435,11 @@ struct ReactionInput {
 }
 
 async fn set_reaction(p: Supported, r: PrRef, input: ReactionInput) -> Result<(), Failure> {
-    let fail = failed("setReaction");
+    let fail = failed(&p, "setReaction");
+    if p.provider == Provider::GitLab {
+        let award = gitlab::award_name(input.content.as_deref().unwrap_or("")).ok_or_else(|| Failure::operation("setReaction", "Unknown reaction."))?;
+        return gitlab::set_reaction(&p, r.number, input.subject_id.as_deref(), award, input.reacted.0 == Some(true)).await.map_err(&fail);
+    }
     let content = github::github_reaction(input.content.as_deref().unwrap_or("")).ok_or_else(|| Failure::operation("setReaction", "Unknown reaction."))?;
     let subject = match input.subject_id.0 {
         Some(s) => s,
@@ -1239,7 +1461,10 @@ struct ReviewerCandidatesInput {
 }
 
 async fn reviewer_candidates(p: Supported, r: PrRef, input: ReviewerCandidatesInput) -> Result<ReviewerCandidates, Failure> {
-    let fail = failed("reviewerCandidates");
+    let fail = failed(&p, "reviewerCandidates");
+    if p.provider == Provider::GitLab {
+        return gitlab::reviewer_candidates(&p, r.number, input.query.as_deref().unwrap_or("")).await.map_err(&fail);
+    }
     let (users, requests) = tokio::join!(github::assignable_users(&p, input.query.as_deref().unwrap_or("")), github::review_requests(&p, r.number));
     let (users, truncated) = users.map_err(&fail)?;
     let requests = requests.map_err(&fail)?;
@@ -1266,14 +1491,17 @@ struct ReviewerInput {
 }
 
 async fn request_reviewers(p: Supported, r: PrRef, input: ReviewerRequestInput) -> Result<(), Failure> {
-    let fail = failed("requestReviewers");
-    let viewer = github::viewer_permissions(&p, r.number).await.map_err(&fail)?;
+    let fail = failed(&p, "requestReviewers");
+    let viewer = viewer_permissions(&p, r.number).await.map_err(&fail)?;
     if !viewer.request_reviewers {
         return Err(Failure::operation("requestReviewers", "You need write access on this repository to ask for a review."));
     }
     let ids: Vec<&str> = rows(&input.reviewers).filter_map(|reviewer| reviewer.id.as_deref()).collect();
     if ids.is_empty() {
         return Ok(());
+    }
+    if p.provider == Provider::GitLab {
+        return gitlab::request_reviewers(&p, r.number, &ids, input.requested.0 == Some(true)).await.map_err(&fail);
     }
     let joined = ids.join(",");
     let flag = if input.requested.0 == Some(true) { "--add-reviewer" } else { "--remove-reviewer" };
@@ -1283,10 +1511,13 @@ async fn request_reviewers(p: Supported, r: PrRef, input: ReviewerRequestInput) 
 const LABEL_CHANGE_REFUSAL: &str = "You need triage access on this repository to change its labels.";
 
 async fn label_candidates(p: Supported, r: PrRef, _: NoFields) -> Result<LabelCandidates, Failure> {
-    let fail = failed("labelCandidates");
-    let viewer = github::viewer_permissions(&p, r.number).await.map_err(&fail)?;
+    let fail = failed(&p, "labelCandidates");
+    let viewer = viewer_permissions(&p, r.number).await.map_err(&fail)?;
     if !viewer.labels {
         return Err(Failure::operation("labelCandidates", LABEL_CHANGE_REFUSAL));
+    }
+    if p.provider == Provider::GitLab {
+        return gitlab::label_candidates(&p, r.number).await.map_err(&fail);
     }
     let (all, applied) = tokio::join!(github::repository_labels(&p, "200", ""), github::applied_labels(&p, r.number));
     let all = all.map_err(&fail)?;
@@ -1308,14 +1539,17 @@ struct LabelChangeInput {
 }
 
 async fn set_labels(p: Supported, r: PrRef, input: LabelChangeInput) -> Result<(), Failure> {
-    let fail = failed("setLabels");
-    let viewer = github::viewer_permissions(&p, r.number).await.map_err(&fail)?;
+    let fail = failed(&p, "setLabels");
+    let viewer = viewer_permissions(&p, r.number).await.map_err(&fail)?;
     if !viewer.labels {
         return Err(Failure::operation("setLabels", LABEL_CHANGE_REFUSAL));
     }
     let labels: Vec<&str> = input.labels.iter().flatten().filter_map(|label| label.as_deref()).collect();
     if labels.is_empty() {
         return Ok(());
+    }
+    if p.provider == Provider::GitLab {
+        return gitlab::set_labels(&p, r.number, &labels, input.applied.0 == Some(true)).await.map_err(&fail);
     }
     let joined = labels.join(",");
     let flag = if input.applied.0 == Some(true) { "--add-label" } else { "--remove-label" };
@@ -1337,7 +1571,10 @@ struct FileViewedInput {
 }
 
 async fn set_files_viewed(p: Supported, r: PrRef, input: FilesViewedInput) -> Result<(), Failure> {
-    let fail = failed("setFilesViewed");
+    let fail = failed(&p, "setFilesViewed");
+    if p.provider == Provider::GitLab {
+        return Err(Failure::operation("setFilesViewed", "This host keeps no record of the files you have seen."));
+    }
     let id = github::node_id(&p, r.number).await.map_err(&fail)?;
     for f in rows(&input.files) {
         let query = if f.viewed.0 == Some(true) {
@@ -1425,6 +1662,7 @@ pub fn register(r: Router<ConnCtx>) -> Router<ConnCtx> {
         .unary("pullRequests.invalidate", |_: Arc<ConnCtx>, input: Fields<InvalidateInput>| async move {
             if input.reference.is_none() && input.files_viewed_only.0 != Some(true) {
                 gh::forget_identities();
+                crate::glab::forget_identities();
             }
             notify_refresh();
             Ok::<_, Never>(())
@@ -1548,7 +1786,7 @@ mod tests {
     }
 
     fn action(given: Value) -> Result<PullRequestAction, Failure> {
-        check_action(&serde_json::from_value::<Fields<ActionInput>>(given).unwrap())
+        check_action(Provider::GitHub, &serde_json::from_value::<Fields<ActionInput>>(given).unwrap())
     }
 
     #[test]
@@ -1558,6 +1796,19 @@ mod tests {
         assert!(action(json!({ "action": "explode" })).is_err());
         assert_eq!(action(json!({ "action": "close" })).unwrap(), PullRequestAction::Close);
         assert_eq!(action(json!({ "action": "merge", "stackNumber": null })).unwrap(), PullRequestAction::Merge, "a null stack is no stack");
+        let on_gitlab = |given: Value| check_action(Provider::GitLab, &serde_json::from_value::<Fields<ActionInput>>(given).unwrap());
+        assert!(on_gitlab(json!({ "action": "approve-workflows" })).is_err(), "GitLab has no workflow approvals");
+        assert!(on_gitlab(json!({ "action": "update-branch", "updateMethod": "merge" })).is_err(), "GitLab only rebases");
+        assert_eq!(on_gitlab(json!({ "action": "update-branch", "updateMethod": "rebase" })).unwrap(), PullRequestAction::UpdateBranch);
+    }
+
+    #[test]
+    fn hosts_named_gitlab_route_to_gitlab() {
+        assert_eq!(route_kind("gitlab.example.com", None).as_deref(), Some("gitlab"));
+        assert_eq!(route_kind("git.example.com", Some("unknown".into())), None);
+        assert_eq!(route_kind("gitlab.example.com", Some("github".into())).as_deref(), Some("github"), "the identity's own kind wins");
+        assert_eq!(change_request_url("gitlab.com", "g/a", 3), "https://gitlab.com/g/a/-/merge_requests/3");
+        assert_eq!(change_request_url("github.com", "o/r", 3), "https://github.com/o/r/pull/3");
     }
 
     #[test]

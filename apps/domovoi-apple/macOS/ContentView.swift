@@ -31,10 +31,13 @@ struct ContentView: View {
                 }
             } else if core.keychainState != .ready {
                 ProgressView("Checking Keychain access…")
+            } else if connection.serverChanged && !addingServer {
+                ServerChangedView(core: core) { addingServer = true }
             } else if showMain && !addingServer {
                 MainView(core: core, addServer: { addingServer = true })
             } else {
-                ConnectView(core: core, cancel: showMain ? { addingServer = false } : nil)
+                // Back to the main window, or to the server that refused this Mac.
+                ConnectView(core: core, cancel: showMain || connection.serverChanged ? { addingServer = false } : nil)
             }
         }
         .overlay(alignment: .bottom) {
@@ -47,6 +50,7 @@ struct ContentView: View {
             }
         }
         .environmentObject(companion)
+        .environment(\.notice, NoticeSink(core: core))
         .modifier(CompanionWindow(brain: companion, connection: connection))
         .task { await Snapshots.run(core) { openSettings() } }
         .onAppear {
@@ -295,6 +299,14 @@ struct EnvironmentMenu: View {
                 renaming = active
             })
             menu.addItem(ServerMenuItem("Forget \(active.label)…") { forgetting = active })
+            if let index = connection.environments.firstIndex(where: { $0.id == active.id }), connection.environments.count > 1 {
+                if index > 0 {
+                    menu.addItem(ServerMenuItem("Move \(active.label) Up") { core.update(.moveEnvironment(id: active.id, delta: -1)) })
+                }
+                if index < connection.environments.count - 1 {
+                    menu.addItem(ServerMenuItem("Move \(active.label) Down") { core.update(.moveEnvironment(id: active.id, delta: 1)) })
+                }
+            }
         }
         menu.addItem(.separator())
         menu.addItem(ServerMenuItem("Add Server…", perform: addServer))
@@ -337,6 +349,70 @@ private final class ServerMenuItem: NSMenuItem {
 
 // MARK: - Connect
 
+/// Moves a saved server up or down the list (the order servers show in).
+private struct ServerOrderButtons: View {
+    @ObservedObject var core: Core
+    let env: EnvironmentView
+
+    private var servers: [EnvironmentView] { core.view.connection.environments }
+
+    var body: some View {
+        let index = servers.firstIndex { $0.id == env.id } ?? 0
+        HStack(spacing: 0) {
+            Button { core.update(.moveEnvironment(id: env.id, delta: -1)) } label: { Image(systemName: "chevron.up") }
+                .disabled(index == 0)
+                .help("Move up")
+                .accessibilityLabel("Move \(env.label) up")
+            Button { core.update(.moveEnvironment(id: env.id, delta: 1)) } label: { Image(systemName: "chevron.down") }
+                .disabled(index >= servers.count - 1)
+                .help("Move down")
+                .accessibilityLabel("Move \(env.label) down")
+        }
+        .buttonStyle(.borderless)
+    }
+}
+
+/// The server refuses this device for good (it was reset, or signed the
+/// device out): pair again, or forget it.
+struct ServerChangedView: View {
+    @ObservedObject var core: Core
+    let pairAgain: () -> Void
+    @State private var forgetting: EnvironmentView?
+
+    private var connection: ConnectionView { core.view.connection }
+    private var active: EnvironmentView? { connection.environments.first { $0.id == connection.activeEnvironmentId } }
+    private var label: String { active?.label ?? "This server" }
+
+    var body: some View {
+        VStack(spacing: Space.l) {
+            Image(systemName: "exclamationmark.arrow.triangle.2.circlepath")
+                .font(.system(size: Size.heroIcon))
+                .foregroundStyle(Tint.caution)
+                .accessibilityHidden(true)
+            Text("\(label) no longer accepts this Mac").font(.title2.bold()).multilineTextAlignment(.center)
+            if let error = connection.error {
+                Text(error).foregroundStyle(.secondary).multilineTextAlignment(.center).textSelection(.enabled)
+            }
+            if !connection.hint.isEmpty {
+                Text(connection.hint).font(TypeRole.meta).foregroundStyle(.secondary).multilineTextAlignment(.center)
+            }
+            HStack(spacing: Space.s) {
+                Button("Forget \(label)…", role: .destructive) { forgetting = active }
+                    .disabled(active == nil)
+                Button("Pair Again", action: pairAgain)
+                    .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(Space.xxl)
+        .frame(maxWidth: 520)
+        .cardSurface(Radius.card + 6)
+        .padding(Space.xxl)
+        .frame(maxWidth: .infinity)
+        .scrollableCentered()
+        .forgettingServer($forgetting, core: core)
+    }
+}
+
 struct ConnectView: View {
     @ObservedObject var core: Core
     /// Set while the main window is behind this (adding another server).
@@ -370,6 +446,9 @@ struct ConnectView: View {
                                     Text(env.detail).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                                 }
                                 Spacer()
+                                if connection.environments.count > 1 {
+                                    ServerOrderButtons(core: core, env: env)
+                                }
                                 Button("Connect") { core.update(.selectEnvironment(id: env.id)) }
                                     .disabled(busy)
                                 Button(role: .destructive) { forgetting = env } label: { Image(systemName: "trash") }

@@ -755,6 +755,7 @@ pub fn on_welcome(model: &mut Model) -> Cmd {
         }
     }
     cmds.push(register_push(model));
+    cmds.push(register_push_endpoint(model));
     for (thread, token, environment) in model.activity_tokens.clone() {
         cmds.push(register_activity(model, &thread, &token, &environment));
     }
@@ -786,6 +787,20 @@ pub fn push_token(model: &mut Model, token: String, environment: String) -> Cmd 
 fn register_push(model: &Model) -> Cmd {
     let (Some((token, environment)), false) = (&model.push_token, model.server_url.is_empty()) else { return Command::done() };
     match authorized(model, Http::post(format!("{}/api/domovoi/push/devices", model.server_url))).body_json(&requests::push_device(token, environment)) {
+        Ok(req) => req.build().then_send(Event::PushRegistered),
+        Err(_) => Command::done(),
+    }
+}
+
+pub fn push_endpoint(model: &mut Model, endpoint: String, p256dh: String, auth: String) -> Cmd {
+    model.push_endpoint = (!endpoint.is_empty()).then_some((endpoint, p256dh, auth));
+    if model.connection == Connection::Connected { register_push_endpoint(model) } else { Command::done() }
+}
+
+/// Registers this device's UnifiedPush endpoint with the server in use.
+fn register_push_endpoint(model: &Model) -> Cmd {
+    let (Some((endpoint, p256dh, auth)), false) = (&model.push_endpoint, model.server_url.is_empty()) else { return Command::done() };
+    match authorized(model, Http::post(format!("{}/api/domovoi/push/webpush", model.server_url))).body_json(&requests::push_webpush(endpoint, p256dh, auth)) {
         Ok(req) => req.build().then_send(Event::PushRegistered),
         Err(_) => Command::done(),
     }

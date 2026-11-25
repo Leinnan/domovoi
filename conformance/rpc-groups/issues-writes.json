@@ -1,0 +1,321 @@
+{
+ "fixture": true,
+ "env": {
+  "GIT_ALLOW_PROTOCOL": "file",
+  "GIT_TERMINAL_PROMPT": "0"
+ },
+ "normalize": [],
+ "cases": [
+  {
+   "tag": "projects.mutate",
+   "payload": {
+    "type": "project.create",
+    "commandId": "create-locked",
+    "projectId": "locked",
+    "title": "Locked",
+    "workspaceRoot": "$DIR/repos/locked",
+    "createWorkspaceRootIfMissing": false,
+    "defaultModelSelection": null
+   }
+  },
+  {
+   "tag": "issues.create",
+   "payload": {
+    "projectId": "$PROJECT",
+    "tracker": "github",
+    "scope": "acme/calc",
+    "title": "Multiply overflows",
+    "body": "",
+    "labels": [
+     "bug"
+    ],
+    "assignees": [
+     "octocat"
+    ]
+   }
+  },
+  {
+   "tag": "issues.create",
+   "payload": {
+    "projectId": "$PROJECT",
+    "tracker": "github",
+    "scope": "acme/calc",
+    "host": "github.com",
+    "title": "Body kept as written",
+    "body": "    indented code\n",
+    "labels": [],
+    "assignees": []
+   }
+  },
+  {
+   "tag": "issues.create",
+   "payload": {
+    "projectId": "$PROJECT",
+    "tracker": "github",
+    "scope": "other/lib",
+    "title": "Not ours",
+    "body": "",
+    "labels": [],
+    "assignees": []
+   },
+   "expect": "failure",
+   "error": "IssueOperationError",
+   "note": "read-only"
+  },
+  {
+   "tag": "issues.create",
+   "payload": {
+    "projectId": "nope",
+    "tracker": "github",
+    "scope": "acme/calc",
+    "title": "x",
+    "body": "",
+    "labels": [],
+    "assignees": []
+   },
+   "expect": "failure",
+   "error": "IssueUnavailableError"
+  },
+  {
+   "tag": "issues.comment",
+   "payload": {
+    "projectId": "$PROJECT",
+    "tracker": "github",
+    "scope": "acme/calc",
+    "key": "7",
+    "body": "Fixed in #12."
+   }
+  },
+  {
+   "tag": "issues.comment",
+   "payload": {
+    "projectId": "$PROJECT",
+    "tracker": "github",
+    "scope": "acme/calc",
+    "key": "7",
+    "body": "  \n "
+   },
+   "expect": "failure",
+   "error": "IssueOperationError",
+   "note": "only white space"
+  },
+  {
+   "tag": "issues.comment",
+   "payload": {
+    "projectId": "$PROJECT",
+    "tracker": "github",
+    "scope": "acme/calc",
+    "key": "999",
+    "body": "Hello"
+   },
+   "expect": "failure",
+   "error": "IssueOperationError",
+   "note": "not-found before writing"
+  },
+  {
+   "tag": "issues.comment",
+   "payload": {
+    "projectId": "$PROJECT",
+    "tracker": "github",
+    "host": "github.com",
+    "scope": "other/lib",
+    "key": "3",
+    "body": "Hi"
+   },
+   "expect": "failure",
+   "error": "IssueOperationError",
+   "note": "read-only"
+  },
+  {
+   "tag": "issues.update",
+   "payload": {
+    "projectId": "$PROJECT",
+    "tracker": "github",
+    "scope": "acme/calc",
+    "key": "7",
+    "title": "Adding negatives fails",
+    "body": "Updated."
+   }
+  },
+  {
+   "tag": "issues.update",
+   "payload": {
+    "projectId": "$PROJECT",
+    "tracker": "github",
+    "scope": "acme/calc",
+    "key": "7",
+    "labels": [
+     "bug",
+     "BUG",
+     "good first issue"
+    ],
+    "assignees": []
+   }
+  },
+  {
+   "tag": "issues.update",
+   "payload": {
+    "projectId": "$PROJECT",
+    "tracker": "github",
+    "scope": "acme/calc",
+    "key": "7"
+   },
+   "expect": "failure",
+   "error": "IssueOperationError",
+   "note": "nothing to change"
+  },
+  {
+   "tag": "issues.update",
+   "payload": {
+    "projectId": "locked",
+    "tracker": "github",
+    "scope": "acme/locked",
+    "key": "1",
+    "labels": [
+     "bug"
+    ]
+   },
+   "expect": "failure",
+   "error": "IssueOperationError",
+   "note": "GitHub dropped the labels: no triage access"
+  },
+  {
+   "tag": "issues.update",
+   "payload": {
+    "projectId": "locked",
+    "tracker": "github",
+    "scope": "acme/locked",
+    "key": "1",
+    "title": "Renamed"
+   }
+  },
+  {
+   "tag": "issues.setState",
+   "payload": {
+    "projectId": "$PROJECT",
+    "tracker": "github",
+    "scope": "acme/calc",
+    "key": "7",
+    "state": "Completed"
+   }
+  },
+  {
+   "tag": "issues.setState",
+   "payload": {
+    "projectId": "$PROJECT",
+    "tracker": "github",
+    "scope": "acme/calc",
+    "key": "8",
+    "state": "Open"
+   }
+  },
+  {
+   "tag": "issues.setState",
+   "payload": {
+    "projectId": "$PROJECT",
+    "tracker": "github",
+    "scope": "acme/calc",
+    "key": "8",
+    "state": "Not planned"
+   },
+   "expect": "failure",
+   "error": "IssueOperationError",
+   "note": "GitHub cannot change why a closed issue was closed"
+  },
+  {
+   "tag": "issues.setState",
+   "payload": {
+    "projectId": "$PROJECT",
+    "tracker": "github",
+    "scope": "acme/calc",
+    "key": "8",
+    "state": "Completed"
+   },
+   "note": "the reason it was closed for already"
+  },
+  {
+   "tag": "issues.setState",
+   "payload": {
+    "projectId": "$PROJECT",
+    "tracker": "github",
+    "scope": "acme/calc",
+    "key": "7",
+    "state": "Closed"
+   },
+   "expect": "failure",
+   "error": "IssueOperationError",
+   "note": "not one of the issue's states"
+  },
+  {
+   "tag": "issues.react",
+   "payload": {
+    "projectId": "$PROJECT",
+    "tracker": "github",
+    "scope": "acme/calc",
+    "key": "7",
+    "content": "heart",
+    "reacted": true
+   }
+  },
+  {
+   "tag": "issues.react",
+   "payload": {
+    "projectId": "$PROJECT",
+    "tracker": "github",
+    "scope": "acme/calc",
+    "key": "7",
+    "content": "thumbs-up",
+    "reacted": false
+   }
+  },
+  {
+   "tag": "issues.react",
+   "payload": {
+    "projectId": "$PROJECT",
+    "tracker": "github",
+    "scope": "acme/calc",
+    "key": "7",
+    "subjectId": "IC_2",
+    "content": "eyes",
+    "reacted": true
+   }
+  },
+  {
+   "tag": "issues.react",
+   "payload": {
+    "projectId": "$PROJECT",
+    "tracker": "github",
+    "scope": "acme/calc",
+    "key": "9",
+    "subjectId": "IC_2",
+    "content": "eyes",
+    "reacted": true
+   },
+   "expect": "failure",
+   "error": "IssueOperationError",
+   "note": "the comment is #7's"
+  },
+  {
+   "tag": "issues.react",
+   "payload": {
+    "projectId": "$PROJECT",
+    "tracker": "github",
+    "scope": "acme/calc",
+    "key": "7",
+    "subjectId": "IC_404",
+    "content": "eyes",
+    "reacted": false
+   },
+   "expect": "failure",
+   "error": "IssueOperationError"
+  },
+  {
+   "tag": "projects.readFile",
+   "payload": {
+    "cwd": "$DIR/gh-data",
+    "relativePath": "log"
+   },
+   "note": "what gh was asked: the writes' bodies"
+  }
+ ]
+}

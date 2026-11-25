@@ -6,11 +6,11 @@ use super::{DispatchResult, Effect, Orchestrator, Refusal, is_active, now};
 use serde_json::Number;
 use domovoi_contracts::time_fmt::{iso_from_millis, millis_from_iso, now_millis};
 use domovoi_model::typed::command::{
-    ThreadAutoSettleSet, ThreadDelete, ThreadMarkUnread, ThreadMetadataUpdate, ThreadProjectAdoptFolder, ThreadSnooze, ThreadTagSet,
+    ThreadAutoSettleSet, ThreadDelete, ThreadIssueLinkCommand, ThreadIssueUnlink, ThreadMarkUnread, ThreadMetadataUpdate, ThreadProjectAdoptFolder, ThreadSnooze, ThreadTagSet,
     ThreadTitleRegenerationComplete, ThreadUnsnooze, ThreadVisit,
 };
 use domovoi_model::typed::{
-    AppThread, CommandId, EventBody, LastTitleRegeneration, ModelSelection, OpenPick, RunStatus, SettledOverride, ThreadChange, ThreadId,
+    AppThread, CommandId, EventBody, LastTitleRegeneration, ThreadIssueKey, ThreadIssueLink, ModelSelection, OpenPick, RunStatus, SettledOverride, ThreadChange, ThreadId,
     ThreadOpens, Timestamp, TitleRegeneration,
 };
 
@@ -225,6 +225,42 @@ impl Orchestrator {
         }
         thread.tags = Some(tags);
         self.write_thread(&c.command_id, ThreadChange::TagsUpdated, thread, false)
+    }
+
+    /// `thread.issue.link`: adds the issue to the thread's links, unless the
+    /// same issue (t3code `threadIssueKeysEqual`) is linked already.
+    pub(super) fn issue_link(&self, c: &ThreadIssueLinkCommand) -> Result<DispatchResult, Refusal> {
+        let mut thread = self.thread(&c.thread_id)?;
+        let key = ThreadIssueKey { tracker: c.tracker.clone(), host: c.host.trim().to_lowercase(), scope: c.scope.trim().to_owned(), key: c.key.trim().to_owned() };
+        let mut links = thread.issues.take().unwrap_or_default();
+        if links.iter().any(|link| link.key.same_issue(&key)) {
+            return self.answer(None);
+        }
+        links.push(ThreadIssueLink {
+            key,
+            project_id: c.project_id.clone(),
+            url: c.url.clone(),
+            source: c.source.clone(),
+            linked_at: now(),
+            display_key: c.display_key.clone(),
+            title: c.title.clone(),
+        });
+        thread.issues = Some(links);
+        self.write_thread(&c.command_id, ThreadChange::IssueSynced, thread, true)
+    }
+
+    /// `thread.issue.unlink`: drops the link to the issue, if there is one.
+    pub(super) fn issue_unlink(&self, c: &ThreadIssueUnlink) -> Result<DispatchResult, Refusal> {
+        let mut thread = self.thread(&c.thread_id)?;
+        let key = ThreadIssueKey { tracker: c.tracker.clone(), host: c.host.clone(), scope: c.scope.clone(), key: c.key.clone() };
+        let mut links = thread.issues.take().unwrap_or_default();
+        let before = links.len();
+        links.retain(|link| !link.key.same_issue(&key));
+        if links.len() == before {
+            return self.answer(None);
+        }
+        thread.issues = Some(links);
+        self.write_thread(&c.command_id, ThreadChange::IssueSynced, thread, true)
     }
 
     /// Deleting a thread also stops its work: the active run is interrupted,

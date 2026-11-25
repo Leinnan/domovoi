@@ -203,6 +203,8 @@ struct FolderBrowserScreen: View {
     private var existing: SidebarProjectView? {
         core.view.sidebar.projects.first { $0.workspaceRoot.trimmingSuffix("/") == browser.path.trimmingSuffix("/") }
     }
+    /// The server has it as a project already, one this list doesn't show.
+    private var unlistedProject: Bool { browser.isProject && existing == nil }
 
     var body: some View {
         List {
@@ -232,6 +234,8 @@ struct FolderBrowserScreen: View {
                 }
             } header: {
                 Text(browser.path.isEmpty ? "…" : browser.path).textCase(nil).lineLimit(2).truncationMode(.head)
+            } footer: {
+                if unlistedProject { Text("This folder is already a project.") }
             }
         }
         .listStyle(.insetGrouped)
@@ -247,11 +251,11 @@ struct FolderBrowserScreen: View {
                     core.update(.addProject(path: browser.path))
                 }
             } label: {
-                Text(existing != nil ? "Start a Thread Here" : "Add This Folder").frame(maxWidth: .infinity)
+                Text(existing != nil ? "Start a Thread Here" : unlistedProject ? "Already a Project" : "Add This Folder").frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
-            .disabled(browser.path.isEmpty || browser.loading)
+            .disabled(browser.path.isEmpty || browser.loading || unlistedProject)
             .projectActionBar()
         }
         .onAppear {

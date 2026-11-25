@@ -110,6 +110,10 @@ fn start_env(dir: &Path, transport: Transport, env: &[(String, String)]) -> Serv
         .env("DOMOVOI_AGENT_SESSIONS_HOME", dir.join("agent-home"))
         // The ACP registry the cases search: a file, not the network.
         .env("DOMOVOI_ACP_REGISTRY_URL", format!("file://{}/../../conformance/acp-registry.json", env!("CARGO_MANIFEST_DIR")))
+        // The usage rate table: a file in LiteLLM's format, not the network.
+        .env("DOMOVOI_USAGE_RATES_URL", format!("file://{}/../../conformance/usage-rates.json", env!("CARGO_MANIFEST_DIR")))
+        // No headless browser: a server preview tab a case opens loads nothing.
+        .env("DOMOVOI_PREVIEW_BROWSER_BINARY", "/nonexistent/chrome")
         .envs(env.iter().map(|(key, value)| (key.as_str(), value.as_str())))
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -184,7 +188,7 @@ async fn connect_with_cookie(server: &Server) -> (Ws, String) {
         .unwrap();
     assert_eq!(res.status(), 200);
     let cookie = res.headers().get("set-cookie").unwrap().to_str().unwrap().split(';').next().unwrap().to_owned();
-    let mut req = format!("ws://127.0.0.1:{}/ws", server.port).into_client_request().unwrap();
+    let mut req = format!("ws://127.0.0.1:{}/ws?orchestrationProtocol=2", server.port).into_client_request().unwrap();
     req.headers_mut().insert("cookie", cookie.parse().unwrap());
     (tokio_tungstenite::connect_async(req).await.unwrap().0, cookie)
 }

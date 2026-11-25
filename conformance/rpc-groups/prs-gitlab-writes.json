@@ -1,0 +1,465 @@
+{
+ "fixture": false,
+ "env": {
+  "GIT_ALLOW_PROTOCOL": "file",
+  "GIT_TERMINAL_PROMPT": "0"
+ },
+ "normalize": [],
+ "cases": [
+  {
+   "tag": "projects.mutate",
+   "payload": {
+    "type": "project.create",
+    "commandId": "create-gl-one",
+    "projectId": "gl-one",
+    "title": "GitLab one",
+    "workspaceRoot": "$DIR/repos/gl-one",
+    "createWorkspaceRootIfMissing": false,
+    "defaultModelSelection": null
+   }
+  },
+  {
+   "tag": "projects.mutate",
+   "payload": {
+    "type": "project.create",
+    "commandId": "create-gl-self",
+    "projectId": "gl-self",
+    "title": "Self-managed app",
+    "workspaceRoot": "$DIR/repos/gl-self",
+    "createWorkspaceRootIfMissing": false,
+    "defaultModelSelection": null
+   }
+  },
+  {
+   "tag": "projects.mutate",
+   "payload": {
+    "type": "project.create",
+    "commandId": "create-gh-one",
+    "projectId": "gh-one",
+    "title": "GitHub calc",
+    "workspaceRoot": "$DIR/repos/gh-one",
+    "createWorkspaceRootIfMissing": false,
+    "defaultModelSelection": null
+   }
+  },
+  {
+   "tag": "pullRequests.comment",
+   "payload": {
+    "projectId": "gl-one",
+    "repository": "group/one",
+    "number": 1,
+    "body": "Looks good to me."
+   }
+  },
+  {
+   "tag": "pullRequests.comment",
+   "payload": {
+    "projectId": "gl-one",
+    "repository": "group/one",
+    "number": 1,
+    "body": "  "
+   },
+   "expect": "failure",
+   "error": "PullRequestOperationError",
+   "note": "an empty comment"
+  },
+  {
+   "tag": "pullRequests.updateComment",
+   "payload": {
+    "projectId": "gl-one",
+    "repository": "group/one",
+    "number": 1,
+    "commentId": "301",
+    "kind": "issue-comment",
+    "body": "Thanks, a second look."
+   }
+  },
+  {
+   "tag": "pullRequests.replyToThread",
+   "payload": {
+    "projectId": "gl-one",
+    "repository": "group/one",
+    "number": 1,
+    "threadId": "d-line",
+    "body": "Renamed."
+   }
+  },
+  {
+   "tag": "pullRequests.setThreadResolution",
+   "payload": {
+    "projectId": "gl-one",
+    "repository": "group/one",
+    "number": 1,
+    "threadId": "d-line",
+    "resolved": true
+   }
+  },
+  {
+   "tag": "pullRequests.setThreadResolution",
+   "payload": {
+    "projectId": "gl-one",
+    "repository": "group/one",
+    "number": 1,
+    "threadId": "d-overview",
+    "resolved": false
+   }
+  },
+  {
+   "tag": "pullRequests.setReaction",
+   "payload": {
+    "projectId": "gl-one",
+    "repository": "group/one",
+    "number": 1,
+    "content": "hooray",
+    "reacted": true
+   }
+  },
+  {
+   "tag": "pullRequests.setReaction",
+   "payload": {
+    "projectId": "gl-one",
+    "repository": "group/one",
+    "number": 1,
+    "content": "rocket",
+    "reacted": false
+   },
+   "note": "the viewer's own award is found and deleted"
+  },
+  {
+   "tag": "pullRequests.setReaction",
+   "payload": {
+    "projectId": "gl-one",
+    "repository": "group/one",
+    "number": 1,
+    "subjectId": "301",
+    "content": "heart",
+    "reacted": false
+   }
+  },
+  {
+   "tag": "pullRequests.setReaction",
+   "payload": {
+    "projectId": "gl-one",
+    "repository": "group/one",
+    "number": 1,
+    "subjectId": "301",
+    "content": "eyes",
+    "reacted": true
+   }
+  },
+  {
+   "tag": "pullRequests.setReaction",
+   "payload": {
+    "projectId": "gl-one",
+    "repository": "group/one",
+    "number": 1,
+    "content": "party",
+    "reacted": true
+   },
+   "expect": "failure",
+   "error": "PullRequestOperationError",
+   "skip_schema": true
+  },
+  {
+   "tag": "pullRequests.requestReviewers",
+   "payload": {
+    "projectId": "gl-one",
+    "repository": "group/one",
+    "number": 1,
+    "reviewers": [
+     {
+      "id": "3",
+      "kind": "user"
+     }
+    ],
+    "requested": true
+   }
+  },
+  {
+   "tag": "pullRequests.requestReviewers",
+   "payload": {
+    "projectId": "gl-one",
+    "repository": "group/one",
+    "number": 1,
+    "reviewers": [
+     {
+      "id": "2",
+      "kind": "user"
+     }
+    ],
+    "requested": false
+   }
+  },
+  {
+   "tag": "pullRequests.setLabels",
+   "payload": {
+    "projectId": "gl-one",
+    "repository": "group/one",
+    "number": 1,
+    "labels": [
+     "ui"
+    ],
+    "applied": true
+   }
+  },
+  {
+   "tag": "pullRequests.setLabels",
+   "payload": {
+    "projectId": "gl-one",
+    "repository": "group/one",
+    "number": 1,
+    "labels": [
+     "nope"
+    ],
+    "applied": true
+   },
+   "expect": "failure",
+   "error": "PullRequestOperationError",
+   "note": "an unknown label is not created"
+  },
+  {
+   "tag": "pullRequests.setLabels",
+   "payload": {
+    "projectId": "gl-one",
+    "repository": "group/one",
+    "number": 1,
+    "labels": [
+     "bug"
+    ],
+    "applied": false
+   }
+  },
+  {
+   "tag": "pullRequests.update",
+   "payload": {
+    "projectId": "gl-one",
+    "repository": "group/one",
+    "number": 1,
+    "title": "Add subtraction and a test",
+    "body": "Adds `sub` and its test.",
+    "maintainerCanModify": true
+   }
+  },
+  {
+   "tag": "pullRequests.update",
+   "payload": {
+    "projectId": "gl-one",
+    "repository": "group/one",
+    "number": 1
+   },
+   "expect": "failure",
+   "error": "PullRequestOperationError",
+   "note": "nothing to change"
+  },
+  {
+   "tag": "pullRequests.submitReview",
+   "payload": {
+    "projectId": "gl-one",
+    "repository": "group/one",
+    "number": 1,
+    "verdict": "comment",
+    "body": "",
+    "comments": [
+     {
+      "path": "calc.py",
+      "body": "Add a docstring.",
+      "position": {
+       "kind": "added",
+       "newLine": 5
+      }
+     },
+     {
+      "path": "calc.py",
+      "body": "Context.",
+      "position": {
+       "kind": "context",
+       "oldLine": 1,
+       "newLine": 1,
+       "side": "right"
+      }
+     }
+    ]
+   },
+   "note": "GitLab needs no summary"
+  },
+  {
+   "tag": "pullRequests.submitReview",
+   "payload": {
+    "projectId": "gl-one",
+    "repository": "group/one",
+    "number": 1,
+    "verdict": "request-changes",
+    "body": "Needs a test for zero.",
+    "comments": []
+   }
+  },
+  {
+   "tag": "pullRequests.submitReview",
+   "payload": {
+    "projectId": "gl-one",
+    "repository": "group/one",
+    "number": 3,
+    "verdict": "approve",
+    "body": "",
+    "comments": []
+   }
+  },
+  {
+   "tag": "pullRequests.runAction",
+   "payload": {
+    "projectId": "gl-one",
+    "repository": "group/one",
+    "number": 2,
+    "action": "ready"
+   }
+  },
+  {
+   "tag": "pullRequests.runAction",
+   "payload": {
+    "projectId": "gl-one",
+    "repository": "group/one",
+    "number": 2,
+    "action": "draft"
+   }
+  },
+  {
+   "tag": "pullRequests.runAction",
+   "payload": {
+    "projectId": "gl-one",
+    "repository": "group/one",
+    "number": 4,
+    "action": "reopen"
+   },
+   "note": "an author's action, offered whatever the role"
+  },
+  {
+   "tag": "pullRequests.runAction",
+   "payload": {
+    "projectId": "gl-one",
+    "repository": "group/one",
+    "number": 4,
+    "action": "merge"
+   },
+   "expect": "failure",
+   "error": "PullRequestOperationError",
+   "note": "the viewer cannot merge"
+  },
+  {
+   "tag": "pullRequests.runAction",
+   "payload": {
+    "projectId": "gl-one",
+    "repository": "group/one",
+    "number": 4,
+    "action": "close"
+   }
+  },
+  {
+   "tag": "pullRequests.runAction",
+   "payload": {
+    "projectId": "gl-one",
+    "repository": "group/one",
+    "number": 1,
+    "action": "update-branch",
+    "updateMethod": "rebase"
+   }
+  },
+  {
+   "tag": "pullRequests.runAction",
+   "payload": {
+    "projectId": "gl-one",
+    "repository": "group/one",
+    "number": 1,
+    "action": "update-branch",
+    "updateMethod": "merge"
+   },
+   "expect": "failure",
+   "error": "PullRequestOperationError",
+   "note": "GitLab only rebases"
+  },
+  {
+   "tag": "pullRequests.runAction",
+   "payload": {
+    "projectId": "gl-one",
+    "repository": "group/one",
+    "number": 1,
+    "action": "approve-workflows"
+   },
+   "expect": "failure",
+   "error": "PullRequestOperationError",
+   "note": "no workflow approvals on GitLab"
+  },
+  {
+   "tag": "pullRequests.runAction",
+   "payload": {
+    "projectId": "gl-one",
+    "repository": "group/one",
+    "number": 1,
+    "action": "enable-auto-merge",
+    "mergeMethod": "squash"
+   }
+  },
+  {
+   "tag": "pullRequests.runAction",
+   "payload": {
+    "projectId": "gl-one",
+    "repository": "group/one",
+    "number": 1,
+    "action": "disable-auto-merge"
+   }
+  },
+  {
+   "tag": "pullRequests.runAction",
+   "payload": {
+    "projectId": "gl-one",
+    "repository": "group/one",
+    "number": 1,
+    "action": "merge",
+    "mergeMethod": "merge"
+   },
+   "note": "merged at the head GitLab reports"
+  },
+  {
+   "tag": "pullRequests.setFilesViewed",
+   "payload": {
+    "projectId": "gl-one",
+    "repository": "group/one",
+    "number": 1,
+    "files": [
+     {
+      "path": "calc.py",
+      "viewed": true
+     }
+    ]
+   },
+   "expect": "failure",
+   "error": "PullRequestOperationError",
+   "note": "GitLab keeps no viewed marks"
+  },
+  {
+   "tag": "pullRequests.detail",
+   "payload": {
+    "projectId": "gl-one",
+    "repository": "group/one",
+    "number": 1
+   },
+   "note": "after the writes"
+  },
+  {
+   "tag": "pullRequests.activity",
+   "payload": {
+    "projectId": "gl-one",
+    "repository": "group/one",
+    "number": 1
+   },
+   "note": "after the writes"
+  },
+  {
+   "tag": "projects.readFile",
+   "payload": {
+    "cwd": "$DIR/glab-data",
+    "relativePath": "log"
+   },
+   "note": "what glab was asked, against which host"
+  }
+ ]
+}

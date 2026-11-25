@@ -1,0 +1,474 @@
+#!/usr/bin/python3 -I
+# Stand-in for the GitLab CLI in the `prs-gitlab-*` and `issues-gitlab*` RPC groups:
+# answers the commands domovoi-server runs (`apps/server/src/glab.rs`, the merge request
+# driver `rpc/source_control/gitlab.rs` and the issue tracker `rpc/issues/gitlab.rs`) from
+# the projects in `$DIR/glab-data/projects/<group>_<project>.json`, in the shapes GitLab's
+# REST and GraphQL APIs answer with. Writes change those files, so a later read sees them.
+#
+# `$DIR/glab-data/rules` makes chosen commands misbehave: each line is
+# `<extended regex>\t<kind>\t<text>`; the first whose regex matches the command line (its
+# arguments joined by spaces, then ` <<< ` and its stdin) wins: `err` prints <text> on stderr
+# and exits 1, `out` prints it and exits 0. `glab-rule` (beside this file) writes that file.
+#
+# Every command line is appended to `$DIR/glab-data/log`, with the host it was run against.
+import json, os, re, sys
+from urllib.parse import unquote, parse_qs
+
+D = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "glab-data")
+args = sys.argv[1:]
+stdin = sys.stdin.read() if "--input" in args else ""
+line = " ".join(args) + (" <<< " + stdin if stdin else "")
+host = os.environ.get("GITLAB_HOST", "")
+with open(os.path.join(D, "log"), "a") as log:
+    log.write("[" + host + "] glab " + line.replace("\n", " ") + "\n")
+
+rules = os.path.join(D, "rules")
+if os.path.exists(rules):
+    for rule in open(rules).read().splitlines():
+        if not rule.strip():
+            continue
+        pattern, kind, text = (rule.split("\t") + ["", ""])[:3]
+        if re.search(pattern, line):
+            text = text.replace("\\n", "\n")
+            if kind == "err":
+                sys.stderr.write(text + "\n")
+                sys.exit(1)
+            if kind == "out":
+                print(text)
+                sys.exit(0)
+            break
+
+USER = json.load(open(os.path.join(D, "user.json")))
+VIEWER = USER["username"]
+PRIVATE = {"notes", "discussions", "commits", "award_emoji", "stats", "files", "approved", "approvedBy", "reviewStates", "stages",
+           "label_events", "closed_by", "related_merge_requests", "synthetic_notes", "listed"}
+
+
+def out(value):
+    print(json.dumps(value))
+    sys.exit(0)
+
+
+def fail(text):
+    sys.stderr.write(text + "\n")
+    sys.exit(1)
+
+
+def not_found():
+    fail("glab: 404 Not Found")
+
+
+def public(record):
+    return {k: v for k, v in record.items() if k not in PRIVATE}
+
+
+def project_file(path):
+    return os.path.join(D, "projects", path.lower().replace("/", "_") + ".json")
+
+
+def load(path):
+    f = project_file(path)
+    if not os.path.exists(f):
+        not_found()
+    return json.load(open(f))
+
+
+def save(path, project):
+    json.dump(project, open(project_file(path), "w"), indent=1)
+
+
+def page(rows, q):
+    per = int(q.get("per_page", ["20"])[0])
+    at = int(q.get("page", ["1"])[0])
+    return rows[(at - 1) * per: at * per]
+
+
+def by_iid(rows, n):
+    for row in rows:
+        if row["iid"] == n:
+            return row
+    not_found()
+
+
+def notes_of(record):
+    notes = list(record.get("notes", []))
+    for i in range(record.get("synthetic_notes", 0)):
+        notes.append({"id": 9000 + i, "body": "Note %d" % (i + 1), "author": {"id": 2, "username": "rev"}, "created_at": "2026-02-01T00:%02d:00Z" % (i % 60), "system": False})
+    return notes
+
+
+def next_id(project):
+    project["next_id"] = project.get("next_id", 5000) + 1
+    return project["next_id"]
+
+
+def user_by_id(project, uid):
+    for u in project.get("users", []):
+        if u["id"] == uid:
+            return u
+    return {"id": uid, "username": "user%d" % uid}
+
+
+def awards_answer(subject, q, method, project, path, rest):
+    awards = subject.setdefault("award_emoji", [])
+    if method == "POST":
+        award = {"id": next_id(project), "name": q["name"][0], "user": {"id": USER["id"], "username": VIEWER}}
+        awards.append(award)
+        save(path, project)
+        out(award)
+    if method == "DELETE":
+        subject["award_emoji"] = [a for a in awards if str(a["id"]) != rest]
+        save(path, project)
+        out({})
+    out(page(awards, q))
+
+
+def note_in(record, note_id):
+    for n in notes_of(record):
+        if str(n["id"]) == note_id:
+            return n
+    for d in record.get("discussions", []):
+        for n in d.get("notes", []):
+            if str(n["id"]) == note_id:
+                return n
+    not_found()
+
+
+def include(body, q, rows):
+    """`--include`: the status line and GitLab's paging headers before the body."""
+    per = int(q.get("per_page", ["20"])[0])
+    at = int(q.get("page", ["1"])[0])
+    more = len(rows) > at * per
+    print("HTTP/2.0 200 OK\r\nContent-Type: application/json\r\nX-Next-Page: %s\r\nX-Page: %d\r\n\r\n%s" % (str(at + 1) if more else "", at, json.dumps(body)))
+    sys.exit(0)
+
+
+def merge_requests(project, path, q, method, parts):
+    mrs = project.setdefault("mergeRequests", [])
+    if not parts:
+        rows = [m for m in mrs if m.get("listed", True)]
+        state = q.get("state", ["all"])[0]
+        if state != "all":
+            rows = [m for m in rows if m["state"] == state]
+        if "author_username" in q:
+            rows = [m for m in rows if (m.get("author") or {}).get("username") == q["author_username"][0]]
+        if "reviewer_username" in q:
+            rows = [m for m in rows if any(r.get("username") == q["reviewer_username"][0] for r in m.get("reviewers", []))]
+        if "search" in q:
+            rows = [m for m in rows if q["search"][0].lower() in m["title"].lower()]
+        for name in q.get("labels", [""])[0].split(",") if "labels" in q else []:
+            rows = [m for m in rows if name in [l if isinstance(l, str) else l["name"] for l in m.get("labels", [])]]
+        if "wip" in q:
+            rows = [m for m in rows if m.get("draft", False) == (q["wip"][0] == "yes")]
+        rows = sorted(rows, key=lambda m: m["updated_at"], reverse=True)
+        out([public(m) for m in page(rows, q)])
+    mr = by_iid(mrs, int(parts[0]))
+    sub = parts[1:]
+    if not sub:
+        if method == "PUT":
+            change = json.loads(stdin or "{}")
+            for key in ("title", "description", "allow_collaboration"):
+                if key in change:
+                    mr[key] = change[key]
+            names = [l if isinstance(l, str) else l["name"] for l in mr.get("labels", [])]
+            for name in (change.get("add_labels") or "").split(","):
+                if name and name not in names:
+                    names.append(name)
+            drop = (change.get("remove_labels") or "").split(",")
+            mr["labels"] = [n for n in names if n not in drop]
+            if "reviewer_ids" in change:
+                mr["reviewers"] = [user_by_id(project, i) for i in change["reviewer_ids"]]
+            save(path, project)
+        out(public(mr))
+    if sub[0] == "notes":
+        if len(sub) == 1:
+            if method == "POST":
+                note = {"id": next_id(project), "body": json.loads(stdin)["body"], "author": dict(USER), "created_at": "2026-03-01T00:00:00Z", "system": False}
+                mr.setdefault("notes", []).append(note)
+                save(path, project)
+                out(note)
+            out(page(notes_of(mr), q))
+        note = note_in(mr, sub[1])
+        if len(sub) >= 3 and sub[2] == "award_emoji":
+            awards_answer(note, q, method, project, path, sub[3] if len(sub) > 3 else "")
+        if method == "PUT":
+            note["body"] = json.loads(stdin)["body"]
+            save(path, project)
+        out(note)
+    if sub[0] == "discussions":
+        discussions = mr.setdefault("discussions", [])
+        if len(sub) == 1:
+            if method == "POST":
+                body = json.loads(stdin)
+                note = {"id": next_id(project), "body": body["body"], "author": dict(USER), "created_at": "2026-03-01T00:00:00Z", "resolvable": True, "resolved": False,
+                        "position": dict(body.get("position", {}))}
+                discussion = {"id": "disc-%d" % note["id"], "notes": [note]}
+                discussions.append(discussion)
+                save(path, project)
+                out(discussion)
+            out(page(discussions, q))
+        discussion = next((d for d in discussions if d["id"] == sub[1]), None) or not_found()
+        if len(sub) == 3 and sub[2] == "notes" and method == "POST":
+            note = {"id": next_id(project), "body": json.loads(stdin)["body"], "author": dict(USER), "created_at": "2026-03-01T00:00:00Z"}
+            discussion["notes"].append(note)
+            save(path, project)
+            out(note)
+        if method == "PUT":
+            for n in discussion["notes"]:
+                n["resolved"] = json.loads(stdin)["resolved"]
+            save(path, project)
+        out(discussion)
+    if sub[0] == "commits":
+        out(page(mr.get("commits", []), q))
+    if sub[0] == "award_emoji":
+        awards_answer(mr, q, method, project, path, sub[1] if len(sub) > 1 else "")
+    if sub[0] == "approve" and method == "POST":
+        mr.setdefault("approvedBy", []).append(VIEWER)
+        mr["approved"] = True
+        save(path, project)
+        out(public(mr))
+    if sub[0] == "cancel_merge_when_pipeline_succeeds" and method == "POST":
+        mr["merge_when_pipeline_succeeds"] = False
+        save(path, project)
+        out(public(mr))
+    not_found()
+
+
+def issues(project, path, q, method, parts):
+    rows = project.setdefault("issues", [])
+    if not parts:
+        if method == "POST":
+            body = json.loads(stdin)
+            iid = max([i["iid"] for i in rows] + [0]) + 1
+            issue = {"iid": iid, "title": body["title"], "description": body.get("description", ""), "state": "opened", "web_url": "https://%s/%s/-/issues/%d" % (host, project["path_with_namespace"], iid),
+                     "created_at": "2026-03-01T00:00:00Z", "updated_at": "2026-03-01T00:00:00Z", "author": dict(USER),
+                     "labels": [l for l in body.get("labels", "").split(",") if l], "assignees": [user_by_id(project, i) for i in body.get("assignee_ids", [])], "user_notes_count": 0}
+            rows.append(issue)
+            save(path, project)
+            out(issue)
+        found = list(rows)
+        if "iids[]" in q:
+            found = [i for i in found if str(i["iid"]) in q["iids[]"]]
+        state = q.get("state", ["all"])[0]
+        if state != "all":
+            found = [i for i in found if i["state"] == state]
+        if "author_username" in q:
+            found = [i for i in found if (i.get("author") or {}).get("username") == q["author_username"][0]]
+        if "assignee_username" in q:
+            found = [i for i in found if any(a.get("username") == q["assignee_username"][0] for a in i.get("assignees", []))]
+        if "search" in q:
+            found = [i for i in found if q["search"][0].lower() in (i["title"] + " " + (i.get("description") or "")).lower()]
+        if "labels" in q:
+            for name in q["labels"][0].split(","):
+                found = [i for i in found if name in [l if isinstance(l, str) else l["name"] for l in i.get("labels", [])]]
+        key = "created_at" if q.get("order_by", ["updated_at"])[0] == "created_at" else "updated_at"
+        found = sorted(found, key=lambda i: i[key], reverse=True)
+        out([public(i) for i in page(found, q)])
+    issue = by_iid(rows, int(parts[0]))
+    sub = parts[1:]
+    if not sub:
+        if method == "PUT":
+            change = json.loads(stdin or "{}")
+            for key in ("title", "description"):
+                if key in change:
+                    issue[key] = change[key]
+            if "labels" in change:
+                issue["labels"] = [l for l in change["labels"].split(",") if l]
+            if "assignee_ids" in change:
+                issue["assignees"] = [user_by_id(project, i) for i in change["assignee_ids"]]
+            if change.get("state_event") == "close":
+                issue["state"] = "closed"
+                issue["closed_at"] = "2026-03-02T00:00:00Z"
+            if change.get("state_event") == "reopen":
+                issue["state"] = "opened"
+                issue["closed_at"] = None
+            save(path, project)
+        out(public(issue))
+    if sub[0] == "notes":
+        if len(sub) == 1:
+            if method == "POST":
+                note = {"id": next_id(project), "body": json.loads(stdin)["body"], "author": dict(USER), "created_at": "2026-03-01T00:00:00Z", "system": False}
+                issue.setdefault("notes", []).append(note)
+                save(path, project)
+                out(note)
+            notes = notes_of(issue)
+            if q.get("activity_filter") == ["only_activity"]:
+                notes = [n for n in notes if n.get("system")]
+            shown = page(notes, q)
+            if "--include" in args:
+                include(shown, q, notes)
+            out(shown)
+        note = note_in(issue, sub[1])
+        if len(sub) >= 3 and sub[2] == "award_emoji":
+            awards_answer(note, q, method, project, path, sub[3] if len(sub) > 3 else "")
+        out(note)
+    if sub[0] == "award_emoji":
+        awards_answer(issue, q, method, project, path, sub[1] if len(sub) > 1 else "")
+    if sub[0] == "resource_label_events":
+        out(page(issue.get("label_events", []), q))
+    if sub[0] in ("closed_by", "related_merge_requests"):
+        out(page(issue.get(sub[0], []), q))
+    not_found()
+
+
+def api(target, method, q):
+    if target == "user":
+        out(USER)
+    if target == "users":
+        for name in os.listdir(os.path.join(D, "projects")):
+            for u in json.load(open(os.path.join(D, "projects", name))).get("users", []):
+                if u["username"] == q.get("username", [""])[0]:
+                    out([u])
+        out([])
+    if target == "graphql":
+        graphql(json.loads(stdin))
+    m = re.match(r"^projects/([^/]+)(?:/(.*))?$", target)
+    if not m:
+        not_found()
+    path = unquote(m.group(1))
+    project = load(path)
+    parts = [unquote(p) for p in (m.group(2) or "").split("/") if p]
+    if not parts:
+        out({"id": project["id"], "path_with_namespace": project["path_with_namespace"], "merge_method": project.get("merge_method"), "squash_option": project.get("squash_option")})
+    if parts[0] == "merge_requests":
+        merge_requests(project, path, q, method, parts[1:])
+    if parts[0] == "issues":
+        issues(project, path, q, method, parts[1:])
+    if parts[0] == "labels":
+        labels = project.get("labels", [])
+        if len(parts) > 1:
+            found = next((l for l in labels if l["name"] == parts[1]), None)
+            out(found) if found else not_found()
+        search = q.get("search", [""])[0].lower()
+        out(page([l for l in labels if search in l["name"].lower()], q))
+    if parts[0] == "users":
+        search = q.get("search", [""])[0].lower()
+        out(page([u for u in project.get("users", []) if search in (u["username"] + " " + u.get("name", "")).lower()], q))
+    if parts[0] == "members":
+        out(page(project.get("users", []), q))
+    if parts[0] == "templates":
+        templates = project.get("templates", [])
+        if len(parts) > 2:
+            found = next((t for t in templates if t["key"] == parts[2]), None) or not_found()
+            out({"name": found["name"], "content": found["content"]})
+        out([{"key": t["key"], "name": t["name"]} for t in templates])
+    if parts[0] == "repository" and parts[1] == "files":
+        contents = project.get("files", {}).get(q.get("ref", [""])[0], {}).get(parts[2])
+        if contents is None:
+            not_found()
+        sys.stdout.write(contents)
+        sys.exit(0)
+    if parts[0] == "repository" and parts[1] == "commits":
+        commit = project.get("commits", {}).get(parts[2]) or not_found()
+        out(commit)
+    not_found()
+
+
+def mr_node_states(project, mr):
+    states = mr.get("reviewStates", {})
+    return {
+        "iid": str(mr["iid"]),
+        "approved": mr.get("approved", False),
+        "approvedBy": {"nodes": [{"username": u} for u in mr.get("approvedBy", [])]},
+        "reviewers": {"nodes": [{"username": r.get("username"), "mergeRequestInteraction": {"reviewState": states.get(r.get("username"), "UNREVIEWED")}} for r in mr.get("reviewers", [])]},
+        "headPipeline": {"status": mr["head_pipeline"]["status"].upper()} if mr.get("head_pipeline") else None,
+    }
+
+
+def award_nodes(awards):
+    return {"nodes": [{"name": a["name"], "user": {"username": a["user"]["username"]}} for a in awards]}
+
+
+def graphql(request):
+    query, variables = request["query"], request.get("variables", {})
+    if query.startswith("mutation"):
+        project = load(variables["projectPath"])
+        mr = by_iid(project["mergeRequests"], int(variables["iid"]))
+        if "mergeRequestSetReviewers" in query:
+            names = [r.get("username") for r in mr.get("reviewers", [])]
+            for name in variables["reviewers"]:
+                if name not in names:
+                    mr.setdefault("reviewers", []).append(dict(USER))
+            save(variables["projectPath"], project)
+            out({"data": {"mergeRequestSetReviewers": {"errors": []}}})
+        if "mergeRequestRequestChanges" in query:
+            if project.get("requestChangesRefused"):
+                out({"data": {"mergeRequestRequestChanges": {"errors": ["Requesting changes is not available on this GitLab."]}}})
+            mr.setdefault("reviewStates", {})[VIEWER] = "REQUESTED_CHANGES"
+            save(variables["projectPath"], project)
+            out({"data": {"mergeRequestRequestChanges": {"errors": []}}})
+        out({"errors": [{"message": "unexpected mutation"}]})
+    project = load(variables["fullPath"])
+    if "mergeRequests(iids" in query:
+        nodes = [m for m in project.get("mergeRequests", []) if str(m["iid"]) in variables.get("iids", [])]
+        if "diffStatsSummary" in query:
+            out({"data": {"project": {"mergeRequests": {"nodes": [{"iid": str(m["iid"]), "diffStatsSummary": m.get("stats")} for m in nodes]}}}})
+        out({"data": {"metadata": {"enterprise": project.get("enterprise", False)}, "project": {"mergeRequests": {"nodes": [mr_node_states(project, m) for m in nodes]}}}})
+    if "mergeRequest: issue(iid" in query:
+        issue = by_iid(project.get("issues", []), int(variables["iid"]))
+        nodes = [{"id": "gid://gitlab/Note/%d" % n["id"], "awardEmoji": award_nodes(n.get("award_emoji", []))} for n in notes_of(issue) if not n.get("system")]
+        at = int(variables.get("cursor") or 0)
+        more = len(nodes) > at + 100
+        out({"data": {"currentUser": {"username": VIEWER}, "project": {"mergeRequest": {"notes": {"pageInfo": {"hasNextPage": more, "endCursor": str(at + 100) if more else None}, "nodes": nodes[at:at + 100]}}}}})
+    mr = by_iid(project.get("mergeRequests", []), int(variables["iid"]))
+    if "userPermissions" in query:
+        colours = {l["name"]: l for l in project.get("labels", [])}
+        labels = [l if isinstance(l, str) else l["name"] for l in mr.get("labels", [])]
+        nodes = [{"title": n, "color": colours.get(n, {}).get("color"), "description": colours.get(n, {}).get("description")} for n in labels]
+        out({"data": {"project": {"mergeRequest": {"userPermissions": {"adminMergeRequest": project.get("canAdmin", True)}, "labels": {"nodes": nodes}}}}})
+    if "stages(first" in query:
+        out({"data": {"project": {"mergeRequest": {"headPipeline": mr.get("stages")}}}})
+    if "awardEmoji" in query:
+        notes = []
+        for n in notes_of(mr) + [n for d in mr.get("discussions", []) for n in d.get("notes", [])]:
+            author = n.get("author") or {}
+            notes.append({"id": "gid://gitlab/Note/%d" % n["id"], "author": {"username": author.get("username"), "bot": author.get("bot", False)},
+                          "lastEditedAt": n.get("last_edited_at"), "lastEditedBy": n.get("last_edited_by"), "resolved": n.get("resolved"),
+                          "awardEmoji": award_nodes(n.get("award_emoji", []))})
+        out({"data": {"currentUser": {"username": VIEWER}, "project": {"mergeRequest": {"awardEmoji": award_nodes(mr.get("award_emoji", [])),
+             "notes": {"pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": notes}}}}})
+    if "diffStats {" in query:
+        files = mr.get("files")
+        out({"data": {"project": {"mergeRequest": {"diffStatsSummary": {"fileCount": mr.get("fileCount", len(files or []))}, "diffStats": files}}}})
+    out({"errors": [{"message": "unexpected query"}]})
+
+
+def flag(name):
+    return args[args.index(name) + 1] if name in args else None
+
+
+if args[:1] == ["api"]:
+    target = args[1]
+    method = flag("--method") or "GET"
+    endpoint, _, qs = target.partition("?")
+    api(endpoint, method, parse_qs(qs, keep_blank_values=True))
+
+if args[:1] == ["mr"]:
+    sub, number, repository = args[1], int(args[2]), flag("--repo")
+    project = load(repository)
+    mr = by_iid(project.get("mergeRequests", []), number)
+    if sub == "merge":
+        if "--sha" in args and flag("--sha") != mr.get("sha"):
+            fail("ERROR: SHA does not match HEAD of source branch: %s" % mr.get("sha"))
+        if "--auto-merge=true" in args:
+            mr["merge_when_pipeline_succeeds"] = True
+        else:
+            mr["state"] = "merged"
+            mr["merged_at"] = "2026-03-02T00:00:00Z"
+    elif sub == "close":
+        mr["state"] = "closed"
+        mr["closed_at"] = "2026-03-02T00:00:00Z"
+    elif sub == "reopen":
+        mr["state"] = "opened"
+        mr["closed_at"] = None
+    elif sub == "update":
+        mr["draft"] = "--draft" in args
+    elif sub == "rebase":
+        pass
+    else:
+        fail('unknown command "%s" for "glab mr"' % sub)
+    save(repository, project)
+    print("!%d %s" % (number, mr["web_url"]))
+    sys.exit(0)
+
+fail('unknown command "%s" for "glab"' % " ".join(args[:2]))

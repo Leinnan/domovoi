@@ -57,6 +57,15 @@ struct DomovoiApp: App {
                     .keyboardShortcut(".")
                     .disabled(!core.view.composerMenu.canStop)
                 Divider()
+                // A transcript that looks wrong: read it again from the server.
+                Button("Reload Thread") { core.update(.reloadThread) }
+                    .keyboardShortcut("r")
+                    .disabled(core.view.header == nil || core.view.connection.state != "connected")
+                // Projects, threads and the open one, read again (or reconnect now).
+                Button("Refresh from Server") { core.update(.resync) }
+                    .keyboardShortcut("r", modifiers: [.command, .shift])
+                    .disabled(core.view.connection.activeEnvironmentId.isEmpty)
+                Divider()
                 ComposerCommandItems(core: core)
             }
             SidebarCommands()

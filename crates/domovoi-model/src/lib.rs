@@ -34,6 +34,12 @@ pub enum ProviderDriver {
     AcpRegistry,
     /// Google's Antigravity CLI over ACP (t3code's `antigravity` driver).
     Antigravity,
+    /// xAI's Grok CLI over ACP (`grok agent stdio`, t3code's `grok` driver).
+    Grok,
+    /// AWS's Kiro CLI over ACP (`kiro-cli acp`, t3code's `kiro` driver).
+    Kiro,
+    /// Vercel's fx CLI over ACP (`fx acp`, t3code's `fx` driver).
+    Fx,
 }
 
 impl ProviderDriver {
@@ -46,6 +52,9 @@ impl ProviderDriver {
             "pi" => Some(Self::Pi),
             "acpRegistry" => Some(Self::AcpRegistry),
             "antigravity" => Some(Self::Antigravity),
+            "grok" => Some(Self::Grok),
+            "kiro" => Some(Self::Kiro),
+            "fx" => Some(Self::Fx),
             _ => None,
         }
     }
@@ -58,18 +67,27 @@ impl ProviderDriver {
             Self::Pi => "pi",
             Self::AcpRegistry => "acpRegistry",
             Self::Antigravity => "antigravity",
+            Self::Grok => "grok",
+            Self::Kiro => "kiro",
+            Self::Fx => "fx",
         }
     }
 
     /// Its live turns take more input (Claude's `priority: now` messages,
-    /// Codex `turn/steer`, Pi's `prompt` with `streamingBehavior: steer`).
+    /// Codex `turn/steer`, Pi's `prompt` with `streamingBehavior: steer`,
+    /// Grok's `_x.ai/interject`, Kiro's `_session/steer`).
     pub const fn can_steer(self) -> bool {
-        matches!(self, Self::Codex | Self::ClaudeAgent | Self::Pi)
+        matches!(self, Self::Codex | Self::ClaudeAgent | Self::Pi | Self::Grok | Self::Kiro)
+    }
+
+    /// It runs over the Agent Client Protocol (one agent process per thread).
+    pub const fn is_acp(self) -> bool {
+        matches!(self, Self::AcpRegistry | Self::Antigravity | Self::Grok | Self::Kiro | Self::Fx)
     }
 
     /// It can fork its own conversation (rather than be handed one as text).
     pub const fn can_native_fork(self) -> bool {
-        matches!(self, Self::Codex | Self::ClaudeAgent | Self::Pi)
+        matches!(self, Self::Codex | Self::ClaudeAgent | Self::Pi | Self::OpenCode)
     }
 }
 

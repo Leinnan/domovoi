@@ -858,6 +858,99 @@ fn thread_intents_become_commands() {
     assert_eq!(sent[0]["payload"]["runtimeMode"], "full-access");
 }
 
+/// A secret the agent asks for shows as a card with what it asked; its
+/// answer goes once as `secrets.answerRequest` (t3code's payload) and is
+/// kept nowhere: not in the model, the outbox or the store, nor sent again
+/// after the socket drops.
+#[test]
+fn secret_requests_are_answered_once_and_kept_nowhere() {
+    let (mut model, _) = connected();
+    model.selected_thread = Some("t1".into());
+    model.route = "thread".into();
+    let asked = |status: &str| records::thread(json!({ "turnItems": [{
+        "id": "s1", "type": "secret_request", "status": "running", "label": "OpenAI API key", "reason": "To call the API in tests.",
+        "url": "https://platform.openai.com/api-keys", "placeholder": "sk-...", "delivery": "file", "secretStatus": status,
+    }] }));
+    model.thread = Some(asked("pending"));
+    let page = DomovoiApp.view(&model).thread.expect("the thread");
+    assert_eq!(page.secret_requests.len(), 1);
+    let card = &page.secret_requests[0];
+    assert_eq!((card.item_id.as_str(), card.label.as_str(), card.placeholder.as_str(), card.delivery.as_str()), ("s1", "OpenAI API key", "sk-...", "file"));
+    assert_eq!(card.url.as_deref(), Some("https://platform.openai.com/api-keys"));
+    assert!(!card.sending && card.hint.contains("file"));
+
+    // Nothing typed, nothing sent; an item that isn't a pending secret request, nothing.
+    assert!(sent_requests(&run(&mut model, Event::AnswerSecret { item_id: "s1".into(), value: "  ".into() })).is_empty());
+    assert!(sent_requests(&run(&mut model, Event::AnswerSecret { item_id: "other".into(), value: "x".into() })).is_empty());
+
+    let effects = run(&mut model, Event::AnswerSecret { item_id: "s1".into(), value: "sk-test-123".into() });
+    let sent = sent_requests(&effects);
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0]["tag"], "secrets.answerRequest");
+    assert_eq!(sent[0]["payload"], json!({ "threadId": "t1", "turnItemId": "s1", "answer": { "type": "save", "secret": "sk-test-123" } }));
+    assert!(effects.iter().all(|e| !matches!(e, Effect::Store(_))), "nothing is saved");
+    assert!(model.composer.outbox.is_empty(), "no outbox holds it");
+    assert!(DomovoiApp.view(&model).thread.expect("the thread").secret_requests[0].sending);
+    // Tapped again while it goes: not sent twice.
+    assert!(sent_requests(&run(&mut model, Event::AnswerSecret { item_id: "s1".into(), value: "sk-test-123".into() })).is_empty());
+
+    // The socket drops before the answer: nothing is sent again on reconnect.
+    let _ = sock(&mut model, SocketEvent::Closed { reason: "gone".into() });
+    assert!(!DomovoiApp.view(&model).thread.expect("the thread").secret_requests[0].sending, "the card can be answered anew");
+    let effects = run(&mut model, Event::AnswerSecret { item_id: "s1".into(), value: "sk-test-123".into() });
+    assert!(sent_requests(&effects).is_empty(), "not sent without a connection");
+    assert!(model.toast.as_ref().is_some_and(|t| t.kind == "error"));
+
+    // Connected again: a decline, then the server's answer.
+    let (mut model, _) = connected();
+    model.selected_thread = Some("t1".into());
+    model.thread = Some(asked("pending"));
+    let effects = run(&mut model, Event::DeclineSecret { item_id: "s1".into() });
+    let sent = sent_requests(&effects);
+    assert_eq!(sent[0]["payload"]["answer"], json!({ "type": "decline" }));
+    let id = sent[0]["id"].as_str().expect("an id").to_owned();
+    let _ = sock(&mut model, exit_ok(&id, Value::Null));
+    assert!(model.secrets_answering.is_empty());
+    // Saved: the card goes and the row says so.
+    model.thread = Some(asked("saved"));
+    let page = DomovoiApp.view(&model).thread.expect("the thread");
+    assert!(page.secret_requests.is_empty());
+    assert_eq!(page.items[0].title, "Secret saved: OpenAI API key");
+
+    // A refusal names its reason (`SecretRequestError` has no message).
+    model.thread = Some(asked("pending"));
+    let sent = sent_requests(&run(&mut model, Event::AnswerSecret { item_id: "s1".into(), value: "v".into() }));
+    let id = sent[0]["id"].as_str().expect("an id").to_owned();
+    let failure = json!({ "_tag": "Exit", "requestId": id, "exit": { "_tag": "Failure", "cause": [{ "_tag": "Fail", "error": { "_tag": "SecretRequestError", "reason": "agent_stopped" } }] } });
+    let _ = sock(&mut model, SocketEvent::Message { text: failure.to_string() });
+    assert_eq!(model.toast.as_ref().map(|t| t.message.as_str()), Some("Secret: the agent stopped waiting for it."));
+    assert!(!DomovoiApp.view(&model).thread.expect("the thread").secret_requests[0].sending);
+}
+
+/// The pull requests and issues linked to the open thread, for its header:
+/// a stack's dismissed pull requests are left out.
+#[test]
+fn linked_pull_requests_and_issues_show_on_the_thread() {
+    let (mut model, _) = connected();
+    model.threads = vec![records::shell(json!({ "id": "t1", "pullRequests": [
+        { "host": "github.com", "repository": "o/r", "number": 12, "url": "https://github.com/o/r/pull/12", "source": "agent", "linkedAt": "1",
+          "snapshot": { "state": "open", "title": "Fix login", "headBranch": "fix", "baseBranch": "main", "isDraft": true, "updatedAt": null, "syncedAt": "1" }, "stack": null },
+        { "host": "github.com", "repository": "o/r", "number": 9, "url": "https://github.com/o/r/pull/9", "source": "stack-dismissed", "linkedAt": "1", "snapshot": null, "stack": null },
+    ], "issues": [
+        { "tracker": "linear", "host": "linear.app", "scope": "ENG", "key": "abc", "projectId": "p1", "url": "https://linear.app/x/issue/ENG-123",
+          "source": "agent", "linkedAt": "1", "displayKey": "ENG-123", "title": "Login fails" },
+    ] }))];
+    model.selected_thread = Some("t1".into());
+    model.thread = Some(records::thread(json!({})));
+    let links = DomovoiApp.view(&model).thread.expect("the thread").links;
+    let shown: Vec<_> = links.iter().map(|l| (l.kind.as_str(), l.label.as_str(), l.title.as_str(), l.state.as_str(), l.url.as_str())).collect();
+    assert_eq!(shown, [
+        ("pull_request", "#12", "Fix login", "draft", "https://github.com/o/r/pull/12"),
+        ("issue", "ENG-123", "Login fails", "", "https://linear.app/x/issue/ENG-123"),
+    ]);
+    assert_eq!(DomovoiApp.view(&model).sidebar.surface_threads[0].pull_request, "#12");
+}
+
 #[test]
 fn mentions_search_files_and_complete_the_draft() {
     let (mut model, _) = connected();
@@ -1001,6 +1094,27 @@ fn reconnects_after_the_socket_drops() {
     // The user's Connect does.
     assert!(!run(&mut model, Event::Reconnect).is_empty());
     assert_eq!(DomovoiApp.view(&model).connection.state, "reconnecting");
+}
+
+/// A UnifiedPush endpoint (Android) registers with the server in use, at
+/// once when connected and again on each connection; an empty one is forgotten.
+#[test]
+fn push_endpoints_register_with_the_server_in_use() {
+    let mut shell = Shell::paired();
+    shell.routes.insert("/api/domovoi/push/webpush".into(), (200, json!({ "registered": true })));
+    let mut model = Model::default();
+    let _ = shell.drive(&mut model, Event::PushEndpoint { endpoint: "https://ntfy.example/upX".into(), p256dh: "BKey".into(), auth: "Auth".into() });
+    assert!(shell.requests.iter().all(|r| !r.url.ends_with("/api/domovoi/push/webpush")), "not before a connection");
+    let _ = shell.drive(&mut model, Event::Connect { server_url: "http://h:1".into(), pairing_code: "CODE".into() });
+    let sent = sent_requests(&sock(&mut model, SocketEvent::Opened));
+    let lifecycle = sent.iter().find(|r| r["tag"] == "subscribeServerLifecycle").unwrap()["id"].as_str().unwrap().to_owned();
+    let _ = shell.drive_sock(&mut model, chunk(&lifecycle, &[records::welcome(json!({ "environmentId": "srv-1", "label": "Mac" }))]));
+    let reg = shell.requests.iter().find(|r| r.url == "http://h:1/api/domovoi/push/webpush").expect("registered once connected");
+    assert_eq!(serde_json::from_slice::<Value>(&reg.body).unwrap(), json!({ "endpoint": "https://ntfy.example/upX", "p256dh": "BKey", "auth": "Auth" }));
+    let before = shell.requests.len();
+    let _ = shell.drive(&mut model, Event::PushEndpoint { endpoint: String::new(), p256dh: String::new(), auth: String::new() });
+    assert!(model.push_endpoint.is_none());
+    assert_eq!(shell.requests.len(), before, "nothing to register");
 }
 
 #[test]
@@ -3370,7 +3484,8 @@ fn turns_fork_from_a_reply_list_their_files_and_surface_waiting_subagents() {
     let checkpoint = page.items.iter().find(|i| i.id == "i-cp").unwrap().checkpoint.clone().unwrap();
     assert_eq!((checkpoint.files[0].path.as_str(), checkpoint.files[0].insertions, checkpoint.diff_source.as_str()), ("src/a.rs", 3, "turn:1"));
     let secret = page.items.iter().find(|i| i.id == "i-secret").unwrap();
-    assert_eq!((secret.title.as_str(), secret.text.as_str()), ("The agent asks for a secret: NPM token", "To publish"));
+    assert_eq!((secret.title.as_str(), secret.text.as_str()), ("Secret no longer needed: NPM token", "To publish"), "a cancelled request says so");
+    assert!(page.secret_requests.is_empty(), "and has no card to answer");
     assert_eq!(page.waiting_children.iter().map(|c| (c.thread_id.as_str(), c.relation.as_str())).collect::<Vec<_>>(), [("c1", "subagent")]);
 
     let sent = sent_requests(&run(&mut model, Event::ForkFromItem { item_id: "i-a".into() }));
@@ -4175,6 +4290,21 @@ fn what_the_server_sends_that_fits_no_record_is_left_out_and_the_user_is_told() 
     let view = DomovoiApp.view(&model);
     assert!(!view.usage.loading && view.usage.rows.is_empty() && model.pages.usage.is_none());
     assert!(view.toast.expect("the user is told").message.contains("the usage summary"));
+}
+
+#[test]
+fn usage_days_follow_the_time_zone_the_shell_reports() {
+    let (mut model, _) = connected();
+    model.now_ms = 1_795_563_000_000; // 2026-11-24 23:30 UTC
+    // No time zone from the shell: the days are UTC's.
+    let sent = sent_requests(&run(&mut model, Event::LoadUsage { days: 1 }));
+    let body = &sent.iter().find(|r| r["tag"] == "server.getUsageSummary").expect("usage asked for")["payload"];
+    assert_eq!((body["sinceDay"].as_str(), body["untilDay"].as_str(), body["timeZone"].as_str()), (Some("2026-11-24"), Some("2026-11-24"), Some("UTC")));
+    // An hour east of UTC it is already the 25th there.
+    let _ = run(&mut model, Event::SetTimeZone { iana: "Europe/Warsaw".into(), utc_offset_secs: 3_600 });
+    let sent = sent_requests(&run(&mut model, Event::LoadUsage { days: 7 }));
+    let body = &sent.iter().find(|r| r["tag"] == "server.getUsageSummary").expect("usage asked for")["payload"];
+    assert_eq!((body["sinceDay"].as_str(), body["untilDay"].as_str(), body["timeZone"].as_str()), (Some("2026-11-19"), Some("2026-11-25"), Some("Europe/Warsaw")));
 }
 
 #[test]

@@ -1187,13 +1187,6 @@ impl ImageSource {
         }
     }
 
-    /// The `assets.createUrl` resource for it.
-    pub(crate) fn resource(&self, thread_id: &str, item_id: &str) -> Value {
-        match self {
-            Self::File(path) => serde_json::json!({ "_tag": "media-file", "threadId": thread_id, "path": path }),
-            Self::Output(index) => serde_json::json!({ "_tag": "tool-output-image", "threadId": thread_id, "itemId": item_id, "index": index }),
-        }
-    }
 
     /// The name shown with it.
     pub(crate) fn name(&self) -> String {

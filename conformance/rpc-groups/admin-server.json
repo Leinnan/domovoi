@@ -56,6 +56,7 @@
     { "tag": "server.prepareTriage", "payload": "web", "skip_schema": true, "note": "a payload that is no object reads as an unnamed client" },
 
     { "tag": "server.getTraceDiagnostics", "payload": {} },
+    { "tag": "server.getTraceDiagnostics", "payload": {}, "sleep_ms": 1500, "note": "the calls above as spans, once the trace writer's one-second batch is on disk; reading diagnostics is not itself traced" },
     { "tag": "server.getProcessDiagnostics", "payload": {} },
     { "tag": "server.getHostResources", "payload": {} },
     { "tag": "server.retryResourceTelemetry", "payload": {} },

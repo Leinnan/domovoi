@@ -8,17 +8,18 @@ mod device;
 mod agent_sessions;
 mod fs;
 mod git_ops;
+pub(crate) mod issues;
 pub(crate) mod orchestration;
 pub(crate) mod projects;
 mod local_servers;
-mod preview;
+pub(crate) mod preview;
 mod provider;
 mod scheduled_tasks;
 mod server;
 mod server_admin;
 pub(crate) mod shell;
 mod telemetry;
-mod source_control;
+pub(crate) mod source_control;
 mod terminal;
 mod vcs;
 
@@ -31,6 +32,8 @@ pub fn router() -> Router<ConnCtx> {
     let r = Router::new().guard(|ctx: &ConnCtx, meta, payload| {
         crate::permissions::check(&meta.tag, payload, &ctx.session.permissions).map_err(|refused| effect_rpc::Failure::fail(&refused))
     });
+    // Reading the diagnostics would otherwise trace itself (t3code's `RPC_METHODS_WITH_TRACING_DISABLED`).
+    let r = r.untraced(&["server.getTraceDiagnostics", "server.getProcessDiagnostics", "server.getProcessResourceHistory", "server.signalProcess"]);
     let r = server::register(r);
     let r = shell::register(r);
     let r = fs::register(r);
@@ -50,6 +53,7 @@ pub fn router() -> Router<ConnCtx> {
     let r = agent_sessions::register(r);
     let r = source_control::register(r);
     let r = artifacts::register(r);
+    let r = issues::register(r);
     vcs::register(r)
 }
 

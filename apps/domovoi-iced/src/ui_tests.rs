@@ -745,3 +745,175 @@ async fn a_failed_image_fetch_can_be_asked_for_again() {
     }
     handle.shutdown();
 }
+
+fn messages_after_click(app: &App, label: &str) -> Vec<Message> {
+    let mut ui = Simulator::with_size(crate::ui::fonts::settings(), Size::new(1440.0, 900.0), crate::views::view(app));
+    ui.click(label).unwrap();
+    ui.into_messages().collect()
+}
+
+#[test]
+fn required_questions_hold_submit_until_answered() {
+    let (mut app, _) = App::new();
+    app.prefs.appearance = Appearance::Dark;
+    app.vm = sample_connected_vm();
+    app.vm.thread.as_mut().unwrap().pending_requests = vec![RequestView {
+        id: "req-q".into(),
+        kind: "user_input".into(),
+        prompt: "A few questions before I start".into(),
+        questions: vec![
+            QuestionView {
+                id: "db".into(),
+                header: "Storage".into(),
+                question: "Which database should the cache use?".into(),
+                required: true,
+                options: vec![
+                    QuestionOptionView { label: "SQLite".into(), value: "sqlite".into(), description: "One file next to the binary".into() },
+                    QuestionOptionView { label: "Postgres".into(), value: "postgres".into(), description: String::new() },
+                ],
+                ..Default::default()
+            },
+            QuestionView { id: "notes".into(), question: "Anything else?".into(), allow_custom_answer: true, ..Default::default() },
+        ],
+        ..Default::default()
+    }];
+    snapshot(&app, "18-question-required-unanswered");
+
+    // Nothing answered: Submit sends nothing, and neither does Enter in the optional field.
+    let pressed = messages_after_click(&app, "Submit Answer");
+    assert!(!pressed.iter().any(|m| matches!(m, Message::QuestionSubmit { .. })), "{pressed:?}");
+    let _ = app.update(Message::QuestionCustomChanged { request_id: "req-q".into(), question_id: "notes".into(), text: "keep it small".into() });
+    let _ = app.update(Message::QuestionSubmit { request_id: "req-q".into() });
+    assert!(app.question_drafts.contains_key("req-q"), "an unanswered required question keeps the card");
+
+    // Answering it lets Submit through, which hands over the answers.
+    click(&mut app, "SQLite");
+    snapshot(&app, "19-question-required-answered");
+    let pressed = messages_after_click(&app, "Submit Answer");
+    assert!(pressed.iter().any(|m| matches!(m, Message::QuestionSubmit { request_id } if request_id == "req-q")), "{pressed:?}");
+    for m in pressed {
+        let _ = app.update(m);
+    }
+    assert!(!app.question_drafts.contains_key("req-q"));
+}
+
+#[test]
+fn plan_and_checklist_strip_and_turn_rows() {
+    let (mut app, _) = App::new();
+    app.prefs.appearance = Appearance::Dark;
+    app.vm = sample_connected_vm();
+    let para = |t: &str| MarkdownBlock { kind: "paragraph".into(), runs: vec![MarkdownRun { text: t.into(), ..Default::default() }], ..Default::default() };
+    let todo = |t: &str, s: &str| TodoView { text: t.into(), status: s.into() };
+    {
+        let t = app.vm.thread.as_mut().unwrap();
+        t.pending_requests.clear();
+        t.status = "idle".into();
+        // Long enough that the open panel scrolls instead of pushing the transcript away.
+        let mut blocks = vec![MarkdownBlock { kind: "heading".into(), level: 3, text: "Steps".into(), ..Default::default() }, para("Reconnect at once after a sleep, and keep the outbox while offline.")];
+        blocks.extend((1..=14).map(|n| MarkdownBlock { kind: "list_item".into(), ordered: true, number: n, runs: vec![MarkdownRun { text: format!("Step {n} of the reconnect work"), ..Default::default() }], ..Default::default() }));
+        t.plan = Some(PlanProgressView {
+            plan_id: "plan-1".into(),
+            label: "Plan: relay reconnects".into(),
+            blocks: Arc::new(blocks),
+            can_implement: true,
+        });
+        t.tasks = Some(TaskProgressView {
+            done: 2,
+            total: 4,
+            current: "Write the tests".into(),
+            label: "Tasks 2/4 · Write the tests".into(),
+            previous_run: true,
+            explanation: Some("From the last turn.".into()),
+            todos: Arc::new(vec![todo("Find the reconnect path", "completed"), todo("Add the probe", "completed"), todo("Write the tests", "in_progress"), todo("Update the docs", "pending")]),
+        });
+        let started = crate::app::now_ms() - 95_000;
+        t.items = vec![
+            ItemView { id: "u1".into(), kind: "user".into(), text: "Make reconnects faster after sleep.".into(), ..Default::default() },
+            ItemView { id: "c1".into(), kind: "command".into(), status: "completed".into(), verb: "Ran".into(), icon: "command".into(), title: "cargo test -p domovoi-core".into(), mono: true, exit_code: Some(0), ..Default::default() },
+            ItemView { id: "f1".into(), kind: "file_change".into(), status: "completed".into(), verb: "Edited".into(), icon: "edit".into(), title: "dashboard.html".into(), mono: true, artifact_paths: vec!["dashboard.html".into()], ..Default::default() },
+            ItemView { id: "a1".into(), kind: "assistant".into(), text: "Reconnects now start as soon as the machine wakes.".into(), run_started_ms: started, run_duration_ms: 83_000, ..Default::default() },
+            ItemView {
+                id: "cp1".into(),
+                kind: "checkpoint".into(),
+                title: "Turn 3".into(),
+                checkpoint: Some(CheckpointView { id: "cp1".into(), turn_count: 3, label: "Checkpoint · turn 3".into(), files_changed: 2, additions: 41, deletions: 7, can_revert: true, ..Default::default() }),
+                ..Default::default()
+            },
+        ];
+    }
+    snapshot(&app, "20-progress-strip-closed");
+
+    // The strip opens on the plan and the to-dos; Implement carries it out and closes it.
+    click(&mut app, "Plan: relay reconnects · Tasks 2/4 · Write the tests");
+    assert_eq!(app.progress_open.as_deref(), Some("t1"));
+    snapshot(&app, "21-progress-strip-open");
+    let pressed = messages_after_click(&app, "Implement Plan");
+    assert!(pressed.iter().any(|m| matches!(m, Message::ImplementPlan(id) if id == "plan-1")), "{pressed:?}");
+    for m in pressed {
+        let _ = app.update(m);
+    }
+    assert!(app.progress_open.is_none());
+
+    // A checkpoint's diff is asked for by its turn when the core names no source.
+    let pressed = messages_after_click(&app, "View diff");
+    assert!(pressed.iter().any(|m| matches!(m, Message::ViewDiff(s) if s == "turn:3")), "{pressed:?}");
+    // A page an edit wrote opens in the Artifacts panel.
+    let pressed = messages_after_click(&app, "Open preview");
+    assert!(pressed.iter().any(|m| matches!(m, Message::PreviewArtifactFile(p) if p == "dashboard.html")), "{pressed:?}");
+}
+
+#[test]
+fn secret_requests_take_a_hidden_value_and_links_open_in_the_browser() {
+    let (mut app, _) = App::new();
+    app.prefs.appearance = Appearance::Dark;
+    app.vm = sample_connected_vm();
+    {
+        let t = app.vm.thread.as_mut().unwrap();
+        t.pending_requests.clear();
+        t.secret_requests = vec![SecretRequestView {
+            item_id: "s1".into(),
+            label: "OpenAI API key".into(),
+            reason: "To run the integration tests against the API.".into(),
+            url: Some("https://platform.openai.com/api-keys".into()),
+            placeholder: "sk-...".into(),
+            delivery: "file".into(),
+            hint: "Stored on the server; the agent reads it from a private file, gone after 24 hours.".into(),
+            sending: false,
+        }];
+        t.links = vec![
+            WorkLinkView { kind: "pull_request".into(), label: "#42".into(), title: "Iced client".into(), url: "https://github.com/o/r/pull/42".into(), state: "open".into() },
+            WorkLinkView { kind: "issue".into(), label: "ENG-7".into(), title: "Desktop app".into(), url: "https://linear.app/o/issue/ENG-7".into(), state: String::new() },
+        ];
+    }
+    snapshot(&app, "26-secret-request-empty");
+
+    // Nothing typed: Save sends nothing.
+    let pressed = messages_after_click(&app, "Save Secret");
+    assert!(!pressed.iter().any(|m| matches!(m, Message::SecretSubmit { .. })), "{pressed:?}");
+
+    // Typed: shown as dots, and never in a message's debug output.
+    let _ = app.update(Message::SecretChanged { item_id: "s1".into(), value: crate::app::SecretText("sk-test-123".into()) });
+    snapshot(&app, "27-secret-request-typed");
+    let pressed = messages_after_click(&app, "Save Secret");
+    assert!(pressed.iter().any(|m| matches!(m, Message::SecretSubmit { item_id } if item_id == "s1")), "{pressed:?}");
+    let typed = Message::SecretChanged { item_id: "s1".into(), value: crate::app::SecretText("sk-test-123".into()) };
+    assert!(!format!("{typed:?}").contains("sk-test-123"));
+    for m in pressed {
+        let _ = app.update(m);
+    }
+    assert!(!app.secret_drafts.contains_key("s1"), "sent, then forgotten here");
+
+    // Decline goes to the core; the link to get one and the linked work open in the browser.
+    let pressed = messages_after_click(&app, "Decline");
+    assert!(pressed.iter().any(|m| matches!(m, Message::Core(e) if matches!(&**e, Event::DeclineSecret { item_id } if item_id == "s1"))), "{pressed:?}");
+    let pressed = messages_after_click(&app, "Get one");
+    assert!(pressed.iter().any(|m| matches!(m, Message::OpenUrl(u) if u == "https://platform.openai.com/api-keys")), "{pressed:?}");
+    let pressed = messages_after_click(&app, "ENG-7");
+    assert!(pressed.iter().any(|m| matches!(m, Message::OpenUrl(u) if u == "https://linear.app/o/issue/ENG-7")), "{pressed:?}");
+
+    // Sending: the buttons wait; once the card is gone, nothing typed is kept.
+    let _ = app.update(Message::SecretChanged { item_id: "s1".into(), value: crate::app::SecretText("again".into()) });
+    app.vm.thread.as_mut().unwrap().secret_requests[0].sending = true;
+    let pressed = messages_after_click(&app, "Saving…");
+    assert!(!pressed.iter().any(|m| matches!(m, Message::SecretSubmit { .. })), "{pressed:?}");
+}

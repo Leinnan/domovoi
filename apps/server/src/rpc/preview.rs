@@ -3,16 +3,18 @@
 //!
 //! The manager is ported in full: the server owns each tab's snapshot (URL,
 //! navigation status, viewport, colour scheme, zoom) and publishes `opened`,
-//! `navigated`, `resized`, `failed` and `closed` events with a revision, while
-//! the client's own browser renders the page and reports status back.
+//! `navigated`, `resized`, `failed` and `closed` events with a revision. A
+//! desktop tab's own browser renders the page and reports status back; a tab
+//! opened with `runtime: "server"` is driven by the server's headless browser
+//! (`crate::preview::browser`, t3code's `ServerBrowser`), which mirrors these
+//! events and reports the tab's status itself (`serverControlled`).
+//! `preview.reportProfiles` and `preview.clearProfile` go to that browser.
 //!
 //! Limits:
-//! - Domovoi has no server-side headless browser (t3code's `ServerBrowser`). Tabs
-//!   opened with `runtime: "server"` are recorded and announced like t3code's,
-//!   but nothing drives them, so they stay in their opening state;
-//!   `preview.clearProfile` has no server browser profile to clear and succeeds.
 //! - The manager lives for the process (like t3code's layer), so its state is a
 //!   process-wide instance rather than an `AppState` field.
+//! - No `registerBeforeClose`: a closed server tab's page is closed after the
+//!   `closed` event, not before it.
 
 use super::Never;
 use super::admin_failure::{Failure, InvalidUrlReason, UrlCause};
@@ -184,24 +186,41 @@ kept_string! {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Snapshot {
-    thread_id: String,
-    tab_id: String,
-    nav_status: NavStatus,
-    can_go_back: bool,
-    can_go_forward: bool,
-    viewport: Viewport,
+    pub thread_id: String,
+    pub tab_id: String,
+    pub nav_status: NavStatus,
+    pub can_go_back: bool,
+    pub can_go_forward: bool,
+    pub viewport: Viewport,
     #[serde(skip_serializing_if = "Option::is_none")]
-    color_scheme: Option<ColorScheme>,
+    pub color_scheme: Option<ColorScheme>,
     /// One of the zoom steps, as the number the client sent.
     #[serde(skip_serializing_if = "Option::is_none")]
-    zoom_factor: Option<Number>,
+    pub zoom_factor: Option<Number>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    profile_id: Option<String>,
+    pub profile_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    runtime: Option<Runtime>,
+    pub runtime: Option<Runtime>,
+    /// The server runs this tab in its headless browser, so clients stream it.
     #[serde(skip_serializing_if = "Option::is_none")]
-    reveal: Option<bool>,
-    updated_at: String,
+    pub headless: Option<bool>,
+    /// The agent session that opened this server tab.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub automation_owner: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reveal: Option<bool>,
+    /// An agent asked clients to show the tab (`requestReveal`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reveal_request: Option<RevealRequest>,
+    pub updated_at: String,
+}
+
+/// `revealRequest`: a new id each time an agent asks to show a tab; `force`
+/// when it asked explicitly.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct RevealRequest {
+    pub id: String,
+    pub force: bool,
 }
 
 /// What the client's browser is asked to do besides taking a tab's new settings.
@@ -210,9 +229,9 @@ pub struct Snapshot {
 pub struct ReloadRequest {
     /// Only ever `true`: a reload that was not asked for is left out.
     #[serde(skip_serializing_if = "Option::is_none")]
-    hard_reload: Option<bool>,
+    pub hard_reload: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    clear: Option<Clear>,
+    pub clear: Option<Clear>,
 }
 
 /// What happened to a tab (the member of `PreviewEvent`, named by `type`).
@@ -243,21 +262,21 @@ pub enum Change {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Event {
-    thread_id: String,
-    tab_id: String,
+    pub thread_id: String,
+    pub tab_id: String,
     created_at: String,
     /// Which server process counts the revisions.
     server_epoch: String,
     revision: u64,
     #[serde(flatten)]
-    change: Change,
+    pub change: Change,
 }
 
 /// The tabs of a thread (`PreviewListResult`), least recently changed first.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TabList {
-    sessions: Vec<Snapshot>,
+    pub sessions: Vec<Snapshot>,
     server_epoch: String,
     revision: u64,
 }
@@ -265,48 +284,50 @@ pub struct TabList {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OpenInput {
-    thread_id: String,
-    url: Option<String>,
-    viewport: Option<Viewport>,
-    profile_id: Option<String>,
-    runtime: Option<Runtime>,
-    reveal: Option<bool>,
+    pub thread_id: String,
+    pub url: Option<String>,
+    pub viewport: Option<Viewport>,
+    pub profile_id: Option<String>,
+    pub runtime: Option<Runtime>,
+    pub color_scheme: Option<ColorScheme>,
+    pub zoom_factor: Option<Number>,
+    pub reveal: Option<bool>,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResizeInput {
-    thread_id: String,
-    tab_id: String,
-    viewport: Viewport,
+    pub thread_id: String,
+    pub tab_id: String,
+    pub viewport: Viewport,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AdjustInput {
-    thread_id: String,
-    tab_id: String,
-    color_scheme: Option<ColorScheme>,
-    zoom_factor: Option<Number>,
-    hard_reload: Option<bool>,
-    clear: Option<Clear>,
+    pub thread_id: String,
+    pub tab_id: String,
+    pub color_scheme: Option<ColorScheme>,
+    pub zoom_factor: Option<Number>,
+    pub hard_reload: Option<bool>,
+    pub clear: Option<Clear>,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CloseInput {
-    thread_id: String,
-    tab_id: Option<String>,
+    pub thread_id: String,
+    pub tab_id: Option<String>,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReportStatusInput {
-    thread_id: String,
-    tab_id: String,
-    nav_status: NavStatus,
-    can_go_back: bool,
-    can_go_forward: bool,
+    pub thread_id: String,
+    pub tab_id: String,
+    pub nav_status: NavStatus,
+    pub can_go_back: bool,
+    pub can_go_forward: bool,
 }
 
 #[derive(Deserialize)]
@@ -318,7 +339,6 @@ struct ThreadOnly {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ClearProfileInput {
-    #[allow(dead_code)]
     profile_id: String,
 }
 
@@ -364,7 +384,8 @@ impl PreviewManager {
         let _ = self.events.send(event);
     }
 
-    pub fn open(&self, epoch: &str, input: OpenInput) -> Result<Snapshot, Failure> {
+    /// `open`; `automation_owner` names the agent session opening a server tab.
+    pub fn open(&self, epoch: &str, input: OpenInput, automation_owner: Option<String>) -> Result<Snapshot, Failure> {
         // Persisted client surfaces must not bind to a different tab after a restart.
         let tab_id = match input.runtime {
             Some(Runtime::Server) => format!("{}_{epoch}", self.new_tab_id()),
@@ -382,11 +403,14 @@ impl PreviewManager {
             can_go_back: false,
             can_go_forward: false,
             viewport: input.viewport.unwrap_or(Viewport::Fill),
-            color_scheme: None,
-            zoom_factor: None,
+            color_scheme: input.color_scheme,
+            zoom_factor: input.zoom_factor,
             profile_id: input.profile_id,
+            automation_owner: automation_owner.filter(|_| input.runtime == Some(Runtime::Server)),
             runtime: input.runtime,
+            headless: None,
             reveal: input.reveal,
+            reveal_request: None,
             updated_at: updated_at.clone(),
         };
         let mut state = crate::util::locked(&self.state);
@@ -420,10 +444,11 @@ impl PreviewManager {
         Ok(next)
     }
 
-    pub fn report_status(&self, epoch: &str, input: ReportStatusInput) -> Result<(), Failure> {
+    /// `reportStatus`; only the server's own browser (`server_controlled`) reports a server tab.
+    pub fn report_status(&self, epoch: &str, input: ReportStatusInput, server_controlled: bool) -> Result<(), Failure> {
         let ReportStatusInput { thread_id, tab_id, nav_status, can_go_back, can_go_forward } = input;
         self.mutate(epoch, &thread_id, &tab_id, |s, at| {
-            if s.runtime == Some(Runtime::Server) {
+            if s.runtime == Some(Runtime::Server) && !server_controlled {
                 return Err(Failure::PreviewControlRequired { tab_id: tab_id.clone() });
             }
             s.nav_status = nav_status.clone();
@@ -436,6 +461,37 @@ impl PreviewManager {
             })
         })
         .map(|_| ())
+    }
+
+    /// `markHeadless`: the server runs the tab headless, until it closes.
+    #[cfg_attr(not(feature = "preview-browser"), expect(dead_code, reason = "only the browser marks tabs"))]
+    pub fn mark_headless(&self, epoch: &str, thread_id: &str, tab_id: &str) -> Result<(), Failure> {
+        if self.snapshot(thread_id, tab_id).is_some_and(|s| s.headless == Some(true)) {
+            return Ok(());
+        }
+        self.mutate(epoch, thread_id, tab_id, |s, at| {
+            s.headless = Some(true);
+            s.updated_at = at.to_owned();
+            Ok(Change::Resized { snapshot: s.clone(), request: None })
+        })
+        .map(|_| ())
+    }
+
+    /// `requestReveal`: asks clients to show the tab.
+    #[cfg_attr(not(feature = "preview-browser"), expect(dead_code, reason = "only the browser's agents ask"))]
+    pub fn request_reveal(&self, epoch: &str, thread_id: &str, tab_id: &str, force: bool) -> Result<(), Failure> {
+        self.mutate(epoch, thread_id, tab_id, |s, at| {
+            s.reveal = Some(true);
+            s.reveal_request = Some(RevealRequest { id: crate::util::new_uuid(), force });
+            s.updated_at = at.to_owned();
+            Ok(Change::Navigated { snapshot: s.clone() })
+        })
+        .map(|_| ())
+    }
+
+    /// The tab as the manager holds it.
+    pub fn snapshot(&self, thread_id: &str, tab_id: &str) -> Option<Snapshot> {
+        crate::util::locked(&self.state).sessions.get(&(thread_id.to_owned(), tab_id.to_owned())).cloned()
     }
 
     pub fn resize(&self, epoch: &str, input: ResizeInput) -> Result<Snapshot, Failure> {
@@ -487,6 +543,11 @@ impl PreviewManager {
 
 static MANAGER: LazyLock<PreviewManager> = LazyLock::new(PreviewManager::default);
 
+/// The process's preview manager.
+pub fn manager() -> &'static PreviewManager {
+    &MANAGER
+}
+
 fn events() -> BoxStream<'static, Result<Event, Never>> {
     let mut rx = MANAGER.subscribe();
     async_stream::stream! {
@@ -502,7 +563,11 @@ fn events() -> BoxStream<'static, Result<Event, Never>> {
 }
 
 pub fn register(r: Router<ConnCtx>) -> Router<ConnCtx> {
-    r.unary("preview.open", |ctx: Arc<ConnCtx>, input: OpenInput| async move { MANAGER.open(&ctx.state.server_epoch, input) })
+    r.unary("preview.open", |ctx: Arc<ConnCtx>, input: OpenInput| async move {
+        // The server's browser must be listening before the tab is announced.
+        crate::preview::host::start(&ctx.state);
+        MANAGER.open(&ctx.state.server_epoch, input, None)
+    })
         .unary("preview.resize", |ctx: Arc<ConnCtx>, input: ResizeInput| async move {
             MANAGER.resize(&ctx.state.server_epoch, input)
         })
@@ -517,10 +582,17 @@ pub fn register(r: Router<ConnCtx>) -> Router<ConnCtx> {
             Ok::<_, Never>(MANAGER.list(&ctx.state.server_epoch, &input.thread_id))
         })
         .unary("preview.reportStatus", |ctx: Arc<ConnCtx>, input: ReportStatusInput| async move {
-            MANAGER.report_status(&ctx.state.server_epoch, input)
+            MANAGER.report_status(&ctx.state.server_epoch, input, false)
         })
-        .unary("preview.reportProfiles", |_, _: IgnoredAny| async { Ok::<_, Never>(()) })
-        .unary("preview.clearProfile", |_, _: ClearProfileInput| async { Ok::<_, Never>(()) })
+        .unary("preview.reportProfiles", |ctx: Arc<ConnCtx>, input: crate::preview::host::ProfilesReport| async move {
+            crate::preview::host::report_profiles(&ctx.state, input);
+            Ok::<_, Never>(())
+        })
+        .unary("preview.clearProfile", |ctx: Arc<ConnCtx>, input: ClearProfileInput| async move {
+            crate::preview::host::clear_profile(&ctx.state, &input.profile_id)
+                .await
+                .map_err(|cause| Failure::PreviewClearProfile { profile_id: input.profile_id, cause: super::admin_failure::Cause::of(cause) })
+        })
         .stream("subscribePreviewEvents", |_, _: IgnoredAny| events())
 }
 
@@ -565,7 +637,7 @@ mod tests {
     }
 
     fn open(m: &PreviewManager, runtime: Option<&str>) -> Snapshot {
-        m.open("epoch", sent(json!({ "threadId": "t", "url": "localhost:3000", "runtime": runtime }))).unwrap()
+        m.open("epoch", sent(json!({ "threadId": "t", "url": "localhost:3000", "runtime": runtime })), Some("agent".into())).unwrap()
     }
 
     /// The event with the time it happened at left out.
@@ -592,7 +664,7 @@ mod tests {
         let adjusted = m.adjust("epoch", sent(json!({ "threadId": "t", "tabId": "tab_1", "colorScheme": "dark", "zoomFactor": 1, "hardReload": true }))).unwrap();
         assert_eq!(adjusted.color_scheme, Some(ColorScheme::Dark));
         let failed = json!({ "_tag": "LoadFailed", "url": "http://localhost:3000/", "title": "", "code": -102, "description": "refused" });
-        m.report_status("epoch", sent(json!({ "threadId": "t", "tabId": "tab_1", "navStatus": failed, "canGoBack": true, "canGoForward": false }))).unwrap();
+        m.report_status("epoch", sent(json!({ "threadId": "t", "tabId": "tab_1", "navStatus": failed, "canGoBack": true, "canGoForward": false })), false).unwrap();
         let listed = m.list("epoch", "t");
         // The tab as the client is sent it: the sizes and the zoom step are the numbers it gave.
         let snapshot = json!({ "threadId": "t", "tabId": "tab_1", "navStatus": failed, "canGoBack": true, "canGoForward": false,
@@ -624,7 +696,16 @@ mod tests {
         let s = open(&m, Some("server"));
         assert_eq!(s.tab_id, "tab_1_epoch");
         let report = |tab: &str| sent(json!({ "threadId": "t", "tabId": tab, "navStatus": { "_tag": "Idle" }, "canGoBack": false, "canGoForward": false }));
-        assert!(matches!(m.report_status("epoch", report("tab_1_epoch")), Err(Failure::PreviewControlRequired { .. })));
+        assert!(matches!(m.report_status("epoch", report("tab_1_epoch"), false), Err(Failure::PreviewControlRequired { .. })));
+        // The server's browser reports it; an agent's tab names its owner, and is headless once marked.
+        m.report_status("epoch", report("tab_1_epoch"), true).unwrap();
+        assert_eq!(s.automation_owner.as_deref(), Some("agent"));
+        m.mark_headless("epoch", "t", "tab_1_epoch").unwrap();
+        m.mark_headless("epoch", "t", "tab_1_epoch").unwrap();
+        m.request_reveal("epoch", "t", "tab_1_epoch", true).unwrap();
+        let shown = m.snapshot("t", "tab_1_epoch").unwrap();
+        assert_eq!((shown.headless, shown.reveal, shown.reveal_request.map(|r| r.force)), (Some(true), Some(true), Some(true)));
+        assert_eq!(m.list("epoch", "t").revision, 4, "marking twice publishes once");
         let input = ResizeInput { thread_id: "t".into(), tab_id: "nope".into(), viewport: Viewport::Fill };
         assert!(matches!(m.resize("epoch", input), Err(Failure::PreviewSessionLookup { .. })));
     }
@@ -632,7 +713,8 @@ mod tests {
     #[test]
     fn what_a_newer_client_names_is_kept_as_sent() {
         let m = PreviewManager::default();
-        let s = m.open("epoch", sent(json!({ "threadId": "t", "runtime": "cloud", "viewport": null }))).unwrap();
+        let s = m.open("epoch", sent(json!({ "threadId": "t", "runtime": "cloud", "viewport": null })), Some("agent".into())).unwrap();
+        assert_eq!(s.automation_owner, None, "only a server tab has an owner");
         assert_eq!(json!(s.runtime), json!("cloud"));
         assert_eq!((&s.tab_id[..], &s.viewport), ("tab_1", &Viewport::Fill));
         let adjusted = m.adjust("epoch", sent(json!({ "threadId": "t", "tabId": "tab_1", "colorScheme": "sepia", "zoomFactor": 1.25, "clear": "storage" }))).unwrap();

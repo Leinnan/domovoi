@@ -80,6 +80,15 @@ pub enum RelayInstallReason {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PeerLinkReason {
+    Unreachable,
+    NotAT3Environment,
+    Incompatible,
+    #[serde(rename = "self")]
+    OwnEnvironment,
+    PairingRejected,
+    Expired,
+    UnknownLink,
+    Storage,
     Disabled,
 }
 
@@ -113,6 +122,8 @@ pub enum SecretRequestReason {
     AgentStopped,
     RecordFailed,
     StoreFailed,
+    /// A `reference` answer: Domovoi has no secret provider to read it from.
+    ReferenceUnreadable,
 }
 
 /// Why an MCP App's request was not carried out.
@@ -166,6 +177,11 @@ pub enum Failure {
     #[serde(rename = "PreviewControlRequiredError", rename_all = "camelCase")]
     PreviewControlRequired { tab_id: String },
 
+    /// t3code `PreviewClearProfileError`.
+    #[error("The environment could not delete this browser profile's data.")]
+    #[serde(rename = "PreviewClearProfileError", rename_all = "camelCase")]
+    PreviewClearProfile { profile_id: String, cause: Cause },
+
     #[error("the local server was not stopped ({reason:?})")]
     #[serde(rename = "PreviewStopLocalServerError")]
     StopLocalServer {
@@ -201,7 +217,13 @@ pub enum Failure {
 
     #[error("{message}")]
     #[serde(rename = "PeerLinkError")]
-    PeerLink { reason: PeerLinkReason, message: &'static str },
+    PeerLink {
+        reason: PeerLinkReason,
+        message: String,
+        /// The environment that answered at the addresses of the one the user picked.
+        #[serde(rename = "answeredAs", skip_serializing_if = "Option::is_none")]
+        answered_as: Option<String>,
+    },
 
     #[error("the link request was not answered ({reason:?})")]
     #[serde(rename = "PeerLinkRequestError")]
@@ -335,8 +357,16 @@ mod tests {
             );
         }
         assert_eq!(
-            json!(Failure::PeerLink { reason: PeerLinkReason::Disabled, message: "Off." }),
+            json!(Failure::PeerLink { reason: PeerLinkReason::Disabled, message: "Off.".into(), answered_as: None }),
             json!({ "_tag": "PeerLinkError", "reason": "disabled", "message": "Off." })
+        );
+        assert_eq!(
+            json!([PeerLinkReason::NotAT3Environment, PeerLinkReason::OwnEnvironment, PeerLinkReason::PairingRejected, PeerLinkReason::UnknownLink]),
+            json!(["not_a_t3_environment", "self", "pairing_rejected", "unknown_link"])
+        );
+        assert_eq!(
+            json!(Failure::PeerLink { reason: PeerLinkReason::Unreachable, message: "m".into(), answered_as: Some("Other".into()) }),
+            json!({ "_tag": "PeerLinkError", "reason": "unreachable", "message": "m", "answeredAs": "Other" })
         );
         let reasons = [
             (PeerLinkRequestReason::LoadFailed, "load_failed"), (PeerLinkRequestReason::NotFound, "not_found"),

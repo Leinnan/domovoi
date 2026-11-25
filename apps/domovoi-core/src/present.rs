@@ -479,9 +479,16 @@ fn item_view(item: &TurnItem, message: Option<&ConversationMessage>, checkpoint:
             v.text = i.summary.clone().unwrap_or_default();
             v.collapsed = true;
         }
+        // The card to answer it is `ThreadPageView::secret_requests`; the row says how it went.
         TurnItem::SecretRequest(i) => {
+            use domovoi_model::typed::SecretRequestStatus as Asked;
             v.kind = "notice".into();
-            v.title = format!("The agent asks for a secret: {}", i.label);
+            v.title = match &i.secret_status {
+                Asked::Pending | Asked::Other(_) => format!("The agent asks for a secret: {}", i.label),
+                Asked::Saved => format!("Secret saved: {}", i.label),
+                Asked::Declined => format!("Secret declined: {}", i.label),
+                Asked::Cancelled => format!("Secret no longer needed: {}", i.label),
+            };
             v.text = i.reason.clone();
         }
         TurnItem::LinkRequest(i) => {
@@ -497,6 +504,58 @@ fn item_view(item: &TurnItem, message: Option<&ConversationMessage>, checkpoint:
         | TurnItem::ThreadCreated(_) => notice_row(&mut v, item, ""),
     }
     v
+}
+
+/// The thread's secret requests that wait for an answer, oldest first.
+fn secret_requests(model: &Model, thread: &domovoi_model::typed::Thread) -> Vec<SecretRequestView> {
+    thread
+        .visible_turn_item_refs()
+        .into_iter()
+        .filter_map(|item| match item {
+            TurnItem::SecretRequest(asked) if asked.secret_status == domovoi_model::typed::SecretRequestStatus::Pending => Some((item.id(), asked)),
+            _ => None,
+        })
+        .map(|(id, asked)| {
+            let file = asked.delivery.as_ref().is_some_and(|d| *d == domovoi_model::typed::SecretDelivery::File);
+            SecretRequestView {
+                item_id: id.as_str().to_owned(),
+                label: asked.label.clone(),
+                reason: asked.reason.clone(),
+                url: asked.url.clone().filter(|url| url.starts_with("https://") || url.starts_with("http://")),
+                placeholder: asked.placeholder.clone().unwrap_or_default(),
+                delivery: asked.delivery.as_ref().map(|d| d.as_str().to_owned()).unwrap_or_default(),
+                hint: if file {
+                    "Stored on the server; the agent reads it from a private file, gone after 24 hours.".into()
+                } else {
+                    "Stored on the server; the agent gets a reference to it, never the value.".into()
+                },
+                sending: model.secrets_answering.contains(id.as_str()),
+            }
+        })
+        .collect()
+}
+
+/// The pull requests (without the stack's dismissed ones) and issues linked to a thread.
+fn work_links(shell: &ThreadShell) -> Vec<WorkLinkView> {
+    use domovoi_model::typed::PullRequestLinkSource;
+    let pull_requests = shell.pull_requests.iter().flatten().filter(|link| link.source != PullRequestLinkSource::StackDismissed).map(|link| {
+        let snapshot = link.snapshot.as_ref();
+        WorkLinkView {
+            kind: "pull_request".into(),
+            label: format!("#{}", link.number),
+            title: snapshot.map(|s| s.title.clone()).unwrap_or_default(),
+            url: link.url.clone(),
+            state: snapshot.map(|s| if s.is_draft && s.state.as_str() == "open" { "draft" } else { s.state.as_str() }).unwrap_or_default().to_owned(),
+        }
+    });
+    let issues = shell.issues.iter().flatten().map(|issue| WorkLinkView {
+        kind: "issue".into(),
+        label: if issue.display_key.is_empty() { issue.key.key.clone() } else { issue.display_key.clone() },
+        title: issue.title.clone(),
+        url: issue.url.clone(),
+        state: String::new(),
+    });
+    pull_requests.chain(issues).collect()
 }
 
 /// How long a finished step took (0: unknown, or still under way).
@@ -816,6 +875,7 @@ fn thread_page_body(model: &Model) -> Option<(ThreadPageView, Vec<crate::artifac
             page.working_activity = Some(WorkingActivityView { kind: Some("starting".into()), step_item_id: None });
         }
     }
+    page.links = shell.map(work_links).unwrap_or_default();
     page.parent = shell.and_then(|shell| Some((shell, shell.lineage.parent_thread_id.as_ref()?))).map(|(shell, parent)| ThreadLinkView {
         thread_id: parent.as_str().to_owned(),
         title: model.thread_shell(parent.as_str()).map(|t| t.title.clone()).filter(|t| !t.is_empty()).unwrap_or_else(|| "Earlier thread".into()),
@@ -1035,6 +1095,7 @@ fn thread_page_body(model: &Model) -> Option<(ThreadPageView, Vec<crate::artifac
             RequestView { id: r.id.as_str().to_owned(), kind: r.kind.as_str().to_owned(), prompt: prompt.unwrap_or(asked).to_owned(), detail: None, questions: asks, files, session_label }
         })
         .collect();
+    page.secret_requests = secret_requests(model, thread);
     let finished = thread.runs.iter().any(|r| match r.status {
         RunStatus::Completed | RunStatus::Failed | RunStatus::Interrupted => true,
         RunStatus::Cancelled => r.started_at.is_some(),

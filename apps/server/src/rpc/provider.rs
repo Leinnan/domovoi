@@ -11,8 +11,9 @@
 //! - managed Codex installation (a download into the server home) is not
 //!   implemented: subscribing shows an idle state, starting it fails;
 //! - the ChatGPT handoff (an OAuth flow against ChatGPT) is refused;
-//! - reset credits are never offered (Domovoi's snapshots carry no usage limits),
-//!   so consuming one answers `noCredit`.
+//! - reset credits are never offered: the usage limits snapshots carry
+//!   (`crate::usage_limits`) never name banked resets, so consuming one
+//!   answers `noCredit`; usage limit sources are not supported.
 
 #![expect(clippy::disallowed_types, reason = "a provider instance's `config`: the driver's own settings, which the schema leaves open")]
 

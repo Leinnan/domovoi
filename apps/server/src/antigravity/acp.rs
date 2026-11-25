@@ -561,6 +561,20 @@ mod tests {
         assert!(read(work.join("out/missing/x"), json!({})).is_err());
         assert!(read(work.join("bin"), json!({})).unwrap_err().1.contains("binary"));
         assert_eq!(read(work.join("nope.txt"), json!({})).unwrap_err().0, -32002);
+        // Paths that only look as if they were inside.
+        assert!(read(work.join("../o/secret.txt"), json!({})).unwrap_err().1.contains("outside"), "a `..` out");
+        assert!(read(work.join("missing/../../o/secret.txt"), json!({})).unwrap_err().1.contains("outside"), "a `..` past a missing folder");
+        std::fs::create_dir_all(dir.join("w2")).unwrap();
+        std::fs::write(dir.join("w2/a.txt"), "no").unwrap();
+        assert!(read(dir.join("w2/a.txt"), json!({})).unwrap_err().1.contains("outside"), "a sibling whose name starts with the root's");
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(dir.join("gone"), work.join("dangling")).unwrap();
+            assert!(read(work.join("dangling/x"), json!({})).unwrap_err().1.contains("outside"), "a dangling link is not walked past");
+            std::os::unix::fs::symlink(work.join("a.txt"), work.join("inner")).unwrap();
+            assert_eq!(read(work.join("inner"), json!({})).unwrap()["content"], "one\ntwo\nthree", "a link that stays inside");
+        }
+        assert!(read(PathBuf::from("relative/a.txt"), json!({})).unwrap_err().1.contains("outside"), "relative to the server's folder, not the thread's");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

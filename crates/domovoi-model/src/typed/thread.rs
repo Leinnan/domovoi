@@ -31,6 +31,9 @@ pub struct AppThread {
     pub linked_pull_request: Option<Option<LinkedPullRequest>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pull_requests: Option<Vec<PullRequestLink>>,
+    /// Issues linked to the thread; absent from servers that predate linking.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub issues: Option<Vec<super::issue::ThreadIssueLink>>,
     #[serde(default, deserialize_with = "double_option", skip_serializing_if = "Option::is_none")]
     pub branch_pull_request: Option<Option<LinkedPullRequest>>,
     pub active_provider_thread_id: Option<ProviderThreadId>,

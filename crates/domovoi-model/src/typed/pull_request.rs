@@ -111,6 +111,8 @@ pub struct PullRequestSnapshot {
     pub checks_state: Option<Option<PullRequestChecksState>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mergeability: Option<PullRequestMergeability>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rebase_required: Option<bool>,
 }
 
 /// The account that opened a pull request.
@@ -171,6 +173,8 @@ pub struct PullRequestWatch {
     pub remarks_through: Timestamp,
     pub remark_ids: Vec<String>,
     pub conflicting: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rebase_required: Option<bool>,
     #[serde(default, deserialize_with = "double_option", skip_serializing_if = "Option::is_none")]
     pub merge_queue_removal_id: Option<Option<String>>,
     pub wakes: u64,
@@ -180,6 +184,18 @@ pub struct PullRequestWatch {
     pub checks_awaited_since: Option<Option<Timestamp>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub checks_pending: Option<bool>,
+    /// How long the watch holds its thread: `merged`, or (absent) until every check finished.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub until: Option<PullRequestWatchUntil>,
+}
+
+string_enum! {
+    /// How long a pull request watch holds its thread (`merged` also ends
+    /// when the pull request closes or the agent stops watching it).
+    PullRequestWatchUntil {
+        Checks = "checks",
+        Merged = "merged",
+    }
 }
 
 string_enum! {

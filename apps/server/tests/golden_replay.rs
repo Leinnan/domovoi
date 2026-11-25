@@ -246,7 +246,7 @@ async fn replay(transport: Transport) {
     let again = http.post(format!("{base}/api/auth/browser-session")).json(&json!({ "credential": server.pairing })).send().await.unwrap();
     assert_eq!(again.status(), 401);
 
-    let mut req = format!("ws://127.0.0.1:{}/ws?frameParts=1", server.port).into_client_request().unwrap();
+    let mut req = format!("ws://127.0.0.1:{}/ws?orchestrationProtocol=2&frameParts=1", server.port).into_client_request().unwrap();
     req.headers_mut().insert("cookie", cookie.parse().unwrap());
     let (mut ws, _) = tokio_tungstenite::connect_async(req).await.expect("authenticated websocket");
 

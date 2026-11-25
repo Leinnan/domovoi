@@ -5,7 +5,7 @@
   "cases": [
     {"tag": "pullRequests.list", "payload": {"state": "open"}, "note": "no project on any host"},
     {"tag": "projects.mutate", "payload": {"type": "project.create", "commandId": "create-gl-one", "projectId": "gl-one", "title": "GitLab one", "workspaceRoot": "$DIR/repos/gl-one", "createWorkspaceRootIfMissing": false, "defaultModelSelection": null}},
-    {"tag": "pullRequests.list", "payload": {"state": "open"}, "note": "only a host that cannot be read"},
+    {"tag": "pullRequests.list", "payload": {"state": "open"}, "expect": "failure", "error": "PullRequestUnavailableError", "note": "only a GitLab host, without glab: cli-missing, with the listing"},
     {"tag": "pullRequests.listStats", "payload": {"refs": [{"projectId": "$PROJECT", "repository": "acme/calc", "number": 7}]}},
     {"tag": "pullRequests.filterOptions", "payload": {"kind": "authors"}},
     {"tag": "pullRequests.summary", "payload": {"projectId": "$PROJECT", "repository": "acme/calc", "number": 7, "host": "github.com"}, "note": "github.com is read without a checkout"},

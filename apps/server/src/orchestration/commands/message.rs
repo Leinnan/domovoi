@@ -112,7 +112,7 @@ fn run_ordinal_of(run_id: &str) -> u64 {
 }
 
 /// The provider turn `run` is in, if it is running one.
-fn running_provider_turn<'a>(outline: &'a Outline, run: &Run) -> Option<&'a ProviderTurn> {
+pub(super) fn running_provider_turn<'a>(outline: &'a Outline, run: &Run) -> Option<&'a ProviderTurn> {
     let attempt = outline.attempts.iter().find(|attempt| Some(&attempt.id) == run.active_attempt_id.as_ref());
     let of_attempt = attempt.and_then(|attempt| attempt.provider_turn_id.as_ref());
     outline

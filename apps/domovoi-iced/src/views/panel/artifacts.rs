@@ -1,7 +1,11 @@
 //! Artifacts side panel: native Iced previews for SVG, Mermaid, Markdown, and
-//! syntax-highlighted Code, plus one-click browser launch for interactive HTML/React
+//! syntax-highlighted Code, plus one-click launch of interactive HTML/React
 //! previews, version selector, quick-iterate prompt bar, and the workspace file an
 //! HTML artifact was written to (shown with the Files panel's preview renderer).
+//!
+//! Interactive previews open in the system browser, or with the `webview`
+//! feature in a preview window of the app's own (`crate::webview`, which says
+//! why that is a window of its own and not part of this panel).
 
 use domovoi_core::Event;
 use domovoi_core::view::{ActiveArtifactView, FilePreviewView};
@@ -15,6 +19,9 @@ use crate::ui::tokens::*;
 use crate::ui::widgets as w;
 use crate::views::markdown;
 use crate::views::panel::files;
+
+/// The button that opens an interactive preview.
+const OPEN_LABEL: &str = if cfg!(feature = "webview") { "Open Preview" } else { "Open in Browser" };
 
 fn core(e: Event) -> Message {
     Message::Core(Box::new(e))
@@ -76,6 +83,9 @@ pub fn view(app: &App) -> Element<'_, Message> {
         .align_y(Alignment::Center);
         if let Some(open) = open_file(&tid, item.path.as_deref()) {
             entry = entry.push(w::icon_button(Icon::FileText, "View workspace file", Some(open)));
+        }
+        if !item.item_id.is_empty() {
+            entry = entry.push(w::icon_button(Icon::MessageSquare, "Show in thread", Some(Message::ShowInThread(item.item_id.clone()))));
         }
         col = col.push(entry);
     }
@@ -164,12 +174,17 @@ fn active_artifact_view<'a>(app: &'a App, art: &'a ActiveArtifactView) -> Elemen
     if let Some(open) = open_file(tid, art.path.as_deref()) {
         subbar = subbar.push(w::icon_button(Icon::FileText, "View workspace file", Some(open)));
     }
+    // The message that made the version shown, else the artifact's own.
+    let from = art.versions.iter().find(|v| v.version == art.version && !v.item_id.is_empty()).map_or(art.item_id.as_str(), |v| v.item_id.as_str());
+    if !from.is_empty() {
+        subbar = subbar.push(w::icon_button(Icon::MessageSquare, "Show in thread", Some(Message::ShowInThread(from.to_owned()))));
+    }
     if let Some(url) = art.preview_url.as_ref().or(art.hosted_url.as_ref()) {
         subbar = subbar.push(w::icon_label_button(
             Icon::ExternalLink,
-            "Open in Browser",
+            OPEN_LABEL,
             w::Kind::Secondary,
-            Some(Message::OpenUrl(url.clone())),
+            Some(Message::OpenPreview { url: url.clone(), title: art.title.clone() }),
         ));
     }
     subbar = subbar.push(w::icon_button(
@@ -258,7 +273,14 @@ fn native_preview<'a>(app: &'a App, art: &'a ActiveArtifactView) -> Element<'a, 
                     w::themed_icon(markdown::artifact_kind_icon(&art.kind), ICON_LARGE, |c| c.accent),
                     column![
                         text(format!("{} preview", markdown::artifact_kind_label(&art.kind))).size(TEXT_UI).font(fonts::SEMIBOLD),
-                        w::muted("Interactive HTML/React artifacts open cleanly in your system browser; source is shown below.", TEXT_SMALL),
+                        w::muted(
+                            if cfg!(feature = "webview") {
+                                "Interactive HTML/React artifacts open in a preview window; source is shown below."
+                            } else {
+                                "Interactive HTML/React artifacts open cleanly in your system browser; source is shown below."
+                            },
+                            TEXT_SMALL,
+                        ),
                     ]
                     .spacing(XXS)
                     .width(Length::Fill),
@@ -269,9 +291,9 @@ fn native_preview<'a>(app: &'a App, art: &'a ActiveArtifactView) -> Element<'a, 
             if let Some(url) = open_url {
                 top = top.push(w::icon_label_button(
                     Icon::ExternalLink,
-                    "Open Interactive Preview in Browser",
+                    if cfg!(feature = "webview") { "Open Interactive Preview" } else { "Open Interactive Preview in Browser" },
                     w::Kind::Primary,
-                    Some(Message::OpenUrl(url)),
+                    Some(Message::OpenPreview { url, title: art.title.clone() }),
                 ));
             }
             w::scroll(

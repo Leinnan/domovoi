@@ -1024,6 +1024,9 @@
    "tag": "subscribeServerConfig",
    "payload": {},
    "expect": "chunk"
-  }
- ]
+  },
+    { "tag": "server.updateSettings", "payload": { "patch": { "observability": { "otlpTracesUrl": "http://127.0.0.1:9/v1/traces" } } }, "note": "spans are exported there too (nothing listens: the export is dropped)" },
+    { "tag": "server.getConfig", "payload": {}, "note": "observability: local tracing on, OTLP traces from the settings" },
+    { "tag": "server.updateSettings", "payload": { "patch": { "observability": { "otlpTracesUrl": "" } } } }
+  ]
 }

@@ -849,20 +849,18 @@ struct StepGroup: View, @MainActor Equatable {
 struct GroupImageStrip: View {
     let images: [ImageView]
     @State private var gallery: ImageGallery?
-    @State private var notice: ImageNotice?
     @Environment(\.showImages) private var showImages
 
     var body: some View {
         HStack(spacing: Space.xs) {
             ForEach(Array(images.enumerated()), id: \.offset) { i, image in
-                ImageTile(image: image, side: 48, notice: $notice) {
+                ImageTile(image: image, side: 48) {
                     let shown = ImageGallery(images: images, start: i)
                     if let showImages { showImages(shown) } else { gallery = shown }
                 }
                 .id(image.url)
             }
         }
-        .imageNotice($notice)
         .imageGallery($gallery)
     }
 }
@@ -945,7 +943,6 @@ struct MessageImages: View {
     /// The side of one image alone (several show smaller).
     var single: CGFloat = 180
     @State private var gallery: ImageGallery?
-    @State private var notice: ImageNotice?
     @Environment(\.showImages) private var showImages
 
     /// The most tiles a row shows.
@@ -956,15 +953,21 @@ struct MessageImages: View {
         let more = images.count - tiles.count
         HStack(spacing: Space.s) {
             ForEach(Array(tiles.enumerated()), id: \.offset) { i, image in
-                ImageTile(image: image, side: images.count == 1 ? single : 96, more: i == tiles.count - 1 ? more : 0, notice: $notice) {
+                ImageTile(image: image, side: images.count == 1 ? single : 96, more: i == tiles.count - 1 ? more : 0) {
                     let shown = ImageGallery(images: images, start: i)
                     if let showImages { showImages(shown) } else { gallery = shown }
                 }
                 .id(image.url)
             }
         }
-        .imageNotice($notice)
         .imageGallery($gallery)
+    }
+}
+
+extension ItemView {
+    /// The HTML files a change wrote, which `OpenArtifactFile` reads from the workspace.
+    var htmlArtifactPaths: [String] {
+        self.artifactPaths.filter { ["html", "htm"].contains(($0 as NSString).pathExtension.lowercased()) }
     }
 }
 
@@ -1059,6 +1062,16 @@ struct ItemRow: View, @MainActor Equatable {
         case "reasoning":
             Button { Platform.copy(item.text) } label: { Label("Copy Thinking", systemImage: "doc.on.doc") }
         case "file_change":
+            // The file as it is in the workspace now, in the Artifacts panel.
+            let pages = item.htmlArtifactPaths
+            ForEach(pages, id: \.self) { path in
+                Button {
+                    actions.send(.openArtifactFile(threadId: coreThreadId, path: path))
+                    actions.send(.showPanel(tab: "artifacts"))
+                } label: {
+                    Label(pages.count == 1 ? "Open Preview" : "Open Preview of \((path as NSString).lastPathComponent)", systemImage: "safari")
+                }
+            }
             Button { Platform.copy(item.diff?.path ?? item.title) } label: { Label("Copy Path", systemImage: "doc.on.doc") }
             if let diff = item.diff {
                 Button { Platform.copy(diff.hunks.flatMap(\.lines).map(\.text).joined(separator: "\n")) } label: { Label("Copy Changed Lines", systemImage: "doc.on.clipboard") }
@@ -1379,12 +1392,28 @@ struct StepRow: View {
                 .buttonStyle(.borderless)
                 .fixedSize()
             }
-            if !item.badge.isEmpty {
+            // The exit badge says "exit 101" itself.
+            if !item.badge.isEmpty, item.badge != exitCode.map({ "exit \($0)" }) {
                 Text(item.badge)
                     .font(TypeRole.meta.monospacedDigit())
                     .foregroundStyle(item.badgeTone == "failed" ? AnyShapeStyle(Tint.danger) : AnyShapeStyle(.secondary))
                     .lineLimit(1)
                     .fixedSize()
+            }
+            // A quiet check for success (as on Android and desktop); a pill only when it failed.
+            if exitCode == 0 {
+                Image(systemName: "checkmark")
+                    .font(TypeRole.meta)
+                    .foregroundStyle(.secondary)
+                    .help("Exited successfully")
+                    .accessibilityLabel("Exited successfully")
+            } else if let exitCode {
+                Text("exit \(exitCode)")
+                    .monospacedDigit()
+                    .foregroundStyle(Tint.danger)
+                    .badgeCapsule(tint: Tint.danger)
+                    .fixedSize()
+                    .help("Exited with code \(exitCode)")
             }
             StatusDot(status: item.status)
         }
@@ -1490,6 +1519,11 @@ struct StepRow: View {
                     .buttonStyle(.borderless)
             }
         }
+    }
+
+    /// A finished command's exit code.
+    private var exitCode: Int64? {
+        item.kind == "command" && item.status != "running" ? item.exitCode : nil
     }
 
     private var iconTint: Color {

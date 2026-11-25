@@ -3,6 +3,9 @@
 //! its endpoint id, which clients dial, survives restarts. Settings live in
 //! `<home>/remote.json`, apart from t3code's settings schema.
 //!
+//! Under a managed policy whose `limits.clients` leaves out `remote`, the
+//! endpoint never starts (`crate::policy`).
+//!
 //! Pairing links look like `domovoi://connect?ticket=…&code=…&name=…`: an iroh
 //! ticket (or bare endpoint id), a one-time pairing code and a label.
 
@@ -64,6 +67,9 @@ pub enum RemoteError {
     Start(String),
     #[error("saving remote.json: {0}")]
     Save(String),
+    /// The managed policy allows no remote clients (`crate::policy`).
+    #[error("{0}")]
+    Refused(String),
 }
 
 pub struct Remote {
@@ -156,6 +162,13 @@ impl Remote {
     }
 
     async fn start_locked(self: &Arc<Self>, router: axum::Router) -> Result<(), RemoteError> {
+        let policy = crate::policy::current();
+        if !policy.allows_remote_clients() {
+            let refused = policy.refuse_remote_clients(Some("so remote access over iroh does not start".into())).to_string();
+            tracing::warn!("Remote access: {refused}");
+            self.phase.send_replace(Phase::Failed(refused.clone()));
+            return Err(RemoteError::Refused(refused));
+        }
         let settings = self.settings();
         let network = server_network(&settings).map_err(RemoteError::InvalidRelay)?;
         self.halt().await;
@@ -438,10 +451,8 @@ pub fn terminal_qr(text: &str, dark_background: bool) -> Option<String> {
 
 /// Reads a 32-byte key (hex) or creates one, readable only by the owner.
 pub fn load_or_create_key(path: &Path) -> std::io::Result<SecretKey> {
-    if let Ok(hex) = std::fs::read_to_string(path)
-        && let Some(bytes) = from_hex(hex.trim())
-    {
-        return Ok(SecretKey::from_bytes(&bytes));
+    if let Some(key) = read_key(path) {
+        return Ok(key);
     }
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
@@ -450,6 +461,12 @@ pub fn load_or_create_key(path: &Path) -> std::io::Result<SecretKey> {
     let hex: String = key.to_bytes().iter().map(|b| format!("{b:02x}")).collect();
     write_private(path, hex.as_bytes())?;
     Ok(key)
+}
+
+/// The key at `path`, if one is there and well formed.
+pub fn read_key(path: &Path) -> Option<SecretKey> {
+    let hex = std::fs::read_to_string(path).ok()?;
+    from_hex(hex.trim()).map(|bytes| SecretKey::from_bytes(&bytes))
 }
 
 fn from_hex(s: &str) -> Option<[u8; 32]> {

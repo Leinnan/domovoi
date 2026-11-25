@@ -4,8 +4,15 @@
 //!
 //! Differences from t3code:
 //! - webhook deliveries (`crate::webhooks`) have no T3 Connect relay;
-//! - no managed policy (`blockedByPolicy`, runtime-mode ceilings), no scratch
-//!   projects and no agent secret requests (`secretRef` is refused).
+//! - no runtime-mode ceilings (the managed policy refuses `maxRuntimeMode`)
+//!   and no scratch projects.
+//!
+//! Under a managed policy with `limits.webhookTasks: false` (`crate::policy`),
+//! webhook tasks stay stored but carry `blockedByPolicy`, cannot be saved or
+//! switched on enabled, and their URLs answer 403 `blocked_by_policy`.
+//!
+//! A webhook's `signature.secretRef` (from the agent tool `request_secret`)
+//! is spent by the save that names it (`crate::secrets::requests::consume`).
 //!
 //! A fresh-session run sends `freshContext`: the occurrence starts a provider
 //! session of its own, a side conversation the thread's own continues past.
@@ -21,7 +28,7 @@ use crate::state::SharedState;
 use crate::store::Store;
 use jiff::{SignedDuration, Timestamp, ToSpan, Zoned, tz::TimeZone};
 use rusqlite::{OptionalExtension, Row, params};
-use serde::de::{DeserializeOwned, Error as _, IgnoredAny};
+use serde::de::{DeserializeOwned, Error as _};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -178,6 +185,11 @@ impl ScheduledTaskError {
     }
 }
 
+/// Why the managed policy keeps a task of `schedule` from running (`blockedByPolicy`).
+fn policy_block(schedule: &ScheduledTaskSchedule) -> Option<String> {
+    matches!(schedule, ScheduledTaskSchedule::Webhook(_)).then(|| crate::policy::current().webhook_block()).flatten()
+}
+
 pub fn task_error(message: &str, task_id: Option<&str>) -> ScheduledTaskError {
     ScheduledTaskError { message: message.to_owned(), task_id: task_id.map(str::to_owned), cause: None }
 }
@@ -298,9 +310,9 @@ struct WebhookSignatureUpsert {
     /// Left out: the stored secret.
     #[serde(default, deserialize_with = "lenient")]
     secret: Option<String>,
-    /// A secret the user entered for an agent, which Domovoi has no way to ask for.
-    #[serde(default)]
-    secret_ref: Option<IgnoredAny>,
+    /// A secret the user entered for an agent (`request_secret`), spent by this save.
+    #[serde(default, deserialize_with = "lenient")]
+    secret_ref: Option<String>,
 }
 
 // ---- storage ----
@@ -334,6 +346,7 @@ fn task_from_row(r: &Row<'_>) -> rusqlite::Result<StoredTask> {
     let id = text(0)?;
     let schedule_json = text(4)?;
     let schedule: ScheduledTaskSchedule = json_column(r, 4)?;
+    let blocked_by_policy = policy_block(&schedule);
     let token: Option<String> = r.get(21)?;
     let secret: Option<String> = r.get(22)?;
     let webhook = match (&schedule, token) {
@@ -366,7 +379,7 @@ fn task_from_row(r: &Row<'_>) -> rusqlite::Result<StoredTask> {
         last_run_error: r.get(19)?,
         run_count: u64::try_from(r.get::<_, i64>(20)?).unwrap_or(0),
         webhook,
-        blocked_by_policy: None,
+        blocked_by_policy,
         id: id.into(),
     };
     Ok(StoredTask { task, schedule_json })
@@ -480,6 +493,7 @@ impl Draft {
     /// The task as saved, for a save whose row is gone again before it is
     /// read back; `None` for a draft the table would have refused.
     fn into_task(self) -> Option<ScheduledTask> {
+        let blocked_by_policy = policy_block(&self.schedule);
         Some(ScheduledTask {
             id: self.id.into(),
             title: self.title?,
@@ -502,8 +516,8 @@ impl Draft {
             last_run_status: self.last_run_status,
             last_run_error: self.last_run_error,
             run_count: self.run_count,
+            blocked_by_policy,
             webhook: None,
-            blocked_by_policy: None,
         })
     }
 }
@@ -685,14 +699,24 @@ pub fn upsert(store: &Store, input: UpsertInput, now: &Zoned) -> Result<Schedule
         }
     }
     let enabled = input.enabled == Some(true);
+    // A webhook task the policy blocks can still be saved while it is off.
+    if let (UpsertSchedule::Webhook(_), true, Some(block)) = (&input.schedule, enabled, crate::policy::current().webhook_block()) {
+        return Err(task_error(&block, existing.is_some().then_some(id.as_str())));
+    }
     let (schedule, webhook) = match input.schedule {
         UpsertSchedule::Webhook(sent) => {
             let creds = if existing.is_some() { webhook_credentials(store, &id)? } else { None };
             let (old_token, old_secret) = creds.unwrap_or((None, None));
-            if sent.signature.as_ref().is_some_and(|s| s.secret_ref.is_some()) {
-                return Err(task_error("That secret request is no longer available. Ask for the secret again.", Some(&id)));
-            }
-            let provided = sent.signature.as_ref().and_then(|s| s.secret.clone());
+            let spent = match sent.signature.as_ref().and_then(|s| s.secret_ref.as_deref()) {
+                None => None,
+                Some(secret_ref) => {
+                    let gone = || task_error("That secret request is no longer available. Ask for the secret again.", Some(&id));
+                    let userdata = crate::state::STATE.get().map(|state| state.paths.userdata.clone()).ok_or_else(gone)?;
+                    let value = crate::secrets::requests::consume(&userdata, secret_ref, &project_id).map_err(|refused| task_error(refused.message(), Some(&id)))?;
+                    Some(value)
+                }
+            };
+            let provided = spent.or_else(|| sent.signature.as_ref().and_then(|s| s.secret.clone()));
             let has_signature = sent.signature.is_some();
             let secret = if has_signature { provided.clone().or(old_secret) } else { None };
             if has_signature && secret.is_none() {
@@ -763,6 +787,10 @@ pub fn set_enabled(store: &Store, id: &str, enabled: bool, now: &Zoned) -> Resul
     let existing = load(store, id)?;
     if existing.enabled == enabled {
         return Ok((existing, false));
+    }
+    // A webhook task the policy blocks can still be edited while it is off.
+    if let Some(block) = existing.blocked_by_policy.as_deref().filter(|_| enabled) {
+        return Err(task_error(block, Some(id)));
     }
     let next = next_run_at(enabled, &existing.schedule, now);
     if enabled && matches!(existing.schedule, ScheduledTaskSchedule::Once(_)) && next.is_none() {

@@ -202,6 +202,7 @@ impl Thread {
             worktree_path: thread.worktree_path.clone(),
             linked_pull_request: None,
             pull_requests: Some(thread.pull_requests.clone().unwrap_or_default()),
+            issues: thread.issues.clone(),
             branch_pull_request: None,
             lineage: thread.lineage.clone(),
             forked_from: thread.forked_from.clone(),

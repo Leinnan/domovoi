@@ -26,10 +26,20 @@ extension EnvironmentValues {
 extension View {
     /// Shows a gallery full screen on iPhone and iPad, as a sheet on the Mac.
     func imageGallery(_ gallery: Binding<ImageGallery?>) -> some View {
+        modifier(ImageGalleryPresenter(gallery: gallery))
+    }
+}
+
+private struct ImageGalleryPresenter: ViewModifier {
+    @Binding var gallery: ImageGallery?
+    /// Handed on: the viewer shows what Copy and Save did itself.
+    @Environment(\.notice) private var notice
+
+    func body(content: Content) -> some View {
         #if os(iOS)
-        fullScreenCover(item: gallery) { ImageGalleryView(gallery: $0) }
+        content.fullScreenCover(item: $gallery) { ImageGalleryView(gallery: $0).environment(\.notice, notice) }
         #else
-        sheet(item: gallery) { ImageGalleryView(gallery: $0).frame(minWidth: 640, minHeight: 520) }
+        content.sheet(item: $gallery) { ImageGalleryView(gallery: $0).frame(minWidth: 640, minHeight: 520).environment(\.notice, notice) }
         #endif
     }
 }
@@ -49,18 +59,16 @@ struct ImageTile: View {
     /// More images than the row shows: "+N" over this one.
     var more = 0
     let open: () -> Void
-    @Binding var notice: ImageNotice?
     @State private var thumbnail: PlatformImage?
     @State private var file: ImageFile?
     @State private var failed = false
     @State private var attempt = 0
 
-    init(image: ImageView, side: CGFloat, more: Int = 0, notice: Binding<ImageNotice?>, open: @escaping () -> Void) {
+    init(image: ImageView, side: CGFloat, more: Int = 0, open: @escaping () -> Void) {
         self.image = image
         self.side = side
         self.more = more
         self.open = open
-        _notice = notice
         // Drawn at once when it was loaded before (a row scrolled back in).
         if let url = URL(string: image.url) {
             _thumbnail = State(initialValue: ImageStore.shared.cachedThumbnail(url, pixels: ImageStore.thumbnailPixels(side)))
@@ -101,7 +109,7 @@ struct ImageTile: View {
         .buttonStyle(.plain)
         .contextMenu {
             if let file {
-                ImageActionItems(file: file, name: image.name, preview: thumbnail, notice: $notice)
+                ImageActionItems(file: file, name: image.name, preview: thumbnail)
             }
         } preview: {
             if let thumbnail {
@@ -160,7 +168,7 @@ struct ImageGalleryView: View {
     /// The pages loaded around the one showing.
     @State private var pages: [Int: GalleryPage]
     @State private var retry = 0
-    @State private var notice: ImageNotice?
+    @Environment(\.notice) private var notice
     @State private var chrome = true
     /// How far a swipe down has pulled the picture.
     @State private var pull: CGFloat = 0
@@ -185,6 +193,13 @@ struct ImageGalleryView: View {
     private var current: ImageView? { images.indices.contains(index) ? images[index] : nil }
     private var counter: String { "\(index + 1) of \(images.count)" }
 
+    /// The viewer covers the window's toasts: what Copy and Save did shows here.
+    @ViewBuilder private var toasts: some View {
+        if let core = notice.core {
+            ToastCapsule(core: core).padding(.top, Space.s).animation(.snappy, value: core.view.toast?.id)
+        }
+    }
+
     var body: some View {
         content
             .task(id: "\(index)\u{0}\(retry)") { await load(around: index) }
@@ -206,7 +221,7 @@ struct ImageGalleryView: View {
                 .ignoresSafeArea()
                 .offset(y: pull)
             }
-            .imageNotice($notice)
+            .overlay(alignment: .top) { toasts }
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 if chrome, images.count > 1 { filmstrip.transition(.opacity) }
             }
@@ -227,7 +242,7 @@ struct ImageGalleryView: View {
                 }
                 ToolbarItemGroup(placement: .bottomBar) {
                     if case .ready(let file, let picture)? = pages[index], let current {
-                        ImageActionItems(file: file, name: current.name, preview: picture, notice: $notice)
+                        ImageActionItems(file: file, name: current.name, preview: picture)
                     }
                 }
             }
@@ -290,7 +305,7 @@ struct ImageGalleryView: View {
                 }
                 Spacer(minLength: 0)
                 if case .ready(let file, let picture)? = pages[index], let current {
-                    ImageActionItems(file: file, name: current.name, preview: picture, notice: $notice)
+                    ImageActionItems(file: file, name: current.name, preview: picture)
                         .labelStyle(.iconOnly)
                         .buttonStyle(.borderless)
                 }
@@ -309,7 +324,7 @@ struct ImageGalleryView: View {
                     .padding(Space.m)
                 }
             }
-            .imageNotice($notice)
+            .overlay(alignment: .top) { toasts }
             if images.count > 1 { filmstrip.background(Color.black) }
         }
         .focusable()

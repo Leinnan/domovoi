@@ -299,6 +299,7 @@ thread_changes! {
     MarkedUnread = "thread.marked-unread",
     MetadataUpdated = "thread.metadata-updated",
     PullRequestSynced = "thread.pull-request-synced",
+    IssueSynced = "thread.issue-synced",
     RuntimeModeUpdated = "thread.runtime-mode-updated",
     InteractionModeUpdated = "thread.interaction-mode-updated",
     ModelSelectionUpdated = "thread.model-selection-updated",

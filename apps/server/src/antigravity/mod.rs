@@ -518,8 +518,6 @@ pub fn environment(profile: &Profile, config: &Config, launch_temp: &Path, brows
     let temp = launch_temp.to_string_lossy().into_owned();
     env.extend([
         ("GEMINI_HOME".to_owned(), profile.home.to_string_lossy().into_owned()),
-        // Keeps the sign-in in the profile, not in an entry the macOS keychain shares.
-        ("AGY_ACP_FORCE_FILE_STORAGE".to_owned(), "1".to_owned()),
         ("BROWSER".to_owned(), browser.to_owned()),
         ("PYTHONUNBUFFERED".to_owned(), "1".to_owned()),
         ("ELECTRON_RUN_AS_NODE".to_owned(), "1".to_owned()),
@@ -645,7 +643,7 @@ pub fn session_started(id: &str, method: AuthMethod, version: Option<&str>, sess
     });
     // A running agent can read the quota now.
     if crate::usage_limits::get(id).is_none_or(|l| l.unavailable.is_some()) || crate::usage_limits::stale(id, crate::providers::LIMITS_FRESH) {
-        limits::refresh(id);
+        limits::refresh(id, limits::AFTER_TURN);
     }
 }
 
@@ -751,9 +749,9 @@ pub async fn probe(id: &str) -> Option<ServerProvider> {
     if let Some(issue) = config.issue() {
         v.status = ServerProviderState::Error;
         v.message = Some(issue);
-    } else if account(id).auth.as_deref() == Some("authenticated") {
-        // Limits refresh with provider status, in the background.
-        limits::refresh(id);
+    } else if account(id).auth.as_deref() == Some("authenticated") && crate::usage_limits::stale(id, crate::providers::LIMITS_FRESH) {
+        // Limits refresh with provider status, in the background, when not fresh.
+        limits::refresh(id, crate::providers::LIMITS_FRESH);
     }
     Some(v)
 }
@@ -935,14 +933,14 @@ mod tests {
         let env = environment(&p, &Config::default(), Path::new("/t/run-1"), "'b'");
         assert!(!names(&env).iter().any(|k| k.contains("API_KEY")));
         assert!(env.contains(&("GEMINI_HOME".into(), p.home.to_string_lossy().into_owned())));
-        assert!(env.contains(&("AGY_ACP_FORCE_FILE_STORAGE".into(), "1".into())));
+        assert!(!names(&env).iter().any(|k| k == "AGY_ACP_FORCE_FILE_STORAGE"), "the sign-in stays where the agent keeps it, never in a file Domovoi could read");
         assert!(env.contains(&("TMPDIR".into(), "/t/run-1".into())));
         let key = Config { auth_method: AuthMethod::GeminiApiKey, api_key: "k1".into(), ..Config::default() };
         assert!(environment(&p, &key, Path::new("/t"), "b").contains(&("GEMINI_API_KEY".into(), "k1".into())));
         let platform = Config { auth_method: AuthMethod::AgentPlatform, api_key: "k2".into(), ..Config::default() };
         assert!(environment(&p, &platform, Path::new("/t"), "b").contains(&("GOOGLE_API_KEY".into(), "k2".into())));
         // Every variable Domovoi sets is also one it removes from what the agent inherits.
-        for name in ["GEMINI_HOME", "BROWSER", "AGY_ACP_FORCE_FILE_STORAGE", "GEMINI_API_KEY", "GOOGLE_API_KEY"] {
+        for name in ["GEMINI_HOME", "BROWSER", "GEMINI_API_KEY", "GOOGLE_API_KEY"] {
             assert!(REMOVED_ENV.contains(&name), "{name}");
         }
     }

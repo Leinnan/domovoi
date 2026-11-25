@@ -19,7 +19,9 @@
  "enableProviderUpdateChecks": true,
  "continueThreadsAfterServerUpdate": true,
  "keepAwakeWhileAgentsWork": true,
+ "requireConnectDeviceApproval": false,
  "enableAgentBrowserAccess": true,
+ "enablePreviewTunnel": true,
  "cloudSpeechCredentials": {
   "openai": "",
   "xai": "",
@@ -93,6 +95,8 @@
  "backgroundActivityProfile": "balanced",
  "defaultTheme": "",
  "defaultThemeSetAt": "",
+ "defaultAppearance": "",
+ "defaultAppearanceSetAt": "",
  "environmentIcon": null,
  "newWorktreesStartFromOrigin": true,
  "worktreeSubmodules": null,
@@ -134,6 +138,7 @@
  "usageLimitSources": {},
  "textGenerators": {},
  "secretProviders": {},
+ "usageHistoryRetentionDays": 92,
  "usagePriceOverrides": {},
  "usageModelAliases": {}
 }

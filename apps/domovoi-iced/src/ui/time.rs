@@ -10,6 +10,16 @@ pub fn local_clock(rfc3339: &str) -> String {
     local_clock_in(ts, &Zoned::now().with_time_zone(tz.clone()), &tz)
 }
 
+/// The same for a Unix time in ms (empty when 0 or out of range).
+pub fn local_clock_ms(ms: i64) -> String {
+    let Ok(ts) = Timestamp::from_millisecond(ms) else { return String::new() };
+    if ms <= 0 {
+        return String::new();
+    }
+    let tz = TimeZone::system();
+    local_clock_in(ts, &Zoned::now().with_time_zone(tz.clone()), &tz)
+}
+
 fn local_clock_in(ts: Timestamp, now: &Zoned, tz: &TimeZone) -> String {
     let at = ts.to_zoned(tz.clone());
     let days = (at.date() - now.date()).get_days();
@@ -35,5 +45,6 @@ mod tests {
         assert_eq!(at("2026-11-24T14:00:00Z"), "Tue 14:00");
         assert_eq!(at("2026-12-12T08:05:00Z"), "12 Dec 08:05");
         assert_eq!(local_clock("not a time"), "");
+        assert_eq!(local_clock_ms(0), "");
     }
 }

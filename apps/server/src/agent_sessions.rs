@@ -2014,6 +2014,7 @@ fn write_thread(store: &Store, project_id: &str, cwd: &str, thread: &ParsedThrea
         worktree_path: None,
         linked_pull_request: None,
         pull_requests: Some(vec![]),
+        issues: None,
         branch_pull_request: None,
         active_provider_thread_id: Some(pt_id.as_str().into()),
         history_origin: Some(HistoryOrigin::V1Import),

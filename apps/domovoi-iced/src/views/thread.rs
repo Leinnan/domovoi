@@ -1,9 +1,10 @@
 //! Main thread view, new-thread setup view, connection banner, transcript cards
 //! (grouped steps, markdown, diffs, plans, checkpoints, subagents), interactive
-//! approvals & questions, and queued messages.
+//! approvals, questions and secret requests, linked pull requests and
+//! issues, and queued messages.
 
 use domovoi_core::Event;
-use domovoi_core::view::{ItemView, RequestView, ThreadPageView};
+use domovoi_core::view::{ItemView, RequestView, SecretRequestView, ThreadPageView, WorkLinkView};
 use iced::widget::{Column, Space, button, canvas, column, container, row, text};
 use iced::{Alignment, Background, Border, Element, Length, Padding, Theme};
 
@@ -71,7 +72,7 @@ pub fn thread_view<'a>(app: &'a App, thread: &'a ThreadPageView) -> Element<'a, 
         main = main.push(w::divider());
     }
 
-    // Banners: waiting children, plan progress, task progress, usage limit reset.
+    // Banners: waiting children, usage limit reset (plan and tasks sit above the composer).
     let mut banners = Column::new().spacing(XS).padding([S, L]).max_width(TRANSCRIPT_MAX_WIDTH);
     let mut has_banners = false;
 
@@ -93,25 +94,9 @@ pub fn thread_view<'a>(app: &'a App, thread: &'a ThreadPageView) -> Element<'a, 
         );
     }
 
-    if let Some(tasks) = &thread.tasks {
+    if !thread.links.is_empty() {
         has_banners = true;
-        banners = banners.push(
-            container(
-                row![
-                    w::themed_icon(Icon::ListTodo, ICON_SMALL, |c| c.info),
-                    w::with_tooltip(text(&tasks.label).size(TEXT_SMALL).font(fonts::MEDIUM), tasks.explanation.as_deref().unwrap_or("")),
-                    Space::new().width(Length::Fill),
-                    match (tasks.done * 100).checked_div(tasks.total) {
-                        Some(pct) => Element::from(container(w::percent_bar(pct, 0, |c| c.info)).width(Length::Fixed(64.0))),
-                        None => Space::new().into(),
-                    },
-                ]
-                .spacing(S)
-                .align_y(Alignment::Center),
-            )
-            .padding([TIGHT, M])
-            .style(w::banner_style(|c| c.info)),
-        );
+        banners = banners.push(row(thread.links.iter().map(work_link_chip)).spacing(XS).wrap());
     }
 
     if !thread.limit_resets.is_empty() {
@@ -162,7 +147,12 @@ pub fn thread_view<'a>(app: &'a App, thread: &'a ThreadPageView) -> Element<'a, 
                 }
                 transcript = transcript.push(container(tool_group_view(app, &thread.items[start..idx])).id(scroll::item_id(&thread.items[start].id)));
             } else {
-                transcript = transcript.push(container(find_mark(item.find_matches, item.find_active, item_view(app, item))).id(scroll::item_id(&item.id)));
+                let mut el = find_mark(item.find_matches, item.find_active, item_view(app, item));
+                // A reply says when its turn ran in its own footer; other last rows get one here.
+                if item.run_duration_ms > 0 && item.kind != "assistant" {
+                    el = column![el, turn_footer(item)].spacing(XS).into();
+                }
+                transcript = transcript.push(container(el).id(scroll::item_id(&item.id)));
                 idx += 1;
             }
         }
@@ -179,6 +169,10 @@ pub fn thread_view<'a>(app: &'a App, thread: &'a ThreadPageView) -> Element<'a, 
     // Interactive pending approvals / questions
     for req in &thread.pending_requests {
         transcript = transcript.push(pending_request_card(app, req));
+    }
+
+    for asked in &thread.secret_requests {
+        transcript = transcript.push(secret_request_card(app, asked));
     }
 
     // Queued messages
@@ -220,8 +214,95 @@ pub fn thread_view<'a>(app: &'a App, thread: &'a ThreadPageView) -> Element<'a, 
         );
     }
     main = main.push(body);
+    if thread.plan.is_some() || thread.tasks.is_some() {
+        main = main.push(work_progress(app, thread));
+    }
     main = main.push(crate::views::composer::view(app));
     main.into()
+}
+
+/// The latest plan and checklist at a glance ("Plan · Tasks 2/5 · Write the
+/// tests"), opening on the plan's text, the to-dos and Implement.
+fn work_progress<'a>(app: &'a App, t: &'a ThreadPageView) -> Element<'a, Message> {
+    let open = app.progress_open.as_deref() == Some(t.id.as_str());
+    let label = [t.plan.as_ref().map(|p| p.label.as_str()), t.tasks.as_ref().map(|k| k.label.as_str())]
+        .into_iter()
+        .flatten()
+        .filter(|l| !l.is_empty())
+        .collect::<Vec<_>>()
+        .join(" · ");
+    let mut strip = row![
+        w::themed_icon(Icon::ListTodo, ICON_SMALL, |c| c.accent),
+        text(if label.is_empty() { "Plan and checklist".to_owned() } else { label }).size(TEXT_SMALL).font(fonts::MEDIUM).width(Length::Fill),
+    ]
+    .spacing(S)
+    .align_y(Alignment::Center);
+    if let Some(pct) = t.tasks.as_ref().and_then(|k| (k.done * 100).checked_div(k.total)) {
+        strip = strip.push(container(w::percent_bar(pct, 0, |c| c.info)).width(Length::Fixed(64.0)));
+    }
+    strip = strip.push(w::themed_icon(if open { Icon::ChevronDown } else { Icon::ChevronUp }, ICON_XS, |c| c.muted));
+    let strip = w::with_tooltip(
+        button(strip).width(Length::Fill).padding([TIGHT, M]).style(w::chip_style(open)).on_press(Message::ToggleProgress),
+        if open { "Hide plan and checklist" } else { "Show plan and checklist" },
+    );
+
+    let mut col = Column::new().spacing(XS).max_width(TRANSCRIPT_MAX_WIDTH);
+    if open {
+        let mut details = Column::new().spacing(S);
+        if let Some(plan) = &t.plan {
+            let mut hdr = row![
+                w::themed_icon(Icon::ClipboardList, ICON, |c| c.violet),
+                text(if plan.label.is_empty() { "Plan" } else { plan.label.as_str() }).size(TEXT_UI).font(fonts::SEMIBOLD).width(Length::Fill),
+            ]
+            .spacing(S)
+            .align_y(Alignment::Center);
+            if plan.can_implement && !plan.plan_id.is_empty() {
+                hdr = hdr.push(w::small_button("Implement Plan", w::primary_style, Some(Message::ImplementPlan(plan.plan_id.clone()))));
+            }
+            details = details.push(hdr);
+            if !plan.blocks.is_empty() {
+                details = details.push(markdown::render_blocks(&plan.blocks, app.prefs.text_size, app.is_dark(), &app.vm.diagrams, &app.images, Message::Markdown));
+            }
+        }
+        if let Some(tasks) = &t.tasks {
+            if t.plan.is_some() {
+                details = details.push(w::divider());
+            }
+            let mut hdr = row![
+                w::themed_icon(Icon::ListTodo, ICON_SMALL, |c| c.info),
+                text(format!("Checklist · {}/{}", tasks.done, tasks.total)).size(TEXT_UI).font(fonts::SEMIBOLD),
+            ]
+            .spacing(S)
+            .align_y(Alignment::Center);
+            if tasks.previous_run {
+                // The list is from an earlier turn, not the one under way.
+                hdr = hdr.push(w::badge_capsule("Previous run", None));
+            }
+            details = details.push(hdr);
+            if let Some(explanation) = tasks.explanation.as_deref().filter(|e| !e.is_empty()) {
+                details = details.push(w::muted(explanation, TEXT_SMALL));
+            }
+            details = details.push(todo_steps(&tasks.todos));
+        }
+        col = col.push(w::card(w::scroll(details).height(Length::Shrink)).max_height(360.0).width(Length::Fill));
+    }
+    col = col.push(strip);
+    container(col).center_x(Length::Fill).padding(Padding { top: XS, bottom: 0.0, left: L, right: L }).into()
+}
+
+/// A to-do list: done, under way and waiting steps.
+fn todo_steps(todos: &[domovoi_core::view::TodoView]) -> Column<'_, Message> {
+    let mut col = Column::new().spacing(XS);
+    for todo in todos {
+        let (ic, tone): (Icon, w::Tone) = match todo.status.as_str() {
+            "completed" => (Icon::CircleCheck, |c| c.success),
+            "in_progress" => (Icon::Loader, |c| c.accent),
+            _ => (Icon::CircleDot, |c| c.faint),
+        };
+        let label = if todo.status == "completed" { w::muted(&todo.text, TEXT_SMALL) } else { text(&todo.text).size(TEXT_SMALL) };
+        col = col.push(row![w::themed_icon(ic, ICON_SMALL, tone), label.width(Length::Fill)].spacing(XS).align_y(Alignment::Center));
+    }
+    col
 }
 
 fn thread_header<'a>(app: &'a App, t: &'a ThreadPageView) -> Element<'a, Message> {
@@ -356,6 +437,10 @@ fn tool_group_view<'a>(app: &'a App, items: &'a [ItemView]) -> Element<'a, Messa
         }
         col = col.push(inner);
     }
+    let last = &items[items.len() - 1];
+    if last.run_duration_ms > 0 {
+        col = col.push(container(turn_footer(last)).padding([0.0, S]));
+    }
 
     container(col).padding(XS).width(Length::Fill).style(w::surface).into()
 }
@@ -405,7 +490,7 @@ fn item_view<'a>(app: &'a App, item: &'a ItemView) -> Element<'a, Message> {
             if !item.streaming && (item.artifact_id.is_some() || item.can_fork_here || item.run_duration_ms > 0) {
                 let mut footer = row![].spacing(S).align_y(Alignment::Center);
                 if item.run_duration_ms > 0 {
-                    footer = footer.push(w::faint(format_duration_ms(item.run_duration_ms), TEXT_CAPTION));
+                    footer = footer.push(turn_footer(item));
                 }
                 footer = footer.push(Space::new().width(Length::Fill));
                 if !item.text.is_empty() {
@@ -489,18 +574,7 @@ fn item_view<'a>(app: &'a App, item: &'a ItemView) -> Element<'a, Message> {
                 .spacing(XS)
                 .align_y(Alignment::Center),
             );
-            for todo in item.todos.iter() {
-                let (ic, tone): (Icon, w::Tone) = match todo.status.as_str() {
-                    "completed" => (Icon::CircleCheck, |c| c.success),
-                    "in_progress" => (Icon::Loader, |c| c.accent),
-                    _ => (Icon::CircleDot, |c| c.faint),
-                };
-                col = col.push(
-                    row![w::themed_icon(ic, ICON_SMALL, tone), text(&todo.text).size(TEXT_SMALL)]
-                        .spacing(XS)
-                        .align_y(Alignment::Center),
-                );
-            }
+            col = col.push(todo_steps(&item.todos));
             w::card(col).width(Length::Fill).into()
         }
         "checkpoint" => {
@@ -511,16 +585,18 @@ fn item_view<'a>(app: &'a App, item: &'a ItemView) -> Element<'a, Message> {
             let mut hdr = row![
                 w::themed_icon(Icon::GitCommit, ICON_SMALL, |c| c.info),
                 text(&cp.label).size(TEXT_SMALL).font(fonts::SEMIBOLD).width(Length::Fill),
-                w::colored(format!("+{}", cp.additions), TEXT_CAPTION, |c| c.success),
-                w::colored(format!("−{}", cp.deletions), TEXT_CAPTION, |c| c.danger),
-                w::small_button(
-                    "Diff",
-                    w::secondary_style,
-                    Some(core(Event::SelectDiffSource { source: cp.diff_source.clone() })),
-                ),
             ]
             .spacing(S)
             .align_y(Alignment::Center);
+            // A turn that changed nothing has no counts or diff to show.
+            if cp.files_changed > 0 {
+                let source = if cp.diff_source.is_empty() { format!("turn:{}", cp.turn_count) } else { cp.diff_source.clone() };
+                hdr = hdr
+                    .push(w::muted(format!("{} file{}", cp.files_changed, if cp.files_changed == 1 { "" } else { "s" }), TEXT_CAPTION))
+                    .push(w::colored(format!("+{}", cp.additions), TEXT_CAPTION, |c| c.success))
+                    .push(w::colored(format!("−{}", cp.deletions), TEXT_CAPTION, |c| c.danger))
+                    .push(w::small_button("View diff", w::secondary_style, Some(Message::ViewDiff(source))));
+            }
             if cp.can_revert {
                 hdr = hdr.push(w::small_button(
                     "Revert",
@@ -631,6 +707,16 @@ fn step_row_view<'a>(app: &'a App, item: &'a ItemView) -> Element<'a, Message> {
         let badge_tone: Option<w::Tone> = if item.badge_tone == "failed" { Some(|c| c.danger) } else { None };
         hdr = hdr.push(w::badge_capsule(&item.badge, badge_tone));
     }
+    // A failed exit is in the badge ("exit 101"); a clean one gets a quiet check.
+    if item.kind == "command" && item.status != "running" && item.exit_code == Some(0) {
+        hdr = hdr.push(w::with_tooltip(w::themed_icon(Icon::Check, ICON_XS, |c| c.success), "Exited with code 0"));
+    }
+    // Web pages an edit wrote open as their source in the Artifacts panel.
+    let pages: Vec<&String> = if item.kind == "file_change" && !item.streaming { item.artifact_paths.iter().filter(|p| is_html(p)).collect() } else { Vec::new() };
+    for path in &pages {
+        let label = if pages.len() == 1 { "Open preview".to_owned() } else { format!("Open {}", path.rsplit(['/', '\\']).next().unwrap_or(path)) };
+        hdr = hdr.push(w::with_tooltip(w::small_button(label, w::ghost_style, Some(Message::PreviewArtifactFile((*path).clone()))), path));
+    }
     if let Some(art_id) = &item.artifact_id
         && let Some(tid) = app.vm.thread.as_ref().map(|t| t.id.clone()) {
             hdr = hdr.push(w::small_button(
@@ -708,6 +794,67 @@ fn step_row_view<'a>(app: &'a App, item: &'a ItemView) -> Element<'a, Message> {
     container(col).width(Length::Fill).style(w::card_style).into()
 }
 
+/// A linked pull request (`#12 · Fix login`, with its state) or issue
+/// (`ENG-123 · Login fails`): opens in the browser.
+fn work_link_chip(link: &WorkLinkView) -> Element<'_, Message> {
+    let icon = if link.kind == "pull_request" { Icon::GitPullRequest } else { Icon::CircleDot };
+    let mut chip = row![w::themed_icon(icon, ICON_XS, |c| c.muted), text(&link.label).size(TEXT_SMALL).font(fonts::MEDIUM)].spacing(XS).align_y(Alignment::Center);
+    if !link.title.is_empty() {
+        chip = chip.push(w::muted(&link.title, TEXT_SMALL));
+    }
+    if !link.state.is_empty() {
+        let tone: w::Tone = match link.state.as_str() {
+            "merged" => |c| c.violet,
+            "closed" => |c| c.danger,
+            "draft" => |c| c.muted,
+            _ => |c| c.success,
+        };
+        chip = chip.push(w::badge_capsule(link.state.clone(), Some(tone)));
+    }
+    let tip = if link.kind == "pull_request" { "Open the pull request in the browser" } else { "Open the issue in the browser" };
+    w::with_tooltip(button(chip).padding([TIGHT, S]).style(w::chip_style(false)).on_press(Message::OpenUrl(link.url.clone())), tip)
+}
+
+/// A secret the agent asked for: a password field, Save and Decline. What
+/// is typed stays in this window (`App::secret_drafts`) until it is sent.
+fn secret_request_card<'a>(app: &'a App, asked: &'a SecretRequestView) -> Element<'a, Message> {
+    let mut col = Column::new().spacing(S).push(
+        row![
+            w::themed_icon(Icon::Key, ICON, |c| c.warning),
+            text(format!("The agent asks for {}", asked.label)).size(TEXT_UI).font(fonts::SEMIBOLD).width(Length::Fill),
+        ]
+        .spacing(S)
+        .align_y(Alignment::Center),
+    );
+    if !asked.reason.is_empty() {
+        col = col.push(text(&asked.reason).size(TEXT_UI));
+    }
+    if let Some(url) = &asked.url {
+        col = col.push(w::small_button("Get one", w::ghost_style, Some(Message::OpenUrl(url.clone()))));
+    }
+    let typed = app.secret_drafts.get(&asked.item_id).map_or("", |v| v.0.as_str());
+    let ready = !typed.trim().is_empty() && !asked.sending;
+    let id = asked.item_id.clone();
+    let mut field = w::input(if asked.placeholder.is_empty() { "Secret value" } else { asked.placeholder.as_str() }, typed).secure(true);
+    if !asked.sending {
+        field = field.on_input(move |value| Message::SecretChanged { item_id: id.clone(), value: crate::app::SecretText(value) });
+        if ready {
+            field = field.on_submit(Message::SecretSubmit { item_id: asked.item_id.clone() });
+        }
+    }
+    col = col.push(field);
+    col = col.push(w::faint(&asked.hint, TEXT_CAPTION));
+    let decline = (!asked.sending).then(|| core(Event::DeclineSecret { item_id: asked.item_id.clone() }));
+    col = col.push(
+        row![
+            w::label_button(if asked.sending { "Saving…" } else { "Save Secret" }, w::primary_style, ready.then(|| Message::SecretSubmit { item_id: asked.item_id.clone() })),
+            w::label_button("Decline", w::ghost_style, decline),
+        ]
+        .spacing(S),
+    );
+    container(col).padding(M).width(Length::Fill).style(w::card_style).into()
+}
+
 fn pending_request_card<'a>(app: &'a App, req: &'a RequestView) -> Element<'a, Message> {
     let is_question = !req.questions.is_empty();
     let tone: w::Tone = if is_question { |c| c.info } else { |c| c.warning };
@@ -737,7 +884,11 @@ fn pending_request_card<'a>(app: &'a App, req: &'a RequestView) -> Element<'a, M
             if !q.header.is_empty() {
                 q_col = q_col.push(w::heading(&q.header));
             }
-            q_col = q_col.push(text(&q.question).size(TEXT_UI).font(fonts::MEDIUM));
+            let mut q_line = row![text(&q.question).size(TEXT_UI).font(fonts::MEDIUM)].spacing(S).align_y(Alignment::Center);
+            if q.required {
+                q_line = q_line.push(w::faint("Required", TEXT_CAPTION));
+            }
+            q_col = q_col.push(q_line);
             for opt in &q.options {
                 let checked = q_draft.is_some_and(|d| d.selected.iter().any(|v| v == &opt.value));
                 q_col = q_col.push(
@@ -788,9 +939,12 @@ fn pending_request_card<'a>(app: &'a App, req: &'a RequestView) -> Element<'a, M
             }
             col = col.push(q_col);
         }
+        // Submit waits for an answer to each required question.
+        let answered = app.questions_answered(req);
+        let submit = w::label_button("Submit Answer", w::primary_style, answered.then(|| Message::QuestionSubmit { request_id: req.id.clone() }));
         col = col.push(
             row![
-                w::label_button("Submit Answer", w::primary_style, Some(Message::QuestionSubmit { request_id: req.id.clone() })),
+                if answered { submit.into() } else { w::with_tooltip(submit, "Answer the required questions first") },
                 w::label_button("Dismiss", w::ghost_style, Some(core(Event::DismissUserInput { request_id: req.id.clone() }))),
             ]
             .spacing(S),
@@ -959,6 +1113,19 @@ pub fn new_thread_view(app: &App) -> Element<'_, Message> {
     ]
     .height(Length::Fill)
     .into()
+}
+
+/// The core reads only HTML files for `OpenArtifactFile`.
+fn is_html(path: &str) -> bool {
+    path.rsplit_once('.').is_some_and(|(_, ext)| ext.eq_ignore_ascii_case("html") || ext.eq_ignore_ascii_case("htm"))
+}
+
+/// When a finished turn started and how long it took: "14:02 · 1m 12s".
+fn turn_footer(item: &ItemView) -> Element<'_, Message> {
+    let started = crate::ui::time::local_clock_ms(item.run_started_ms);
+    let took = format_duration_ms(item.run_duration_ms);
+    let label = if started.is_empty() { took } else { format!("{started} · {took}") };
+    w::faint(label, TEXT_CAPTION).into()
 }
 
 fn format_duration_ms(ms: i64) -> String {

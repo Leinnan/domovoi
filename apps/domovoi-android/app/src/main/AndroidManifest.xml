@@ -61,6 +61,13 @@
 
         <receiver android:name=".core.ApprovalReceiver" android:exported="false" />
 
+        <!-- UnifiedPush: the distributor delivers endpoints and messages here. -->
+        <service android:name=".system.UnifiedPushService" android:exported="false">
+            <intent-filter>
+                <action android:name="org.unifiedpush.android.connector.PUSH_EVENT" />
+            </intent-filter>
+        </service>
+
         <service
             android:name=".system.LiveTurnService"
             android:exported="false"

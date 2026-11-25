@@ -135,6 +135,10 @@ struct PullRequestsPage: View {
                                 }
                                 HStack(spacing: Space.tight) {
                                     Text(pr.repository)
+                                    if !pr.author.isEmpty {
+                                        Text("·")
+                                        Text(pr.author).lineLimit(1)
+                                    }
                                     Text("·")
                                     Text("\(pr.head) → \(pr.base)").lineLimit(1)
                                     Spacer()
@@ -420,31 +424,33 @@ struct UsagePage: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Space.l) {
-                HStack {
-                    Picker("Range", selection: Binding(get: { usage.days == 0 ? 7 : usage.days }, set: { core.update(.loadUsage(days: $0)) })) {
-                        ForEach(UsageSpan.days, id: \.0) { Text($0.1).tag($0.0) }
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .frame(maxWidth: 360)
-                    Spacer()
-                    VStack(alignment: .trailing, spacing: Space.xxs) {
-                        Text("\(usage.totalTokens) tokens").font(.title3.monospacedDigit().bold())
-                        if !usage.totalCost.isEmpty {
-                            Text(usage.totalCost).font(.callout.monospacedDigit()).foregroundStyle(.secondary)
-                        }
-                    }
+                Picker("Range", selection: Binding(get: { usage.days == 0 ? 7 : usage.days }, set: { core.update(.loadUsage(days: $0)) })) {
+                    ForEach(UsageSpan.days, id: \.0) { Text($0.1).tag($0.0) }
                 }
-                if !usage.rangeLabel.isEmpty { Text(usage.rangeLabel).foregroundStyle(.secondary) }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(maxWidth: 360)
+                if let error = usage.error { ErrorRow(error) }
+                UsageSourceNotices(notices: usage.sourceNotices)
+                if !usage.providers.isEmpty {
+                    UsageProviderFilter(usage: usage) { core.update(.filterUsageProvider(provider: $0)) }
+                }
                 if usage.loading, usage.rows.isEmpty {
                     ProgressView().frame(maxWidth: .infinity, minHeight: 200)
                 } else if usage.rows.isEmpty {
                     ContentUnavailableView("No usage yet", systemImage: "chart.bar", description: Text("Turns run in this range show up here."))
                 } else {
+                    UsageKPIs(usage: usage)
+                    if !usage.series.isEmpty {
+                        GroupBox { UsageActivityChart(usage: usage).padding(Space.s) }
+                    }
+                    if !usage.tokenMix.isEmpty {
+                        GroupBox { UsageTokenMix(slices: usage.tokenMix).padding(Space.s) }
+                    }
                     if !usage.byModel.isEmpty {
                         GroupBox("By model") { table(usage.byModel, byDay: false).frame(height: tableHeight(usage.byModel.count)) }
                     }
-                    GroupBox("By day") { table(usage.rows, byDay: true).frame(height: tableHeight(usage.rows.count, max: 360)) }
+                    GroupBox(usage.hourly ? "By hour" : "By day") { table(usage.rows, byDay: true).frame(height: tableHeight(usage.rows.count, max: 360)) }
                 }
                 if !usage.limits.isEmpty {
                     GroupBox("Limits") {
@@ -457,10 +463,14 @@ struct UsagePage: View {
                 if !usage.notice.isEmpty { Text(usage.notice).font(.caption).foregroundStyle(.secondary) }
             }
             .padding(Space.xl)
+            .frame(maxWidth: 1100, alignment: .leading)
         }
         .navigationTitle("Usage")
         .toolbar {
             if usage.loading, !usage.rows.isEmpty { ToolbarItem { ProgressView().controlSize(.small) } }
+            ToolbarItem {
+                RefreshLimitsButton(refreshing: usage.limitsRefreshing) { core.update(.refreshUsageLimits) }
+            }
         }
     }
 
@@ -471,18 +481,31 @@ struct UsagePage: View {
 
     private func table(_ rows: [UsageRowView], byDay: Bool) -> some View {
         Table(rows) {
-            if byDay { TableColumn("Day", value: \.day) }
-            TableColumn("Provider", value: \.provider)
-            TableColumn("Model", value: \.model)
-            TableColumn("Input") { Text($0.input).monospacedDigit() }
-            TableColumn("Cached") { Text($0.cached).monospacedDigit() }
-            TableColumn("Output") { Text($0.output).monospacedDigit() }
-            TableColumn("Total") { Text($0.total).monospacedDigit() }
-            if priced { TableColumn("Cost") { Text($0.cost).monospacedDigit() } }
+            Group {
+                if byDay { TableColumn(usage.hourly ? "Hour" : "When") { (row: UsageRowView) in Text(row.when(hourly: usage.hourly)).monospacedDigit() } }
+                TableColumn("Provider") { (row: UsageRowView) in
+                    HStack(spacing: Space.xs) {
+                        Circle().fill(Tint.provider(row.providerKey)).frame(width: Size.dot, height: Size.dot)
+                        Text(row.provider)
+                    }
+                }
+                TableColumn("Model") { (row: UsageRowView) in Text(row.model) }
+                TableColumn("Input") { (row: UsageRowView) in Text(row.input).monospacedDigit() }
+                TableColumn("Cached") { (row: UsageRowView) in Text(row.cached).monospacedDigit() }
+                TableColumn("Output") { (row: UsageRowView) in Text(row.output).monospacedDigit() }
+            }
+            Group {
+                // Every kind of token, cache writes and reasoning too, on the total.
+                TableColumn("Total") { (row: UsageRowView) in Text(row.total).monospacedDigit().help(row.breakdown) }
+                TableColumn("Share") { (row: UsageRowView) in Text(row.shareLabel).monospacedDigit() }
+                TableColumn("Cache hit") { (row: UsageRowView) in Text(row.cacheHitText).monospacedDigit() }
+                TableColumn("Sessions") { (row: UsageRowView) in Text("\(row.sessions)").monospacedDigit() }
+                if priced { TableColumn("Cost") { (row: UsageRowView) in Text(row.cost).monospacedDigit() } }
+            }
         }
     }
 }
 
 extension UsageRowView: @retroactive Identifiable {
-    public var id: String { "\(day)/\(provider)/\(model)" }
+    public var id: String { "\(day)/\(hourLabel)/\(providerKey)/\(model)" }
 }

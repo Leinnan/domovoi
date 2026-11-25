@@ -1,0 +1,486 @@
+{
+ "fixture": false,
+ "env": {
+  "GIT_ALLOW_PROTOCOL": "file",
+  "GIT_TERMINAL_PROMPT": "0"
+ },
+ "normalize": [],
+ "cases": [
+  {
+   "tag": "projects.mutate",
+   "payload": {
+    "type": "project.create",
+    "commandId": "create-gl-one",
+    "projectId": "gl-one",
+    "title": "GitLab one",
+    "workspaceRoot": "$DIR/repos/gl-one",
+    "createWorkspaceRootIfMissing": false,
+    "defaultModelSelection": null
+   }
+  },
+  {
+   "tag": "projects.mutate",
+   "payload": {
+    "type": "project.create",
+    "commandId": "create-gl-self",
+    "projectId": "gl-self",
+    "title": "Self-managed app",
+    "workspaceRoot": "$DIR/repos/gl-self",
+    "createWorkspaceRootIfMissing": false,
+    "defaultModelSelection": null
+   }
+  },
+  {
+   "tag": "projects.mutate",
+   "payload": {
+    "type": "project.create",
+    "commandId": "create-gh-one",
+    "projectId": "gh-one",
+    "title": "GitHub calc",
+    "workspaceRoot": "$DIR/repos/gh-one",
+    "createWorkspaceRootIfMissing": false,
+    "defaultModelSelection": null
+   }
+  },
+  {
+   "tag": "pullRequests.list",
+   "payload": {
+    "state": "open"
+   },
+   "note": "both GitLab hosts read through glab; GitHub listed without gh"
+  },
+  {
+   "tag": "pullRequests.list",
+   "payload": {
+    "state": "all",
+    "limit": 1
+   },
+   "note": "more rows than the limit: truncated"
+  },
+  {
+   "tag": "pullRequests.list",
+   "payload": {
+    "state": "merged",
+    "projectId": "gl-one"
+   }
+  },
+  {
+   "tag": "pullRequests.list",
+   "payload": {
+    "state": "closed",
+    "host": "gitlab.com"
+   }
+  },
+  {
+   "tag": "pullRequests.list",
+   "payload": {
+    "state": "open",
+    "involvement": "authored",
+    "host": "gitlab.com"
+   }
+  },
+  {
+   "tag": "pullRequests.list",
+   "payload": {
+    "state": "open",
+    "involvement": "reviewing",
+    "host": "gitlab.com"
+   }
+  },
+  {
+   "tag": "pullRequests.list",
+   "payload": {
+    "state": "open",
+    "host": "gitlab.com",
+    "filters": {
+     "labels": [
+      [
+       "bug"
+      ]
+     ],
+     "draft": "hide"
+    }
+   },
+   "note": "labels and draft narrowed by GitLab"
+  },
+  {
+   "tag": "pullRequests.list",
+   "payload": {
+    "state": "open",
+    "host": "gitlab.com",
+    "filters": {
+     "author": "@me"
+    }
+   }
+  },
+  {
+   "tag": "pullRequests.list",
+   "payload": {
+    "state": "open",
+    "host": "gitlab.com",
+    "filters": {
+     "review": "changes-requested",
+     "checks": "failing"
+    }
+   },
+   "note": "review and checks from the GraphQL list states"
+  },
+  {
+   "tag": "pullRequests.list",
+   "payload": {
+    "state": "all",
+    "host": "gitlab.com",
+    "query": " subtraction "
+   }
+  },
+  {
+   "tag": "pullRequests.list",
+   "payload": {
+    "state": "open",
+    "host": "GitLab.example.com"
+   },
+   "note": "the self-managed host alone"
+  },
+  {
+   "tag": "pullRequests.listStats",
+   "payload": {
+    "refs": [
+     {
+      "projectId": "gl-one",
+      "repository": "group/one",
+      "number": 1
+     },
+     {
+      "projectId": "gl-one",
+      "repository": "group/one",
+      "number": 2
+     },
+     {
+      "projectId": "gl-self",
+      "repository": "team/sub/app",
+      "number": 5
+     },
+     {
+      "projectId": "gl-one",
+      "repository": "group/one",
+      "number": 99
+     }
+    ]
+   },
+   "note": "a merge request without counts is left out"
+  },
+  {
+   "tag": "pullRequests.filterOptions",
+   "payload": {
+    "kind": "labels",
+    "host": "gitlab.com"
+   }
+  },
+  {
+   "tag": "pullRequests.filterOptions",
+   "payload": {
+    "kind": "authors",
+    "host": "gitlab.com",
+    "query": "rev"
+   }
+  },
+  {
+   "tag": "pullRequests.filterOptions",
+   "payload": {
+    "kind": "references",
+    "host": "gitlab.com",
+    "query": "1"
+   },
+   "note": "a number asks for that iid of issues and merge requests"
+  },
+  {
+   "tag": "pullRequests.filterOptions",
+   "payload": {
+    "kind": "references",
+    "projectId": "gl-one",
+    "query": "rounding"
+   }
+  },
+  {
+   "tag": "pullRequests.routingIdentity",
+   "payload": {
+    "host": "gitlab.com"
+   }
+  },
+  {
+   "tag": "pullRequests.routingIdentity",
+   "payload": {
+    "host": "gitlab.example.com"
+   }
+  },
+  {
+   "tag": "pullRequests.routing",
+   "payload": {
+    "projectId": "gl-one",
+    "repository": "group/one",
+    "number": 1,
+    "host": "gitlab.com"
+   }
+  },
+  {
+   "tag": "pullRequests.summary",
+   "payload": {
+    "projectId": "gl-one",
+    "repository": "group/one",
+    "number": 1
+   }
+  },
+  {
+   "tag": "pullRequests.summary",
+   "payload": {
+    "projectId": "gl-one",
+    "repository": "group/one",
+    "number": 2,
+    "host": "gitlab.com",
+    "expectedAccountId": "101"
+   }
+  },
+  {
+   "tag": "pullRequests.summary",
+   "payload": {
+    "projectId": "gl-self",
+    "repository": "team/sub/app",
+    "number": 5,
+    "host": "gitlab.example.com"
+   }
+  },
+  {
+   "tag": "pullRequests.detail",
+   "payload": {
+    "projectId": "gl-one",
+    "repository": "group/one",
+    "number": 1
+   },
+   "note": "pipeline stages as checks, changes requested, behind its base"
+  },
+  {
+   "tag": "pullRequests.detail",
+   "payload": {
+    "projectId": "gl-one",
+    "repository": "group/one",
+    "number": 2
+   },
+   "note": "a fork's draft that needs a rebase"
+  },
+  {
+   "tag": "pullRequests.detail",
+   "payload": {
+    "projectId": "gl-one",
+    "repository": "group/one",
+    "number": 4
+   },
+   "note": "closed, and the viewer cannot merge"
+  },
+  {
+   "tag": "pullRequests.detail",
+   "payload": {
+    "projectId": "gl-self",
+    "repository": "team/sub/app",
+    "number": 5,
+    "host": "gitlab.example.com"
+   },
+   "note": "self-managed: fast-forward and squash only, no label permission"
+  },
+  {
+   "tag": "pullRequests.preview",
+   "payload": {
+    "projectId": "gl-one",
+    "repository": "group/one",
+    "number": 3
+   }
+  },
+  {
+   "tag": "pullRequests.checks",
+   "payload": {
+    "projectId": "gl-one",
+    "repository": "group/one",
+    "number": 1
+   }
+  },
+  {
+   "tag": "pullRequests.checks",
+   "payload": {
+    "projectId": "gl-one",
+    "repository": "group/one",
+    "number": 3
+   },
+   "note": "no stages: the pipeline as one check"
+  },
+  {
+   "tag": "pullRequests.activity",
+   "payload": {
+    "projectId": "gl-one",
+    "repository": "group/one",
+    "number": 1
+   },
+   "note": "notes, line and overview threads, commits and awards"
+  },
+  {
+   "tag": "pullRequests.activity",
+   "payload": {
+    "projectId": "gl-one",
+    "repository": "group/one",
+    "number": 2
+   }
+  },
+  {
+   "tag": "pullRequests.threadComments",
+   "payload": {
+    "projectId": "gl-one",
+    "repository": "group/one",
+    "number": 1,
+    "threadId": "d-line",
+    "cursor": "x"
+   },
+   "expect": "failure",
+   "error": "PullRequestOperationError",
+   "note": "GitLab answers a thread whole"
+  },
+  {
+   "tag": "pullRequests.diffFileContents",
+   "payload": {
+    "projectId": "gl-one",
+    "repository": "group/one",
+    "number": 1,
+    "changeType": "change",
+    "oldPath": "calc.py",
+    "newPath": "calc.py"
+   }
+  },
+  {
+   "tag": "pullRequests.diffFileContents",
+   "payload": {
+    "projectId": "gl-one",
+    "repository": "group/one",
+    "number": 1,
+    "commit": "1111111111111111111111111111111111111111",
+    "changeType": "new",
+    "oldPath": "tests/test_calc.py",
+    "newPath": "tests/test_calc.py"
+   }
+  },
+  {
+   "tag": "pullRequests.diffFileContents",
+   "payload": {
+    "projectId": "gl-one",
+    "repository": "group/one",
+    "number": 1,
+    "commit": "zz",
+    "changeType": "change",
+    "oldPath": "calc.py",
+    "newPath": "calc.py"
+   },
+   "expect": "failure",
+   "error": "PullRequestOperationError",
+   "note": "not a commit sha"
+  },
+  {
+   "tag": "pullRequests.changeBreakdown",
+   "payload": {
+    "projectId": "gl-one",
+    "repository": "group/one",
+    "number": 1
+   }
+  },
+  {
+   "tag": "pullRequests.filesViewed",
+   "payload": {
+    "projectId": "gl-one",
+    "repository": "group/one",
+    "number": 1
+   },
+   "note": "GitLab keeps no viewed marks"
+  },
+  {
+   "tag": "pullRequests.reviewerCandidates",
+   "payload": {
+    "projectId": "gl-one",
+    "repository": "group/one",
+    "number": 1
+   },
+   "note": "requested reviewers lead; the author is left out"
+  },
+  {
+   "tag": "pullRequests.reviewerCandidates",
+   "payload": {
+    "projectId": "gl-one",
+    "repository": "group/one",
+    "number": 1,
+    "query": "ann"
+   }
+  },
+  {
+   "tag": "pullRequests.labelCandidates",
+   "payload": {
+    "projectId": "gl-one",
+    "repository": "group/one",
+    "number": 1
+   }
+  },
+  {
+   "tag": "pullRequests.labelCandidates",
+   "payload": {
+    "projectId": "gl-self",
+    "repository": "team/sub/app",
+    "number": 5,
+    "host": "gitlab.example.com"
+   },
+   "expect": "failure",
+   "error": "PullRequestOperationError",
+   "note": "no permission to change labels"
+  },
+  {
+   "tag": "pullRequests.stack",
+   "payload": {
+    "projectId": "gl-one",
+    "repository": "group/one",
+    "number": 1
+   }
+  },
+  {
+   "tag": "pullRequests.linkedThreads",
+   "payload": {
+    "projectId": "gl-one",
+    "repository": "group/one",
+    "number": 1,
+    "host": "gitlab.com"
+   }
+  },
+  {
+   "tag": "pullRequests.reviewGuide",
+   "payload": {
+    "projectId": "gl-one",
+    "repository": "group/one",
+    "number": 1
+   },
+   "note": "no guide yet, at the current head"
+  },
+  {
+   "tag": "pullRequests.summary",
+   "payload": {
+    "projectId": "gl-one",
+    "repository": "group/one",
+    "number": 99
+   },
+   "expect": "failure",
+   "error": "PullRequestOperationError",
+   "note": "no such merge request"
+  },
+  {
+   "tag": "pullRequests.summary",
+   "payload": {
+    "projectId": "gh-one",
+    "repository": "acme/calc",
+    "number": 1
+   },
+   "expect": "failure",
+   "error": "PullRequestUnavailableError",
+   "note": "the GitHub project without gh"
+  }
+ ]
+}

@@ -5,7 +5,7 @@
 use super::{Answers, DispatchResult, Effect, Orchestrator, Refusal, is_active, now};
 use crate::orchestration::events::{Origin, enc};
 use crate::store::StoreError;
-use domovoi_model::typed::command::{CheckpointRollback, MessageDispatch, RuntimeRequestRespond, SubagentStop};
+use domovoi_model::typed::command::{CheckpointRollback, MessageDispatch, RuntimeRequestRespond, SecretRequestRecord, SubagentStop};
 use domovoi_model::typed::{
     Actor, CheckpointRollbackRequest, CommandId, CreationSource, EventBody, ExecutionNode, NodeStatus, ResponseCapability, RunStatus,
     RuntimeRequest, RuntimeRequestId, RuntimeRequestKind, RuntimeRequestStatus, SubagentStatus, ThreadChange, ThreadId, TurnItem,
@@ -13,6 +13,86 @@ use domovoi_model::typed::{
 };
 
 impl Orchestrator {
+    /// `secret_request.record` (server-only): the card an agent's
+    /// `request_secret` shows, new or updated. It holds the label, never the
+    /// value. A card that ended stays as it ended; one asked under a run's
+    /// earlier root (before a restart) can still close. A saved secret wakes
+    /// a snoozed thread.
+    pub(super) fn secret_request_record(&self, c: &SecretRequestRecord) -> Result<DispatchResult, Refusal> {
+        use domovoi_model::typed::{SecretRequestItem, SecretRequestStatus};
+        let thread = self.thread(&c.thread_id)?;
+        let tid = c.thread_id.as_str();
+        let outline = self.store.thread_outline(tid)?;
+        let run = outline.runs.iter().find(|run| run.id == c.run_id).ok_or_else(|| Refusal::UnknownRun(c.run_id.clone()))?;
+        let existing = match self.store.record::<TurnItem>(tid, c.turn_item_id.as_str())? {
+            None => None,
+            Some(TurnItem::SecretRequest(card)) => Some(card),
+            Some(_) => return Err(Refusal::NotASecretRequest(c.turn_item_id.clone())),
+        };
+        if existing.is_none() && run.root_node_id.as_ref() != Some(&c.node_id) {
+            return Err(Refusal::NotRunRoot { node: c.node_id.clone(), run: c.run_id.clone() });
+        }
+        if existing.as_ref().is_some_and(|card| card.run_id.as_ref() != Some(&c.run_id)) {
+            return Err(Refusal::SecretRequestOfAnotherRun(c.turn_item_id.clone()));
+        }
+        let pending = c.secret_status == SecretRequestStatus::Pending;
+        if existing.as_ref().is_some_and(|card| card.secret_status != SecretRequestStatus::Pending || pending) {
+            return self.answer(None);
+        }
+        let at = now();
+        let origin = Self::run_origin(&c.command_id, run);
+        let (provider_thread_id, provider_turn_id, ordinal, started_at) = match &existing {
+            Some(card) => (card.provider_thread_id.clone(), card.provider_turn_id.clone(), card.ordinal, card.started_at.clone()),
+            None => (
+                run.provider_thread_id.clone(),
+                super::message::running_provider_turn(&outline, run).map(|turn| turn.id.clone()),
+                super::next_item_ordinal(&self.store, tid, run.ordinal),
+                Some(at.clone()),
+            ),
+        };
+        let status = match c.secret_status {
+            SecretRequestStatus::Pending => TurnItemStatus::Waiting,
+            SecretRequestStatus::Saved => TurnItemStatus::Completed,
+            _ => TurnItemStatus::Cancelled,
+        };
+        let card = TurnItem::SecretRequest(Box::new(SecretRequestItem {
+            deferred_work: None,
+            tool_non_execution_kind: None,
+            tool_surface: None,
+            tool_icon: None,
+            tool_source: None,
+            id: c.turn_item_id.clone(),
+            thread_id: c.thread_id.clone(),
+            run_id: Some(c.run_id.clone()),
+            node_id: Some(existing.as_ref().and_then(|card| card.node_id.clone()).unwrap_or_else(|| c.node_id.clone())),
+            provider_thread_id,
+            provider_turn_id,
+            native_item_ref: None,
+            parent_item_id: None,
+            ordinal,
+            status,
+            title: Some(c.label.clone()),
+            started_at,
+            completed_at: (!pending).then(|| at.clone()),
+            updated_at: at.clone(),
+            label: c.label.clone(),
+            reason: c.reason.clone(),
+            url: c.url.clone(),
+            placeholder: c.placeholder.clone(),
+            delivery: c.delivery.clone(),
+            secret_status: c.secret_status.clone(),
+        }));
+        if c.secret_status == SecretRequestStatus::Saved && thread.snoozed_until.as_ref().and_then(Option::as_ref).is_some() {
+            let mut awake = thread;
+            awake.snoozed_until = Some(None);
+            awake.snoozed_at = Some(None);
+            awake.updated_at = at;
+            self.store.append_event(tid, EventBody::Thread { change: ThreadChange::Unsnoozed, thread: Box::new(awake) }, &origin)?;
+        }
+        let sequence = self.store.append_event(tid, EventBody::TurnItemUpdated(card), &origin)?.sequence;
+        self.answer(Some(sequence))
+    }
+
     /// `subagent.stop`: the provider stops that subagent; the turn goes on.
     pub(super) fn stop_subagent(&self, c: &SubagentStop) -> Result<DispatchResult, Refusal> {
         self.thread(&c.thread_id)?;

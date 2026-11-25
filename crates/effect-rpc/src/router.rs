@@ -51,6 +51,8 @@ type GuardFn<C> = Arc<dyn Fn(&C, &RequestMeta, &Value) -> Result<(), Failure> + 
 pub struct Router<C> {
     handlers: HashMap<String, HandlerFn<C>>,
     guard: Option<GuardFn<C>>,
+    /// Tags whose calls get no `ws.rpc.<tag>` span.
+    untraced: std::collections::HashSet<String>,
 }
 
 impl<C> Default for Router<C> {
@@ -58,6 +60,7 @@ impl<C> Default for Router<C> {
         Self {
             handlers: HashMap::new(),
             guard: None,
+            untraced: Default::default(),
         }
     }
 }
@@ -150,6 +153,17 @@ impl<C: Send + Sync + 'static> Router<C> {
             "duplicate RPC handler for {tag}"
         );
         std::mem::take(self)
+    }
+
+    /// Calls of these tags get no span (t3code's `RPC_METHODS_WITH_TRACING_DISABLED`).
+    pub fn untraced(mut self, tags: &[&str]) -> Self {
+        self.untraced.extend(tags.iter().map(|t| (*t).to_owned()));
+        self
+    }
+
+    /// Whether a call of `tag` runs in a `ws.rpc.<tag>` span.
+    pub fn traced(&self, tag: &str) -> bool {
+        !self.untraced.contains(tag)
     }
 
     pub fn has(&self, tag: &str) -> bool {

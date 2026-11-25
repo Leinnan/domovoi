@@ -1,5 +1,6 @@
-//! Logging: stderr always, plus a daily-rotated file when the server runs
-//! (`<home>/userdata/logs/server.<date>.log`, a week kept). Pairing codes
+//! Logging: stderr always, plus, when the server runs, a daily-rotated file
+//! (`<home>/userdata/logs/server.<date>.log`, a week kept) and the trace file
+//! of spans (`crate::trace_writer`, `server.trace.ndjson`). Pairing codes
 //! are printed to stdout, never logged, so they stay out of the file.
 
 #![expect(clippy::disallowed_types, clippy::disallowed_macros, reason = "the protocol log: provider messages as sent and received")]
@@ -9,8 +10,21 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Layer};
 
-/// Keeps the file writer alive; dropping it flushes buffered lines.
+/// Keeps the file writer alive; dropping it flushes buffered lines (and the trace file's).
 pub struct Guard(#[allow(dead_code)] Option<tracing_appender::non_blocking::WorkerGuard>);
+
+impl Drop for Guard {
+    fn drop(&mut self) {
+        crate::trace_writer::flush();
+    }
+}
+
+/// What the trace file records: spans (and the events in them) at `info` and
+/// above of Domovoi's own crates, whatever `RUST_LOG` says (t3code's
+/// `T3CODE_TRACE_MIN_LEVEL` defaults to `Info`).
+fn trace_filter() -> tracing_subscriber::filter::Targets {
+    tracing_subscriber::filter::Targets::new().with_target("domovoi_server", tracing::Level::INFO).with_target("effect_rpc", tracing::Level::INFO)
+}
 
 fn filter() -> EnvFilter {
     EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into())
@@ -34,7 +48,8 @@ pub fn init(dir: Option<&Path>) -> Guard {
     match file {
         Some((writer, guard)) => {
             let file = tracing_subscriber::fmt::layer().with_ansi(false).with_writer(writer).with_filter(filter());
-            let _ = tracing_subscriber::registry().with(stderr).with(file).try_init();
+            let traces = dir.and_then(crate::trace_writer::layer).map(|l| l.with_filter(trace_filter()));
+            let _ = tracing_subscriber::registry().with(stderr).with(file).with(traces).try_init();
             log_panics();
             Guard(Some(guard))
         }

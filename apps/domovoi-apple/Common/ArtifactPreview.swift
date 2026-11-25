@@ -155,7 +155,9 @@ struct ArtifactPane: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            if let active = artifacts.active {
+            if let file = core.view.panel.files.artifactPreview {
+                WorkspaceArtifactFile(core: core, preview: file, dark: previewDark)
+            } else if let active = artifacts.active {
                 activeHeader(active)
                 Divider()
                 activeBody(active)
@@ -234,6 +236,16 @@ struct ArtifactPane: View {
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    if let path = item.path, ["html", "htm"].contains((path as NSString).pathExtension.lowercased()) {
+                        Button {
+                            core.update(.openArtifactFile(threadId: threadId, path: path))
+                        } label: {
+                            Image(systemName: "doc.text")
+                        }
+                        .buttonStyle(.borderless)
+                        .help("View the workspace file")
+                        .accessibilityLabel("View the workspace file")
+                    }
                     if let jumpToMessage, !item.itemId.isEmpty {
                         Button {
                             jumpToMessage(item.itemId.components(separatedBy: ":").first ?? item.itemId)
@@ -547,6 +559,73 @@ struct ArtifactPane: View {
         try? active.source.write(to: url, atomically: true, encoding: .utf8)
     }
     #endif
+}
+
+// MARK: - Workspace HTML File
+
+/// An HTML file in the workspace an artifact was written to, read as it is
+/// now (`OpenArtifactFile`): drawn, or its source. Back closes it.
+struct WorkspaceArtifactFile: View {
+    @ObservedObject var core: Core
+    let preview: FilePreviewView
+    let dark: Bool
+    @State private var source = false
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: Space.s) {
+                Button { core.update(.closeArtifactFile) } label: { Image(systemName: "chevron.left") }
+                    .buttonStyle(.borderless)
+                    .help("Back to the artifacts")
+                    .accessibilityLabel("Back")
+                Text(preview.path).font(TypeRole.monoSmall).lineLimit(1).truncationMode(.middle)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .help(preview.path)
+                if !preview.loading, preview.error == nil {
+                    Picker("View", selection: $source) {
+                        Text("Preview").tag(false)
+                        Text("Source").tag(true)
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .fixedSize()
+                    Menu {
+                        Button("Add to Message", systemImage: "at") { core.update(.appendToDraft(text: "@\(preview.path) ")) }
+                        Button("Copy Source", systemImage: "doc.on.doc") { Platform.copy(preview.text) }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                    }
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
+                    .fixedSize()
+                    .accessibilityLabel("More")
+                }
+            }
+            .padding(Space.s)
+            Divider()
+            if preview.loading {
+                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if let error = preview.error {
+                ContentUnavailableView("Can’t show the file", systemImage: "doc.questionmark", description: Text(error))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if source {
+                ScrollView([.vertical, .horizontal]) {
+                    Text(CodeHighlight.text(preview.spans, fallback: preview.text))
+                        .font(TypeRole.code)
+                        .textSelection(.enabled)
+                        .fixedSize()
+                        .padding(Space.s)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            } else {
+                ArtifactWebView(kind: "html", source: preview.text, interactive: true, dark: dark)
+                    .id("\(preview.path)-\(preview.text.hashValue)-\(dark)")
+            }
+            if preview.truncated {
+                Text("Showing the first megabyte.").font(.caption).foregroundStyle(Tint.caution).padding(Space.tight)
+            }
+        }
+    }
 }
 
 // MARK: - Legacy Compatibility Entrypoints (Files pane / Sheets)

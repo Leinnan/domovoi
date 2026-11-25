@@ -73,7 +73,7 @@ async fn connect(server: &Server, code: &str) -> tokio_tungstenite::WebSocketStr
     let res = http_client().post(format!("{base}/api/auth/browser-session")).json(&json!({ "credential": code })).send().await.unwrap();
     assert_eq!(res.status(), 200);
     let cookie = res.headers().get("set-cookie").unwrap().to_str().unwrap().split(';').next().unwrap().to_owned();
-    let mut req = format!("ws://127.0.0.1:{}/ws", server.port).into_client_request().unwrap();
+    let mut req = format!("ws://127.0.0.1:{}/ws?orchestrationProtocol=2", server.port).into_client_request().unwrap();
     req.headers_mut().insert("cookie", cookie.parse().unwrap());
     tokio_tungstenite::connect_async(req).await.unwrap().0
 }
