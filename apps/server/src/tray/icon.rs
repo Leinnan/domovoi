@@ -1,10 +1,10 @@
-//! The status bar icon: the domovoi in his hood, with eyes, nose, moustache and
-//! beard (the single-colour glyph from tools/icons.py), with a mark for the state,
-//! drawn at start (no image assets). The face sits low and to the left so the
-//! mark has the top-right corner. The glyph is black or white to match the bar,
-//! with a green dot when a device is connected and a red exclamation mark on an
-//! error. macOS gets a template image (which the system tints) while there is
-//! no mark to colour.
+//! The status bar icon: Domovoi's keeper's lantern with a hearth flame inside
+//! (the single-colour glyph from tools/icons.py), with a mark for the state,
+//! drawn at start (no image assets). The lantern sits low and to the left so
+//! the mark has the top-right corner. The glyph is black or white to match the
+//! bar, with a green dot when a device is connected and a red exclamation mark
+//! on an error. macOS gets a template image (which the system tints) while
+//! there is no mark to colour.
 
 use super::model::IconKind;
 use tiny_skia::{Color, FillRule, LineCap, Paint, PathBuilder, Pixmap, Stroke, Transform};
@@ -19,6 +19,11 @@ pub enum Style {
     OnDark,
 }
 
+enum Op {
+    Line((f32, f32)),
+    Cubic((f32, f32), (f32, f32), (f32, f32)),
+}
+
 /// RGBA pixels of a `size`×`size` icon.
 pub fn render(kind: IconKind, style: Style, size: u32) -> Vec<u8> {
     let mut pixmap = Pixmap::new(size, size).expect("a non-empty icon");
@@ -31,65 +36,91 @@ pub fn render(kind: IconKind, style: Style, size: u32) -> Vec<u8> {
     glyph.set_color_rgba8(r, g, b, glyph_alpha);
     glyph.anti_alias = true;
 
-    // The domovoi as a single-colour glyph (MONO_OPENING_PATH and friends in
-    // tools/icons.py): the hood with one opening for the face and beard, and
-    // the eyes, nose and moustache solid inside it. Mapped from the 1024 grid
-    // onto the low-left of the 44-unit grid (scale 0.046, centred at x = 18)
-    // so the top-right stays clear for the connected/error badge.
+    // Keeper's lantern monochrome glyph mirrored from tools/icons.py:
+    // bail ring + tapered lantern frame with arched window cutout + hearth flame.
+    // Mapped from the 1024 grid (centre 512, 484) onto the low-left of the
+    // 44-unit grid (scale 0.046, centred at 16.5, 25.5) so the top-right stays
+    // clear for the connected/error badge.
     const S: f32 = 0.046;
-    let map = |(x, y): (f32, f32)| (18.0 + (x - 512.0) * S, 25.5 + (y - 498.0) * S);
-    let trace = |builder: &mut PathBuilder, start: (f32, f32), curves: &[((f32, f32), (f32, f32), (f32, f32))]| {
+    let map = |(x, y): (f32, f32)| (16.5 + (x - 512.0) * S, 25.5 + (y - 484.0) * S);
+    let trace = |builder: &mut PathBuilder, start: (f32, f32), ops: &[Op]| {
         let (x, y) = map(start);
         builder.move_to(x, y);
-        for &(p1, p2, p3) in curves {
-            let ((x1, y1), (x2, y2), (x3, y3)) = (map(p1), map(p2), map(p3));
-            builder.cubic_to(x1, y1, x2, y2, x3, y3);
+        for op in ops {
+            match *op {
+                Op::Line(p) => {
+                    let (x, y) = map(p);
+                    builder.line_to(x, y);
+                }
+                Op::Cubic(p1, p2, p3) => {
+                    let ((x1, y1), (x2, y2), (x3, y3)) = (map(p1), map(p2), map(p3));
+                    builder.cubic_to(x1, y1, x2, y2, x3, y3);
+                }
+            }
         }
         builder.close();
     };
-    let mut hood = PathBuilder::new();
-    trace(&mut hood, (512.0, 172.0), &[
-        ((592.0, 172.0), (652.0, 244.0), (690.0, 336.0)),
-        ((732.0, 438.0), (764.0, 562.0), (806.0, 684.0)),
-        ((828.0, 748.0), (804.0, 806.0), (742.0, 812.0)),
-        ((666.0, 820.0), (590.0, 824.0), (512.0, 824.0)),
-        ((434.0, 824.0), (358.0, 820.0), (282.0, 812.0)),
-        ((220.0, 806.0), (196.0, 748.0), (218.0, 684.0)),
-        ((260.0, 562.0), (292.0, 438.0), (334.0, 336.0)),
-        ((372.0, 244.0), (432.0, 172.0), (512.0, 172.0)),
-    ]);
-    // The face-and-beard opening, cut out of the hood by the even-odd rule.
-    trace(&mut hood, (334.0, 548.0), &[
-        ((334.0, 456.0), (414.0, 382.0), (512.0, 382.0)),
-        ((610.0, 382.0), (690.0, 456.0), (690.0, 548.0)),
-        ((690.0, 572.0), (688.0, 590.0), (682.0, 604.0)),
-        ((708.0, 632.0), (712.0, 680.0), (684.0, 708.0)),
-        ((680.0, 740.0), (650.0, 762.0), (614.0, 756.0)),
-        ((596.0, 776.0), (556.0, 788.0), (512.0, 788.0)),
-        ((468.0, 788.0), (428.0, 776.0), (410.0, 756.0)),
-        ((374.0, 762.0), (344.0, 740.0), (340.0, 708.0)),
-        ((312.0, 680.0), (316.0, 632.0), (342.0, 604.0)),
-        ((336.0, 590.0), (334.0, 572.0), (334.0, 548.0)),
-    ]);
-    if let Some(path) = hood.finish() {
-        pixmap.fill_path(&path, &glyph, FillRule::EvenOdd, scale, None);
-    }
-    let mut face = PathBuilder::new();
-    // An upturned moustache under the nose.
-    trace(&mut face, (512.0, 618.0), &[
-        ((548.0, 598.0), (600.0, 600.0), (652.0, 584.0)),
-        ((634.0, 636.0), (566.0, 662.0), (512.0, 642.0)),
-        ((458.0, 662.0), (390.0, 636.0), (372.0, 584.0)),
-        ((424.0, 600.0), (476.0, 598.0), (512.0, 618.0)),
-    ]);
-    // Two round eyes and the nose.
-    for (centre, rx, ry) in [((444.0, 516.0), 32.0, 32.0), ((580.0, 516.0), 32.0, 32.0), ((512.0, 592.0), 30.0, 27.0)] {
-        let (cx, cy) = map(centre);
-        if let Some(oval) = tiny_skia::Rect::from_xywh(cx - rx * S, cy - ry * S, 2.0 * rx * S, 2.0 * ry * S) {
-            face.push_oval(oval);
+
+    // 1. Top bail ring (filled even-odd separately so the ring/cap overlap never cancels out).
+    let mut ring = PathBuilder::new();
+    for radius in [56.0_f32, 22.0] {
+        let (cx, cy) = map((512.0, 186.0));
+        if let Some(oval) = tiny_skia::Rect::from_xywh(cx - radius * S, cy - radius * S, 2.0 * radius * S, 2.0 * radius * S) {
+            ring.push_oval(oval);
         }
     }
-    if let Some(path) = face.finish() {
+    if let Some(path) = ring.finish() {
+        pixmap.fill_path(&path, &glyph, FillRule::EvenOdd, scale, None);
+    }
+
+    // 2. Tapered lantern body with arched window cut out by the even-odd rule.
+    let mut frame = PathBuilder::new();
+    trace(&mut frame, (457.2, 248.4), &[
+        Op::Cubic((487.5, 234.9), (536.5, 234.9), (566.8, 248.4)),
+        Op::Line((761.9, 335.1)),
+        Op::Cubic((773.0, 340.0), (773.7, 349.4), (763.6, 356.0)),
+        Op::Line((752.1, 363.5)),
+        Op::Cubic((746.5, 367.1), (741.5, 375.3), (740.9, 381.9)),
+        Op::Line((707.1, 744.1)),
+        Op::Cubic((706.5, 750.7), (710.8, 758.5), (716.6, 761.6)),
+        Op::Line((732.1, 769.6)),
+        Op::Cubic((740.9, 774.3), (748.0, 786.1), (748.0, 796.0)),
+        Op::Line((748.0, 810.0)),
+        Op::Cubic((748.0, 825.5), (735.5, 838.0), (720.0, 838.0)),
+        Op::Line((304.0, 838.0)),
+        Op::Cubic((288.5, 838.0), (276.0, 825.5), (276.0, 810.0)),
+        Op::Line((276.0, 796.0)),
+        Op::Cubic((276.0, 786.1), (283.1, 774.3), (291.9, 769.6)),
+        Op::Line((307.4, 761.6)),
+        Op::Cubic((313.2, 758.5), (317.5, 750.7), (316.9, 744.1)),
+        Op::Line((283.1, 381.9)),
+        Op::Cubic((282.5, 375.3), (277.5, 367.1), (271.9, 363.5)),
+        Op::Line((260.4, 356.0)),
+        Op::Cubic((250.3, 349.4), (251.0, 340.0), (262.1, 335.1)),
+    ]);
+    // Arched window cutout (MONO_WINDOW_PATH).
+    trace(&mut frame, (512.0, 394.0), &[
+        Op::Cubic((597.1, 394.0), (684.0, 462.9), (684.0, 548.0)),
+        Op::Line((660.0, 720.0)),
+        Op::Cubic((660.0, 733.3), (649.3, 744.0), (636.0, 744.0)),
+        Op::Line((388.0, 744.0)),
+        Op::Cubic((374.7, 744.0), (364.0, 733.3), (364.0, 720.0)),
+        Op::Line((340.0, 548.0)),
+        Op::Cubic((340.0, 462.9), (426.9, 394.0), (512.0, 394.0)),
+    ]);
+    if let Some(path) = frame.finish() {
+        pixmap.fill_path(&path, &glyph, FillRule::EvenOdd, scale, None);
+    }
+
+    // 3. Solid hearth flame inside the lantern window (MONO_FLAME_PATH).
+    let mut flame = PathBuilder::new();
+    trace(&mut flame, (512.0, 476.0), &[
+        Op::Cubic((530.2, 522.8), (588.0, 569.6), (588.0, 623.4)),
+        Op::Cubic((588.0, 698.3), (553.0, 710.0), (512.0, 710.0)),
+        Op::Cubic((471.0, 710.0), (436.0, 698.3), (436.0, 623.4)),
+        Op::Cubic((436.0, 569.6), (493.8, 522.8), (512.0, 476.0)),
+    ]);
+    if let Some(path) = flame.finish() {
         pixmap.fill_path(&path, &glyph, FillRule::Winding, scale, None);
     }
 

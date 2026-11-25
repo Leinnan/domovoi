@@ -202,7 +202,8 @@ CLIENT_BODY_RADII = [60, 22, 12, 12, 18, 28, 28, 18, 12, 12, 22]
 
 CLIENT_OUTER_PATH = rounded_polygon(CLIENT_BODY_POINTS, CLIENT_BODY_RADII)
 CLIENT_WINDOW_PATH = tapered_window_path(512, 396, 744, hw_top=162, hw_bot=138, arch_r=148, bottom_r=24)
-CLIENT_CHAMBER_PATH = tapered_window_path(512, 398, 742, hw_top=160, hw_bot=136, arch_r=146, bottom_r=23)
+# Slightly larger than the window cutout so the glass tucks seamlessly under the brass bezel.
+CLIENT_CHAMBER_PATH = tapered_window_path(512, 392, 748, hw_top=166, hw_bot=142, arch_r=152, bottom_r=26)
 CLIENT_RING_OUTER = circle_path(512, 186, 56)
 CLIENT_RING_INNER = circle_path(512, 186, 22)
 CLIENT_FLAME_PATH = flame_path(512, 470, 710, half_w=82, waist_frac=0.63)
@@ -234,7 +235,8 @@ SERVER_BODY_RADII = [44, 10, 18, 18, 10, 26, 12, 10, 18, 28, 28, 18, 10, 12, 26]
 
 SERVER_OUTER_PATH = rounded_polygon(SERVER_BODY_POINTS, SERVER_BODY_RADII)
 SERVER_WINDOW_PATH = arch_path(512, 476, 766, half_w=142, arch_r=142, bottom_r=26)
-SERVER_CHAMBER_PATH = arch_path(512, 478, 764, half_w=140, arch_r=140, bottom_r=24)
+# Slightly larger than the window cutout so the glass tucks seamlessly under the brass bezel.
+SERVER_CHAMBER_PATH = arch_path(512, 472, 770, half_w=146, arch_r=146, bottom_r=28)
 SERVER_FLAME_PATH = flame_path(512, 538, 736, half_w=74, waist_frac=0.63)
 
 
