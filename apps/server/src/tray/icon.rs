@@ -1,5 +1,5 @@
-//! The status bar icon: the domovoi's peaked Hearth Hood and two ember eyes
-//! (the app icon's silhouette from tools/icons.py) with a mark for the state,
+//! The status bar icon: the domovoi in his hood, with eyes, nose, moustache and
+//! beard (the single-colour glyph from tools/icons.py), with a mark for the state,
 //! drawn at start (no image assets). The face sits low and to the left so the
 //! mark has the top-right corner. The glyph is black or white to match the bar,
 //! with a green dot when a device is connected and a red exclamation mark on an
@@ -31,42 +31,66 @@ pub fn render(kind: IconKind, style: Style, size: u32) -> Vec<u8> {
     glyph.set_color_rgba8(r, g, b, glyph_alpha);
     glyph.anti_alias = true;
 
-    // The sculpted peaked Hearth Hood (same silhouette as tools/icons.py),
-    // mapped onto the low-left of the 44-unit grid (scale 0.0455, centered at
-    // x = 18.0) so the top-right stays clear for the connected/error badge.
-    let map = |x: f32, y: f32| (18.0 + (x - 512.0) * 0.0455, 25.0 + (y - 472.0) * 0.0455);
-    let mut hood = PathBuilder::new();
-    let (x, y) = map(512.0, 204.0);
-    hood.move_to(x, y);
-    for (p1, p2, p3) in [
-        ((554.0, 204.0), (636.0, 254.0), (718.0, 352.0)),
-        ((792.0, 440.0), (844.0, 552.0), (858.0, 666.0)),
-        ((864.0, 708.0), (832.0, 742.0), (792.0, 738.0)),
-        ((758.0, 734.0), (738.0, 710.0), (730.0, 672.0)),
-        ((714.0, 596.0), (682.0, 518.0), (634.0, 452.0)),
-        ((590.0, 392.0), (544.0, 358.0), (512.0, 358.0)),
-        ((480.0, 358.0), (434.0, 392.0), (390.0, 452.0)),
-        ((342.0, 518.0), (310.0, 596.0), (294.0, 672.0)),
-        ((286.0, 710.0), (266.0, 734.0), (232.0, 738.0)),
-        ((192.0, 742.0), (160.0, 708.0), (166.0, 666.0)),
-        ((180.0, 552.0), (232.0, 440.0), (306.0, 352.0)),
-        ((388.0, 254.0), (470.0, 204.0), (512.0, 204.0)),
-    ] {
-        let (x1, y1) = map(p1.0, p1.1);
-        let (x2, y2) = map(p2.0, p2.1);
-        let (x3, y3) = map(p3.0, p3.1);
-        hood.cubic_to(x1, y1, x2, y2, x3, y3);
-    }
-    hood.close();
-    if let Some(path) = hood.finish() {
-        pixmap.fill_path(&path, &glyph, FillRule::Winding, scale, None);
-    }
-    // Two soft vertical-oval ember eyes matching the app icon's proportions.
-    for (cx_src, cy_src) in [(404.0_f32, 622.0_f32), (620.0, 622.0)] {
-        let (cx, cy) = map(cx_src, cy_src);
-        if let Some(eye) = tiny_skia::Rect::from_xywh(cx - 2.9, cy - 3.6, 5.8, 7.2).and_then(PathBuilder::from_oval) {
-            pixmap.fill_path(&eye, &glyph, FillRule::Winding, scale, None);
+    // The domovoi as a single-colour glyph (MONO_OPENING_PATH and friends in
+    // tools/icons.py): the hood with one opening for the face and beard, and
+    // the eyes, nose and moustache solid inside it. Mapped from the 1024 grid
+    // onto the low-left of the 44-unit grid (scale 0.046, centred at x = 18)
+    // so the top-right stays clear for the connected/error badge.
+    const S: f32 = 0.046;
+    let map = |(x, y): (f32, f32)| (18.0 + (x - 512.0) * S, 25.5 + (y - 498.0) * S);
+    let trace = |builder: &mut PathBuilder, start: (f32, f32), curves: &[((f32, f32), (f32, f32), (f32, f32))]| {
+        let (x, y) = map(start);
+        builder.move_to(x, y);
+        for &(p1, p2, p3) in curves {
+            let ((x1, y1), (x2, y2), (x3, y3)) = (map(p1), map(p2), map(p3));
+            builder.cubic_to(x1, y1, x2, y2, x3, y3);
         }
+        builder.close();
+    };
+    let mut hood = PathBuilder::new();
+    trace(&mut hood, (512.0, 172.0), &[
+        ((592.0, 172.0), (652.0, 244.0), (690.0, 336.0)),
+        ((732.0, 438.0), (764.0, 562.0), (806.0, 684.0)),
+        ((828.0, 748.0), (804.0, 806.0), (742.0, 812.0)),
+        ((666.0, 820.0), (590.0, 824.0), (512.0, 824.0)),
+        ((434.0, 824.0), (358.0, 820.0), (282.0, 812.0)),
+        ((220.0, 806.0), (196.0, 748.0), (218.0, 684.0)),
+        ((260.0, 562.0), (292.0, 438.0), (334.0, 336.0)),
+        ((372.0, 244.0), (432.0, 172.0), (512.0, 172.0)),
+    ]);
+    // The face-and-beard opening, cut out of the hood by the even-odd rule.
+    trace(&mut hood, (334.0, 548.0), &[
+        ((334.0, 456.0), (414.0, 382.0), (512.0, 382.0)),
+        ((610.0, 382.0), (690.0, 456.0), (690.0, 548.0)),
+        ((690.0, 572.0), (688.0, 590.0), (682.0, 604.0)),
+        ((708.0, 632.0), (712.0, 680.0), (684.0, 708.0)),
+        ((680.0, 740.0), (650.0, 762.0), (614.0, 756.0)),
+        ((596.0, 776.0), (556.0, 788.0), (512.0, 788.0)),
+        ((468.0, 788.0), (428.0, 776.0), (410.0, 756.0)),
+        ((374.0, 762.0), (344.0, 740.0), (340.0, 708.0)),
+        ((312.0, 680.0), (316.0, 632.0), (342.0, 604.0)),
+        ((336.0, 590.0), (334.0, 572.0), (334.0, 548.0)),
+    ]);
+    if let Some(path) = hood.finish() {
+        pixmap.fill_path(&path, &glyph, FillRule::EvenOdd, scale, None);
+    }
+    let mut face = PathBuilder::new();
+    // An upturned moustache under the nose.
+    trace(&mut face, (512.0, 618.0), &[
+        ((548.0, 598.0), (600.0, 600.0), (652.0, 584.0)),
+        ((634.0, 636.0), (566.0, 662.0), (512.0, 642.0)),
+        ((458.0, 662.0), (390.0, 636.0), (372.0, 584.0)),
+        ((424.0, 600.0), (476.0, 598.0), (512.0, 618.0)),
+    ]);
+    // Two round eyes and the nose.
+    for (centre, rx, ry) in [((444.0, 516.0), 32.0, 32.0), ((580.0, 516.0), 32.0, 32.0), ((512.0, 592.0), 30.0, 27.0)] {
+        let (cx, cy) = map(centre);
+        if let Some(oval) = tiny_skia::Rect::from_xywh(cx - rx * S, cy - ry * S, 2.0 * rx * S, 2.0 * ry * S) {
+            face.push_oval(oval);
+        }
+    }
+    if let Some(path) = face.finish() {
+        pixmap.fill_path(&path, &glyph, FillRule::Winding, scale, None);
     }
 
     let mut mark = Paint::default();

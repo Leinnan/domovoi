@@ -6,3 +6,4 @@
 /apps/domovoi-core/target
 home=
 /.env
+*.pyc

@@ -1,102 +1,104 @@
 import SwiftUI
 
-/// Domovoi's Hearth Hood brand badge: the sculpted peaked hood and luminous
-/// ember eyes from `tools/icons.py`, rendered natively for connect and
-/// onboarding hero surfaces.
+/// Domovoi's brand badge: the domovoi in his hood, with a hearth-lit face,
+/// cream beard, rosy nose and friendly eyes, drawn from the geometry in
+/// `tools/icons.py` for connect and onboarding hero surfaces.
 struct DomovoiMark: View {
     var size: CGFloat = 44
 
     var body: some View {
         let corner = size * 0.225
         ZStack {
-            // Night-indigo backdrop with soft hearth bloom behind the eyes.
+            // Warm apricot backdrop.
             RoundedRectangle(cornerRadius: corner, style: .continuous)
-                .fill(
-                    LinearGradient(
-                        colors: [Color(red: 0.153, green: 0.184, blue: 0.357), Color(red: 0.051, green: 0.063, blue: 0.145)],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                )
-            RadialGradient(
-                colors: [Color(red: 1.0, green: 0.616, blue: 0.141).opacity(0.45), .clear],
-                center: UnitPoint(x: 0.5, y: 0.61),
-                startRadius: 0,
-                endRadius: size * 0.34
-            )
-            .clipShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
+                .fill(LinearGradient(colors: [Color(red: 0.988, green: 0.922, blue: 0.816), Color(red: 0.949, green: 0.690, blue: 0.486)], startPoint: .top, endPoint: .bottom))
 
-            // Sculpted peaked Hearth Hood.
-            HearthHoodShape()
-                .fill(
-                    LinearGradient(
-                        colors: [
-                            Color(red: 1.0, green: 0.973, blue: 0.922),
-                            Color(red: 0.976, green: 0.914, blue: 0.800),
-                            Color(red: 0.898, green: 0.808, blue: 0.651),
-                        ],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                )
-                .shadow(color: .black.opacity(0.35), radius: size * 0.04, y: size * 0.02)
+            // The hood.
+            CurvePath(start: (512, 172), curves: Self.hood)
+                .fill(LinearGradient(colors: [Color(red: 0.867, green: 0.369, blue: 0.255), Color(red: 0.769, green: 0.271, blue: 0.180), Color(red: 0.576, green: 0.188, blue: 0.122)], startPoint: UnitPoint(x: 0.5, y: 168 / 1024.0), endPoint: UnitPoint(x: 0.5, y: 824 / 1024.0)))
+                .shadow(color: .black.opacity(0.18), radius: size * 0.02, y: size * 0.01)
 
-            // Two luminous ember eyes.
-            HStack(spacing: size * 0.095) {
-                emberEye.rotationEffect(.degrees(-2.5))
-                emberEye.rotationEffect(.degrees(2.5))
-            }
-            .offset(y: size * 0.11)
+            // The hearth-lit face and rosy cheeks.
+            Grid1024Ellipse(cx: 512, cy: 548, rx: 178, ry: 166)
+                .fill(RadialGradient(colors: [Color(red: 1.000, green: 0.945, blue: 0.839), Color(red: 1.000, green: 0.851, blue: 0.639), Color(red: 0.953, green: 0.659, blue: 0.396)], center: UnitPoint(x: 512/1024.0, y: 518/1024.0), startRadius: 0, endRadius: size * 200 / 1024))
+            Grid1024Ellipse(cx: 400, cy: 586, rx: 38, ry: 24).fill(Color(red: 0.933, green: 0.498, blue: 0.424).opacity(0.45))
+            Grid1024Ellipse(cx: 624, cy: 586, rx: 38, ry: 24).fill(Color(red: 0.933, green: 0.498, blue: 0.424).opacity(0.45))
+
+            // The beard and nose.
+            CurvePath(start: (330, 640), curves: Self.beard)
+                .fill(LinearGradient(colors: [Color(red: 1.000, green: 0.992, blue: 0.973), Color(red: 0.957, green: 0.918, blue: 0.859), Color(red: 0.886, green: 0.824, blue: 0.729)], startPoint: UnitPoint(x: 0.5, y: 586 / 1024.0), endPoint: UnitPoint(x: 0.5, y: 846 / 1024.0)))
+            Grid1024Ellipse(cx: 512, cy: 606, rx: 36, ry: 32)
+                .fill(RadialGradient(colors: [Color(red: 0.965, green: 0.643, blue: 0.529), Color(red: 0.867, green: 0.455, blue: 0.345)], center: UnitPoint(x: 502/1024.0, y: 594/1024.0), startRadius: 0, endRadius: size * 44 / 1024))
+
+            // Friendly eyes with a catch light.
+            Grid1024Ellipse(cx: 446, cy: 528, rx: 25, ry: 25).fill(Color(red: 0.290, green: 0.165, blue: 0.110))
+            Grid1024Ellipse(cx: 454, cy: 519, rx: 7.5, ry: 7.5).fill(.white.opacity(0.85))
+            Grid1024Ellipse(cx: 578, cy: 528, rx: 25, ry: 25).fill(Color(red: 0.290, green: 0.165, blue: 0.110))
+            Grid1024Ellipse(cx: 586, cy: 519, rx: 7.5, ry: 7.5).fill(.white.opacity(0.85))
         }
         .frame(width: size, height: size)
         .overlay(
             RoundedRectangle(cornerRadius: corner, style: .continuous)
-                .strokeBorder(.white.opacity(0.14), lineWidth: 1)
+                .strokeBorder(.white.opacity(0.35), lineWidth: 1)
         )
         .accessibilityHidden(true)
     }
 
-    private var emberEye: some View {
-        RoundedRectangle(cornerRadius: size * 0.048, style: .continuous)
-            .fill(
-                RadialGradient(
-                    colors: [
-                        Color(red: 1.0, green: 0.957, blue: 0.722),
-                        Color(red: 1.0, green: 0.761, blue: 0.239),
-                        Color(red: 0.949, green: 0.541, blue: 0.086),
-                    ],
-                    center: UnitPoint(x: 0.5, y: 0.38),
-                    startRadius: 0,
-                    endRadius: size * 0.10
-                )
-            )
-            .frame(width: size * 0.118, height: size * 0.145)
-            .shadow(color: Color(red: 0.95, green: 0.55, blue: 0.09).opacity(0.55), radius: size * 0.05)
+    private static let hood: [Curve] = [
+        ((592, 172), (652, 244), (690, 336)),
+        ((732, 438), (764, 562), (806, 684)),
+        ((828, 748), (804, 806), (742, 812)),
+        ((666, 820), (590, 824), (512, 824)),
+        ((434, 824), (358, 820), (282, 812)),
+        ((220, 806), (196, 748), (218, 684)),
+        ((260, 562), (292, 438), (334, 336)),
+        ((372, 244), (432, 172), (512, 172)),
+    ]
+
+    private static let beard: [Curve] = [
+        ((322, 606), (346, 584), (378, 590)),
+        ((410, 596), (440, 612), (462, 628)),
+        ((482, 642), (498, 642), (512, 632)),
+        ((526, 642), (542, 642), (562, 628)),
+        ((584, 612), (614, 596), (646, 590)),
+        ((678, 584), (702, 606), (694, 640)),
+        ((724, 664), (722, 704), (690, 724)),
+        ((698, 762), (664, 790), (628, 784)),
+        ((614, 826), (566, 850), (512, 850)),
+        ((458, 850), (410, 826), (396, 784)),
+        ((360, 790), (326, 762), (334, 724)),
+        ((302, 704), (300, 664), (330, 640)),
+    ]
+}
+
+/// A cubic Bézier segment on the 1024-point icon grid: two control points and an end point.
+private typealias Curve = ((CGFloat, CGFloat), (CGFloat, CGFloat), (CGFloat, CGFloat))
+
+/// A closed path of cubic segments on the 1024-point icon grid, scaled to the frame.
+private struct CurvePath: Shape {
+    let start: (CGFloat, CGFloat)
+    let curves: [Curve]
+
+    func path(in rect: CGRect) -> Path {
+        func p(_ point: (CGFloat, CGFloat)) -> CGPoint {
+            CGPoint(x: rect.minX + point.0 * rect.width / 1024, y: rect.minY + point.1 * rect.height / 1024)
+        }
+        var path = Path()
+        path.move(to: p(start))
+        for (control1, control2, end) in curves {
+            path.addCurve(to: p(end), control1: p(control1), control2: p(control2))
+        }
+        path.closeSubpath()
+        return path
     }
 }
 
-private struct HearthHoodShape: Shape {
+/// An ellipse on the 1024-point icon grid, scaled to the frame.
+private struct Grid1024Ellipse: Shape {
+    let cx: CGFloat, cy: CGFloat, rx: CGFloat, ry: CGFloat
+
     func path(in rect: CGRect) -> Path {
-        let sx = rect.width / 1024
-        let sy = rect.height / 1024
-        func p(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
-            CGPoint(x: rect.minX + x * sx, y: rect.minY + y * sy)
-        }
-        var path = Path()
-        path.move(to: p(512, 204))
-        path.addCurve(to: p(718, 352), control1: p(554, 204), control2: p(636, 254))
-        path.addCurve(to: p(858, 666), control1: p(792, 440), control2: p(844, 552))
-        path.addCurve(to: p(792, 738), control1: p(864, 708), control2: p(832, 742))
-        path.addCurve(to: p(730, 672), control1: p(758, 734), control2: p(738, 710))
-        path.addCurve(to: p(634, 452), control1: p(714, 596), control2: p(682, 518))
-        path.addCurve(to: p(512, 358), control1: p(590, 392), control2: p(544, 358))
-        path.addCurve(to: p(390, 452), control1: p(480, 358), control2: p(434, 392))
-        path.addCurve(to: p(294, 672), control1: p(342, 518), control2: p(310, 596))
-        path.addCurve(to: p(232, 738), control1: p(286, 710), control2: p(266, 734))
-        path.addCurve(to: p(166, 666), control1: p(192, 742), control2: p(160, 708))
-        path.addCurve(to: p(306, 352), control1: p(180, 552), control2: p(232, 440))
-        path.addCurve(to: p(512, 204), control1: p(388, 254), control2: p(470, 204))
-        path.closeSubpath()
-        return path
+        let sx = rect.width / 1024, sy = rect.height / 1024
+        return Path(ellipseIn: CGRect(x: rect.minX + (cx - rx) * sx, y: rect.minY + (cy - ry) * sy, width: 2 * rx * sx, height: 2 * ry * sy))
     }
 }

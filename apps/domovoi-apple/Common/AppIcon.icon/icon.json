@@ -3,8 +3,8 @@
     {
       "value": {
         "linear-gradient": [
-          "srgb:0.15294,0.18431,0.35686,1.00000",
-          "srgb:0.05098,0.06275,0.14510,1.00000"
+          "srgb:0.14902,0.17647,0.27059,1.00000",
+          "srgb:0.06667,0.08235,0.13725,1.00000"
         ]
       }
     },
@@ -12,8 +12,8 @@
       "appearance": "dark",
       "value": {
         "linear-gradient": [
-          "srgb:0.09412,0.11373,0.21961,1.00000",
-          "srgb:0.01961,0.02745,0.06275,1.00000"
+          "srgb:0.09020,0.10980,0.17255,1.00000",
+          "srgb:0.03137,0.03922,0.07059,1.00000"
         ]
       }
     }
@@ -22,42 +22,51 @@
     {
       "layers": [
         {
-          "image-name": "hood.svg",
-          "name": "hood"
+          "image-name": "frame.svg",
+          "name": "frame"
         }
       ],
       "shadow": {
         "kind": "neutral",
-        "opacity": 0.55
+        "opacity": 0.5
       },
       "translucency": {
         "enabled": true,
-        "value": 0.22
+        "value": 0.12
       },
       "specular": true
     },
     {
       "layers": [
         {
-          "image-name": "eyes.svg",
-          "name": "eyes"
+          "image-name": "flame.svg",
+          "name": "flame"
         }
       ],
       "shadow": {
-        "kind": "layer-color",
-        "opacity": 0.65
+        "kind": "none",
+        "opacity": 0.0
       },
-      "translucency": {
-        "enabled": true,
-        "value": 0.08
-      },
-      "specular": true
+      "specular": false
     },
     {
       "layers": [
         {
-          "image-name": "atmosphere.svg",
-          "name": "atmosphere",
+          "image-name": "chamber.svg",
+          "name": "chamber"
+        }
+      ],
+      "shadow": {
+        "kind": "none",
+        "opacity": 0.0
+      },
+      "specular": false
+    },
+    {
+      "layers": [
+        {
+          "image-name": "glow.svg",
+          "name": "glow",
           "hidden-specializations": [
             {
               "appearance": "tinted",
