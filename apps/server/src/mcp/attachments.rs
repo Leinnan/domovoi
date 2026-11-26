@@ -54,7 +54,7 @@ pub async fn call(c: &Call<'_>, name: &str) -> Option<Result<Value, String>> {
 }
 
 fn now() -> i64 {
-    domovoi_contracts::time_fmt::now_millis()
+    crate::time_fmt::now_millis()
 }
 
 fn prepare(c: &Call<'_>) -> Result<Value, String> {

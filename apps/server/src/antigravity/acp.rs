@@ -24,7 +24,7 @@ fn version(v: Option<&str>) -> Option<(u64, u64, u64)> {
 /// it is Zed.
 pub fn client_info(agent_version: Option<&str>) -> Value {
     match version(agent_version) {
-        Some(v) if v >= (1, 5, 1) => json!({ "name": "t3-code", "title": "T3 Code", "version": domovoi_contracts::environment::SERVER_VERSION }),
+        Some(v) if v >= (1, 5, 1) => json!({ "name": "t3-code", "title": "T3 Code", "version": crate::wire::environment::SERVER_VERSION }),
         _ => json!({ "name": "zed", "version": "0.0.0" }),
     }
 }

@@ -98,7 +98,6 @@ account or port forwarding.
 | `packaging/windows` | The Windows installers (WiX MSIs) |
 | `crates/domovoi-rpc` | The RPC socket between the server and its clients: messages, the connection loop, packed frames |
 | `crates/domovoi-api` | Every call the server answers, defined once: its name, kind, permission and who calls it |
-| `crates/domovoi-contracts` | The server's own wire types (sign-in, environment) and its default settings |
 | `crates/domovoi-model` | Typed records and the thread read model, shared by the server and the client core |
 | `crates/domovoi-remote` | HTTP/1.1 over iroh streams, plus a loopback bridge for clients |
 | `crates/domovoi-local` | How a client finds and signs in to the server on the same machine: the descriptor the server writes and the request files a client proves itself with |
@@ -222,5 +221,5 @@ is measured.
 ## License
 
 [MIT](LICENSE). The default settings, keybindings and capabilities in
-`crates/domovoi-contracts/defaults` come from t3code (MIT License, Copyright (c)
-2026 T3 Tools Inc.). See its [NOTICE](crates/domovoi-contracts/defaults/NOTICE.md).
+`apps/server/defaults` come from t3code (MIT License, Copyright (c)
+2026 T3 Tools Inc.). See its [NOTICE](apps/server/defaults/NOTICE.md).

@@ -2262,16 +2262,6 @@ name = "domovoi-api"
 version = "0.1.0"
 
 [[package]]
-name = "domovoi-contracts"
-version = "0.1.0"
-dependencies = [
- "domovoi-model",
- "serde",
- "serde_json",
- "time",
-]
-
-[[package]]
 name = "domovoi-desktop-host"
 version = "0.1.0"
 dependencies = [
@@ -2395,7 +2385,6 @@ dependencies = [
  "dark-light",
  "dirs 7.0.0",
  "domovoi-api",
- "domovoi-contracts",
  "domovoi-local",
  "domovoi-model",
  "domovoi-remote",

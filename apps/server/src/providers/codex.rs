@@ -47,7 +47,7 @@ pub(crate) async fn refresh_limits(exe: &Path) {
 
 async fn initialize(rpc: &RpcClient) -> Result<(), String> {
     rpc.request("initialize", json!({
-        "clientInfo": { "name": "domovoi", "version": domovoi_contracts::environment::SERVER_VERSION },
+        "clientInfo": { "name": "domovoi", "version": crate::wire::environment::SERVER_VERSION },
         "capabilities": { "experimentalApi": true },
     })).await.map_err(|e| e.to_string())?;
     rpc.notify("initialized", None).await.map_err(|e| e.to_string())

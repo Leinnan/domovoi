@@ -113,7 +113,7 @@ fn event_now(thread_id: &str, body: EventBody, origin: &Origin) -> DomainEvent {
         driver: origin.driver.as_deref().map(ProviderDriverKind::from),
         provider_instance_id: origin.provider_instance_id.as_deref().map(ProviderInstanceId::from),
         raw_event_id: None,
-        occurred_at: Timestamp::from(domovoi_contracts::iso_now()),
+        occurred_at: Timestamp::from(crate::time_fmt::iso_now()),
         body,
     }
 }
@@ -708,7 +708,7 @@ impl Store {
         let text = serde_json::to_string(result).map_err(|e| StoreError::Invalid(format!("the answer to {command_id} does not encode: {e}")))?;
         self.db().with(|c| {
             c.prepare_cached("INSERT OR REPLACE INTO command_receipts (command_id, result, created_at) VALUES (?1, ?2, ?3)")?
-                .execute(params![command_id, text, domovoi_contracts::iso_now()])
+                .execute(params![command_id, text, crate::time_fmt::iso_now()])
                 .map(|_| ())
         })?;
         Ok(())
@@ -720,7 +720,7 @@ impl Store {
     pub fn outbox_put<T: Serialize>(&self, key: &str, effect: &T) -> Result<(), StoreError> {
         let text = serde_json::to_string(effect).map_err(|e| StoreError::Invalid(format!("the effect {key} does not encode: {e}")))?;
         self.db().with(|c| c.execute("INSERT OR REPLACE INTO effect_outbox (key, effect, created_at) VALUES (?1, ?2, ?3)",
-            params![key, text, domovoi_contracts::iso_now()]).map(|_| ()))?;
+            params![key, text, crate::time_fmt::iso_now()]).map(|_| ()))?;
         Ok(())
     }
 

@@ -26,8 +26,7 @@ use super::run::{ExecutionNode, Run, RunAttempt, Subagent};
 use super::stream::{ThreadProjection, ThreadSnapshot};
 use super::thread::AppThread;
 use super::common::Timestamp;
-use super::turn_item::{Appended, ItemVisibility, TurnItem};
-use rustc_hash::FxHashSet;
+use super::turn_item::{Appended, TurnItem};
 
 /// A thread: its own record and every record that belongs to it, each at its
 /// latest version.
@@ -122,16 +121,9 @@ impl Thread {
         Self { snapshot_sequence: snapshot.snapshot_sequence, ..Self::from_projection(snapshot.projection) }
     }
 
-    /// The thread a projection describes. Turn items the projection left to
-    /// its visible rows (`turnItemsOmitLocalVisible`) are restored from them.
+    /// The thread a projection describes.
     pub fn from_projection(projection: ThreadProjection) -> Self {
-        let mut turn_items = projection.turn_items;
-        let mut held: FxHashSet<TurnItemId> = turn_items.iter().map(|item| item.id().clone()).collect();
-        for visible in projection.visible_turn_items {
-            if visible.visibility == ItemVisibility::Local && held.insert(visible.item.id().clone()) {
-                turn_items.push(visible.item);
-            }
-        }
+        let turn_items = projection.turn_items;
         Self {
             record: projection.thread,
             runs: Records::from_shared(projection.runs),
@@ -174,7 +166,6 @@ impl Thread {
             checkpoints: Vec::new(),
             context_handoffs: Vec::new(),
             context_transfers: Vec::new(),
-            visible_turn_items: Vec::new(),
         };
         for record in records {
             match record {
@@ -288,10 +279,7 @@ impl Thread {
         }
     }
 
-    /// Everything the thread consists of, as the server sends it. The
-    /// timeline as shown is left out: it is derived from the records
-    /// ([`Thread::visible_turn_items`]), and sending it would send every
-    /// visible item a second time.
+    /// Everything the thread consists of, as the server sends it.
     pub fn projection(&self) -> ThreadProjection {
         ThreadProjection {
             thread: self.record.clone(),
@@ -310,7 +298,6 @@ impl Thread {
             checkpoints: self.checkpoints.as_slice().to_vec(),
             context_handoffs: self.context_handoffs.as_slice().to_vec(),
             context_transfers: self.context_transfers.as_slice().to_vec(),
-            visible_turn_items: Vec::new(),
             updated_at: self.record.updated_at.clone(),
         }
     }

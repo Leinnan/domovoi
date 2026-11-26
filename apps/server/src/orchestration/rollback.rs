@@ -32,7 +32,7 @@ pub async fn run<H: ProviderHost>(orch: &Orchestrator, host: &H, thread_id: &str
         }
     }
     let o = Origin::default();
-    let ts = Timestamp::from(domovoi_contracts::iso_now());
+    let ts = Timestamp::from(crate::time_fmt::iso_now());
     for later in outline.checkpoints.iter().filter(|c| c.scope_id == target.scope_id && c.ordinal_within_scope > target.ordinal_within_scope) {
         let mut stale = Checkpoint::clone(later);
         stale.status = CheckpointStatus::Stale;

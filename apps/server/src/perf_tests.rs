@@ -270,7 +270,7 @@ fn perf_event_log_bytes_per_streamed_reply() {
 /// An orchestrator on `store`, with the project its threads launch in.
 fn orchestrator(store: Store) -> (Orchestrator, tokio::sync::mpsc::UnboundedReceiver<crate::orchestration::commands::Effect>) {
     store
-        .create_project(domovoi_contracts::shell::ProjectShell {
+        .create_project(crate::wire::shell::ProjectShell {
             id: "p".into(), title: "p".into(), has_custom_title: false, workspace_root: std::env::temp_dir().to_string_lossy().into(),
             repository_identity: None, default_model_selection: None, default_thread_env_mode: None, auto_pull: false,
             favicon_path: None, project_icon: None, scripts: vec![], pinned_at: None, archived_at: None,
@@ -394,7 +394,7 @@ async fn perf_command_latency_by_thread_size() {
         let reps = 20u32;
         let (mut visits, mut sends) = (vec![], vec![]);
         for i in 0..reps {
-            let visit = json!({ "type": "thread.visit", "commandId": format!("v{i}"), "threadId": "t1", "visitedAt": domovoi_contracts::iso_now() });
+            let visit = json!({ "type": "thread.visit", "commandId": format!("v{i}"), "threadId": "t1", "visitedAt": crate::time_fmt::iso_now() });
             // From the JSON a client sends, as before commands were typed: decoding is part of the cost.
             let started = Instant::now();
             crate::rpc::shell::dispatch_command(&o, visit).await.expect("visit");
@@ -516,7 +516,7 @@ fn perf_shell_snapshot_of_many_threads() {
 /// A project at `root`, for launches there.
 fn project_at(store: &Store, id: &str, root: &std::path::Path) {
     store
-        .create_project(domovoi_contracts::shell::ProjectShell {
+        .create_project(crate::wire::shell::ProjectShell {
             id: id.into(), title: id.into(), has_custom_title: false, workspace_root: root.to_string_lossy().into(),
             repository_identity: None, default_model_selection: None, default_thread_env_mode: None, auto_pull: false,
             favicon_path: None, project_icon: None, scripts: vec![], pinned_at: None, archived_at: None,
@@ -871,7 +871,7 @@ async fn hot_queries_use_an_index() {
     let visit = domovoi_model::typed::command::ThreadVisit {
         command_id: "v1".into(),
         thread_id: "t1".into(),
-        visited_at: domovoi_contracts::iso_now().into(),
+        visited_at: crate::time_fmt::iso_now().into(),
         opened: None,
         search_query: None,
     };
@@ -915,9 +915,8 @@ async fn hot_queries_use_an_index() {
     assert!(scans.is_empty(), "statements that read a whole table:\n{}", scans.join("\n"));
 }
 
-/// A reply's first flush is its node and its turn item, in one commit. The
-/// flushes after it are the turn item alone, with the node as it was; the
-/// last is the node closed, the reply's message and the turn item.
+/// A reply's flush is its turn item, in one commit; the last is the reply's
+/// message and the turn item. No node is recorded for an item.
 #[tokio::test]
 async fn a_streamed_update_is_one_commit() {
     let store = Store::new(Db::open_in_memory().expect("db"));
@@ -935,16 +934,16 @@ async fn a_streamed_update_is_one_commit() {
         types
     };
     turn.assistant("live", "Hello", true, None);
-    assert_eq!(commits.load(Ordering::Relaxed), 1, "the reply's events commit together");
-    assert_eq!(written(&mut live), ["node.updated", "turn-item.updated"]);
+    assert_eq!(commits.load(Ordering::Relaxed), 1);
+    assert_eq!(written(&mut live), ["turn-item.updated"]);
     std::thread::sleep(Duration::from_millis(130));
     turn.assistant("live", "Hello there", true, None);
     assert_eq!(commits.load(Ordering::Relaxed), 2);
     assert_eq!(written(&mut live), ["turn-item.updated"], "a streaming flush is the turn item alone");
     turn.assistant("live", "Hello there.", false, None);
     assert_eq!(commits.load(Ordering::Relaxed), 3);
-    assert_eq!(written(&mut live), ["node.updated", "message.updated", "turn-item.updated"], "the whole reply is written with its message");
+    assert_eq!(written(&mut live), ["message.updated", "turn-item.updated"], "the whole reply is written with its message");
     turn.item("tool-1", Work::Command { input: "ls".into(), output: None, exit_code: None }, TurnItemStatus::Running);
-    assert_eq!(commits.load(Ordering::Relaxed), 4, "a tool item's two events commit together");
-    assert_eq!(written(&mut live), ["node.updated", "turn-item.updated"]);
+    assert_eq!(commits.load(Ordering::Relaxed), 4);
+    assert_eq!(written(&mut live), ["turn-item.updated"], "a tool item is one event");
 }

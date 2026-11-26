@@ -179,7 +179,7 @@ pub fn driver_for_instance(instance_id: &str) -> String {
 }
 
 fn now() -> Timestamp {
-    Timestamp::from(domovoi_contracts::iso_now())
+    Timestamp::from(crate::time_fmt::iso_now())
 }
 
 pub fn run_id(thread_id: &str, ordinal: u64) -> String {

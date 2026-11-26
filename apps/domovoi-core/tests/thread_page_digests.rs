@@ -105,7 +105,6 @@ fn opened(row: &Value) -> Model {
     let thread = row["threadId"].as_str().unwrap_or_default();
     let mut projection: Map<String, Value> = RecordKind::ALL.iter().map(|kind| (kind.collection().to_owned(), records(row, kind.collection()).cloned().collect())).collect();
     projection.insert("thread".into(), row["thread"].clone());
-    projection.insert("visibleTurnItems".into(), json!([]));
     projection.insert("updatedAt".into(), row["thread"]["updatedAt"].clone());
     let mut model = Model::default();
     model.connection = Connection::Connected;

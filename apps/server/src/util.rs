@@ -201,7 +201,7 @@ pub fn encode_uri_component(s: &str) -> String {
 pub fn seconds_until(iso: &str) -> i64 {
     use time::format_description::well_known::Rfc3339;
     let Ok(at) = time::OffsetDateTime::parse(iso, &Rfc3339) else { return 0 };
-    let ms = (at.unix_timestamp_nanos() / 1_000_000) as i64 - domovoi_contracts::time_fmt::now_millis();
+    let ms = (at.unix_timestamp_nanos() / 1_000_000) as i64 - crate::time_fmt::now_millis();
     (ms / 1000).max(0)
 }
 

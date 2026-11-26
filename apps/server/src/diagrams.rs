@@ -79,7 +79,7 @@ pub async fn issue(userdata: &Path, source: &str, dark: bool) -> Result<AssetCre
             .ok_or_else(|| err("This diagram couldn’t be rendered."))?;
         remember(digest.clone(), png);
     }
-    let expires_at = domovoi_contracts::now_millis() + TTL_MS;
+    let expires_at = crate::time_fmt::now_millis() + TTL_MS;
     let claims = Claims { kind: KIND.into(), digest, expires_at };
     let token = attachments::sign_asset_claims(userdata, &claims).map_err(|_| err("Could not sign the URL."))?;
     Ok(AssetCreateUrlResult {
@@ -94,7 +94,7 @@ pub async fn issue(userdata: &Path, source: &str, dark: bool) -> Result<AssetCre
 /// The PNG behind a URL `issue` handed out, while it is valid and kept.
 pub fn read(userdata: &Path, token: &str) -> Option<Vec<u8>> {
     let claims: Claims = attachments::verify_asset_claims(userdata, token)?;
-    if claims.kind != KIND || claims.expires_at <= domovoi_contracts::now_millis() {
+    if claims.kind != KIND || claims.expires_at <= crate::time_fmt::now_millis() {
         return None;
     }
     cached(&claims.digest)
@@ -116,7 +116,7 @@ pub async fn issue_svg(userdata: &Path, source: &str, dark: bool) -> Result<Asse
             .ok_or_else(|| err("This diagram couldn’t be rendered."))?;
         remember(digest.clone(), svg);
     }
-    let expires_at = domovoi_contracts::now_millis() + TTL_MS;
+    let expires_at = crate::time_fmt::now_millis() + TTL_MS;
     let claims = Claims { kind: KIND_SVG.into(), digest, expires_at };
     let token = attachments::sign_asset_claims(userdata, &claims).map_err(|_| err("Could not sign the URL."))?;
     Ok(AssetCreateUrlResult {
@@ -131,7 +131,7 @@ pub async fn issue_svg(userdata: &Path, source: &str, dark: bool) -> Result<Asse
 /// The SVG behind a URL `issue_svg` handed out, while it is valid and kept.
 pub fn read_svg(userdata: &Path, token: &str) -> Option<Vec<u8>> {
     let claims: Claims = attachments::verify_asset_claims(userdata, token)?;
-    if claims.kind != KIND_SVG || claims.expires_at <= domovoi_contracts::now_millis() {
+    if claims.kind != KIND_SVG || claims.expires_at <= crate::time_fmt::now_millis() {
         return None;
     }
     cached(&claims.digest)

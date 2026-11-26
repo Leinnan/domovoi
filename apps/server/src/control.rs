@@ -7,7 +7,7 @@ use crate::remote::{Phase, RemoteError};
 use crate::state::{AppState, SharedState};
 use rusqlite::params;
 use std::time::Duration;
-use domovoi_contracts::time_fmt::{iso_from_millis, now_millis};
+use crate::time_fmt::{iso_from_millis, now_millis};
 use domovoi_model::typed::{RemoteAccessStatus, RemoteDevice, RemotePairingLink, RemotePushStatus};
 use tokio::sync::watch;
 
@@ -151,8 +151,8 @@ const DELETED_THREAD_RETENTION_DAYS: i64 = 30;
 const RECEIPT_RETENTION_DAYS: i64 = 7;
 
 pub fn sweep(state: &AppState) {
-    let now = domovoi_contracts::time_fmt::now_millis();
-    let ago = |days: i64| domovoi_contracts::time_fmt::iso_from_millis(now - days * 86_400_000);
+    let now = crate::time_fmt::now_millis();
+    let ago = |days: i64| crate::time_fmt::iso_from_millis(now - days * 86_400_000);
     match state.store.prune(&ago(DELETED_THREAD_RETENTION_DAYS), &ago(RECEIPT_RETENTION_DAYS)) {
         Ok((0, 0, 0)) => {}
         Ok((events, entities, receipts)) => tracing::info!(events, entities, receipts, "pruned the event log"),

@@ -23,7 +23,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use domovoi_contracts::time_fmt::{iso_from_millis, now_millis};
+use crate::time_fmt::{iso_from_millis, now_millis};
 use domovoi_model::typed::{
     LiveProgress, RuntimeRequestKind, SUMMARY_CHARS, ShellStatus, ThreadShell, TurnItem, UserInputQuestion, first_line_clipped, live_progress, notice, shell_status,
 };
@@ -692,7 +692,7 @@ fn update_activities(state: &SharedState, apns: &Arc<Apns>, shell: &ThreadShell,
 /// sent, whose start time stands in when the thread has none; `private`
 /// leaves out what the thread is about.
 fn live_state(state: &SharedState, shell: &ThreadShell, thread_id: &str, status: ShellStatus, last: Option<&LiveState>, now: i64, private: bool) -> LiveState {
-    let at = |t: &Option<Option<domovoi_model::typed::Timestamp>>| t.as_ref().and_then(Option::as_ref).and_then(|at| domovoi_contracts::time_fmt::millis_from_iso(at.as_str()));
+    let at = |t: &Option<Option<domovoi_model::typed::Timestamp>>| t.as_ref().and_then(Option::as_ref).and_then(|at| crate::time_fmt::millis_from_iso(at.as_str()));
     let started = at(&shell.activity_run_started_at).or_else(|| at(&shell.latest_run_started_at)).or(last.map(|l| l.started_ms)).unwrap_or(now);
     let pending = shell.pending_runtime_request.as_ref().filter(|_| status == ShellStatus::Approval);
     let question = pending.is_some_and(|p| p.kind == RuntimeRequestKind::UserInput);

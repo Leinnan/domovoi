@@ -182,7 +182,6 @@ fn unshared(thread: &Thread) -> Thread {
         checkpoints: own(thread.checkpoints.as_slice()),
         context_handoffs: own(thread.context_handoffs.as_slice()),
         context_transfers: own(thread.context_transfers.as_slice()),
-        visible_turn_items: Vec::new(),
         updated_at: thread.record.updated_at.clone(),
     })
 }

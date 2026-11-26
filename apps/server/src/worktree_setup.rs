@@ -90,7 +90,7 @@ pub fn tracker() -> &'static Tracker {
 }
 
 fn now() -> Timestamp {
-    domovoi_contracts::iso_now().into()
+    crate::time_fmt::iso_now().into()
 }
 
 impl Tracker {

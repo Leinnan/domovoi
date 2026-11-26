@@ -1006,7 +1006,6 @@ fn stored<'a>(row: &'a Value, kind: &'a str) -> impl Iterator<Item = &'a Value> 
 fn snapshot_of(row: &Value) -> Value {
     let mut projection: Map<String, Value> = RecordKind::ALL.iter().map(|kind| (kind.collection().to_owned(), stored(row, kind.collection()).cloned().collect())).collect();
     projection.insert("thread".into(), row["thread"].clone());
-    projection.insert("visibleTurnItems".into(), json!([]));
     projection.insert("updatedAt".into(), row["thread"]["updatedAt"].clone());
     json!({ "kind": "snapshot", "snapshotSequence": 1, "projection": projection })
 }

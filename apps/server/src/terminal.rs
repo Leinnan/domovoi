@@ -264,7 +264,7 @@ impl Session {
             self.rows = grid.rows;
             self.screen.set_size(dimension(grid.rows), dimension(grid.cols));
             self.resize_since_clear = true;
-            self.updated_at = domovoi_contracts::iso_now();
+            self.updated_at = crate::time_fmt::iso_now();
             self.next_event(Happened::Resized);
             let _ = metadata.send(TerminalMetadataEvent::Upsert { terminal: Box::new(self.summary()) });
         }
@@ -626,7 +626,7 @@ impl Terminals {
             if prior.map(|p| (p.agent, p.activity)) != next.map(|p| (p.agent, p.activity)) {
                 session.agent_revision += 1;
                 session.agent = next;
-                session.updated_at = domovoi_contracts::iso_now();
+                session.updated_at = crate::time_fmt::iso_now();
                 changed = true;
             }
         }
@@ -766,7 +766,7 @@ impl Terminals {
             sequence: 1,
             cols: grid.cols,
             rows: grid.rows,
-            updated_at: domovoi_contracts::iso_now(),
+            updated_at: crate::time_fmt::iso_now(),
             killer: Some(child.clone_killer()),
             master: Some(pair.master),
             input: Some(input),
@@ -827,7 +827,7 @@ impl Terminals {
                     let (title, cwd) = (s.screen.callbacks().title.clone(), s.screen.callbacks().cwd.clone());
                     s.screen.process(text.as_bytes());
                     if s.screen.callbacks().title != title || s.screen.callbacks().cwd != cwd {
-                        s.updated_at = domovoi_contracts::iso_now();
+                        s.updated_at = crate::time_fmt::iso_now();
                         if s.screen.callbacks().cwd != cwd {
                             this.persist(s);
                         }
@@ -853,7 +853,7 @@ impl Terminals {
             s.agent = None;
             s.agent_thread_id = None;
             let _ = self.details.send(());
-            s.updated_at = domovoi_contracts::iso_now();
+            s.updated_at = crate::time_fmt::iso_now();
             s.next_event(Happened::Exited(code));
             self.persist(s);
             self.capture(s);

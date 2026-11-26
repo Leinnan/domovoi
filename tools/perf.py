@@ -92,6 +92,12 @@ def sync_build_tree():
             if str((here / file).relative_to(BUILD)) not in wanted:
                 (here / file).unlink()
                 removed += 1
+    # A folder left empty (a crate that was renamed) would still be a
+    # workspace member to cargo, and one without a manifest.
+    for folder, folders, files in os.walk(BUILD, topdown=False):
+        here = Path(folder)
+        if here != BUILD and "target" not in here.relative_to(BUILD).parts[:1] and not any(here.iterdir()):
+            here.rmdir()
     print(f"perf: build tree {BUILD.relative_to(ROOT)}: {copied} file(s) copied, {removed} removed", flush=True)
 
 

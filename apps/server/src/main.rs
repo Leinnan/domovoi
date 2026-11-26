@@ -22,6 +22,7 @@ mod connections;
 mod control;
 mod data_format;
 mod db;
+mod defaults;
 mod diagrams;
 mod doctor;
 mod document_text;
@@ -69,6 +70,7 @@ mod sent_tests;
 mod state;
 mod store;
 mod terminal;
+mod time_fmt;
 #[cfg(test)]
 mod test_records;
 mod text_gen;
@@ -86,6 +88,7 @@ mod util;
 mod vcs;
 mod vcs_ops;
 mod webhooks;
+mod wire;
 #[cfg(windows)]
 mod win;
 mod worktree_setup;
@@ -94,7 +97,7 @@ mod workspace;
 use clap::Parser;
 use std::path::PathBuf;
 use std::sync::Arc;
-use domovoi_contracts::environment::{
+use crate::wire::environment::{
     DATABASE_MIGRATION, EnvironmentDescriptor, ORCHESTRATION_PROTOCOL_VERSION, Platform, SERVER_VERSION,
 };
 
@@ -340,7 +343,7 @@ fn base(args: &Args, paths: &state::Paths) -> Fallible<Base> {
         server_version: SERVER_VERSION.into(),
         orchestration_protocol_version: ORCHESTRATION_PROTOCOL_VERSION,
         database_migration: DATABASE_MIGRATION,
-        capabilities: domovoi_contracts::defaults::capabilities(),
+        capabilities: crate::defaults::capabilities(),
     };
     let auth = auth::Auth::new(db.clone());
     let web = format!("http://localhost:{}", args.port);
@@ -509,7 +512,7 @@ async fn pair(base: &Base, ttl_minutes: u64, permissions: &[String], output: Pai
     let ttl_minutes = ttl_minutes.clamp(1, auth::MAX_PAIRING_TTL.as_secs() / 60);
     let grant = if permissions.is_empty() { auth::Grant::full() } else { auth::Grant::limited(permissions.to_vec()) };
     let code = base.auth.issue_pairing_code_with(std::time::Duration::from_secs(ttl_minutes * 60), &grant)?;
-    let expires_at = domovoi_contracts::time_fmt::iso_from_millis(domovoi_contracts::time_fmt::now_millis() + (ttl_minutes * 60_000) as i64);
+    let expires_at = crate::time_fmt::iso_from_millis(crate::time_fmt::now_millis() + (ttl_minutes * 60_000) as i64);
     let pairing_url = format!("{}/pair#token={code}", base.web.trim_end_matches('/'));
     let remote_enabled = base.remote.settings().enabled;
     match output {

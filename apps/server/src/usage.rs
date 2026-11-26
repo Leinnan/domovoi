@@ -770,7 +770,7 @@ fn antigravity_roots(env: &ScanEnv) -> Vec<PathBuf> {
 
 /// Fills the cache for the last 30 days, so the first usage request is fast.
 pub fn warm(env: &ScanEnv) {
-    let now = domovoi_contracts::time_fmt::now_millis();
+    let now = crate::time_fmt::now_millis();
     let w = Window {
         tz: jiff::tz::TimeZone::UTC,
         since: jiff::civil::date(1970, 1, 1),
@@ -804,7 +804,7 @@ pub fn summary(env: &ScanEnv, input: &SummaryInput, settings: &ServerSettings, r
     let start = since.to_zoned(tz.clone()).map_err(|e| err(e.to_string()))?.timestamp().as_millisecond();
     let end = until.tomorrow().and_then(|d| d.to_zoned(tz.clone())).map_err(|e| err(e.to_string()))?.timestamp().as_millisecond();
     let w = Window { tz, since, until, start_ms: start, end_ms: end, hourly: input.resolution.as_deref() == Some("hour") };
-    let cutoff = retention_cutoff_ms(settings, domovoi_contracts::time_fmt::now_millis());
+    let cutoff = retention_cutoff_ms(settings, crate::time_fmt::now_millis());
     let retained_since = (start - MTIME_SLACK_MS).max(cutoff);
     let mut pricer = Pricer::new(&rates.table, settings, input.model_filter.as_ref());
     let mut buckets: Buckets = BTreeMap::new();
@@ -920,7 +920,7 @@ pub fn summary(env: &ScanEnv, input: &SummaryInput, settings: &ServerSettings, r
         .collect();
     let summary = UsageSummary {
         contract_version: CONTRACT_VERSION.into(),
-        read_at: domovoi_contracts::iso_now().as_str().into(),
+        read_at: crate::time_fmt::iso_now().as_str().into(),
         time_zone: tz_name.to_owned(),
         since_day: since.to_string(),
         until_day: until.to_string(),
@@ -1170,7 +1170,7 @@ mod tests {
         let dir = home.join(".claude/projects/p");
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("gone.jsonl");
-        let then = domovoi_contracts::time_fmt::iso_from_millis(domovoi_contracts::time_fmt::now_millis() - 10 * 86_400_000);
+        let then = crate::time_fmt::iso_from_millis(crate::time_fmt::now_millis() - 10 * 86_400_000);
         std::fs::write(&file, claude_rec("g1", &then, "claude-x", json!({}))).unwrap();
         let ten_days_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(10 * 86_400);
         std::fs::File::options().write(true).open(&file).unwrap().set_modified(ten_days_ago).unwrap();
@@ -1198,10 +1198,10 @@ mod bench {
     #[ignore]
     fn real_logs() {
         let env = crate::agent_sessions::ScanEnv::new(&crate::settings::Settings::default(), std::path::Path::new("/tmp/domovoi-bench"));
-        let now = domovoi_contracts::iso_now();
+        let now = crate::time_fmt::iso_now();
         let until = &now[..10];
         for days in [1i64, 7, 30] {
-            let since = domovoi_contracts::time_fmt::iso_from_millis(domovoi_contracts::time_fmt::now_millis() - (days - 1) * 86_400_000)[..10].to_owned();
+            let since = crate::time_fmt::iso_from_millis(crate::time_fmt::now_millis() - (days - 1) * 86_400_000)[..10].to_owned();
             let input = serde_json::json!({ "sinceDay": since, "untilDay": until, "timeZone": "Europe/Warsaw" });
             for pass in ["cold", "warm"] {
                 let t = std::time::Instant::now();

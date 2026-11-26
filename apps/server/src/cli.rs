@@ -55,7 +55,7 @@ async fn open<'a>(base: &'a Base, host: &str, port: u16) -> Fallible<Option<Loca
         return Ok(None);
     };
     // Anything but this server's own descriptor is another server's answer.
-    let environment = res.json::<domovoi_contracts::environment::EnvironmentDescriptor>().await.ok();
+    let environment = res.json::<crate::wire::environment::EnvironmentDescriptor>().await.ok();
     if environment.map(|found| found.environment_id) != Some(base.environment.environment_id.clone()) {
         return Err(format!("the server on port {port} uses a different home directory; pass its --home-dir or --port").into());
     }

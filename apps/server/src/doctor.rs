@@ -483,7 +483,7 @@ async fn check_port(host: &str, port: u16, environment_id: Option<&str>) -> Chec
     };
     let origin = format!("http://{address}");
     let environment = match http.get(format!("{origin}/.well-known/t3/environment")).send().await {
-        Ok(res) => res.json::<domovoi_contracts::environment::EnvironmentDescriptor>().await.ok(),
+        Ok(res) => res.json::<crate::wire::environment::EnvironmentDescriptor>().await.ok(),
         Err(_) => None,
     };
     let Some(environment) = environment else {

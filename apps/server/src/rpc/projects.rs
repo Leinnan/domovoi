@@ -12,7 +12,7 @@ use domovoi_rpc::Router;
 use serde::de::IgnoredAny;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use domovoi_contracts::shell::ProjectShell;
+use crate::wire::shell::ProjectShell;
 use domovoi_model::typed::command::ThreadProjectAdoptFolder;
 use domovoi_model::typed::{
     AppThread, ProjectCreateFromThreadResult, ProjectCreateNewResult, ProjectEnsureScratchResult, ProjectEntryKind,
@@ -125,7 +125,7 @@ fn dispatch_error(message: impl Into<String>) -> Failure {
 /// A project as it is when made: nothing chosen yet. `repository_identity` is
 /// what `vcs::repository_identity` answered for the folder.
 pub(crate) fn new_project_shell(id: String, title: String, workspace_root: String, repository_identity: Option<RepositoryIdentity>) -> ProjectShell {
-    let now = domovoi_contracts::iso_now();
+    let now = crate::time_fmt::iso_now();
     ProjectShell {
         id,
         title,

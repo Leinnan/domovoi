@@ -77,7 +77,7 @@ pub async fn issue(
         root: root.to_owned(),
         relative_path: relative_path.into(),
         digest: image.digest.clone(),
-        expires_at: domovoi_contracts::now_millis() + TTL_MS,
+        expires_at: crate::time_fmt::now_millis() + TTL_MS,
         icon: false,
     };
     let token = attachments::sign_asset_claims(userdata, &claims)
@@ -109,7 +109,7 @@ pub async fn issue_media(userdata: &Path, path: &str) -> Result<Option<(String, 
         return Ok(None);
     }
     let Some(image) = load(&resolved, Path::new(name), false).await.map_err(ImageError::message)? else { return Ok(None) };
-    let expires_at = domovoi_contracts::now_millis() + MEDIA_TTL_MS;
+    let expires_at = crate::time_fmt::now_millis() + MEDIA_TTL_MS;
     let claims = Claims { kind: KIND.into(), root: root.to_owned(), relative_path: name.into(), digest: image.digest, expires_at, icon: false };
     let token = attachments::sign_asset_claims(userdata, &claims).map_err(|_| "Could not open an image preview.")?;
     Ok(Some((format!("{ROUTE_PREFIX}/{token}"), expires_at)))
@@ -122,7 +122,7 @@ pub async fn issue_icon(
     let digest = image.digest.clone();
     // Verify that the source can be rendered before returning it as an automatic choice.
     tokio::task::spawn_blocking(move || raster_png(&image, Some(ICON_SIDE))).await.ok()??;
-    let expires_at = domovoi_contracts::now_millis() + TTL_MS;
+    let expires_at = crate::time_fmt::now_millis() + TTL_MS;
     let claims = Claims {
         kind: KIND.into(),
         root: root.to_owned(),
@@ -172,7 +172,7 @@ fn drawn_as_png(mime: &str) -> bool {
 
 pub async fn read(userdata: &Path, token: &str) -> Option<(&'static str, Vec<u8>)> {
     let claims: Claims = attachments::verify_asset_claims(userdata, token)?;
-    if claims.kind != KIND || claims.expires_at <= domovoi_contracts::now_millis() {
+    if claims.kind != KIND || claims.expires_at <= crate::time_fmt::now_millis() {
         return None;
     }
     let path = Path::new(&claims.relative_path);
@@ -385,12 +385,12 @@ mod tests {
             .unwrap()
         };
         assert!(
-            read(&dir, &token(domovoi_contracts::now_millis() + TTL_MS))
+            read(&dir, &token(crate::time_fmt::now_millis() + TTL_MS))
                 .await
                 .is_some()
         );
         assert!(
-            read(&dir, &token(domovoi_contracts::now_millis() - 1))
+            read(&dir, &token(crate::time_fmt::now_millis() - 1))
                 .await
                 .is_none()
         );

@@ -33,7 +33,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
-use domovoi_contracts::time_fmt::iso_from_millis;
+use crate::time_fmt::iso_from_millis;
 use domovoi_model::typed::command::MessageDispatch;
 use domovoi_model::typed::{
     Actor, CreationSource, FixedTimeSchedule, InitialMessage, InteractionMode, ModelSelection, OnceSchedule, Run, RunStatus, RuntimeMode, ScheduledTask,

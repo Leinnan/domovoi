@@ -9,7 +9,7 @@ use crate::orchestration::context;
 use crate::orchestration::events::{Outline, enc};
 use crate::store::Store;
 use std::collections::BTreeSet;
-use domovoi_contracts::time_fmt::{iso_from_millis, now_millis};
+use crate::time_fmt::{iso_from_millis, now_millis};
 use domovoi_model::typed::command::MessageDispatch;
 use domovoi_model::typed::{
     Actor, AppThread, ChatAttachment, CheckpointScope, CheckpointScopeKind, CommandId, ContextHandoff, ContextTransfer, ContextTransferId,

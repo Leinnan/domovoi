@@ -354,7 +354,7 @@ fn git_host_bindings(identity: Option<&RepositoryIdentity>) -> Vec<Binding> {
 }
 
 /// The repository a project is of: as its row says, or as its folder says now.
-async fn project_identity(project: &domovoi_contracts::shell::ProjectShell) -> Option<RepositoryIdentity> {
+async fn project_identity(project: &crate::wire::shell::ProjectShell) -> Option<RepositoryIdentity> {
     match &project.repository_identity {
         Some(identity) => Some(identity.clone()),
         None => crate::vcs::repository_identity(&project.workspace_root).await,

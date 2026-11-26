@@ -29,7 +29,7 @@ use crate::state::SharedState;
 use axum::Extension;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
-use domovoi_contracts::auth::AuthInvalidError;
+use crate::wire::auth::AuthInvalidError;
 use domovoi_model::typed::{InternalRejection, RequestRejection, ScopeRequiredRejection};
 use domovoi_remote::RemotePeer;
 

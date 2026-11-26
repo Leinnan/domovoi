@@ -298,7 +298,7 @@ pub(crate) fn entry(instance_id: &str, driver: &str, display_name: &str) -> Serv
         installed_version: None,
         status: ServerProviderState::Error,
         auth: auth(ServerProviderAuthStatus::Unknown, None, None),
-        checked_at: domovoi_contracts::iso_now().into(),
+        checked_at: crate::time_fmt::iso_now().into(),
         message: None,
         availability: None,
         unavailable_reason: None,
@@ -318,7 +318,7 @@ pub(crate) fn entry(instance_id: &str, driver: &str, display_name: &str) -> Serv
 
 /// The entry of a built-in provider (Codex, Claude) with what no probe decides.
 fn base_entry(instance_id: &str) -> ServerProvider {
-    let defaults = domovoi_contracts::defaults::providers().remove(instance_id).expect("a built-in provider has bundled defaults");
+    let defaults = crate::defaults::providers().remove(instance_id).expect("a built-in provider has bundled defaults");
     let mut v = entry(instance_id, defaults.driver.as_str(), &defaults.display_name);
     v.continuation = Some(ServerProviderContinuation { group_key: expand_home(&defaults.continuation.group_key) });
     v.show_interaction_mode_toggle = Some(defaults.show_interaction_mode_toggle);
@@ -1050,7 +1050,7 @@ mod tests {
     fn entries_are_written_as_t3code_provider_statuses() {
         let missing = finish(base_entry(CODEX), None, auth(ServerProviderAuthStatus::Unknown, None, None), "", "Codex CLI is not installed.");
         let sent = json!(missing);
-        let bundled: Value = serde_json::from_str(include_str!("../../../crates/domovoi-contracts/defaults/providers.json")).unwrap();
+        let bundled: Value = serde_json::from_str(include_str!("../defaults/providers.json")).unwrap();
         let mut expected = bundled["codex"].clone();
         expected["continuation"]["groupKey"] = json!(expand_home("codex:home:/HOME/.codex"));
         for (key, value) in [

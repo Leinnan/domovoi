@@ -375,7 +375,7 @@ fn screenshot_path(c: &Call<'_>, url: &str) -> std::path::PathBuf {
     }
     let slug: String = slug.trim_matches('-').chars().take(40).collect::<String>().trim_end_matches('-').to_owned();
     let slug = if slug.is_empty() { "site".to_owned() } else { slug };
-    let millis = domovoi_contracts::time_fmt::now_millis().max(0) as u64;
+    let millis = crate::time_fmt::now_millis().max(0) as u64;
     let mut base36 = String::new();
     let mut v = millis;
     while v > 0 {

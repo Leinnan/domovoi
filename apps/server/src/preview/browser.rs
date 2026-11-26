@@ -347,7 +347,7 @@ fn color_value(scheme: &Option<ColorScheme>) -> String {
 }
 
 fn now() -> String {
-    domovoi_contracts::iso_now()
+    crate::time_fmt::iso_now()
 }
 
 fn push_bounded<T>(list: &mut VecDeque<T>, item: T, limit: usize) {

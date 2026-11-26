@@ -116,7 +116,7 @@ fn lifecycle_stream(ctx: Arc<ConnCtx>) -> BoxStream<'static, Result<ServerLifecy
         ServerLifecycleStreamEvent::Ready(Box::new(ServerLifecycleStreamReadyEvent {
             version: 1,
             sequence: 2,
-            payload: ServerLifecycleReadyPayload { at: domovoi_contracts::iso_now().into(), environment: (&s.environment).into(), update_outcome: None },
+            payload: ServerLifecycleReadyPayload { at: crate::time_fmt::iso_now().into(), environment: (&s.environment).into(), update_outcome: None },
         })),
     ])
 }

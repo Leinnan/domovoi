@@ -714,7 +714,7 @@ fn remove(project_id: &str) {
 }
 
 fn finish(project_id: &str, phase: ClonePhase, error: Option<String>) {
-    let ended = Timestamp::from(domovoi_contracts::iso_now());
+    let ended = Timestamp::from(crate::time_fmt::iso_now());
     modify(project_id, |s| {
         s.phase = phase;
         s.ended_at = Some(ended);
@@ -742,7 +742,7 @@ fn finish(project_id: &str, phase: ClonePhase, error: Option<String>) {
 async fn on_cloned(state: &AppState, project_id: &str, root: &str) {
     let Ok(Some(mut project)) = state.store.get_project(project_id) else { return };
     project.repository_identity = crate::vcs::repository_identity(root).await;
-    project.updated_at = domovoi_contracts::iso_now();
+    project.updated_at = crate::time_fmt::iso_now();
     let json = serde_json::to_string(&project).unwrap_or_default();
     let id = project.id.clone();
     let _ = state.store.append("project", &id, "project.updated", &json, None, |tx| {
@@ -812,8 +812,8 @@ fn create_project(state: &AppState, project_id: &str, title: &str, root: &Path) 
         }
     }
     std::fs::create_dir_all(root).map_err(|_| dispatch_error("Failed to create clone project."))?;
-    let now = domovoi_contracts::iso_now();
-    let shell = domovoi_contracts::shell::ProjectShell {
+    let now = crate::time_fmt::iso_now();
+    let shell = crate::wire::shell::ProjectShell {
         id: project_id.to_owned(), title: title.to_owned(), has_custom_title: false, workspace_root: root_str,
         repository_identity: None, default_model_selection: None, default_thread_env_mode: None, auto_pull: false,
         favicon_path: None, project_icon: None, scripts: vec![], pinned_at: None, archived_at: None,
@@ -859,7 +859,7 @@ async fn clone_start(state: Arc<AppState>, input: CloneStartInput) -> Result<Clo
             detail: None,
             stalled: false,
             error: None,
-            started_at: Timestamp::from(domovoi_contracts::iso_now()),
+            started_at: Timestamp::from(crate::time_fmt::iso_now()),
             ended_at: None,
             sequence: t.sequence,
         };
@@ -932,7 +932,7 @@ async fn clone_retry(state: Arc<AppState>, project_id: &str) -> Result<bool, Fai
         c.destination.clone()
     };
     discard_clone(&destination)?;
-    let started = Timestamp::from(domovoi_contracts::iso_now());
+    let started = Timestamp::from(crate::time_fmt::iso_now());
     modify(project_id, |s| {
         s.phase = ClonePhase::Running;
         s.stage = CloneStage::Connecting;

@@ -73,7 +73,7 @@ pub struct Report {
 }
 
 fn now_iso() -> String {
-    domovoi_contracts::iso_now()
+    crate::time_fmt::iso_now()
 }
 
 /// Records which roots have a project now and which lost theirs. Returns the
@@ -161,7 +161,7 @@ fn auto_import_round(env: &ScanEnv, store: &Store) -> (Report, bool) {
         }
     };
     // Same format on both sides, so the strings compare as times.
-    let cutoff = domovoi_contracts::time_fmt::iso_from_millis(domovoi_contracts::time_fmt::now_millis() - AUTO_WINDOW_MS);
+    let cutoff = crate::time_fmt::iso_from_millis(crate::time_fmt::now_millis() - AUTO_WINDOW_MS);
     let with_imports: HashSet<String> = imported_roots(store).into_iter().map(|(_, r)| norm(&r)).collect();
     for c in &scanned.candidates {
         let path = c.path.as_str();
@@ -240,11 +240,11 @@ fn jsonl_files(dir: &Path, out: &mut Vec<(PathBuf, u64, SystemTime)>) {
 /// Codex's dated session folders for today and yesterday (local time is not
 /// known here, so UTC ± a day covers it).
 fn codex_recent_dirs(home: &Path) -> Vec<PathBuf> {
-    let now = domovoi_contracts::time_fmt::now_millis();
+    let now = crate::time_fmt::now_millis();
     let day = 24 * 60 * 60 * 1000;
     let mut dirs = vec![];
     for offset in [-day, 0, day] {
-        let iso = domovoi_contracts::time_fmt::iso_from_millis(now + offset);
+        let iso = crate::time_fmt::iso_from_millis(now + offset);
         let (y, m, d) = (&iso[0..4], &iso[5..7], &iso[8..10]);
         let dir = home.join("sessions").join(y).join(m).join(d);
         if !dirs.contains(&dir) {

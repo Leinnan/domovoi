@@ -699,7 +699,7 @@ impl ProviderHost for Host {
                             Some(ProviderRef { driver: "claudeAgent".into(), native_id: Some(cursor), strength: NativeRefStrength::Weak, fingerprint: None, ordinal: None });
                         pt.status = ProviderThreadStatus::Idle;
                         pt.last_run_ordinal = Some(after);
-                        pt.updated_at = Timestamp::from(domovoi_contracts::iso_now());
+                        pt.updated_at = Timestamp::from(crate::time_fmt::iso_now());
                         let o = crate::orchestration::events::Origin {
                             driver: Some("claudeAgent".into()),
                             provider_instance_id: Some(pt.provider_instance_id.as_str().to_owned()),
@@ -729,7 +729,7 @@ impl ProviderHost for Host {
                 pt.native_thread_ref = Some(ProviderRef { driver: "pi".into(), native_id: Some(file), strength: NativeRefStrength::Strong, fingerprint: None, ordinal: None });
                 pt.status = ProviderThreadStatus::Idle;
                 pt.last_run_ordinal = Some(after);
-                pt.updated_at = Timestamp::from(domovoi_contracts::iso_now());
+                pt.updated_at = Timestamp::from(crate::time_fmt::iso_now());
                 let o = crate::orchestration::events::Origin { driver: Some("pi".into()), provider_instance_id: Some(pt.provider_instance_id.as_str().to_owned()), command_id: None };
                 store.append_event(thread_id, pt.updated(), &o).map_err(|e| e.to_string())?;
             }
@@ -754,7 +754,7 @@ impl ProviderHost for Host {
                 pt.native_conversation_head_ref = None;
                 pt.status = ProviderThreadStatus::Idle;
                 pt.last_run_ordinal = Some(after);
-                pt.updated_at = Timestamp::from(domovoi_contracts::iso_now());
+                pt.updated_at = Timestamp::from(crate::time_fmt::iso_now());
                 let o = crate::orchestration::events::Origin { driver: Some(driver.into()), provider_instance_id: Some(pt.provider_instance_id.as_str().to_owned()), command_id: None };
                 store.append_event(thread_id, pt.updated(), &o).map_err(|e| e.to_string())?;
             }
@@ -841,7 +841,7 @@ mod tests {
         let store = crate::store::Store::new(crate::db::Db::open_in_memory().expect("db"));
         let dir = std::env::temp_dir().join(format!("domovoi-dead-turn-{}", crate::util::new_uuid()));
         store
-            .create_project(domovoi_contracts::shell::ProjectShell {
+            .create_project(crate::wire::shell::ProjectShell {
                 id: "p".into(), title: "p".into(), has_custom_title: false, workspace_root: dir.to_string_lossy().into(),
                 repository_identity: None, default_model_selection: None, default_thread_env_mode: None, auto_pull: false,
                 favicon_path: None, project_icon: None, scripts: vec![], pinned_at: None, archived_at: None,

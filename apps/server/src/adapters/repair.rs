@@ -101,7 +101,7 @@ fn notices(dir: &Path, wanted: &[String]) -> HashMap<String, Notice> {
             if summary.trim().is_empty() || !wanted.iter().any(|w| w == tool) {
                 continue;
             }
-            let at = v["t"].as_str().map_or_else(domovoi_contracts::iso_now, str::to_owned);
+            let at = v["t"].as_str().map_or_else(crate::time_fmt::iso_now, str::to_owned);
             out.insert(tool.to_owned(), Notice { status: task_status(msg["status"].as_str()), summary: summary.trim().to_owned(), at });
         }
     }

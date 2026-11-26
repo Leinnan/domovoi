@@ -256,7 +256,7 @@ mod records {
         }
         complete("thread", parts.entry("thread").or_insert_with(|| json!({})));
         let updated_at = parts["thread"]["updatedAt"].clone();
-        fill(&mut projection, json!({ "visibleTurnItems": [], "updatedAt": updated_at }));
+        fill(&mut projection, json!({ "updatedAt": updated_at }));
         json!({ "kind": "snapshot", "snapshotSequence": sequence, "projection": projection })
     }
 
@@ -2670,9 +2670,8 @@ fn the_open_thread_comes_back_from_the_offline_copy_if_it_can_be_read() {
     let parts: Vec<&str> = copy["thread"].as_object().expect("the open thread is in the copy").keys().map(String::as_str).collect();
     assert_eq!(parts, [
         "thread", "runs", "attempts", "nodes", "subagents", "providerSessions", "providerThreads", "providerTurns", "runtimeRequests", "messages",
-        "plans", "turnItems", "checkpointScopes", "checkpoints", "contextHandoffs", "contextTransfers", "visibleTurnItems", "updatedAt",
+        "plans", "turnItems", "checkpointScopes", "checkpoints", "contextHandoffs", "contextTransfers", "updatedAt",
     ]);
-    assert_eq!(copy["thread"]["visibleTurnItems"], json!([]), "the rows shown are derived from the items, not kept beside them");
 
     // A launch without the server, with the thread selected as the saved drafts say.
     let restore = |saved: String| {

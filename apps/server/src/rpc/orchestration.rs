@@ -18,7 +18,7 @@ use futures::stream::BoxStream;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use domovoi_contracts::shell::ProjectShell;
+use crate::wire::shell::ProjectShell;
 use domovoi_model::typed::command::RunInterrupt;
 use domovoi_model::typed::{
     AppThread, EventBody, MessageId, ProjectId, Run, RunId, RunStatus, Subagent, SubagentStatus, ThreadId, ThreadShell, Timestamp, TurnItem,
@@ -463,7 +463,7 @@ async fn force_stop(ctx: Arc<ConnCtx>, input: ForceStopInput) -> Result<ForceSto
     };
     if let Some(run) = target.filter(|run| is_active_run(run)) {
         let interrupt = RunInterrupt {
-            command_id: format!("server:force-stop:{}:{}", run.id, domovoi_contracts::time_fmt::now_millis()).into(),
+            command_id: format!("server:force-stop:{}:{}", run.id, crate::time_fmt::now_millis()).into(),
             thread_id: input.thread_id.as_str().into(),
             run_id: Some(run.id.clone()),
             reason: Some("force-stop".into()),

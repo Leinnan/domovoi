@@ -3,8 +3,8 @@ use super::*;
 use crate::db::Db;
 use crate::orchestration::events::Origin;
 use serde_json::json;
-use domovoi_contracts::shell::ProjectShell;
-use domovoi_contracts::time_fmt::{iso_from_millis, now_millis};
+use crate::wire::shell::ProjectShell;
+use crate::time_fmt::{iso_from_millis, now_millis};
 use domovoi_model::typed::command::{
     MessageDispatch, QueueResume, QueuedRunCancel, QueuedRunEdit, QueuedRunReorder, RunInterrupt, ThreadActiveReorder, ThreadArchive,
     ThreadAutoSettleSet, ThreadDelete, ThreadFork, ThreadMarkUnread, ThreadMergeBack, ThreadMetadataUpdate, ThreadPinReorder, ThreadRuntimeModeSet,
@@ -69,7 +69,7 @@ fn message(id: &str, text: &str, mode: DispatchMode) -> Command {
 }
 
 fn visit(thread: &str, command: &str) -> Command {
-    ThreadVisit { command_id: command.into(), thread_id: thread.into(), visited_at: domovoi_contracts::iso_now().into(), opened: None, search_query: None }.into()
+    ThreadVisit { command_id: command.into(), thread_id: thread.into(), visited_at: crate::time_fmt::iso_now().into(), opened: None, search_query: None }.into()
 }
 
 fn steer(run: &str) -> DispatchMode {
@@ -614,7 +614,6 @@ async fn launch_emits_thread_run_message_and_starts_turn() {
     assert_eq!(p.runs[0].status, RunStatus::Starting);
     assert_eq!(p.messages[0].text, "hello");
     assert_eq!(p.turn_items[0].ordinal(), 1_000_001);
-    assert!(p.visible_turn_items.is_empty(), "the timeline as shown is derived by the reader");
     assert_eq!(p.thread.active_provider_thread_id.as_ref(), Some(&p.provider_threads[0].id));
     assert!(matches!(fx.recv().await, Some(Effect::StartTurn { .. })));
     // Idempotent by commandId.

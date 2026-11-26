@@ -219,7 +219,7 @@ pub mod requests {
     }
 
     fn now_ms() -> i64 {
-        domovoi_contracts::time_fmt::now_millis()
+        crate::time_fmt::now_millis()
     }
 
     /// Keeps a card's answer. A value already saved for the card (an earlier

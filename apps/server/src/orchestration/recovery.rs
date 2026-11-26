@@ -68,7 +68,7 @@ pub fn settle_dead_run(store: &Store, tid: &str, run_id: &str, message: &str) ->
 }
 
 fn interrupt(store: &Store, tid: &str, run: &Run, outline: &Outline, items: &[std::sync::Arc<TurnItem>], messages: &[std::sync::Arc<ConversationMessage>]) {
-    let ts = Timestamp::from(domovoi_contracts::iso_now());
+    let ts = Timestamp::from(crate::time_fmt::iso_now());
     let o = Origin { provider_instance_id: Some(run.provider_instance_id.as_str().to_owned()), ..Default::default() };
     fn emit<R: Kept>(store: &Store, tid: &str, o: &Origin, record: R) {
         let event = record.updated();
@@ -130,7 +130,7 @@ fn interrupt(store: &Store, tid: &str, run: &Run, outline: &Outline, items: &[st
 /// What belongs to the thread rather than one run: requests no process will
 /// answer, and provider threads still marked active.
 fn settle_thread(store: &Store, tid: &str, outline: &Outline) {
-    let ts = Timestamp::from(domovoi_contracts::iso_now());
+    let ts = Timestamp::from(crate::time_fmt::iso_now());
     let o = Origin::default();
     for request in outline.runtime_requests.iter().filter(|request| request.status == RuntimeRequestStatus::Pending
         && !(request.kind == domovoi_model::typed::RuntimeRequestKind::UserInput

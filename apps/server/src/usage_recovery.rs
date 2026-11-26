@@ -63,7 +63,7 @@ pub async fn look(state: &SharedState) {
         let s = state.settings.read().await;
         (s.auto_resume_limited_threads == Some(true), s.snooze_limited_threads == Some(true))
     };
-    let now = domovoi_contracts::time_fmt::now_millis();
+    let now = crate::time_fmt::now_millis();
     let Ok(threads) = state.store.app_threads() else { return };
     for t in threads.into_iter().filter(|t| t.deleted_at.is_none() && t.archived_at.is_none()) {
         let tid = t.id.as_str().to_owned();

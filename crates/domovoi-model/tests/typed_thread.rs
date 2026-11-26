@@ -141,8 +141,6 @@ impl Checked {
         assert!(rebuilt == self.thread, "the projection describes another thread after {after}");
 
         // The timeline as shown: each row carries the item at its place, and the shell counts the rows.
-        // A projection sends none of it: the rows are derived from the items.
-        assert!(projection.visible_turn_items.is_empty(), "a projection carries visible rows after {after}");
         let visible = self.thread.visible_turn_item_refs();
         let rows = self.thread.visible_turn_items();
         assert_eq!(rows.len(), visible.len(), "the visible turn items differ after {after}");
@@ -355,7 +353,7 @@ const ITEM_TYPES: [&str; 10] = [
 
 /// The capabilities of a provider session, as the server writes them for a Codex session.
 fn capabilities() -> Value {
-    let by_driver: Value = serde_json::from_str(include_str!("../../domovoi-contracts/defaults/provider-capabilities.json")).unwrap();
+    let by_driver: Value = serde_json::from_str(include_str!("../../../apps/server/defaults/provider-capabilities.json")).unwrap();
     by_driver["codex"].clone()
 }
 
@@ -382,7 +380,7 @@ impl Generator {
             "lineage": { "parentThreadId": null, "relationshipToParent": null, "rootThreadId": THREAD }, "forkedFrom": null,
             "createdAt": "2026-01-01T00:00:00.000Z", "updatedAt": "2026-01-01T00:00:00.000Z", "archivedAt": null, "deletedAt": null,
         });
-        let mut projection = json!({ "thread": thread, "visibleTurnItems": [], "updatedAt": "2026-01-01T00:00:00.000Z" });
+        let mut projection = json!({ "thread": thread, "updatedAt": "2026-01-01T00:00:00.000Z" });
         for kind in KINDS {
             projection[kind.collection()] = json!([]);
         }
@@ -971,27 +969,6 @@ fn generated_events_follow_the_rules() {
     for status in ["approval", "working", "failed", "interrupted", "completed", "idle"] {
         assert!(generator.statuses.get(status).copied().unwrap_or(0) > 5, "the generated thread's shell was `{status}` too rarely");
     }
-
-    // A snapshot of the thread as it is now, sent with its visible rows and the
-    // items of those rows left out of `turnItems`. A row inherited from another
-    // thread is not one of this thread's items, and is not restored as one.
-    generator.checked.check_stored();
-    let mut projection = generator.checked.held.clone();
-    let visible: Vec<Value> = serde_json::to_value(generator.checked.thread.visible_turn_items()).unwrap().as_array().unwrap().clone();
-    projection["visibleTurnItems"] = json!(visible);
-    assert!(visible.len() > 20 && visible.len() < generator.checked.thread.turn_items.len(), "some items are visible and some are hidden");
-    projection["turnItems"].as_array_mut().unwrap().retain(|item| !visible.iter().any(|row| row["sourceItemId"] == item["id"]));
-    let mut inherited = visible[0].clone();
-    inherited["visibility"] = json!("inherited");
-    inherited["sourceThreadId"] = json!("thread-parent");
-    inherited["sourceItemId"] = json!("item-inherited");
-    inherited["item"]["id"] = json!("item-inherited");
-    inherited["item"]["threadId"] = json!("thread-parent");
-    projection["visibleTurnItems"].as_array_mut().unwrap().insert(0, inherited);
-    let mut restored = Checked::from_snapshot(&json!({ "kind": "snapshot", "snapshotSequence": 9, "projection": projection, "turnItemsOmitLocalVisible": true }));
-    restored.check("a snapshot that leaves visible items out");
-    assert_eq!(restored.held, generator.checked.held, "the thread is the one the snapshot was taken of");
-    assert!(!restored.thread.turn_items.contains("item-inherited"));
 
     for case in [
         "a new record", "text grows", "a status flips", "an ordinal changes", "a provider session is detached", "an event of an unknown type",

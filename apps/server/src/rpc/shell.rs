@@ -23,7 +23,7 @@ use serde::de::IgnoredAny;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use std::sync::Arc;
-use domovoi_contracts::shell::{ProjectRecord, ProjectShell, SHELL_SCHEMA_VERSION, ShellSnapshot, ShellStreamItem};
+use crate::wire::shell::{ProjectRecord, ProjectShell, SHELL_SCHEMA_VERSION, ShellSnapshot, ShellStreamItem};
 use domovoi_model::typed::{Command, ModelSelection, ProjectIcon, ProjectScript, ThreadEnvMode, ThreadLaunchInput, ThreadShell};
 use tokio::sync::broadcast::error::RecvError;
 
@@ -489,7 +489,7 @@ fn mutation_error(command_id: &str, message: impl Into<String>) -> MutationFailu
 }
 
 pub fn apply_project_update(p: &mut ProjectShell, c: ProjectChanges) -> Result<(), String> {
-    let now = || Some(domovoi_contracts::iso_now());
+    let now = || Some(crate::time_fmt::iso_now());
     if let Some(title) = c.title {
         if title.trim().is_empty() {
             return Err("Project title cannot be empty.".into());
@@ -544,7 +544,7 @@ async fn mutate(ctx: Arc<ConnCtx>, m: ProjectMutation) -> Result<ProjectRecord, 
                 }
                 std::fs::create_dir_all(root).map_err(|e| mutation_error(&command_id, e.to_string()))?;
             }
-            let now = domovoi_contracts::iso_now();
+            let now = crate::time_fmt::iso_now();
             let shell = ProjectShell {
                 id: project_id,
                 title,
@@ -575,7 +575,7 @@ async fn mutate(ctx: Arc<ConnCtx>, m: ProjectMutation) -> Result<ProjectRecord, 
                 if reset_icon && crate::managed::is_scratch_root(&project.workspace_root) {
                     project.project_icon = Some(crate::project_icons::scratch_default());
                 }
-                project.updated_at = domovoi_contracts::iso_now();
+                project.updated_at = crate::time_fmt::iso_now();
                 store.update_project(project.clone(), Some(&command_id))?;
                 Ok(ProjectRecord::from(&project))
             }).map_err(|e| mutation_error(&command_id, e.to_string()))
@@ -587,7 +587,7 @@ async fn mutate(ctx: Arc<ConnCtx>, m: ProjectMutation) -> Result<ProjectRecord, 
                 .ok_or_else(|| mutation_error(&command_id, "Unknown project."))?;
             store.delete_project(&project_id, Some(&command_id)).map_err(|e| mutation_error(&command_id, e.to_string()))?;
             let mut record = ProjectRecord::from(&project);
-            record.deleted_at = Some(domovoi_contracts::iso_now());
+            record.deleted_at = Some(crate::time_fmt::iso_now());
             Ok(record)
         }
     }

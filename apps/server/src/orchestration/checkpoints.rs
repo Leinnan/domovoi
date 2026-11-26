@@ -53,7 +53,7 @@ pub async fn ensure_baseline(store: &Store, thread_id: &str, run: &Run) {
         status,
         files: Vec::new(),
         files_total: None,
-        captured_at: Timestamp::from(domovoi_contracts::iso_now()),
+        captured_at: Timestamp::from(crate::time_fmt::iso_now()),
     };
     let _ = store.append_event(thread_id, EventBody::CheckpointCaptured(Box::new(baseline)), &Origin::default());
 }
@@ -80,7 +80,7 @@ pub async fn capture_after_run(store: &Store, thread_id: &str, run: &Run) -> Opt
     // A checkpoint is taken under its run's root node: a run without one records none.
     let node_id = run.root_node_id.clone()?;
     let id = CheckpointId::from(checkpoint_id(&scope, n));
-    let ts = Timestamp::from(domovoi_contracts::iso_now());
+    let ts = Timestamp::from(crate::time_fmt::iso_now());
     let instance = run.provider_instance_id.as_str();
     let o = Origin { provider_instance_id: Some(instance.into()), ..Default::default() };
     let taken = Checkpoint {
@@ -178,7 +178,7 @@ mod tests {
     use super::*;
     use crate::db::Db;
     use crate::orchestration::commands::Orchestrator;
-    use domovoi_contracts::shell::ProjectShell;
+    use crate::wire::shell::ProjectShell;
 
     #[tokio::test]
     async fn baseline_then_run_checkpoint_with_files_and_diff() {

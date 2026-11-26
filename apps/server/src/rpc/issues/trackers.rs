@@ -99,7 +99,7 @@ fn set_binding(state: &AppState, project_id: &str, binding: Option<&IssueTracker
             Some(b) => conn.execute(
                 "INSERT INTO issue_tracker_bindings (project_id, tracker, scope, updated_at) VALUES (?1, ?2, ?3, ?4)
                  ON CONFLICT (project_id) DO UPDATE SET tracker = excluded.tracker, scope = excluded.scope, updated_at = excluded.updated_at",
-                params![project_id, b.tracker, b.scope.trim(), domovoi_contracts::iso_now()],
+                params![project_id, b.tracker, b.scope.trim(), crate::time_fmt::iso_now()],
             )?,
         };
         Ok(())

@@ -395,7 +395,7 @@ impl PreviewManager {
             Some(url) => NavStatus::Loading { url: normalize_preview_url(url)?, title: String::new() },
             None => NavStatus::Idle,
         };
-        let updated_at = domovoi_contracts::iso_now();
+        let updated_at = crate::time_fmt::iso_now();
         let snapshot = Snapshot {
             thread_id: input.thread_id.clone(),
             tab_id: tab_id.clone(),
@@ -436,7 +436,7 @@ impl PreviewManager {
             return Err(Failure::no_session(thread_id, tab_id));
         };
         let mut next = current.clone();
-        let at = domovoi_contracts::iso_now();
+        let at = crate::time_fmt::iso_now();
         let change = f(&mut next, &at)?;
         state.revision += 1;
         state.sessions.insert(key, next.clone());
@@ -518,7 +518,7 @@ impl PreviewManager {
     }
 
     pub fn close(&self, epoch: &str, input: CloseInput) {
-        let created_at = domovoi_contracts::iso_now();
+        let created_at = crate::time_fmt::iso_now();
         let mut state = crate::util::locked(&self.state);
         let targets: Vec<(String, String)> = state
             .sessions

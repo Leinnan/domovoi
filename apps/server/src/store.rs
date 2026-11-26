@@ -5,7 +5,7 @@
 use crate::db::Db;
 use rusqlite::{OptionalExtension, params};
 use std::sync::Arc;
-use domovoi_contracts::shell::ProjectShell;
+use crate::wire::shell::ProjectShell;
 use domovoi_model::typed::{DomainEvent, ThreadShell};
 use tokio::sync::broadcast;
 
@@ -116,7 +116,7 @@ impl Store {
     ) -> Result<Arc<StoredEvent>, StoreError> {
         let stored = self.db.with(|c| {
             let tx = c.savepoint()?;
-            let sequence = insert_event(&tx, aggregate_kind, aggregate_id, event_type, payload, &domovoi_contracts::iso_now(), command_id)?;
+            let sequence = insert_event(&tx, aggregate_kind, aggregate_id, event_type, payload, &crate::time_fmt::iso_now(), command_id)?;
             project(&tx)?;
             tx.commit()?;
             let stored = Arc::new(StoredEvent {

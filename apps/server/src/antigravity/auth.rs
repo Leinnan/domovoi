@@ -349,7 +349,7 @@ pub async fn start(instance: &str, owner: &str) -> Result<AuthState, Failure> {
         inner.operation = Operation::Auth;
         inner.flow = Some(Flow { id: flow_id.clone(), owner: owner.to_owned(), expires: tokio::time::Instant::now() + AUTH_TIMEOUT, pending: None, callback_sent: false, task: None, rpc: None });
     }
-    let expires_at = domovoi_contracts::time_fmt::iso_from_millis(domovoi_contracts::time_fmt::now_millis() + AUTH_TIMEOUT.as_millis() as i64);
+    let expires_at = crate::time_fmt::iso_from_millis(crate::time_fmt::now_millis() + AUTH_TIMEOUT.as_millis() as i64);
     let state = AuthState {
         instance_id: instance.to_owned(),
         phase: "starting",

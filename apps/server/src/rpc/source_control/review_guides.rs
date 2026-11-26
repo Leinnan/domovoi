@@ -238,7 +238,7 @@ pub fn start(userdata: PathBuf, key: String, root: String, change: Change, head:
         if r.get(&key).is_some_and(|run| matches!(run, GuideRun::Running { head_sha, .. } if *head_sha == head)) {
             return;
         }
-        r.insert(key.clone(), GuideRun::Running { head_sha: head.clone(), started_at: domovoi_contracts::iso_now().into() });
+        r.insert(key.clone(), GuideRun::Running { head_sha: head.clone(), started_at: crate::time_fmt::iso_now().into() });
     }
     tokio::spawn(async move {
         let outcome = write(&userdata, &key, &root, &change, &head, &settings).await;
@@ -250,7 +250,7 @@ pub fn start(userdata: PathBuf, key: String, root: String, change: Change, head:
             Err(detail) => {
                 tracing::warn!(%key, "review guide failed: {detail}");
                 let detail = if detail.trim().is_empty() { "The review guide could not be written.".into() } else { detail };
-                r.insert(key, GuideRun::Failed { head_sha: head, failed_at: domovoi_contracts::iso_now().into(), detail });
+                r.insert(key, GuideRun::Failed { head_sha: head, failed_at: crate::time_fmt::iso_now().into(), detail });
             }
         }
     });
@@ -278,7 +278,7 @@ async fn write(userdata: &Path, key: &str, root: &str, c: &Change, head: &str, s
     }
     // A guide names the model that wrote it; the general selection may name less than a model.
     let model_selection: ModelSelection = settings.model.selection().ok_or_else(|| "The model selected for review guides cannot be named in a guide.".to_owned())?;
-    let guide = ReviewGuide { head_sha: head.to_owned(), generated_at: domovoi_contracts::iso_now().into(), model_selection, stops };
+    let guide = ReviewGuide { head_sha: head.to_owned(), generated_at: crate::time_fmt::iso_now().into(), model_selection, stops };
     let p = path(userdata, key);
     std::fs::create_dir_all(p.parent().expect("a file under the guides directory")).map_err(|e| e.to_string())?;
     std::fs::write(&p, serde_json::to_vec_pretty(&guide).map_err(|e| e.to_string())?).map_err(|e| e.to_string())

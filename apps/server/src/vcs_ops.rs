@@ -520,7 +520,7 @@ pub async fn diff_preview(input: &DiffPreviewInput) -> Result<ReviewDiffPreviewR
     let cwd = input.cwd.as_str();
     let preview = |sources: Vec<ReviewDiffPreviewSource>, incomplete: Option<bool>| ReviewDiffPreviewResult {
         cwd: cwd.to_owned(),
-        generated_at: domovoi_contracts::iso_now().into(),
+        generated_at: crate::time_fmt::iso_now().into(),
         sources,
         incomplete,
     };
@@ -895,7 +895,7 @@ pub async fn auto_pull_blocker(cwd: &str) -> Option<&'static str> {
 
 /// Fast-forwards each project marked for it (`autoPull`, or the
 /// `defaultAutoPull` / `projectAutoPullOverrides` settings) at startup.
-pub async fn auto_pull_projects(projects: &[domovoi_contracts::shell::ProjectShell], settings: &domovoi_model::typed::ServerSettings) {
+pub async fn auto_pull_projects(projects: &[crate::wire::shell::ProjectShell], settings: &domovoi_model::typed::ServerSettings) {
     let overrides = settings.project_auto_pull_overrides.as_ref();
     let mut roots: Vec<&str> = projects.iter().filter(|p| p.archived_at.is_none()).filter(|p| {
         overrides.and_then(|overrides| overrides.get(p.id.as_str()).copied())

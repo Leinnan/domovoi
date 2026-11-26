@@ -91,7 +91,7 @@ pub fn protocol_log(path: std::path::PathBuf) -> impl Fn(&str, &serde_json::Valu
     std::thread::spawn(move || write_protocol_log(&path, &queued, PROTOCOL_LOG_MAX_BYTES));
     let lines = std::sync::Mutex::new(lines);
     move |direction: &str, msg: &serde_json::Value| {
-        let line = serde_json::json!({ "t": domovoi_contracts::iso_now(), "direction": direction, "payload": msg }).to_string();
+        let line = serde_json::json!({ "t": crate::time_fmt::iso_now(), "direction": direction, "payload": msg }).to_string();
         let _ = crate::util::locked(&lines).send(line);
     }
 }

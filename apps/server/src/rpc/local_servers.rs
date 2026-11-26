@@ -395,7 +395,7 @@ struct LocalServerList {
 
 impl LocalServerList {
     fn now(servers: &[LocalServer]) -> Self {
-        LocalServerList { servers: servers.to_vec(), scanned_at: domovoi_contracts::iso_now(), configured_url_probing: true }
+        LocalServerList { servers: servers.to_vec(), scanned_at: crate::time_fmt::iso_now(), configured_url_probing: true }
     }
 }
 

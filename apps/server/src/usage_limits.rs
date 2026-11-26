@@ -53,7 +53,7 @@ fn changed() {
 /// Whether the instance's limits were checked more than `age` ago (or never).
 pub fn stale(instance: &str, age: std::time::Duration) -> bool {
     let Some(limits) = get(instance) else { return true };
-    domovoi_contracts::time_fmt::millis_from_iso(limits.checked_at.as_str()).is_none_or(|checked| domovoi_contracts::time_fmt::now_millis() - checked > age.as_millis() as i64)
+    crate::time_fmt::millis_from_iso(limits.checked_at.as_str()).is_none_or(|checked| crate::time_fmt::now_millis() - checked > age.as_millis() as i64)
 }
 
 /// The instance's limits as last reported.
@@ -69,7 +69,7 @@ pub fn merge(instance: &str, windows: Vec<ServerProviderUsageWindow>) {
     let changed = {
         let mut all = LIMITS.write().unwrap_or_else(|e| e.into_inner());
         let all = all.get_or_insert_with(HashMap::new);
-        let checked_at = Timestamp::from(domovoi_contracts::iso_now());
+        let checked_at = Timestamp::from(crate::time_fmt::iso_now());
         let entry = all.entry(instance.to_owned()).or_insert_with(|| ServerProviderUsageLimits {
             checked_at: checked_at.clone(),
             windows: ForwardList::default(),
@@ -123,7 +123,7 @@ pub fn set(instance: &str, limits: ServerProviderUsageLimits) {
 
 fn iso_from_epoch_seconds(v: &Value) -> Option<Timestamp> {
     let secs = v.as_f64().filter(|s| s.is_finite() && *s > 0.0)?;
-    Some(Timestamp::from(domovoi_contracts::time_fmt::iso_from_millis((secs * 1000.0) as i64)))
+    Some(Timestamp::from(crate::time_fmt::iso_from_millis((secs * 1000.0) as i64)))
 }
 
 fn percent(v: f64) -> serde_json::Number {
@@ -162,8 +162,8 @@ pub fn claude_windows(info: &Value) -> Vec<ServerProviderUsageWindow> {
 }
 
 fn iso_from_text(v: &Value) -> Option<Timestamp> {
-    let millis = domovoi_contracts::time_fmt::millis_from_iso(v.as_str()?)?;
-    Some(Timestamp::from(domovoi_contracts::time_fmt::iso_from_millis(millis)))
+    let millis = crate::time_fmt::millis_from_iso(v.as_str()?)?;
+    Some(Timestamp::from(crate::time_fmt::iso_from_millis(millis)))
 }
 
 fn slug(name: &str) -> String {
@@ -191,7 +191,7 @@ fn share(used: &Value, limit: &Value) -> Option<f64> {
 /// says so.
 pub fn claude_usage_limits(response: &Value) -> ServerProviderUsageLimits {
     use domovoi_model::typed::{ServerProviderUsageUnavailable, ServerProviderUsageUnavailableReason as Reason};
-    let checked_at = Timestamp::from(domovoi_contracts::iso_now());
+    let checked_at = Timestamp::from(crate::time_fmt::iso_now());
     let limits = &response["rate_limits"];
     let unavailable = |reason| ServerProviderUsageLimits {
         checked_at: checked_at.clone(),
@@ -304,7 +304,7 @@ pub fn exhausted_reset_at(instance: &str) -> Option<Timestamp> {
         .filter(|w| w.used_percent.as_f64().is_some_and(|p| p >= 100.0))
         .filter_map(|w| w.resets_at.clone())
         // A window already past its reset is open again.
-        .filter(|r| domovoi_contracts::time_fmt::millis_from_iso(r.as_str()).is_some_and(|at| at > domovoi_contracts::time_fmt::now_millis()))
+        .filter(|r| crate::time_fmt::millis_from_iso(r.as_str()).is_some_and(|at| at > crate::time_fmt::now_millis()))
         .max_by(|a, b| a.as_str().cmp(b.as_str()))
 }
 
@@ -366,7 +366,7 @@ mod tests {
     #[test]
     fn codex_snapshots_become_windows() {
         // As codex-cli 0.170 sends one.
-        let soon = domovoi_contracts::time_fmt::now_millis() / 1000 + 3600;
+        let soon = crate::time_fmt::now_millis() / 1000 + 3600;
         let snapshot = json!({ "limitId": "codex", "primary": { "usedPercent": 100, "windowDurationMins": 300, "resetsAt": soon },
             "secondary": { "usedPercent": 4, "windowDurationMins": 10080, "resetsAt": soon + 86_400 }, "planType": "plus", "individualLimit": null });
         let w = codex_windows(&snapshot);

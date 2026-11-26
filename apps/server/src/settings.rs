@@ -354,7 +354,7 @@ fn deep_merge(current: &mut Value, patch: &Value) {
 
 /// The built-in defaults as a settings document.
 pub fn default_document() -> Map<String, Value> {
-    encoded(&domovoi_contracts::defaults::settings())
+    encoded(&crate::defaults::settings())
 }
 
 /// The settings file as saved, if it holds an object.
@@ -700,7 +700,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(path(&dir), odd().to_string()).unwrap();
         let loaded = load(&dir);
-        let mut expected = Value::Object(encoded(&domovoi_contracts::defaults::settings()));
+        let mut expected = Value::Object(encoded(&crate::defaults::settings()));
         deep_merge(&mut expected, &odd());
         assert_eq!(loaded.document(), expected, "the file over the defaults");
         save(&dir, &loaded).unwrap();
@@ -710,7 +710,7 @@ mod tests {
 
         // A file that is no object is no settings file.
         std::fs::write(path(&dir), "[1, 2]").unwrap();
-        assert_eq!(load(&dir).document(), Value::Object(encoded(&domovoi_contracts::defaults::settings())));
+        assert_eq!(load(&dir).document(), Value::Object(encoded(&crate::defaults::settings())));
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -733,8 +733,8 @@ mod tests {
 
     #[test]
     fn the_default_settings_are_all_read() {
-        let settings = Settings::from_document(encoded(&domovoi_contracts::defaults::settings()));
+        let settings = Settings::from_document(encoded(&crate::defaults::settings()));
         assert!(settings.unknown.is_empty());
-        assert_eq!(*settings, domovoi_contracts::defaults::settings());
+        assert_eq!(*settings, crate::defaults::settings());
     }
 }

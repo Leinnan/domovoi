@@ -129,7 +129,7 @@ pub(crate) fn message_of_reply(shown: &domovoi_model::typed::AssistantMessageIte
 /// read and decoded once, not for every session a turn records.
 fn capabilities_of(driver: &str) -> Option<ProviderCapabilities> {
     static BY_DRIVER: std::sync::LazyLock<HashMap<String, ProviderCapabilities>> = std::sync::LazyLock::new(|| {
-        let Value::Object(by_driver) = domovoi_contracts::defaults::provider_capabilities() else { return HashMap::new() };
+        let Value::Object(by_driver) = crate::defaults::provider_capabilities() else { return HashMap::new() };
         by_driver.into_iter().filter_map(|(driver, capabilities)| Some((driver, serde_json::from_value(capabilities).ok()?))).collect()
     });
     BY_DRIVER.get(driver).cloned()
@@ -284,7 +284,7 @@ pub struct Turn {
 }
 
 pub(super) fn now() -> Timestamp {
-    Timestamp::from(domovoi_contracts::iso_now())
+    Timestamp::from(crate::time_fmt::iso_now())
 }
 
 pub(super) fn native_ref(driver: &str, id: &str) -> ProviderRef {
@@ -586,22 +586,19 @@ impl Turn {
         format!("{prefix}:provider:{}:native-item:{}", self.driver, enc(native_id))
     }
 
-    /// Brings the node of the native item `native_id` to `status` and records
-    /// it if that changed it; the node's id. A streaming reply flushes many
-    /// times in one status: its node is written once when it starts and once
-    /// when it ends.
+    /// Brings the node of the native item `native_id` to `status`; the node's id.
     fn node_in(&mut self, native_id: &str, kind: NodeKind, status: NodeStatus, node_id: String) -> NodeId {
-        let before = self.nodes.get(native_id).cloned();
-        let node = self.node_for(native_id, kind, status, Some(self.root.clone()), None, node_id);
-        let id = node.id.clone();
-        if before.as_ref() != Some(&node) {
-            self.emit(EventBody::NodeUpdated(Box::new(node)));
-        }
-        id
+        self.node_for(native_id, kind, status, Some(self.root.clone()), None, node_id).id
     }
 
-    /// The node of the native item `native_id` in `status`: the one already
-    /// written, or a new one with the given id, kind and place.
+    /// The node of the native item `native_id` in `status`: the one the
+    /// turn already holds, or a new one with the given id, kind and place.
+    ///
+    /// An item's node is kept by the turn only: its id is what the item, its
+    /// plan and its requests are told apart by, and where a request hangs
+    /// under its item. It is not recorded. Nothing reads a node but a run's
+    /// root and a subagent's (which are recorded where they are made), and a
+    /// node per item was a second record written for everything an agent did.
     fn node_for(
         &mut self,
         native_id: &str,
@@ -780,9 +777,7 @@ impl Turn {
             Plan::Proposed { .. } => NodeKind::Plan,
             Plan::Todo { .. } => NodeKind::TodoList,
         };
-        let node = self.node_for(native_id, node_kind, node_status(&status), Some(self.root.clone()), None, self.native_item_id("node", native_id));
-        let node_id = node.id.clone();
-        self.emit(EventBody::NodeUpdated(Box::new(node)));
+        let node_id = self.node_in(native_id, node_kind, node_status(&status), self.native_item_id("node", native_id));
         let plan_id = PlanId::from(self.native_item_id("plan", native_id));
         let (thread_id, run_id) = (ThreadId::from(self.thread_id.as_str()), Some(self.run.id.clone()));
         let shared = self.shared(native_id, self.native_item_id("turn-item", native_id), &node_id, native_id, status);
@@ -938,9 +933,7 @@ impl Turn {
         let parent = self.nodes.get(native_item_id).map_or_else(|| self.root.clone(), |node| node.id.clone());
         let node_id = format!("node:runtime-request:{}", enc(&request_id));
         let id = RuntimeRequestId::from(request_id.as_str());
-        let node = self.node_for(&request_id, NodeKind::ApprovalRequest, NodeStatus::Waiting, Some(parent), Some(id.clone()), node_id);
-        let node_id = node.id.clone();
-        self.emit(EventBody::NodeUpdated(Box::new(node)));
+        let node_id = self.node_for(&request_id, NodeKind::ApprovalRequest, NodeStatus::Waiting, Some(parent), Some(id.clone()), node_id).id;
         let item_id = format!("turn-item:runtime-request:{}", enc(&request_id));
         let shared = self.shared(&request_id, item_id, &node_id, native_item_id, TurnItemStatus::Waiting);
         (id, node_id, shared)
@@ -1047,8 +1040,7 @@ impl Turn {
         self.emit(EventBody::RuntimeRequestUpdated(Box::new(request)));
         if self.nodes.contains_key(request_id) {
             let status = if cancelled { NodeStatus::Cancelled } else { NodeStatus::Completed };
-            let node = self.node_for(request_id, NodeKind::ApprovalRequest, status, None, None, String::new());
-            self.emit(EventBody::NodeUpdated(Box::new(node)));
+            self.node_for(request_id, NodeKind::ApprovalRequest, status, None, None, String::new());
         }
         if let Some(mut item) = self.items.remove(request_id) {
             let status = if cancelled { TurnItemStatus::Cancelled } else { TurnItemStatus::Completed };
@@ -1167,7 +1159,7 @@ mod tests {
     async fn turn_on(instance: &str) -> (Store, Turn) {
         let store = Store::new(crate::db::Db::open_in_memory().expect("db"));
         store
-            .create_project(domovoi_contracts::shell::ProjectShell {
+            .create_project(crate::wire::shell::ProjectShell {
                 id: "p".into(), title: "p".into(), has_custom_title: false, workspace_root: std::env::temp_dir().to_string_lossy().into(),
                 repository_identity: None, default_model_selection: None, default_thread_env_mode: None, auto_pull: false,
                 favicon_path: None, project_icon: None, scripts: vec![], pinned_at: None, archived_at: None,

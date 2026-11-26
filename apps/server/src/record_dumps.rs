@@ -168,8 +168,8 @@ fn append(store: &Store, thread_id: &str, event_type: &str, payload: Value) {
     test_records::append(store, thread_id, event_type, payload, &Origin::default()).expect("the test's event is stored");
 }
 
-fn project(id: &str, root: &Path) -> domovoi_contracts::shell::ProjectShell {
-    domovoi_contracts::shell::ProjectShell {
+fn project(id: &str, root: &Path) -> crate::wire::shell::ProjectShell {
+    crate::wire::shell::ProjectShell {
         id: id.into(), title: id.into(), has_custom_title: false, workspace_root: root.to_string_lossy().into(),
         repository_identity: None, default_model_selection: None, default_thread_env_mode: None, auto_pull: false,
         favicon_path: None, project_icon: None, scripts: vec![], pinned_at: None, archived_at: None,

@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
-use domovoi_contracts::auth::AuthInvalidError;
+use crate::wire::auth::AuthInvalidError;
 use domovoi_model::typed::{
     AuthAccessTokenResult, AuthTokenType, AuthWebSocketTicketResult, HostNotAllowedRejection, InternalRejection, LocalSessionRequest, LocalSessionResult,
     OperationForbiddenRejection, RateLimitedRejection, RemoteAccessRejection, RequestInvalidRejection, RequestRejection, ScopeRequiredRejection,

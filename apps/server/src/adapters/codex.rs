@@ -80,7 +80,7 @@ impl CodexServer {
         });
         rpc.request("initialize", json!({
             "capabilities": { "experimentalApi": true },
-            "clientInfo": { "name": "T3 Code", "title": "T3 Code", "version": domovoi_contracts::environment::SERVER_VERSION },
+            "clientInfo": { "name": "T3 Code", "title": "T3 Code", "version": crate::wire::environment::SERVER_VERSION },
         })).await.map_err(|e| format!("codex initialize failed: {e}"))?;
         rpc.notify("initialized", None).await.map_err(|e| e.to_string())?;
         let server = Arc::new(CodexServer { rpc, routes, loaded: Mutex::new(HashSet::new()) });

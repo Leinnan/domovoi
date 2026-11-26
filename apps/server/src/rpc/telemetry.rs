@@ -23,7 +23,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
-use domovoi_contracts::time_fmt::{iso_from_millis, now_millis};
+use crate::time_fmt::{iso_from_millis, now_millis};
 use domovoi_model::typed::{
     HostResourcesSnapshot, ServerProcessDiagnosticsEntry, ServerProcessDiagnosticsError, ServerProcessDiagnosticsResult, TaggedOption, Timestamp,
 };

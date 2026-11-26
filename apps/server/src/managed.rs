@@ -78,7 +78,7 @@ pub fn folder_words(text: &str) -> String {
 pub fn folder_for_thread(project_root: &str, thread_id: &str, text: &str) -> std::io::Result<Option<String>> {
     let Some(root) = scratch_root().filter(|r| same_dir(Path::new(project_root), r)) else { return Ok(None) };
     std::fs::create_dir_all(&root)?;
-    let date = &domovoi_contracts::iso_now()[..10];
+    let date = &crate::time_fmt::iso_now()[..10];
     let words = folder_words(text);
     let id: String = thread_id.to_lowercase().chars().filter(|c| c.is_ascii_alphanumeric()).collect();
     let folder_for = |id_part: &str| root.join([date, &words, id_part].iter().filter(|s| !s.is_empty()).copied().collect::<Vec<_>>().join("-"));

@@ -106,7 +106,7 @@ pub fn upsert(store: &Store, input: UpsertInput<'_>) -> Result<(ArtifactSummary,
     if input.content.len() > MAX_CONTENT_BYTES {
         return Err(format!("Artifact content exceeds the {} MiB limit.", MAX_CONTENT_BYTES / (1024 * 1024)));
     }
-    let now = domovoi_contracts::iso_now();
+    let now = crate::time_fmt::iso_now();
     let kind = normalize_kind(input.kind);
     let title = input.title.trim();
     let title = if title.is_empty() { "Untitled artifact" } else { title };
@@ -300,7 +300,7 @@ pub fn issue_bundle(userdata: &Path, cwd: &str, relative_path: &str) -> Result<A
         .file_name()
         .and_then(|n| n.to_str())
         .ok_or_else(|| err("Invalid artifact filename."))?;
-    let expires_at = domovoi_contracts::now_millis() + TTL_MS;
+    let expires_at = crate::time_fmt::now_millis() + TTL_MS;
     let claims = BundleClaims {
         kind: BUNDLE_KIND.into(),
         root: root.to_string_lossy().into_owned(),
@@ -344,7 +344,7 @@ fn mime_for_path(path: &Path) -> &'static str {
 /// confined to the original canonical workspace root.
 pub fn read_bundle(userdata: &Path, token: &str, rel_path: &str) -> Option<(&'static str, Vec<u8>)> {
     let claims: BundleClaims = attachments::verify_asset_claims(userdata, token)?;
-    if claims.kind != BUNDLE_KIND || claims.expires_at <= domovoi_contracts::now_millis() {
+    if claims.kind != BUNDLE_KIND || claims.expires_at <= crate::time_fmt::now_millis() {
         return None;
     }
     if rel_path.is_empty() || rel_path.contains('\0') {
@@ -443,7 +443,7 @@ pub fn issue_react_preview(userdata: &Path, source: &str, dark: bool) -> Result<
             cache.push_back(CachedReact { digest: digest.clone(), html });
         }
     }
-    let expires_at = domovoi_contracts::now_millis() + TTL_MS;
+    let expires_at = crate::time_fmt::now_millis() + TTL_MS;
     let claims = ReactClaims { kind: REACT_KIND.into(), digest, expires_at };
     let token = attachments::sign_asset_claims(userdata, &claims).map_err(|_| err("Could not sign React preview URL."))?;
     Ok(AssetCreateUrlResult {
@@ -457,7 +457,7 @@ pub fn issue_react_preview(userdata: &Path, source: &str, dark: bool) -> Result<
 
 pub fn read_react_preview(userdata: &Path, token: &str) -> Option<Vec<u8>> {
     let claims: ReactClaims = attachments::verify_asset_claims(userdata, token)?;
-    if claims.kind != REACT_KIND || claims.expires_at <= domovoi_contracts::now_millis() {
+    if claims.kind != REACT_KIND || claims.expires_at <= crate::time_fmt::now_millis() {
         return None;
     }
     let mut cache = react_cache();

@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 use domovoi_model::typed::{
     AppThread, Checkpoint, CheckpointScope, ContextHandoff, ContextTransfer, ConversationMessage, DomainEvent, EventBody,
-    ExecutionNode, PlanArtifact, ProjectedTurnItem, ProviderSession, ProviderThread, ProviderTurn, RecordKind, Run, RunAttempt,
+    ExecutionNode, PlanArtifact, ProviderSession, ProviderThread, ProviderTurn, RecordKind, Run, RunAttempt,
     RuntimeRequest, StoredEvent, Subagent, ThreadProjection, ThreadShell, ThreadStreamItem, TurnItem,
 };
 
@@ -25,7 +25,6 @@ fn collections() -> [&'static str; 15] {
 /// Record kinds beyond the fifteen projection collections.
 const THREAD: &str = "thread";
 const THREAD_SHELLS: &str = "threadShells";
-const VISIBLE_TURN_ITEMS: &str = "visibleTurnItems";
 
 /// Kinds the recorded session is known to contain: those a client is sent
 /// (the records only the server works with are not in it). Checking none of
@@ -102,7 +101,7 @@ fn collect_thread_item(item: &Value, records: &mut BTreeMap<&'static str, Vec<Va
     if item["kind"] == "snapshot" {
         let projection = item["projection"].as_object().unwrap().clone();
         records.entry(THREAD).or_default().push(projection["thread"].clone());
-        for kind in collections().into_iter().chain([VISIBLE_TURN_ITEMS]) {
+        for kind in collections() {
             if let Some(list) = projection.get(kind).and_then(Value::as_array) {
                 records.entry(kind).or_default().extend(list.iter().cloned());
             }
@@ -202,7 +201,6 @@ fn round_trip_as(kind: &str, record: &Value) -> Result<(), String> {
     match kind {
         THREAD => round_trip::<AppThread>(record),
         THREAD_SHELLS => round_trip::<ThreadShell>(record),
-        VISIBLE_TURN_ITEMS => round_trip::<ProjectedTurnItem>(record),
         "runs" => round_trip::<Run>(record),
         "attempts" => round_trip::<RunAttempt>(record),
         "nodes" => round_trip::<ExecutionNode>(record),
@@ -230,7 +228,7 @@ fn record_id(record: &Value) -> &str {
 #[test]
 fn recorded_records_round_trip_through_their_types() {
     let records = recorded();
-    let all_kinds: Vec<&str> = [THREAD, THREAD_SHELLS].into_iter().chain(collections()).chain([VISIBLE_TURN_ITEMS]).collect();
+    let all_kinds: Vec<&str> = [THREAD, THREAD_SHELLS].into_iter().chain(collections()).collect();
 
     let mut checked: BTreeMap<&str, usize> = BTreeMap::new();
     let mut item_types: BTreeMap<String, usize> = BTreeMap::new();
@@ -239,8 +237,7 @@ fn recorded_records_round_trip_through_their_types() {
     for (kind, list) in &records {
         for record in list {
             *checked.entry(kind).or_default() += 1;
-            let item = if *kind == VISIBLE_TURN_ITEMS { &record["item"] } else { record };
-            if let (true, Some(item_type)) = (matches!(*kind, "turnItems" | VISIBLE_TURN_ITEMS), item["type"].as_str()) {
+            if let ("turnItems", Some(item_type)) = (*kind, record["type"].as_str()) {
                 *item_types.entry(item_type.to_owned()).or_default() += 1;
             }
             if let Err(why) = round_trip_as(kind, record) {

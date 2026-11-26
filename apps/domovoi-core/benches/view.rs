@@ -56,7 +56,7 @@ fn projection(items: usize) -> Value {
         "lineage": { "parentThreadId": null, "relationshipToParent": null, "rootThreadId": "t1" }, "forkedFrom": null,
         "createdAt": "1", "updatedAt": "1", "archivedAt": null, "deletedAt": null,
     });
-    let mut projection = json!({ "thread": record, "messages": messages, "turnItems": turn_items, "visibleTurnItems": [], "updatedAt": "1" });
+    let mut projection = json!({ "thread": record, "messages": messages, "turnItems": turn_items, "updatedAt": "1" });
     for kind in RecordKind::ALL {
         if projection.get(kind.collection()).is_none() {
             projection[kind.collection()] = json!([]);

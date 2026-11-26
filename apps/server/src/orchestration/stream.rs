@@ -124,14 +124,7 @@ pub fn snapshot(store: &Store, thread_id: &str, all_records: bool) -> Result<Thr
         .map_err(|e| projection_error(thread_id, e.to_string()))?
         .ok_or_else(|| projection_error(thread_id, format!("Unknown thread {thread_id}")))?;
     let projection = if all_records { thread.projection() } else { thread.projection().for_client() };
-    Ok(ThreadSnapshot {
-        snapshot_sequence,
-        projection,
-        history_cursor: None,
-        has_more_history: None,
-        latest_local_turn_ordinal: None,
-        turn_items_omit_local_visible: None,
-    })
+    Ok(ThreadSnapshot { snapshot_sequence, projection })
 }
 
 pub fn snapshot_item(store: &Store, thread_id: &str, all_records: bool) -> Result<(u64, ThreadStreamItem), Failure> {
@@ -246,7 +239,7 @@ mod tests {
         use domovoi_model::typed::{Thread, TurnItem};
         let store = Store::new(crate::db::Db::open_in_memory().unwrap());
         store
-            .create_project(domovoi_contracts::shell::ProjectShell {
+            .create_project(crate::wire::shell::ProjectShell {
                 id: "p".into(), title: "p".into(), has_custom_title: false, workspace_root: "/tmp/p".into(), repository_identity: None,
                 default_model_selection: None, default_thread_env_mode: None, auto_pull: false, favicon_path: None, project_icon: None,
                 scripts: vec![], pinned_at: None, archived_at: None, created_at: "t".into(), updated_at: "t".into(),

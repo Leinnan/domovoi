@@ -15,15 +15,16 @@ use super::provider::{ProviderSession, ProviderThread, ProviderTurn, RuntimeRequ
 use super::run::{ExecutionNode, Run, RunAttempt, Subagent};
 use super::ids::{ThreadId, TurnItemId};
 use super::thread::AppThread;
-use super::turn_item::{ProjectedTurnItem, TurnItem};
-use super::wire::{nullable, optional, required};
+use super::turn_item::TurnItem;
+use super::wire::required;
 use serde::de::Error;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value};
 use std::sync::Arc;
 
-/// Everything a thread consists of (`OrchestrationV2ThreadProjection`): its
-/// record, each kind of its records, and its timeline as shown.
+/// Everything a thread consists of: its record and each kind of its
+/// records. The timeline as shown is derived from them
+/// ([`super::Thread::visible_turn_items`]).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadProjection {
@@ -38,14 +39,11 @@ pub struct ThreadProjection {
     pub runtime_requests: Vec<Arc<RuntimeRequest>>,
     pub messages: Vec<Arc<ConversationMessage>>,
     pub plans: Vec<Arc<PlanArtifact>>,
-    /// In a snapshot that says `turnItemsOmitLocalVisible`, only the items
-    /// `visible_turn_items` does not already carry.
     pub turn_items: Vec<Arc<TurnItem>>,
     pub checkpoint_scopes: Vec<Arc<CheckpointScope>>,
     pub checkpoints: Vec<Arc<Checkpoint>>,
     pub context_handoffs: Vec<Arc<ContextHandoff>>,
     pub context_transfers: Vec<Arc<ContextTransfer>>,
-    pub visible_turn_items: Vec<ProjectedTurnItem>,
     pub updated_at: Timestamp,
 }
 
@@ -67,23 +65,13 @@ impl ThreadProjection {
 }
 
 /// A thread as of one point in the server's log, which a subscription starts
-/// from. With a `history_cursor` it is a window on a longer timeline.
+/// from.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadSnapshot {
     /// The last event the projection includes; events after it follow on the stream.
     pub snapshot_sequence: u64,
     pub projection: ThreadProjection,
-    /// Where to ask for the timeline before this window. Opaque.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub history_cursor: Option<Option<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub has_more_history: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub latest_local_turn_ordinal: Option<Option<u64>>,
-    /// `projection.turn_items` leaves out the items its visible rows carry.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub turn_items_omit_local_visible: Option<bool>,
 }
 
 impl ThreadSnapshot {
@@ -92,10 +80,6 @@ impl ThreadSnapshot {
         Ok(Self {
             snapshot_sequence: required(&mut fields, "snapshotSequence")?,
             projection: required(&mut fields, "projection")?,
-            history_cursor: nullable(&mut fields, "historyCursor")?,
-            has_more_history: optional(&mut fields, "hasMoreHistory")?,
-            latest_local_turn_ordinal: nullable(&mut fields, "latestLocalTurnOrdinal")?,
-            turn_items_omit_local_visible: optional(&mut fields, "turnItemsOmitLocalVisible")?,
         })
     }
 }

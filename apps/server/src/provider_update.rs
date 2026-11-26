@@ -361,7 +361,7 @@ fn set_state(instance: &str, state: ServerProviderUpdateState) {
 }
 
 fn now() -> domovoi_model::typed::Timestamp {
-    domovoi_contracts::iso_now().into()
+    crate::time_fmt::iso_now().into()
 }
 
 fn update_state(status: ServerProviderUpdateStatus, started_at: Option<&domovoi_model::typed::Timestamp>, finished: bool, message: &str, output: Option<String>) -> ServerProviderUpdateState {

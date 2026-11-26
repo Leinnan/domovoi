@@ -304,7 +304,7 @@ fn percent(value: f64) -> serde_json::Number {
 
 fn reset_time(ms: &Value) -> Option<Timestamp> {
     let ms = ms.as_f64().filter(|ms| ms.is_finite())?;
-    Some(Timestamp::from(domovoi_contracts::time_fmt::iso_from_millis(ms as i64)))
+    Some(Timestamp::from(crate::time_fmt::iso_from_millis(ms as i64)))
 }
 
 fn unavailable(checked_at: &Timestamp, reason: ServerProviderUsageUnavailableReason, message: Option<&str>) -> ServerProviderUsageLimits {
@@ -558,7 +558,7 @@ impl OpenCodeServer {
     /// Reads the workspace's usage limits for `instance` (in the location of
     /// `directory`). An OpenCode without the endpoint leaves them as they were.
     pub async fn read_usage_limits(&self, instance: &str, directory: &str) {
-        let checked_at = Timestamp::from(domovoi_contracts::iso_now());
+        let checked_at = Timestamp::from(crate::time_fmt::iso_now());
         let read = async {
             let mut url = reqwest::Url::parse(&format!("{}/api/experimental/usage/limits", self.base)).map_err(|e| e.to_string())?;
             url.query_pairs_mut().extend_pairs(located(directory));

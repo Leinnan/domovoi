@@ -37,7 +37,7 @@ fn due(asked: Option<std::time::Instant>, now: std::time::Instant, min_interval:
 }
 
 fn checked_at() -> Timestamp {
-    Timestamp::from(domovoi_contracts::iso_now())
+    Timestamp::from(crate::time_fmt::iso_now())
 }
 
 fn unavailable(reason: ServerProviderUsageUnavailableReason, message: Option<&str>) -> ServerProviderUsageLimits {
@@ -62,7 +62,7 @@ fn kind_rank(kind: &ServerProviderUsageWindowKind) -> u8 {
 
 fn iso(value: Option<&str>) -> Option<Timestamp> {
     let t = value?.parse::<jiff::Timestamp>().ok()?;
-    Some(Timestamp::from(domovoi_contracts::time_fmt::iso_from_millis(t.as_millisecond())))
+    Some(Timestamp::from(crate::time_fmt::iso_from_millis(t.as_millisecond())))
 }
 
 fn window(id: &str, label: String, remaining: Option<f64>, reset: Option<&str>, kind: ServerProviderUsageWindowKind, mins: Option<u64>) -> Option<ServerProviderUsageWindow> {
@@ -193,7 +193,7 @@ async fn read_from_agent(id: &str) -> Option<Vec<ServerProviderUsageWindow>> {
     let http = client()?;
     for port in ports {
         crate::util::locked(&ASKED).insert(id.to_owned(), std::time::Instant::now());
-        let requested = domovoi_contracts::time_fmt::now_millis();
+        let requested = crate::time_fmt::now_millis();
         let r = http
             .post(format!("http://127.0.0.1:{port}/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary"))
             .header("Connect-Protocol-Version", "1")

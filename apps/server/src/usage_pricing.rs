@@ -673,7 +673,7 @@ enum Fetched {
 }
 
 fn now_ms() -> i64 {
-    domovoi_contracts::time_fmt::now_millis()
+    crate::time_fmt::now_millis()
 }
 
 /// Writes `bytes` to `path` through a temporary file, so a reader never sees half of it.
@@ -724,7 +724,7 @@ impl RateService {
             pricing: UsagePricing {
                 status: s.status.clone(),
                 source: self.source(),
-                fetched_at: s.meta.as_ref().map(|m| domovoi_contracts::time_fmt::iso_from_millis(m.fetched_at_ms).into()),
+                fetched_at: s.meta.as_ref().map(|m| crate::time_fmt::iso_from_millis(m.fetched_at_ms).into()),
                 known_models: s.table.len() as u64,
             },
         }

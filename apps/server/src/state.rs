@@ -4,7 +4,7 @@ use crate::settings::Settings;
 use crate::store::Store;
 use std::path::PathBuf;
 use std::sync::Arc;
-use domovoi_contracts::environment::EnvironmentDescriptor;
+use crate::wire::environment::EnvironmentDescriptor;
 use domovoi_model::typed::{ServerConfigOf, ServerObservability, ServerProvider};
 use tokio::sync::{RwLock, broadcast};
 
@@ -184,8 +184,6 @@ impl AppState {
             keybindings: kb.keybindings.into(),
             issues: kb.issues.into(),
             providers: self.providers.snapshot().await.into(),
-            remote_open_targets: None,
-            direct_endpoints: None,
             terminal_details: Some(true),
             observability: ServerObservability {
                 logs_directory_path: self.paths.logs.to_string_lossy().into_owned(),
@@ -205,22 +203,7 @@ impl AppState {
             },
             settings: self.settings.read().await.clone(),
             managed_policy: crate::policy::current().summary(),
-            shell_resume_completion_marker: Some(true),
-            shell_thread_families: None,
-            thread_link_metadata: None,
-            shell_older_settled: None,
-            shell_reveal_in_file_manager: None,
-            shell_reveal_in_file_manager_kind: None,
-            thread_resume_completion_marker: None,
-            thread_snapshot_pagination: None,
-            thread_find: None,
-            thread_find_progressive: None,
-            secret_provider_settings: None,
-            secret_references: None,
-            secret_request_references: None,
-            scratch_workspace_root: None,
             new_projects_root: Some(self.paths.projects_root.to_string_lossy().into_owned()),
-            last_event_loop_stall: None,
             environment_themes: None,
             usage_limit_sources: None,
         }

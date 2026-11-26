@@ -137,7 +137,7 @@ pub fn initialize_params() -> Value {
     json!({
         "protocolVersion": PROTOCOL_VERSION,
         "clientCapabilities": { "fs": { "readTextFile": false, "writeTextFile": false }, "terminal": false },
-        "clientInfo": { "name": "t3-code", "title": "T3 Code (Domovoi)", "version": domovoi_contracts::environment::SERVER_VERSION },
+        "clientInfo": { "name": "t3-code", "title": "T3 Code (Domovoi)", "version": crate::wire::environment::SERVER_VERSION },
     })
 }
 
@@ -1544,14 +1544,14 @@ pub mod url_auth {
     /// Shows the sign-in; the answer is whether the user opened it.
     pub fn request(instance: &str, elicitation_id: String, url: String, message: String) -> tokio::sync::oneshot::Receiver<bool> {
         let (consent, answer) = tokio::sync::oneshot::channel();
-        let now = domovoi_contracts::now_millis();
+        let now = crate::time_fmt::now_millis();
         let ttl = i64::try_from(TTL.as_millis()).unwrap_or(i64::MAX);
         let action = AcpRegistryUrlAuthAction {
             elicitation_id,
             url,
             message,
-            created_at: Some(domovoi_contracts::time_fmt::iso_from_millis(now)),
-            expires_at: Some(domovoi_contracts::time_fmt::iso_from_millis(now.saturating_add(ttl))),
+            created_at: Some(crate::time_fmt::iso_from_millis(now)),
+            expires_at: Some(crate::time_fmt::iso_from_millis(now.saturating_add(ttl))),
         };
         let previous = crate::util::locked(&PENDING).insert(instance.to_owned(), Pending { action, consent, expires: std::time::Instant::now() + TTL });
         if let Some(p) = previous {

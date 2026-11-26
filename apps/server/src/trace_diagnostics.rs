@@ -200,7 +200,7 @@ fn nanos_to_millis(v: Option<&str>) -> Option<i64> {
 }
 
 fn iso(ms: i64) -> String {
-    domovoi_contracts::time_fmt::iso_from_millis(ms)
+    crate::time_fmt::iso_from_millis(ms)
 }
 
 /// `insertBounded`: keeps the `limit` first of `items` in `order`.
@@ -403,7 +403,7 @@ pub fn rotated_paths(path: &Path, max_files: usize) -> Vec<PathBuf> {
 
 /// `TraceDiagnostics.read`.
 pub fn read(path: &Path, max_files: usize, slow_ms: u64) -> TraceDiagnostics {
-    let read_at = domovoi_contracts::iso_now();
+    let read_at = crate::time_fmt::iso_now();
     let paths = rotated_paths(path, max_files);
     let scanned: Vec<String> = paths.iter().map(|p| p.to_string_lossy().into_owned()).collect();
     let mut agg = Aggregator::new(slow_ms);
@@ -450,7 +450,7 @@ pub fn read(path: &Path, max_files: usize, slow_ms: u64) -> TraceDiagnostics {
 /// `makeEmptyDiagnostics`: nothing read, and why.
 fn empty(path: &Path, max_files: usize, slow_ms: u64, error: TraceError) -> TraceDiagnostics {
     let scanned = rotated_paths(path, max_files).iter().map(|p| p.to_string_lossy().into_owned()).collect();
-    let mut d = Aggregator::new(slow_ms).finish(path.to_string_lossy().into_owned(), scanned, domovoi_contracts::iso_now(), None);
+    let mut d = Aggregator::new(slow_ms).finish(path.to_string_lossy().into_owned(), scanned, crate::time_fmt::iso_now(), None);
     d.error = TaggedOption::Some { value: error };
     d
 }

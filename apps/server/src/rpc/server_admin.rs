@@ -221,7 +221,7 @@ async fn run_cleanup_all(state: &crate::state::AppState, trigger: StorageCleanup
     let mut cleaned = tokio::task::spawn_blocking(move || run_cleanup_logs(&logs, days))
         .await
         // The log sweep panicked: the report is of the worktrees alone.
-        .unwrap_or_else(|_| Cleaned { started_at: domovoi_contracts::iso_now(), entries: vec![], bytes_freed: 0 });
+        .unwrap_or_else(|_| Cleaned { started_at: crate::time_fmt::iso_now(), entries: vec![], bytes_freed: 0 });
     let (wt_entries, freed) = worktree_entries(&state.store, &rules, &worktrees).await;
     cleaned.entries.extend(wt_entries);
     cleaned.bytes_freed += freed;
@@ -260,7 +260,7 @@ async fn worktree_keep_reason(thread: &AppThread, active: bool, root: &str, path
     if active {
         return Some("An agent is working in it.".into());
     }
-    let ms = |at: &Timestamp| domovoi_contracts::time_fmt::millis_from_iso(at.as_str());
+    let ms = |at: &Timestamp| crate::time_fmt::millis_from_iso(at.as_str());
     let deleted = thread.deleted_at.is_some();
     let settled = thread.settled_override == Some(Some(SettledOverride::Settled));
     let settled_at = settled.then(|| thread.settled_at.as_ref().and_then(Option::as_ref).and_then(ms)).flatten();
@@ -314,7 +314,7 @@ async fn worktree_keep_reason(thread: &AppThread, active: bool, root: &str, path
 /// Report entries for thread worktrees (and stray folders in Domovoi's own
 /// worktrees directory, which are kept), removing those the rules allow.
 async fn worktree_entries(store: &crate::store::Store, rules: &Rules, worktrees_dir: &std::path::Path) -> (Vec<StorageCleanupReportEntry>, u64) {
-    let now_ms = domovoi_contracts::time_fmt::now_millis();
+    let now_ms = crate::time_fmt::now_millis();
     let mut entries = vec![];
     let mut freed = 0;
     let mut seen = std::collections::HashSet::new();
@@ -366,7 +366,7 @@ async fn worktree_entries(store: &crate::store::Store, rules: &Rules, worktrees_
 
 /// Removes log files older than `days`.
 fn run_cleanup_logs(logs: &std::path::Path, days: u64) -> Cleaned {
-    let started_at = domovoi_contracts::iso_now();
+    let started_at = crate::time_fmt::iso_now();
     let mut entries = vec![];
     let cutoff = std::time::SystemTime::now() - std::time::Duration::from_secs(days * 86_400);
     let mut freed = 0u64;
@@ -400,7 +400,7 @@ fn publish(trigger: StorageCleanupTrigger, cleaned: Cleaned) -> StorageCleanupRe
     let report = StorageCleanupReport {
         trigger,
         started_at: started_at.into(),
-        finished_at: domovoi_contracts::iso_now().into(),
+        finished_at: crate::time_fmt::iso_now().into(),
         entries,
         counts,
         omitted_count: 0.into(),
@@ -876,13 +876,13 @@ mod tests {
         let wt = d.join("wt");
         git(&root, &["worktree", "add", "-q", "-b", "domovoi/x", wt.to_str().unwrap()]);
         let store = crate::store::Store::new(Db::open_in_memory().unwrap());
-        store.create_project(domovoi_contracts::shell::ProjectShell {
+        store.create_project(crate::wire::shell::ProjectShell {
             id: "p".into(), title: "p".into(), has_custom_title: false, workspace_root: root.to_string_lossy().into(),
             repository_identity: None, default_model_selection: None, default_thread_env_mode: None, auto_pull: false,
             favicon_path: None, project_icon: None, scripts: vec![], pinned_at: None, archived_at: None,
             created_at: "t".into(), updated_at: "t".into(),
         }, None).unwrap();
-        let settled = domovoi_contracts::time_fmt::iso_from_millis(domovoi_contracts::time_fmt::now_millis() - 3 * 86_400_000);
+        let settled = crate::time_fmt::iso_from_millis(crate::time_fmt::now_millis() - 3 * 86_400_000);
         let thread = crate::test_records::with(crate::test_records::thread("t1", "p"), json!({ "title": "Done", "worktreePath": wt,
             "settledOverride": "settled", "settledAt": settled, "updatedAt": settled }));
         crate::test_records::append(&store, "t1", "thread.created", thread, &Default::default()).unwrap();
@@ -942,7 +942,7 @@ mod tests {
         std::fs::write(root.join("a.txt"), "changed").unwrap();
         assert_eq!(crate::vcs_ops::auto_pull_blocker(cwd).await, Some("working-tree-changes"));
         git(&root, &["checkout", "-q", "a.txt"]);
-        let project = domovoi_contracts::shell::ProjectShell {
+        let project = crate::wire::shell::ProjectShell {
             id: "p".into(), title: "p".into(), has_custom_title: false, workspace_root: cwd.into(),
             repository_identity: None, default_model_selection: None, default_thread_env_mode: None, auto_pull: true,
             favicon_path: None, project_icon: None, scripts: vec![], pinned_at: None, archived_at: None,

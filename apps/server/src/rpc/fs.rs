@@ -300,7 +300,7 @@ async fn create_asset_url(ctx: Arc<ConnCtx>, RecordOrNot(input): RecordOrNot<Cre
             return Ok(asset);
         }
     }
-    let expires_at = domovoi_contracts::now_millis() + crate::file_images::TTL_MS;
+    let expires_at = crate::time_fmt::now_millis() + crate::file_images::TTL_MS;
     Ok(AssetCreateUrlResult {
         relative_url: "/api/assets/none/project-favicon-missing".into(),
         expires_at: expires_at.into(),

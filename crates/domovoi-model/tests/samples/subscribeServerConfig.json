@@ -634,27 +634,6 @@
           "skills": []
         }
       ],
-      "remoteOpenTargets": [
-        {
-          "kind": "tailscale",
-          "host": "ada-mbp.tailnet-1234.ts.net",
-          "username": "ada"
-        },
-        {
-          "kind": "mdns",
-          "host": "ada-mbp.local"
-        }
-      ],
-      "directEndpoints": [
-        {
-          "kind": "lan",
-          "httpBaseUrl": "http://192.168.1.20:3773"
-        },
-        {
-          "kind": "tailnet",
-          "httpBaseUrl": "http://100.64.0.7:3773"
-        }
-      ],
       "observability": {
         "logsDirectoryPath": "/Users/ada/.t3/userdata/logs",
         "localTracingEnabled": true,
@@ -849,27 +828,7 @@
           }
         }
       },
-      "shellResumeCompletionMarker": true,
-      "shellThreadFamilies": true,
-      "threadLinkMetadata": true,
-      "shellOlderSettled": true,
-      "shellRevealInFileManager": true,
-      "shellRevealInFileManagerKind": "finder",
-      "threadResumeCompletionMarker": true,
-      "threadSnapshotPagination": true,
-      "threadFind": true,
-      "threadFindProgressive": true,
-      "secretProviderSettings": true,
-      "secretReferences": true,
-      "secretRequestReferences": true,
-      "scratchWorkspaceRoot": "/Users/ada/.t3/scratch",
       "newProjectsRoot": "/Users/ada/code",
-      "lastEventLoopStall": {
-        "detectedAt": "2026-11-17T08:58:40.000Z",
-        "durationMs": 4200,
-        "loadAverage": 11.42,
-        "cpuCount": 10
-      },
       "environmentThemes": [
         {
           "id": "solar-dawn",

@@ -21,7 +21,8 @@ use std::time::{Duration, Instant};
 /// The format this build reads and writes. Format 1 is the records as SQL
 /// migration 16 found them. Format 2 changes no record: it is the event log
 /// cut down to what a reconnecting client replays, and the file compacted.
-pub const CURRENT: u32 = 2;
+/// Format 3 is without the execution node of every turn item.
+pub const CURRENT: u32 = 3;
 
 const KEY: &str = "data_format";
 
@@ -36,7 +37,10 @@ pub struct Step {
 }
 
 /// Every step, in order: `STEPS[n].to == n + 2`.
-const STEPS: &[Step] = &[Step { to: 2, what: "the event log trimmed to what a reconnecting client replays", run: trim_event_log }];
+const STEPS: &[Step] = &[
+    Step { to: 2, what: "the event log trimmed to what a reconnecting client replays", run: trim_event_log },
+    Step { to: 3, what: "the execution nodes of turn items deleted", run: delete_item_nodes },
+];
 
 /// Until format 2 every event ever recorded was kept, most of the database's
 /// size, though only the newest are ever read (`Store::trim_event_log`). The
@@ -46,6 +50,21 @@ fn trim_event_log(db: &Db) -> Result<(), StepError> {
     let keep = crate::orchestration::events::EVENT_LOG_KEEPS as i64;
     db.with(|c| {
         c.execute("DELETE FROM events WHERE sequence <= (SELECT COALESCE(MAX(sequence), 0) FROM events) - ?1", rusqlite::params![keep])?;
+        c.execute_batch("VACUUM")
+    })?;
+    Ok(())
+}
+
+/// The kinds of execution node a turn recorded for each of its items, until
+/// format 3: one beside every command, tool call, reasoning block, reply,
+/// approval and task list, which nothing ever read. A run's root node, a
+/// subagent's node and a plan's are read and stay.
+const ITEM_NODE_KINDS: &[&str] = &["tool_call", "reasoning", "assistant_message", "approval_request", "todo_list", "system"];
+
+fn delete_item_nodes(db: &Db) -> Result<(), StepError> {
+    let kinds = ITEM_NODE_KINDS.iter().map(|kind| format!("'{kind}'")).collect::<Vec<_>>().join(", ");
+    db.with(|c| {
+        c.execute(&format!("DELETE FROM thread_entities WHERE kind = 'nodes' AND json_extract(record, '$.kind') IN ({kinds})"), [])?;
         c.execute_batch("VACUUM")
     })?;
     Ok(())
@@ -131,7 +150,7 @@ fn upgrade_with(db: &Db, backups: &Path, steps: &[Step], current: u32) -> Result
     if from == current {
         return Ok(None);
     }
-    let backup = backups.join(format!("domovoi-format-{from}-{}.sqlite", domovoi_contracts::now_millis()));
+    let backup = backups.join(format!("domovoi-format-{from}-{}.sqlite", crate::time_fmt::now_millis()));
     let started = Instant::now();
     let copied = crate::state::create_private_dir(backups).map_err(StepError::from).and_then(|()| db.backup_to(&backup).map_err(StepError::from));
     if let Err(source) = copied {
@@ -211,6 +230,28 @@ mod tests {
         // The copy made first still holds every event.
         let copy = Db::open(&done.backup).unwrap();
         assert_eq!(copy.read(|c| c.query_row("SELECT COUNT(*) FROM events", [], |r| r.get::<_, i64>(0))).unwrap(), keep + 500);
+    }
+
+    /// Format 3: the node recorded beside every turn item goes; a run's
+    /// root, a subagent's node, a plan's and every other record stay.
+    #[test]
+    fn the_nodes_of_turn_items_are_deleted_and_the_ones_that_are_read_stay() {
+        let (db, backups) = home();
+        db.with(|c| {
+            for (id, kind) in [("n-root", "root_turn"), ("n-sub", "subagent"), ("n-plan", "plan"), ("n-tool", "tool_call"), ("n-think", "reasoning"), ("n-reply", "assistant_message"), ("n-ask", "approval_request"), ("n-todo", "todo_list"), ("n-note", "system")] {
+                c.execute(
+                    "INSERT INTO thread_entities (thread_id, kind, entity_id, record, first_sequence) VALUES ('t1', 'nodes', ?1, ?2, 1)",
+                    rusqlite::params![id, format!(r#"{{"id":"{id}","kind":"{kind}"}}"#)],
+                )?;
+            }
+            // A turn item whose type is one of those kinds is no node.
+            c.execute("INSERT INTO thread_entities (thread_id, kind, entity_id, record, first_sequence) VALUES ('t1', 'turnItems', 'i1', '{\"id\":\"i1\",\"kind\":\"tool_call\"}', 1)", [])
+        })
+        .unwrap();
+        let done = upgrade(&db, &backups).unwrap().expect("the steps ran");
+        assert_eq!(done.to, 3);
+        let left: Vec<String> = db.read(|c| c.prepare("SELECT entity_id FROM thread_entities ORDER BY entity_id")?.query_map([], |r| r.get(0))?.collect()).unwrap();
+        assert_eq!(left, ["i1", "n-plan", "n-root", "n-sub"]);
     }
 
     #[test]

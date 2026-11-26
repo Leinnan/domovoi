@@ -306,7 +306,7 @@ pub async fn handle(state: &Arc<AppState>, token: &str, msg: &Value) -> Option<V
         "initialize" => ok(json!({
             "protocolVersion": msg["params"]["protocolVersion"].as_str().unwrap_or("2025-06-18"),
             "capabilities": { "tools": { "listChanged": false } },
-            "serverInfo": { "name": "domovoi-server", "title": "T3 Code (Domovoi)", "version": domovoi_contracts::environment::SERVER_VERSION },
+            "serverInfo": { "name": "domovoi-server", "title": "T3 Code (Domovoi)", "version": crate::wire::environment::SERVER_VERSION },
             "instructions": crate::agent_instructions::MCP_SUMMARY,
         })),
         "ping" => ok(json!({})),

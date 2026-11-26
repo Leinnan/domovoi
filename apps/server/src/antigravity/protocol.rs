@@ -739,7 +739,7 @@ fn reset_at(text: &str, now_ms: i64) -> Option<String> {
     }
     let delay = regex::Regex::new(r"\b(?:quotaResetDelay|retryDelay):((?:\d+(?:\.\d+)?(?:ns|us|µs|μs|ms|h|m|s))+)(?:[\s\]]|$)").ok()?.captures(text).map(|c| c[1].to_owned())?;
     let ms = go_duration_ms(&delay)?;
-    Some(domovoi_contracts::time_fmt::iso_from_millis(now_ms + ms as i64))
+    Some(crate::time_fmt::iso_from_millis(now_ms + ms as i64))
 }
 
 /// The failure a turn's last step (and the answer's stop reason) shows
@@ -765,7 +765,7 @@ pub fn failure(stop_reason: Option<&str>, step: Option<(i64, &[u8])>, now_ms: i6
 /// The real outcome of a turn: what its last step after `mark` shows.
 pub fn outcome(profile_home: &Path, session_id: &str, mark: Option<i64>, stop_reason: Option<&str>) -> Option<Failure> {
     let step = mark.and_then(|m| last_step_after(profile_home, session_id, m));
-    failure(stop_reason, step.as_ref().map(|(t, p)| (*t, p.as_slice())), domovoi_contracts::time_fmt::now_millis())
+    failure(stop_reason, step.as_ref().map(|(t, p)| (*t, p.as_slice())), crate::time_fmt::now_millis())
 }
 
 #[cfg(test)]
@@ -912,7 +912,7 @@ mod tests {
         let quota = b"Error 429, Message: Quota exceeded, Status: RESOURCE_EXHAUSTED [reason:QUOTA_EXHAUSTED quotaResetDelay:1h30m0s]";
         let f = failure(Some("end_turn"), Some((17, quota)), now).unwrap();
         assert!(f.usage_limit && f.message.contains("quota"));
-        assert_eq!(f.reset_at.as_deref(), Some(domovoi_contracts::time_fmt::iso_from_millis(now + 90 * 60_000).as_str()));
+        assert_eq!(f.reset_at.as_deref(), Some(crate::time_fmt::iso_from_millis(now + 90 * 60_000).as_str()));
         let rate = b"Error 429, Message: Too many requests, Status: RESOURCE_EXHAUSTED [retryDelay:30s]";
         assert!(failure(Some("end_turn"), Some((17, rate)), now).unwrap().usage_limit);
         let server = b"Error 503, Message: The model is overloaded, Status: UNAVAILABLE";

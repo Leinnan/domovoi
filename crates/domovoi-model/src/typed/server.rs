@@ -747,33 +747,6 @@ string_enum! {
     }
 }
 
-string_enum! {
-    /// The file manager of the server's machine (`FileManagerRevealKind`).
-    FileManagerRevealKind {
-        Finder = "finder",
-        FileExplorer = "file-explorer",
-        Files = "files",
-    }
-}
-
-string_enum! {
-    /// How a host name of the server's machine is known (`RemoteOpenTargetKind`).
-    RemoteOpenTargetKind {
-        Tailscale = "tailscale",
-        Mdns = "mdns",
-    }
-}
-
-/// An address an editor on another machine can reach the server's files at over SSH (`RemoteOpenTarget`).
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RemoteOpenTarget {
-    pub kind: RemoteOpenTargetKind,
-    pub host: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub username: Option<String>,
-}
-
 // ---------------------------------------------------------------------------
 // Observability
 // ---------------------------------------------------------------------------
@@ -946,34 +919,6 @@ pub struct EnvironmentTheme {
     pub variants: Option<EnvironmentThemeVariants>,
 }
 
-string_enum! {
-    /// The network a direct address of the server is on (`ServerDirectEndpointKind`).
-    ServerDirectEndpointKind {
-        Lan = "lan",
-        Tailnet = "tailnet",
-    }
-}
-
-/// An address the server may be reachable at without a relay (`ServerDirectEndpoint`): a hint to verify.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ServerDirectEndpoint {
-    pub kind: ServerDirectEndpointKind,
-    pub http_base_url: String,
-}
-
-/// A stretch during which the server could answer nothing (`ServerEventLoopStall`).
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ServerEventLoopStall {
-    pub detected_at: Timestamp,
-    pub duration_ms: u64,
-    /// The one-minute load average when the stall was seen; Windows has none.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub load_average: Option<Number>,
-    pub cpu_count: u64,
-}
-
 // ---------------------------------------------------------------------------
 // The config and its stream
 // ---------------------------------------------------------------------------
@@ -994,10 +939,6 @@ pub struct ServerConfigOf<S> {
     pub keybindings: ResolvedKeybindingsConfig,
     pub issues: ForwardList<ServerConfigIssue>,
     pub providers: ForwardList<ServerProvider>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub remote_open_targets: Option<ForwardList<RemoteOpenTarget>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub direct_endpoints: Option<ForwardList<ServerDirectEndpoint>>,
     /// Domovoi's live and saved terminal metadata.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub terminal_details: Option<bool>,
@@ -1007,44 +948,7 @@ pub struct ServerConfigOf<S> {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub managed_policy: Option<ManagedPolicySummary>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub shell_resume_completion_marker: Option<bool>,
-    /// The shell stream can leave idle subagent threads out of its snapshots.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub shell_thread_families: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub thread_link_metadata: Option<bool>,
-    /// The shell stream can leave older settled threads out of its snapshots.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub shell_older_settled: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub shell_reveal_in_file_manager: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub shell_reveal_in_file_manager_kind: Option<FileManagerRevealKind>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub thread_resume_completion_marker: Option<bool>,
-    /// A thread subscription accepts the fields that ask for a window of its timeline.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub thread_snapshot_pagination: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub thread_find: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub thread_find_progressive: Option<bool>,
-    /// A settings patch may carry `secretProviders`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub secret_provider_settings: Option<bool>,
-    /// A secret setting may point at a secret provider.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub secret_references: Option<bool>,
-    /// A secret request may be answered with a reference to a secret provider.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub secret_request_references: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub scratch_workspace_root: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub new_projects_root: Option<String>,
-    /// The latest stall long enough to notice, sent only for a few minutes after it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_event_loop_stall: Option<ServerEventLoopStall>,
     /// Never sent in a snapshot: themes arrive as their own stream event.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub environment_themes: Option<Vec<EnvironmentTheme>>,

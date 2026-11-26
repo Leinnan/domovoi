@@ -18,16 +18,3 @@ pub(crate) fn optional<T: DeserializeOwned, E: Error>(fields: &mut Map<String, V
         Some(value) => T::deserialize(value).map(Some).map_err(|error| E::custom(format_args!("`{key}`: {error}"))),
     }
 }
-
-/// Moves the field `key` out of `fields` and decodes it, keeping an absent
-/// field (`None`) apart from a `null` one (`Some(None)`).
-pub(crate) fn nullable<T: DeserializeOwned, E: Error>(
-    fields: &mut Map<String, Value>,
-    key: &'static str,
-) -> Result<Option<Option<T>>, E> {
-    match fields.remove(key) {
-        None => Ok(None),
-        Some(Value::Null) => Ok(Some(None)),
-        Some(value) => T::deserialize(value).map(|value| Some(Some(value))).map_err(|error| E::custom(format_args!("`{key}`: {error}"))),
-    }
-}

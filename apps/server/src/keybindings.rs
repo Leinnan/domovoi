@@ -77,7 +77,7 @@ impl From<Resolved> for ServerConfigKeybindingsUpdatedPayload {
 }
 
 pub fn default_rules() -> Vec<KeybindingRule> {
-    serde_json::from_str(domovoi_contracts::defaults::KEYBINDING_RULES).expect("bundled keybindings are valid JSON")
+    serde_json::from_str(crate::defaults::KEYBINDING_RULES).expect("bundled keybindings are valid JSON")
 }
 
 /// `parseKeybindingShortcut`.
@@ -418,8 +418,8 @@ mod tests {
 
     #[test]
     fn compiled_defaults_match_t3code_resolved_defaults() {
-        assert_eq!(compiled_defaults(), domovoi_contracts::defaults::keybindings());
-        let bundled: Value = serde_json::from_str(domovoi_contracts::defaults::KEYBINDING_RULES).unwrap();
+        assert_eq!(compiled_defaults(), crate::defaults::keybindings());
+        let bundled: Value = serde_json::from_str(crate::defaults::KEYBINDING_RULES).unwrap();
         assert_eq!(json!(default_rules()), bundled, "a default rule is written to the file as it is bundled");
     }
 

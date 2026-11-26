@@ -683,7 +683,7 @@ impl Answer {
 }
 
 fn now_ms() -> i64 {
-    domovoi_contracts::time_fmt::now_millis()
+    crate::time_fmt::now_millis()
 }
 
 fn sha256_hex(s: &str) -> String {
@@ -755,7 +755,7 @@ pub async fn trigger(service: Arc<ScheduledTasks>, task_id: &str, token: &str, r
     let Ok(Some(task)) = crate::scheduled_tasks::find(&store, task_id) else { return Answer::NotFound };
     let ScheduledTaskSchedule::Webhook(schedule) = task.schedule.clone() else { return Answer::NotFound };
     let now = now_ms();
-    let received_at = domovoi_contracts::time_fmt::iso_from_millis(now);
+    let received_at = crate::time_fmt::iso_from_millis(now);
     let delivery_id = format!("delivery:{}", crate::util::new_uuid());
     let log = |outcome: &str, verified: bool, missing: &[String], prompt: Option<&str>, error: Option<&str>, pending: bool| {
         record(&store, LogEntry {

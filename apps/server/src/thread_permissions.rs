@@ -50,7 +50,7 @@ pub fn remember(store: &Store, thread_id: &str, provider: &str, rules: &[String]
     if rules.is_empty() {
         return;
     }
-    let now = domovoi_contracts::iso_now();
+    let now = crate::time_fmt::iso_now();
     let kept = store.db().with(|c| {
         for rule in rules {
             c.execute("INSERT OR IGNORE INTO thread_permission_rules VALUES (?1, ?2, ?3, ?4)", params![thread_id, provider, rule, now])?;

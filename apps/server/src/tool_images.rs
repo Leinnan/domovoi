@@ -58,7 +58,7 @@ fn load(store: &Store, thread_id: &str, item_id: &str, index: usize) -> Option<(
 pub fn issue(userdata: &Path, store: &Store, thread_id: &str, item_id: &str, index: usize) -> Result<AssetCreateUrlResult, attachments::Failure> {
     let err = |message: &str| attachments::Failure::AssetUrl { message: message.to_owned() };
     let (_, bytes) = load(store, thread_id, item_id, index).ok_or_else(|| err("Tool output image was not found."))?;
-    let expires_at = domovoi_contracts::now_millis() + TTL_MS;
+    let expires_at = crate::time_fmt::now_millis() + TTL_MS;
     let claims = Claims { kind: KIND.into(), thread_id: thread_id.into(), item_id: item_id.into(), index, digest: sha256_hex(&bytes), expires_at };
     let token = attachments::sign_asset_claims(userdata, &claims).map_err(|_| err("Could not sign the URL."))?;
     Ok(AssetCreateUrlResult { relative_url: format!("{ROUTE_PREFIX}/{token}"), expires_at: expires_at.into(), source_path: None, image_dimensions: None, file_revision: None })
@@ -67,7 +67,7 @@ pub fn issue(userdata: &Path, store: &Store, thread_id: &str, item_id: &str, ind
 /// The image behind a URL `issue` handed out, while it is valid and unchanged.
 pub fn read(userdata: &Path, store: &Store, token: &str) -> Option<(&'static str, Vec<u8>)> {
     let claims: Claims = attachments::verify_asset_claims(userdata, token)?;
-    if claims.kind != KIND || claims.expires_at <= domovoi_contracts::now_millis() {
+    if claims.kind != KIND || claims.expires_at <= crate::time_fmt::now_millis() {
         return None;
     }
     let (mime, bytes) = load(store, &claims.thread_id, &claims.item_id, claims.index)?;

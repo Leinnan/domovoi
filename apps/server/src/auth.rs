@@ -19,8 +19,8 @@ use rusqlite::{OptionalExtension, params};
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::Duration;
-use domovoi_contracts::auth::{AuthDescriptor, AuthSessionState, DEFAULT_PERMISSIONS, DEFAULT_SCOPES, strings};
-use domovoi_contracts::time_fmt::{iso_from_millis, now_millis};
+use crate::wire::auth::{AuthDescriptor, AuthSessionState, DEFAULT_PERMISSIONS, DEFAULT_SCOPES, strings};
+use crate::time_fmt::{iso_from_millis, now_millis};
 
 const SESSION_TTL_MS: i64 = 30 * 24 * 60 * 60 * 1000;
 /// A session in use is extended once less than this remains, so a device

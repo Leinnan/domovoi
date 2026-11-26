@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use crate::util::locked;
-use domovoi_contracts::time_fmt::now_millis;
+use crate::time_fmt::now_millis;
 use tokio_util::sync::CancellationToken;
 
 #[derive(Clone, Default)]

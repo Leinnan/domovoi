@@ -182,10 +182,10 @@ fn settings_samples_round_trip_through_their_type() {
 }
 
 /// The defaults sample is what the Domovoi server loads its settings from
-/// (`settings::load` over `domovoi_contracts::defaults::settings`), byte for byte in meaning.
+/// (`settings::load` over the server's `defaults::settings`), byte for byte in meaning.
 #[test]
 fn the_defaults_sample_is_what_the_domovoi_server_starts_with() {
-    let bundled = json_file("../domovoi-contracts/defaults/settings.json");
+    let bundled = json_file("../../apps/server/defaults/settings.json");
     assert_eq!(sample(DEFAULTS_SAMPLE), bundled);
     round_trip(&bundled).unwrap();
 }

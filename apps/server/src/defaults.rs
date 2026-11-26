@@ -6,7 +6,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
 use domovoi_model::typed::{
-    ExecutionEnvironmentCapabilities, ProviderDriverKind, ResolvedKeybindingRule, ServerProviderContinuation, ServerProviderModel,
+    ExecutionEnvironmentCapabilities, ProviderDriverKind, ServerProviderContinuation, ServerProviderModel,
     ServerProviderSetup, ServerSettings,
 };
 
@@ -18,10 +18,11 @@ pub fn capabilities() -> ExecutionEnvironmentCapabilities {
 
 /// t3code's default keybindings as a fresh server resolves them
 /// (`keybindings` of its `ServerConfig`).
-pub fn keybindings() -> Vec<ResolvedKeybindingRule> {
+#[cfg(test)]
+pub fn keybindings() -> Vec<domovoi_model::typed::ResolvedKeybindingRule> {
     #[derive(Deserialize)]
     struct Resolved {
-        keybindings: Vec<ResolvedKeybindingRule>,
+        keybindings: Vec<domovoi_model::typed::ResolvedKeybindingRule>,
     }
     serde_json::from_str::<Resolved>(include_str!("../defaults/keybindings.json")).expect(BUNDLED).keybindings
 }

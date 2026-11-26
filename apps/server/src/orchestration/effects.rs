@@ -58,7 +58,7 @@ pub fn fail_run(store: &Store, thread_id: &str, run_id: &str, message: &str, cla
 /// [`fail_run`], with when the limit that stopped it resets (a `usage_limit` failure).
 pub fn fail_run_with(store: &Store, thread_id: &str, run_id: &str, message: &str, class: ProviderFailureClass, reset_at: Option<Timestamp>) {
     let Ok(Some(run)) = store.record::<Run>(thread_id, run_id) else { return };
-    let ts = Timestamp::from(domovoi_contracts::iso_now());
+    let ts = Timestamp::from(crate::time_fmt::iso_now());
     let o = Origin { provider_instance_id: Some(run.provider_instance_id.as_str().to_owned()), ..Default::default() };
     let ordinal = next_item_ordinal(store, thread_id, run.ordinal);
     if let Some(attempt) = &run.active_attempt_id {
@@ -230,7 +230,7 @@ pub async fn finalize_run(orch: &Orchestrator, thread_id: &str, run_id: &str) {
     if let Some(run) = run_record(store, thread_id, run_id) {
         let checkpoint = super::checkpoints::capture_after_run(store, thread_id, &run).await;
         let o = Origin { provider_instance_id: Some(run.provider_instance_id.as_str().to_owned()), ..Default::default() };
-        let ts = Timestamp::from(domovoi_contracts::iso_now());
+        let ts = Timestamp::from(crate::time_fmt::iso_now());
         // Decided on the run as it is now (the checkpoint took a while), not as it was read before.
         let mut completed_root = None;
         let _ = store.update_record_if(thread_id, run_id, &o, |run: &mut Run| {

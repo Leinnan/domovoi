@@ -51,12 +51,12 @@ impl Normalizer {
             branch: regex::Regex::new("t3([/-])[0-9a-f]{8}").expect("regex"),
             folder_hash: regex::Regex::new("-[0-9a-f]{16}").expect("regex"),
             uuids: HashMap::new(),
-            started_ms: domovoi_contracts::time_fmt::now_millis() - 5_000,
+            started_ms: crate::time_fmt::now_millis() - 5_000,
         }
     }
 
     fn of_this_run(&self, ms: i64) -> bool {
-        ms >= self.started_ms && ms <= domovoi_contracts::time_fmt::now_millis() + 5_000
+        ms >= self.started_ms && ms <= crate::time_fmt::now_millis() + 5_000
     }
 
     fn text(&mut self, text: &str) -> String {
@@ -73,8 +73,8 @@ impl Normalizer {
         let started = self.started_ms;
         let out = self.time.replace_all(&out, |found: &regex::Captures| {
             let time = &found[0];
-            match domovoi_contracts::time_fmt::millis_from_iso(time) {
-                Some(ms) if ms >= started && ms <= domovoi_contracts::time_fmt::now_millis() + 5_000 => "<now>".to_owned(),
+            match crate::time_fmt::millis_from_iso(time) {
+                Some(ms) if ms >= started && ms <= crate::time_fmt::now_millis() + 5_000 => "<now>".to_owned(),
                 _ => time.to_owned(),
             }
         });
@@ -255,8 +255,8 @@ impl Harness {
     }
 }
 
-fn project(id: &str, root: &Path) -> domovoi_contracts::shell::ProjectShell {
-    domovoi_contracts::shell::ProjectShell {
+fn project(id: &str, root: &Path) -> crate::wire::shell::ProjectShell {
+    crate::wire::shell::ProjectShell {
         id: id.into(), title: id.into(), has_custom_title: false, workspace_root: root.to_string_lossy().into(),
         repository_identity: None, default_model_selection: None, default_thread_env_mode: None, auto_pull: false,
         favicon_path: None, project_icon: None, scripts: vec![], pinned_at: None, archived_at: None,

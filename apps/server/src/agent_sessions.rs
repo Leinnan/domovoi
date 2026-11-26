@@ -24,7 +24,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Component, Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
-use domovoi_contracts::time_fmt::iso_from_millis;
+use crate::time_fmt::iso_from_millis;
 use domovoi_model::typed::{
     Actor, AgentSessionImportResult, AgentSessionProjectCandidate, AgentSessionProjectGit, AgentSessionScanResult, AgentSessionSource, AppThread,
     ConversationMessage, CreationSource, EventBody, HistoryOrigin, InputIntent, InteractionMode, MessageId, MessageRole, ModelSelection, NativeRefStrength,
@@ -1605,7 +1605,7 @@ pub fn scan(env: &ScanEnv, store: &Store) -> Result<AgentSessionScanResult, Fail
     let Collected { candidates: raw, truncated } = collect_candidates(env, store)?;
     // Counted as import takes them: the last 30 days, at the project root
     // itself (sessions in a linked worktree show the project but are not imported).
-    let now = domovoi_contracts::time_fmt::now_millis();
+    let now = crate::time_fmt::now_millis();
     let cutoff = now - RECENT_THREAD_WINDOW_MS;
     let mut merged: Vec<(String, Merged)> = vec![];
     let mut projects: HashMap<PathBuf, Option<(String, PathBuf, Option<AgentSessionProjectGit>)>> = HashMap::new();
@@ -1635,7 +1635,7 @@ pub fn scan(env: &ScanEnv, store: &Store) -> Result<AgentSessionScanResult, Fail
     }
     // Persisted roots may use other symlinks to the same directory.
     let shells = store.list_projects().map_err(Failure::read_projects)?;
-    let mut by_root: HashMap<String, &domovoi_contracts::shell::ProjectShell> = HashMap::new();
+    let mut by_root: HashMap<String, &crate::wire::shell::ProjectShell> = HashMap::new();
     for p in &shells {
         let root = resolve(&expand_home(&p.workspace_root, &env.home));
         by_root.insert(normalize_for_comparison(&root.to_string_lossy()), p);
@@ -1661,7 +1661,7 @@ pub fn scan(env: &ScanEnv, store: &Store) -> Result<AgentSessionScanResult, Fail
         })
         .collect();
     candidates.sort_by(|a, b| b.last_active_at.cmp(&a.last_active_at).then_with(|| a.path.cmp(&b.path)));
-    Ok(AgentSessionScanResult { candidates, scanned_at: domovoi_contracts::iso_now().into(), truncated: truncated.then_some(true) })
+    Ok(AgentSessionScanResult { candidates, scanned_at: crate::time_fmt::iso_now().into(), truncated: truncated.then_some(true) })
 }
 
 // ---- import ----
@@ -1703,7 +1703,7 @@ fn recent_threads(env: &ScanEnv, store: &Store, workspace_root: &str, completed:
         return Ok(vec![]);
     }
     let root_identity = directory_identity(&root);
-    let now = domovoi_contracts::time_fmt::now_millis();
+    let now = crate::time_fmt::now_millis();
     let cutoff = now - RECENT_THREAD_WINDOW_MS;
     let Collected { candidates, .. } = collect_candidates(env, store)?;
     let mut eligible: Vec<(&RawCandidate, &Transcript)> = vec![];
@@ -2304,8 +2304,8 @@ mod tests {
         Fixture { root, env, project }
     }
 
-    fn project_shell(id: &str, root: &Path) -> domovoi_contracts::shell::ProjectShell {
-        domovoi_contracts::shell::ProjectShell {
+    fn project_shell(id: &str, root: &Path) -> crate::wire::shell::ProjectShell {
+        crate::wire::shell::ProjectShell {
             id: id.into(), title: "calc".into(), has_custom_title: false, workspace_root: root.to_string_lossy().into_owned(),
             repository_identity: None, default_model_selection: None, default_thread_env_mode: None, auto_pull: false,
             favicon_path: None, project_icon: None, scripts: vec![], pinned_at: None, archived_at: None,
