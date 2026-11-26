@@ -2274,6 +2274,7 @@ dependencies = [
  "crux_core",
  "crux_http",
  "dirs 6.0.0",
+ "domovoi-local",
  "domovoi-remote",
  "domovoi_core",
  "futures",
@@ -2320,6 +2321,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "domovoi-local"
+version = "0.1.0"
+dependencies = [
+ "getrandom 0.4.3",
+ "libc",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "domovoi-model"
 version = "0.1.0"
 dependencies = [
@@ -2360,6 +2371,7 @@ dependencies = [
  "dark-light",
  "dirs 7.0.0",
  "domovoi-contracts",
+ "domovoi-local",
  "domovoi-model",
  "domovoi-remote",
  "effect-rpc",
@@ -2457,6 +2469,7 @@ dependencies = [
  "crux_core",
  "crux_http",
  "divan",
+ "domovoi-local",
  "domovoi-model",
  "domovoi-remote",
  "effect-rpc",

@@ -1,5 +1,6 @@
 //! The window: the title bar, then the pairing form, or the thread list on
-//! the left and the open thread with its composer on the right.
+//! the left and the open thread with its composer on the right. A link from
+//! outside the app puts its question over all of it (`views::link_dialog`).
 //!
 //! It owns the core link and the store. The host's reports wake the UI
 //! thread (`ui_thread`), which sends `Message::CoreWoke`; `absorb` takes all
@@ -18,7 +19,7 @@ use windows_reactor::{
 use crate::core_link::CoreLink;
 use crate::launch::Launch;
 use crate::store::Store;
-use crate::views::{composer, pairing, sidebar, thread};
+use crate::views::{composer, link_dialog, pairing, sidebar, thread};
 use crate::{theme, ui_thread};
 
 const SIZE: (f64, f64) = (1280.0, 820.0);
@@ -49,6 +50,10 @@ pub enum Message {
     PairCode(Rc<str>),
     ConnectLink,
     ConnectCode,
+    /// Sign in to the server on this computer.
+    ConnectLocal,
+    /// The answer to the link request with this `id`.
+    AnswerLink { id: u32, accept: bool },
     Draft(Rc<str>),
     ProjectPath(Rc<str>),
     AddProject,
@@ -131,8 +136,9 @@ impl Component for MainWindow {
             let (iana, utc_offset_secs) = domovoi_desktop_host::local_timezone();
             core.send(Event::SetTimeZone { iana, utc_offset_secs });
             core.send(Event::Launch { surface: "desktop".into(), device_label: domovoi_desktop_host::device_label(), device_os: domovoi_desktop_host::device_os().into() });
+            // The link came from outside the app: the core asks before it connects.
             if let Some(link) = &launch.link {
-                core.send(Event::ConnectRemote { link: link.clone() });
+                core.send(Event::OpenLink { link: link.clone() });
             } else if let Some(server) = &launch.server {
                 core.send(Event::Connect { server_url: server.clone(), pairing_code: launch.pairing.clone().unwrap_or_default() });
             }
@@ -159,6 +165,8 @@ impl Component for MainWindow {
             Message::PairCode(text) => self.pairing.code = text.to_string(),
             Message::ConnectLink => self.send(Event::ConnectRemote { link: self.pairing.link.trim().to_owned() }),
             Message::ConnectCode => self.send(Event::Connect { server_url: self.pairing.url.trim().to_owned(), pairing_code: self.pairing.code.trim().to_owned() }),
+            Message::ConnectLocal => self.send(Event::ConnectLocalServer),
+            Message::AnswerLink { id, accept } => self.send(Event::AnswerLinkRequest { id, accept }),
             Message::Draft(text) => {
                 if *text != *self.draft {
                     self.draft = text.to_string();
@@ -199,6 +207,7 @@ impl Component for MainWindow {
                 &self.store.connection,
                 &self.pairing,
                 pairing::Hooks {
+                    on_connect_local: context.callback(|()| Message::ConnectLocal),
                     on_link: context.callback(Message::PairLink),
                     on_url: context.callback(Message::PairUrl),
                     on_code: context.callback(Message::PairCode),
@@ -264,6 +273,11 @@ impl Component for MainWindow {
                     .into()
             }
         };
-        Grid::new().rows([GridLength::Auto, GridLength::STAR]).children((title_bar, Border::new().grid_row(1).content(body))).into()
+        let mut layers: Vec<View> = vec![title_bar.into(), Border::new().grid_row(1).content(body).into()];
+        // Last, so it draws over the rest and takes the presses meant for it.
+        if let Some(request) = &self.store.connection.link_request {
+            layers.push(link_dialog::link_dialog(request, context.callback(|(id, accept)| Message::AnswerLink { id, accept })));
+        }
+        Grid::new().rows([GridLength::Auto, GridLength::STAR]).children(layers).into()
     }
 }

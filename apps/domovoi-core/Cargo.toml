@@ -28,6 +28,7 @@ facet = "=0.46.5"
 serde.workspace = true
 serde_json.workspace = true
 domovoi-model = { path = "../../crates/domovoi-model" }
+domovoi-local = { path = "../../crates/domovoi-local" }
 domovoi-remote = { path = "../../crates/domovoi-remote", default-features = false, features = ["bridge"], optional = true }
 tokio = { workspace = true, optional = true }
 uuid = { version = "1.29.2", features = ["v4"] }

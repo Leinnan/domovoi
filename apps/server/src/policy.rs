@@ -470,6 +470,12 @@ impl Policy {
         if self.allows_client(Client::LocalBrowser) { Ok(()) } else { Err(self.refuse("browsers on this machine", None)) }
     }
 
+    /// Whether the desktop app on this machine may sign in by itself, with
+    /// no pairing code (`crate::local`): the `desktop` client kind.
+    pub fn allows_desktop_client(&self) -> bool {
+        self.allows_client(Client::Desktop)
+    }
+
     /// Whether anything off this machine may pair (`allowsRemoteClients`).
     pub fn allows_remote_clients(&self) -> bool {
         self.allows_client(Client::Remote)

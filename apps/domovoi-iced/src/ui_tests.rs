@@ -114,6 +114,8 @@ fn sample_connected_vm() -> ViewModel {
             }],
             companion: CompanionLookView { look, custom: true },
             activity: ActivityView { working: 1, attention: 1, ..Default::default() },
+            local_server: None,
+            link_request: None,
             ..Default::default()
         },
         sidebar: SidebarView {
@@ -921,4 +923,130 @@ fn secret_requests_take_a_hidden_value_and_links_open_in_the_browser() {
     app.vm.thread.as_mut().unwrap().secret_requests[0].sending = true;
     let pressed = messages_after_click(&app, "Saving…");
     assert!(!pressed.iter().any(|m| matches!(m, Message::SecretSubmit { .. })), "{pressed:?}");
+}
+
+fn local_server() -> LocalServerView {
+    LocalServerView { label: "Piotr’s MacBook Pro".into(), url: "http://127.0.0.1:13773".into() }
+}
+
+#[test]
+fn connect_screen_offers_the_server_on_this_computer() {
+    let (mut app, _) = App::new();
+    app.prefs.appearance = Appearance::Dark;
+
+    // Without one, the screen has no such card.
+    let mut ui = Simulator::with_size(crate::ui::fonts::settings(), Size::new(1440.0, 900.0), crate::views::view(&app));
+    assert!(ui.find("SERVER ON THIS COMPUTER").is_err());
+    drop(ui);
+
+    // First run: nothing saved, and a server runs here.
+    app.vm.connection = ConnectionView { state: "disconnected".into(), local_server: Some(local_server()), link_request: None, ..Default::default() };
+    snapshot(&app, "28-connect-local-server-first-run");
+    // The card's Connect is the first on the screen, above the form's.
+    let pressed = messages_after_click(&app, "Connect");
+    assert!(matches!(pressed.as_slice(), [Message::ConnectLocal]), "{pressed:?}");
+
+    // With saved servers (here: adding one while connected), the card is above their list.
+    app.vm = sample_connected_vm();
+    app.vm.connection.local_server = Some(local_server());
+    let _ = app.update(Message::ShowAddServer(true));
+    snapshot(&app, "29-connect-local-server-above-saved");
+    let mut ui = Simulator::with_size(crate::ui::fonts::settings(), Size::new(1440.0, 900.0), crate::views::view(&app));
+    let mut top_of = |shown: &str| ui.find(shown).unwrap().visible_bounds().unwrap().y;
+    let (card, line, caption, saved) = (top_of("SERVER ON THIS COMPUTER"), top_of("Piotr’s MacBook Pro · http://127.0.0.1:13773"), top_of("No pairing code needed."), top_of("SAVED SERVERS"));
+    assert!(card < line && line < caption && caption < saved, "{card} {line} {caption} {saved}");
+    drop(ui);
+    let pressed = messages_after_click(&app, "Connect");
+    assert!(matches!(pressed.as_slice(), [Message::ConnectLocal]), "{pressed:?}");
+
+    // While something connects, its button waits like the others.
+    app.vm.connection.state = "connecting".into();
+    let pressed = messages_after_click(&app, "Connect");
+    assert!(pressed.is_empty(), "{pressed:?}");
+}
+
+/// What a click at `at` sends.
+fn messages_after_click_at(app: &App, at: iced::Point) -> Vec<Message> {
+    let mut ui = Simulator::with_size(crate::ui::fonts::settings(), Size::new(1440.0, 900.0), crate::views::view(app));
+    ui.point_at(at);
+    let _ = ui.simulate(iced_test::simulator::click());
+    ui.into_messages().collect()
+}
+
+#[test]
+fn a_link_from_outside_asks_before_anything_connects() {
+    let (mut app, _) = App::new();
+    app.prefs.appearance = Appearance::Dark;
+    app.vm = sample_connected_vm();
+
+    // Places that take a click while no dialog is up: the top bar, the sidebar, the composer.
+    let mut ui = Simulator::with_size(crate::ui::fonts::settings(), Size::new(1440.0, 900.0), crate::views::view(&app));
+    let beside: Vec<iced::Point> = ["Usage", "Audit iroh relay reconnects", "Send"].into_iter().map(|shown| ui.find(shown).unwrap().visible_bounds().unwrap().center()).collect();
+    drop(ui);
+    for at in &beside {
+        assert!(!messages_after_click_at(&app, *at).is_empty(), "{at:?} takes a click");
+    }
+
+    // A server not saved here, over the connected workspace: the key and the link's own name.
+    app.vm.connection.link_request = Some(LinkRequestView {
+        id: 7,
+        title: "Connect to a new server?".into(),
+        message: "A link asks this app to connect to a server that is not saved here. Connect only if you made this link on your own server: a server you connect to sees what you send it, and this app shows what it sends back. The name in a link is whatever its author wrote.".into(),
+        confirm_label: "Connect".into(),
+        endpoint: "9c41e07ab2".into(),
+        link_name: "Build box".into(),
+        known_label: String::new(),
+    });
+    snapshot(&app, "30-link-dialog-new-server");
+    let mut ui = Simulator::with_size(crate::ui::fonts::settings(), Size::new(1440.0, 900.0), crate::views::view(&app));
+    for shown in ["Connect to a new server?", "Server key", "9c41e07ab2…", "Name in the link", "Build box"] {
+        assert!(ui.find(shown).is_ok(), "{shown}");
+    }
+    assert!(ui.find("Saved here as").is_err());
+    drop(ui);
+
+    // Only the two buttons answer, each with the request's id.
+    let pressed = messages_after_click(&app, "Cancel");
+    assert!(matches!(pressed.as_slice(), [Message::AnswerLink { id: 7, accept: false }]), "{pressed:?}");
+    let pressed = messages_after_click(&app, "Connect");
+    assert!(matches!(pressed.as_slice(), [Message::AnswerLink { id: 7, accept: true }]), "{pressed:?}");
+    // A click beside the dialog answers nothing and reaches nothing under it.
+    for at in &beside {
+        let pressed = messages_after_click_at(&app, *at);
+        assert!(pressed.is_empty(), "{at:?}: {pressed:?}");
+    }
+
+    // Escape goes to the dialog, not to what is open under it.
+    let _ = app.update(Message::OpenSettings(SettingsSection::General));
+    let _ = app.update(Message::Escape);
+    assert!(app.overlay.is_some(), "Escape answers the link and leaves Settings open");
+    app.vm.connection.link_request = None;
+    let _ = app.update(Message::Escape);
+    assert!(app.overlay.is_none());
+
+    // A saved server, over the connect screen: its name here, never the link's.
+    app.vm = ViewModel::default();
+    app.vm.connection.local_server = Some(local_server());
+    app.vm.connection.link_request = Some(LinkRequestView {
+        id: 8,
+        title: "Connect to Mac Studio?".into(),
+        message: "A link asks this app to connect to a server saved here. It carries a pairing code, which signs this device in to it again.".into(),
+        confirm_label: "Connect".into(),
+        endpoint: "3f2a9c8b7d".into(),
+        link_name: "Totally Mac Studio".into(),
+        known_label: "Mac Studio".into(),
+    });
+    snapshot(&app, "31-link-dialog-saved-server");
+    let mut ui = Simulator::with_size(crate::ui::fonts::settings(), Size::new(1440.0, 900.0), crate::views::view(&app));
+    for shown in ["Connect to Mac Studio?", "Server key", "3f2a9c8b7d…", "Saved here as", "Mac Studio"] {
+        assert!(ui.find(shown).is_ok(), "{shown}");
+    }
+    assert!(ui.find("Name in the link").is_err());
+    assert!(ui.find("Totally Mac Studio").is_err());
+    drop(ui);
+    // The card under the dialog is out of reach while it asks.
+    let pressed = messages_after_click(&app, "Cancel");
+    assert!(matches!(pressed.as_slice(), [Message::AnswerLink { id: 8, accept: false }]), "{pressed:?}");
+    let pressed = messages_after_click_at(&app, iced::Point::new(720.0, 120.0));
+    assert!(pressed.is_empty(), "{pressed:?}");
 }

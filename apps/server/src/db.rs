@@ -80,6 +80,29 @@ fn checkpoint_in_background(path: std::path::PathBuf, open: std::sync::Weak<Reen
     }
 }
 
+/// The database's three files (`path`, `-wal`, `-shm`).
+pub fn files(path: &Path) -> [std::path::PathBuf; 3] {
+    let beside = |suffix: &str| std::path::PathBuf::from(format!("{}{suffix}", path.display()));
+    [path.to_owned(), beside("-wal"), beside("-shm")]
+}
+
+/// Makes an empty private file where a new database goes, and makes an
+/// existing database's files private. A failure is logged and the database
+/// opens all the same: a server that cannot change a mode still serves.
+fn make_private(path: &Path) {
+    match crate::util::create_private(path, true) {
+        Ok(_) => return,
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+        // SQLite reports why the file cannot be made.
+        Err(_) => return,
+    }
+    for file in files(path) {
+        if let Err(e) = crate::util::tighten(&file) {
+            tracing::warn!("{} could not be made private: {e}", file.display());
+        }
+    }
+}
+
 const MIGRATIONS: &[&str] = &[
     // 1: metadata, auth sessions, application event log, project projection.
     "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -204,7 +227,11 @@ const MIGRATIONS: &[&str] = &[
 ];
 
 impl Db {
+    /// Opens the database at `path`, making it when missing. The file, its
+    /// write-ahead log and its shared-memory file are this user's alone:
+    /// SQLite gives the two it makes the mode of the database.
     pub fn open(path: &Path) -> rusqlite::Result<Self> {
+        make_private(path);
         let conn = Connection::open(path)?;
         // NORMAL is safe with WAL: a crash of the server loses nothing; only a
         // power loss can undo the last commits, never corrupt the file.
@@ -401,6 +428,36 @@ impl Drop for OpenBatch<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn the_database_files_are_private_new_or_old() {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        let dir = std::env::temp_dir().join(format!("domovoi-db-private-{}", crate::util::new_uuid()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("domovoi.sqlite");
+
+        // A new database: all three files are made private.
+        let db = Db::open(&path).unwrap();
+        db.meta_set("k", "v").unwrap();
+        for file in files(&path) {
+            assert_eq!(mode(&file), 0o600, "{}", file.display());
+        }
+
+        // One an older server made, opened while its WAL files are there:
+        // what `domovoi-server pair` does beside a running server.
+        for file in files(&path) {
+            std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
+        }
+        let again = Db::open(&path).unwrap();
+        assert_eq!(again.meta_get("k").unwrap().as_deref(), Some("v"));
+        for file in files(&path) {
+            assert_eq!(mode(&file), 0o600, "{}", file.display());
+        }
+        drop((db, again));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     fn meta(db: &Db) -> Option<String> {
         db.read(|c| c.query_row("SELECT value FROM meta WHERE key = 'k'", [], |r| r.get(0)).optional()).unwrap()

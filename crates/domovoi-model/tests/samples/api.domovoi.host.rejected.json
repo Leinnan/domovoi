@@ -1,0 +1,5 @@
+{
+  "_tag": "HostNotAllowedError",
+  "host": "domovoi.example.com:13773",
+  "message": "This server does not answer to the name \"domovoi.example.com\". If you reach it by that name (a reverse proxy, a DNS name of your own), start it with --allowed-host domovoi.example.com."
+}

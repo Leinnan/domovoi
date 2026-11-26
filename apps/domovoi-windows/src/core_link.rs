@@ -58,12 +58,13 @@ impl CoreLink {
                 ticker.send(Event::Tick { now_ms: now_ms() });
             }
         });
-        // Links from later launches (`domovoi_desktop_host::links`).
+        // Links from later launches (`domovoi_desktop_host::links`). They come
+        // from outside the app, so the core asks before it connects.
         if let Some(mut links) = domovoi_desktop_host::links::take_receiver() {
             let to = handle.clone();
             runtime.spawn(async move {
                 while let Some(link) = links.recv().await {
-                    to.send(Event::ConnectRemote { link });
+                    to.send(Event::OpenLink { link });
                 }
             });
         }

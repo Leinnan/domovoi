@@ -4,7 +4,8 @@
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Launch {
-    /// A `domovoi://connect?…` link to pair with.
+    /// A `domovoi://connect?…` link the system handed the app. The core asks
+    /// before it connects (`Event::OpenLink`).
     pub link: Option<String>,
     /// `DOMOVOI_SERVER`: a local server's URL to connect to at once…
     pub server: Option<String>,

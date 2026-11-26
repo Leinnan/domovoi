@@ -8,8 +8,6 @@ struct DomovoiIOSApp: App {
     @StateObject private var core = Core()
     @Environment(\.scenePhase) private var scenePhase
     @State private var network = NetworkWatcher()
-    /// A `domovoi://` link that would leave the server in use, waiting for a yes.
-    @State private var pendingLink: PendingLink?
 
     var body: some Scene {
         WindowGroup {
@@ -26,27 +24,11 @@ struct DomovoiIOSApp: App {
                         }
                         return
                     }
-                    // `domovoi://connect?ticket=…&code=…` from a scanned QR code or a shared link.
-                    let link = PendingLink(url: url)
-                    let current = core.view.connection
-                    // Connected to another server: ask before leaving it.
-                    if current.state == "connected", !current.activeEnvironmentId.isEmpty {
-                        pendingLink = link
-                    } else {
-                        core.update(.connectRemote(link: url.absoluteString))
-                    }
+                    // `domovoi://connect?ticket=…&code=…` from the Camera app's
+                    // scan or a shared link: the core asks before connecting.
+                    core.update(.openLink(link: url.absoluteString))
                 }
-                .confirmationDialog(
-                    pendingLink.map { "Connect to \($0.name)?" } ?? "",
-                    isPresented: Binding(get: { pendingLink != nil }, set: { if !$0 { pendingLink = nil } }),
-                    titleVisibility: .visible,
-                    presenting: pendingLink
-                ) { link in
-                    Button("Connect") { core.update(.connectRemote(link: link.url.absoluteString)) }
-                    Button("Cancel", role: .cancel) {}
-                } message: { _ in
-                    Text("This leaves \(core.view.connection.environmentLabel.isEmpty ? "the current server" : core.view.connection.environmentLabel).")
-                }
+                .linkRequestDialog(core: core)
                 .task {
                     core.launch()
                     network.start(online: { core.update(.networkStatus(online: $0)) }) { core.update(.networkChanged) }
@@ -88,18 +70,6 @@ struct DomovoiIOSApp: App {
             default: break
             }
         }
-    }
-}
-
-struct PendingLink: Identifiable {
-    let url: URL
-    var id: String { url.absoluteString }
-    /// The server's name from the link, if it has one.
-    var name: String {
-        // Form-encoded like the core reads it: `+` is a space ("MacBook+Pro"),
-        // which `queryItems` would leave as a plus.
-        let raw = URLComponents(url: url, resolvingAgainstBaseURL: false)?.percentEncodedQueryItems?.first { $0.name == "name" }?.value
-        return raw.flatMap { $0.replacingOccurrences(of: "+", with: " ").removingPercentEncoding } ?? "this server"
     }
 }
 

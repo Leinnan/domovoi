@@ -39,6 +39,11 @@ fn start() -> Server {
 
 /// Each test gets its own home directory (they run in parallel).
 fn start_as(tag: &str) -> Server {
+    start_with(tag, &[])
+}
+
+/// As [`start_as`], with further flags.
+fn start_with(tag: &str, flags: &[&str]) -> Server {
     let home = std::env::temp_dir().join(format!("domovoi-remote-access-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&home);
     let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
@@ -51,6 +56,7 @@ fn start_as(tag: &str) -> Server {
         // its ten seconds.
         .env("DOMOVOI_AGENT_SESSIONS_HOME", home.join("agent-home"))
         .args(["--home-dir", home.to_str().unwrap(), "--port", &port.to_string(), "--remote", "--relay", "disabled"])
+        .args(flags)
         .env("RUST_LOG", "info")
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -490,4 +496,256 @@ async fn a_device_forgetting_the_server_signs_itself_out() {
     let status = cli(&server, &["remote", "status"]);
     assert!(status.contains("Devices: none paired") && status.contains("0 device(s) registered") || status.contains("Push: off"), "{status}");
     phone.stop().await;
+}
+
+/// What `<home>/local/server.json` says, once the server has written it.
+fn descriptor(home: &Path) -> Value {
+    let path = home.join("local").join("server.json");
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        if let Some(found) = std::fs::read(&path).ok().and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok()) {
+            return found;
+        }
+        assert!(std::time::Instant::now() < deadline, "no descriptor at {}", path.display());
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// A request file as a client on this machine writes one: `(id, secret)`.
+fn local_request(home: &Path, id_seed: &str) -> (String, String) {
+    let id = id_seed.repeat(32);
+    let secret = "5ec2e7".repeat(10);
+    std::fs::write(home.join("local").join("requests").join(&id), &secret).unwrap();
+    (id, secret)
+}
+
+async fn local_sign_in(base: &str, id: &str) -> reqwest::Response {
+    http_client().post(format!("{base}/api/domovoi/local/session")).json(&json!({ "request": id, "clientLabel": "Test App", "clientDeviceType": "desktop", "clientOs": "macOS" })).send().await.unwrap()
+}
+
+#[cfg(unix)]
+fn mode(path: &Path) -> u32 {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path).unwrap_or_else(|e| panic!("{}: {e}", path.display())).permissions().mode() & 0o777
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_app_on_this_machine_signs_in_by_writing_a_file() {
+    let mut server = start_as("local");
+    let base = format!("http://127.0.0.1:{}", server.port);
+    let found = descriptor(&server.home);
+    let environment = http_client().get(format!("{base}/.well-known/t3/environment")).send().await.unwrap().json::<Value>().await.unwrap();
+    assert_eq!(found, json!({ "version": 1, "url": base, "environmentId": environment["environmentId"], "label": environment["label"] }));
+    #[cfg(unix)]
+    {
+        assert_eq!(mode(&server.home.join("local")), 0o700);
+        assert_eq!(mode(&server.home.join("local/requests")), 0o700);
+        assert_eq!(mode(&server.home.join("local/server.json")), 0o600);
+    }
+
+    // What an app does: reads the descriptor as its own user's file, and writes a request beside it.
+    let path = server.home.join("local").join("server.json");
+    let read = domovoi_local::Descriptor::parse(&domovoi_local::read_descriptor(&path).expect("a file of this user's")).expect("a descriptor an app accepts");
+    assert_eq!((read.url.as_str(), read.address().map(|address| address.port())), (base.as_str(), Some(server.port)));
+    let request = domovoi_local::create_request(&domovoi_local::requests_beside(&path).unwrap()).expect("the requests folder takes this user's files");
+    let (id, secret) = (request.id, request.secret);
+    // The request file buys a session that is a local pairing's: full access, over plain TCP.
+    let res = local_sign_in(&base, &id).await;
+    assert_eq!(res.status(), 200);
+    assert_eq!(res.headers()["cache-control"], "no-store");
+    let body = res.json::<Value>().await.unwrap();
+    assert_eq!(body["proof"], secret, "the server shows it read the file");
+    assert_eq!(body["environmentId"], environment["environmentId"]);
+    let token = body["accessToken"].as_str().unwrap().to_owned();
+    assert!(!server.home.join("local/requests").join(&id).exists(), "the request is used up");
+    let mut ws = open_ws(&base, &token).await;
+    let config = rpc(&mut ws, "1", "server.getConfig").await.expect("an RPC over the session");
+    assert_eq!(config["exit"]["_tag"], "Success", "{config}");
+    let status = cli(&server, &["remote", "devices"]);
+    let line = status.lines().find(|l| l.contains("Test App")).unwrap_or_else(|| panic!("the app is listed: {status}"));
+    assert!(line.contains("desktop") && line.contains("local"), "{line}");
+
+    // Once only, and only for a file that is there.
+    assert_eq!(local_sign_in(&base, &id).await.status(), 401, "replayed");
+    assert_eq!(local_sign_in(&base, &"b".repeat(32)).await.status(), 401, "no such request");
+    assert_eq!(local_sign_in(&base, "../server.json").await.status(), 401);
+
+    // Never from a web page: a browser names the page on a POST.
+    let (id, _) = local_request(&server.home, "c");
+    let from_page = |origin: &'static str| {
+        let (base, id) = (base.clone(), id.clone());
+        async move { http_client().post(format!("{base}/api/domovoi/local/session")).header("origin", origin).json(&json!({ "request": id })).send().await.unwrap() }
+    };
+    let res = from_page("http://evil.example").await;
+    assert_eq!(res.status(), 403);
+    assert_eq!(res.json::<Value>().await.unwrap()["_tag"], "HostNotAllowedError", "another site's page is stopped at the door");
+    let res = from_page(Box::leak(base.clone().into_boxed_str())).await;
+    assert_eq!(res.status(), 403);
+    assert_eq!(res.json::<Value>().await.unwrap()["reason"], "local_sign_in_is_for_this_machine", "and so is the server's own page");
+    assert!(server.home.join("local/requests").join(&id).exists(), "a refused caller uses no request up");
+
+    // Never over iroh: not for a stranger, not for a paired device.
+    let (ticket, code) = parse_link(&pair_link(&server.home, server.port));
+    let stranger = bridge(&ticket, SecretKey::generate()).await;
+    assert_eq!(local_sign_in(&format!("http://127.0.0.1:{}", stranger.port()), &id).await.status(), 401);
+    let (phone, phone_base, phone_token) = paired(&ticket, &code).await;
+    let res = http_client().post(format!("{phone_base}/api/domovoi/local/session")).bearer_auth(&phone_token).json(&json!({ "request": id })).send().await.unwrap();
+    assert_eq!(res.status(), 403);
+    assert!(server.home.join("local/requests").join(&id).exists());
+    stranger.stop().await;
+    phone.stop().await;
+
+    // A second server on the same home and port fails to listen and leaves the descriptor alone.
+    let second = Command::new(env!("CARGO_BIN_EXE_domovoi-server"))
+        .env("DOMOVOI_NO_SESSION_IMPORT", "1")
+        .env("DOMOVOI_NO_SHELL_ENV", "1")
+        .env("DOMOVOI_AGENT_SESSIONS_HOME", server.home.join("agent-home"))
+        .args(["--home-dir", server.home.to_str().unwrap(), "--port", &server.port.to_string(), "--no-startup-code"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .unwrap();
+    assert!(!second.success(), "the port is taken");
+    assert_eq!(descriptor(&server.home), found);
+    let (id, secret) = local_request(&server.home, "d");
+    assert_eq!(local_sign_in(&base, &id).await.json::<Value>().await.unwrap()["proof"], secret, "and the first still signs apps in");
+
+    // Stopping takes the descriptor and unread requests away.
+    let (unread, _) = local_request(&server.home, "e");
+    assert!(cli(&server, &["stop"]).contains("Stopping the server"));
+    let exit = tokio::task::block_in_place(|| server.child.wait()).unwrap();
+    assert!(exit.success(), "{exit:?}");
+    assert!(!server.home.join("local/server.json").exists(), "the descriptor outlived the server");
+    assert!(!server.home.join("local/requests").join(unread).exists());
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn sigterm_takes_the_descriptor_away() {
+    let mut server = start_as("local-sigterm");
+    descriptor(&server.home);
+    assert!(Command::new("kill").args(["-TERM", &server.child.id().to_string()]).status().unwrap().success());
+    let exit = tokio::task::block_in_place(|| server.child.wait()).unwrap();
+    assert!(exit.success(), "{exit:?}");
+    assert!(!server.home.join("local/server.json").exists());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn no_descriptor_when_asked_for_none() {
+    let server = start_with("local-off", &["--no-local-sign-in"]);
+    let base = format!("http://127.0.0.1:{}", server.port);
+    assert_eq!(http_client().get(format!("{base}/health")).send().await.unwrap().status(), 200);
+    assert!(!server.home.join("local").exists(), "nothing for an app to find");
+    let res = local_sign_in(&base, &"a".repeat(32)).await;
+    assert_eq!(res.status(), 403);
+    assert_eq!(res.json::<Value>().await.unwrap()["reason"], "local_sign_in_is_off");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn requests_under_a_name_that_is_not_the_servers_are_refused() {
+    let server = start_as("host");
+    let base = format!("http://127.0.0.1:{}", server.port);
+    let get = |path: &'static str, host: &'static str| {
+        let base = base.clone();
+        async move { http_client().get(format!("{base}{path}")).header("host", host).send().await.unwrap() }
+    };
+
+    // A page that points a name of its own at this machine reaches nothing.
+    let res = get("/api/auth/session", "evil.example").await;
+    assert_eq!(res.status(), 403);
+    let body = res.json::<Value>().await.unwrap();
+    assert_eq!((&body["_tag"], &body["host"]), (&json!("HostNotAllowedError"), &json!("evil.example")));
+    assert!(body["message"].as_str().unwrap().contains("--allowed-host evil.example"), "{body}");
+    assert_eq!(get("/.well-known/t3/environment", "evil.example:13773").await.status(), 403);
+    let res = exchange_as(&base, &server.startup_code, Some("evil.example"), None).await;
+    assert_eq!(res.status(), 403, "not even with a good code");
+
+    // The names it has, and monitors by whatever name they use.
+    for host in ["localhost", "127.0.0.1:1", "[::1]:13773", "box.tail1234.ts.net", "nas.lan"] {
+        assert_eq!(get("/api/auth/session", host).await.status(), 200, "{host}");
+    }
+    assert_eq!(get("/health", "evil.example").await.status(), 200);
+    assert_eq!(get("/ready", "evil.example").await.status(), 200);
+
+    // Another site's page may not post, whatever name it uses; the server's own may.
+    let res = exchange_as(&base, "WRONGCODE000", None, Some("http://evil.example")).await;
+    assert_eq!(res.status(), 403);
+    assert_eq!(res.json::<Value>().await.unwrap()["host"], "http://evil.example");
+    assert_eq!(exchange_as(&base, "WRONGCODE000", None, Some(&base)).await.status(), 401, "the code is looked at");
+    // Over iroh there is no browser and no DNS: the bridge's requests carry whatever name they have.
+    let (ticket, code) = parse_link(&pair_link(&server.home, server.port));
+    let phone = bridge(&ticket, SecretKey::generate()).await;
+    let res = exchange_as(&format!("http://127.0.0.1:{}", phone.port()), &code, Some("anything.example"), Some("http://anything.example")).await;
+    assert_eq!(res.status(), 200);
+    phone.stop().await;
+
+    // The code refused above was not used up.
+    assert_eq!(exchange(&base, &server.startup_code).await.status(), 200);
+    drop(server);
+
+    // A proxy's name, and a web client served from elsewhere, are named at start.
+    let server = start_with("host-allowed", &["--allowed-host", "domovoi.example.com", "--allowed-host", ".corp.example", "--web-url", "https://app.example.com"]);
+    let base = format!("http://127.0.0.1:{}", server.port);
+    let get = |host: &'static str| {
+        let base = base.clone();
+        async move { http_client().get(format!("{base}/api/auth/session")).header("host", host).send().await.unwrap().status().as_u16() }
+    };
+    assert_eq!(get("domovoi.example.com").await, 200);
+    assert_eq!(get("a.corp.example:8443").await, 200);
+    assert_eq!(get("app.example.com").await, 200, "the web client's host");
+    assert_eq!(get("evil.example").await, 403);
+    assert_eq!(exchange_as(&base, "WRONGCODE000", Some("domovoi.example.com"), Some("https://app.example.com")).await.status(), 401);
+    assert_eq!(exchange_as(&base, "WRONGCODE000", Some("domovoi.example.com"), Some("https://evil.example")).await.status(), 403);
+}
+
+/// [`exchange`] with a `Host` or an `Origin` of the caller's choosing.
+async fn exchange_as(base: &str, code: &str, host: Option<&str>, origin: Option<&str>) -> reqwest::Response {
+    let body = format!(
+        "grant_type={}&subject_token={code}&subject_token_type={}&requested_token_type={}",
+        "urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Atoken-exchange",
+        "urn%3At3%3Aparams%3Aoauth%3Atoken-type%3Aenvironment-bootstrap",
+        "urn%3Aietf%3Aparams%3Aoauth%3Atoken-type%3Aaccess_token",
+    );
+    let mut request = http_client().post(format!("{base}/oauth/token")).header("content-type", "application/x-www-form-urlencoded").body(body);
+    if let Some(host) = host {
+        request = request.header("host", host);
+    }
+    if let Some(origin) = origin {
+        request = request.header("origin", origin);
+    }
+    request.send().await.unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn wrong_codes_over_tcp_are_limited_and_the_owner_still_pairs() {
+    let server = start_as("tcp-limit");
+    let base = format!("http://127.0.0.1:{}", server.port);
+
+    // Guesses in parallel: ten a minute get an answer, the rest are told to wait.
+    let guesses = futures::future::join_all((0..25).map(|i| {
+        let base = base.clone();
+        async move { exchange(&base, &format!("WRONGCODE{i:03}")).await.status().as_u16() }
+    }))
+    .await;
+    let refused = guesses.iter().filter(|s| **s == 401).count();
+    let limited = guesses.iter().filter(|s| **s == 429).count();
+    assert_eq!((refused, limited), (10, 15), "{guesses:?}");
+    let res = exchange(&base, "WRONGCODE999").await;
+    assert_eq!(res.status(), 429);
+    assert_eq!(res.headers()["retry-after"], "60");
+    // The browser's route shares the budget.
+    let res = http_client().post(format!("{base}/api/auth/browser-session")).json(&json!({ "credential": "WRONGCODE998" })).send().await.unwrap();
+    assert_eq!(res.status(), 429);
+
+    // Whoever holds a real code is not locked out by the guessing: the
+    // command line, a new code from `pair`, and the code printed at start.
+    let status = cli(&server, &["remote", "status"]);
+    assert!(status.contains("Server: running"), "{status}");
+    let cookie = owner_cookie(&server).await;
+    assert_eq!(http_client().get(format!("{base}/api/domovoi/remote")).header("cookie", cookie).send().await.unwrap().status(), 200);
+    assert_eq!(exchange(&base, &server.startup_code).await.status(), 200);
+    assert_eq!(exchange(&base, &server.startup_code).await.status(), 429, "used: one more wrong code");
+    // Signed-in clients never notice.
+    let (id, _) = local_request(&server.home, "a");
+    assert_eq!(local_sign_in(&base, &id).await.status(), 200);
 }

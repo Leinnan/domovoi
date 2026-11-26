@@ -181,6 +181,26 @@ do, and how to tell it's done.
 - **Done when:** a test as a second local user can't open the pipe or read a
   secret file.
 
+**Since then (not run on Windows).** The server also closes `userdata`,
+`remote` and `local` under its home to other accounts at each start
+(`Paths::make_private`, `util::tighten`), writes `remote.json` with an ACL of
+its own, and signs apps on its machine in without a code (`local.rs`). All of
+it was written and tested on macOS; on Windows it has only been cross-compiled.
+To check on a Windows machine:
+
+- `just windows-test-server` (the `remote_access` and `pairing_permissions`
+  suites carry the new cases; the file-mode ones are Unix only).
+- After a start, `icacls %USERPROFILE%\.domovoi\userdata` lists your account
+  alone, and the home folder itself is unchanged.
+- The first start on a home with a large `userdata`: setting a protected ACL
+  on the folder rewrites the inherited entries of everything under it, once.
+  Time it on a real home.
+- A fresh WinUI or Iced app beside a running server connects with no code;
+  the same app run elevated shows the pairing form (its request file is
+  owned by Administrators, which `local::read_request` refuses).
+- As a second local user: `local\server.json` and `local\requests` cannot be
+  read or written.
+
 ### 8. Stopping agents gracefully
 
 - **Why.** Windows has no SIGTERM. Stopping a turn or a local dev server ends

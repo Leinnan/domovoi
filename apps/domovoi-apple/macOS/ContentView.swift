@@ -52,6 +52,8 @@ struct ContentView: View {
         .environmentObject(companion)
         .environment(\.notice, NoticeSink(core: core))
         .modifier(CompanionWindow(brain: companion, connection: connection))
+        // A link from a browser or another app, on whichever screen is up.
+        .linkRequestDialog(core: core)
         .task { await Snapshots.run(core) { openSettings() } }
         .onAppear {
             if Snapshots.directory == nil { core.launch() }
@@ -433,6 +435,24 @@ struct ConnectView: View {
                 VStack(alignment: .leading) {
                     Text("Connect to a Domovoi server").font(.title2.bold())
                     Text("domovoi-server or any t3code-compatible environment").foregroundStyle(.secondary)
+                }
+            }
+            if let local = connection.localServer {
+                // The server running on this Mac lets this user's apps in
+                // without a code.
+                GroupBox("Server on this computer") {
+                    HStack(spacing: Space.s) {
+                        Image(systemName: "desktopcomputer").foregroundStyle(.secondary)
+                        VStack(alignment: .leading) {
+                            Text("\(local.label) · \(local.url)").lineLimit(1)
+                            Text("No pairing code needed.").font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button("Connect") { core.update(.connectLocalServer) }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(busy)
+                    }
+                    .padding(Space.xs)
                 }
             }
             if !connection.environments.isEmpty {

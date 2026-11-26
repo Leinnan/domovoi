@@ -156,6 +156,12 @@ async fn a_managed_server_tells_clients_and_refuses_what_its_policy_locks() {
     let server = start("acme", &fixture("acme.json"));
     let mut rpc = Rpc::open(&server).await;
 
+    // The policy's clients leave out the desktop app: it is offered no sign-in without a code.
+    assert!(!server.home.join("local").exists(), "no descriptor for an app on this machine to find");
+    let res = http_client().post(format!("http://127.0.0.1:{}/api/domovoi/local/session", server.port)).json(&json!({ "request": "a".repeat(32) })).send().await.unwrap();
+    assert_eq!(res.status(), 403);
+    assert_eq!(res.json::<Value>().await.unwrap()["reason"], "local_sign_in_is_off");
+
     let config = rpc.ok("server.getConfig", json!({})).await;
     assert_eq!(
         config["managedPolicy"],

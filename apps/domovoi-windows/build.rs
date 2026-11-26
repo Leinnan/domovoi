@@ -1,6 +1,7 @@
 //! Stages the self-contained Windows App SDK runtime beside the executable
 //! (no runtime installer, no package identity) and embeds the app icon.
 
+#[cfg(windows)]
 const ICON: &str = "../domovoi-iced/assets/app-icon.ico";
 
 fn main() {

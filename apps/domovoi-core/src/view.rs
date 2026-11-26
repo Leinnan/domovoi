@@ -130,6 +130,46 @@ pub struct ConnectionView {
     pub attempting: bool,
     pub companion: CompanionLookView,
     pub activity: ActivityView,
+    /// A Domovoi server runs on this machine and this app can sign in to it
+    /// with no pairing code: offer it (`ConnectLocalServer`). Desktop only,
+    /// and only while the app is not already using that server.
+    pub local_server: Option<LocalServerView>,
+    /// A `domovoi://` link reached the app from outside and waits for the
+    /// user: ask before anything connects (`AnswerLinkRequest`).
+    pub link_request: Option<LinkRequestView>,
+}
+
+/// The server running on this machine.
+#[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct LocalServerView {
+    /// The machine's name, as the server gives it.
+    pub label: String,
+    /// `http://127.0.0.1:13773`.
+    pub url: String,
+}
+
+/// A link's request to connect, as a dialog asks it: `title`, `message`,
+/// then what identifies the server, one line each, then Cancel and
+/// `confirm_label`. The lines, the same on every client:
+///
+/// - `Server key` with `endpoint` and an ellipsis, in a fixed-width face;
+/// - `Saved here as` with `known_label`, when the server is a saved one;
+/// - otherwise `Name in the link` with `link_name`, when the link gives one.
+#[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct LinkRequestView {
+    /// Goes back in `AnswerLinkRequest`.
+    pub id: u32,
+    pub title: String,
+    pub message: String,
+    /// The accepting button's label.
+    pub confirm_label: String,
+    /// The start of the server's key (its endpoint id), which the link cannot fake.
+    pub endpoint: String,
+    /// What the link calls the server (anyone can write anything there);
+    /// empty when it gives no name. Never shown as a saved server's name.
+    pub link_name: String,
+    /// The saved server the link is for; empty for a server not saved here.
+    pub known_label: String,
 }
 
 #[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]

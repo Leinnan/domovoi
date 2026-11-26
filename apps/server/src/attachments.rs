@@ -84,7 +84,8 @@ fn signing_key(userdata: &Path) -> std::io::Result<Vec<u8>> {
         Ok(k) if k.len() >= 32 => Ok(k),
         _ => {
             let key = crate::util::random_bytes::<32>().to_vec();
-            std::fs::write(&path, &key)?;
+            // Whoever reads it can sign upload and asset URLs.
+            std::io::Write::write_all(&mut crate::util::create_private(&path, false)?, &key)?;
             Ok(key)
         }
     }

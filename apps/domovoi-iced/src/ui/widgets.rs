@@ -451,18 +451,29 @@ pub enum Placement {
 }
 
 pub fn modal<'a, M: Clone + 'a>(content: impl Into<Element<'a, M>>, close: M, placement: Placement) -> Element<'a, M> {
+    modal_layer(content, Some(close), placement)
+}
+
+/// A modal that only its own buttons answer: a press on the backdrop is
+/// swallowed and sends nothing.
+pub fn blocking_modal<'a, M: Clone + 'a>(content: impl Into<Element<'a, M>>, placement: Placement) -> Element<'a, M> {
+    modal_layer(content, None, placement)
+}
+
+fn modal_layer<'a, M: Clone + 'a>(content: impl Into<Element<'a, M>>, close: Option<M>, placement: Placement) -> Element<'a, M> {
     let layer = container(opaque(content)).center_x(Length::Fill).height(Length::Fill);
     let layer = match placement {
         Placement::Top(top) => layer.padding(Padding { top, bottom: XL, left: XL, right: XL }),
         Placement::Center => layer.center_y(Length::Fill).padding(XL),
     };
-    opaque(
-        mouse_area(layer.style(|_| container::Style {
-            background: Some(Background::Color(Color { a: 0.45, ..Color::BLACK })),
-            ..Default::default()
-        }))
-        .on_press(close),
-    )
+    let backdrop = mouse_area(layer.style(|_| container::Style {
+        background: Some(Background::Color(Color { a: 0.45, ..Color::BLACK })),
+        ..Default::default()
+    }));
+    opaque(match close {
+        Some(close) => backdrop.on_press(close),
+        None => backdrop,
+    })
 }
 
 pub fn dialog<'a, M: 'a>(content: impl Into<Element<'a, M>>, width: f32) -> container::Container<'a, M> {

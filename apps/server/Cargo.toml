@@ -73,6 +73,7 @@ reqwest = { version = "0.13.5", default-features = false, features = ["json", "h
 rustls = { version = "0.23.46", default-features = false, features = ["ring"] }
 ring = "0.17.14"
 domovoi-remote = { path = "../../crates/domovoi-remote" }
+domovoi-local = { path = "../../crates/domovoi-local" }
 tokio-util.workspace = true
 tracing-appender = "0.2.4"
 libc = "0.2.189"

@@ -14,9 +14,10 @@ struct DomovoiApp: App {
                 // Room for the thread and the panel; `MainView` hides the
                 // sidebar when all three columns don't fit.
                 .frame(minWidth: 720, minHeight: 560)
-                // `domovoi://connect?…` links, from a browser or another app.
+                // `domovoi://connect?…` links, from a browser or another app:
+                // the core asks before connecting (`linkRequestDialog`).
                 .onOpenURL { url in
-                    if url.scheme == "domovoi" { core.update(.connectRemote(link: url.absoluteString)) }
+                    if url.scheme == "domovoi" { core.update(.openLink(link: url.absoluteString)) }
                 }
                 .task {
                     network.start(online: { core.update(.networkStatus(online: $0)) }) { core.update(.networkChanged) }

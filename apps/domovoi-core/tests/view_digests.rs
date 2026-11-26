@@ -153,7 +153,8 @@ impl<'a> Walk<'a> {
                             other => self.sent.push(json!(format!("{other:?}"))),
                         },
                         Effect::Notify(request) => self.sent.push(json!(format!("{:?}", request.operation))),
-                        Effect::Render(_) | Effect::Tunnel(_) => {}
+                        // No server beside the app in a walk: the watch is left unanswered.
+                        Effect::Render(_) | Effect::Tunnel(_) | Effect::Local(_) => {}
                     }
                 }
                 queue.extend(command.events());

@@ -4,13 +4,11 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -20,6 +18,7 @@ import com.crayen.domovoi.app.ConnectionView
 import com.crayen.domovoi.app.Event
 import com.crayen.domovoi.core.Core
 import com.crayen.domovoi.ui.nav.MainScaffold
+import com.crayen.domovoi.ui.pairing.LinkRequestDialog
 import com.crayen.domovoi.ui.pairing.PairingScreen
 import com.crayen.domovoi.ui.pairing.ServerChangedScreen
 import com.crayen.domovoi.ui.theme.Space
@@ -31,22 +30,20 @@ fun showMain(connection: ConnectionView): Boolean = when (connection.state) {
     else -> false
 }
 
+/**
+ * The screen for the connection's state, and over it the question a link from
+ * outside the app asks (`ConnectionView.linkRequest`): it can arrive on any
+ * screen, also at a cold start before a server is paired.
+ */
 @Composable
-fun AppRoot(core: Core, pendingLink: String?, onConfirmLink: (String?) -> Unit) {
+fun AppRoot(core: Core) {
     val connection by core.view.connection.collectAsStateWithLifecycle()
     when {
         connection.serverChanged -> ServerChangedScreen(core, connection)
         showMain(connection) -> MainScaffold(core)
         else -> PairingScreen(core, onboarding = true)
     }
-    if (pendingLink != null) {
-        val label = connection.environments.firstOrNull { it.active }?.label ?: "this server"
-        AlertDialog(
-            onDismissRequest = { onConfirmLink(null) },
-            title = { Text("Connect to another server?") },
-            text = { Text("This leaves $label. You can switch back from the server menu.") },
-            confirmButton = { TextButton(onClick = { onConfirmLink(pendingLink) }) { Text("Connect") } },
-            dismissButton = { TextButton(onClick = { onConfirmLink(null) }) { Text("Cancel") } },
-        )
+    connection.linkRequest?.let { request ->
+        LinkRequestDialog(request) { accept -> core.update(Event.AnswerLinkRequest(request.id, accept)) }
     }
 }

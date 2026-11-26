@@ -60,6 +60,11 @@ pub fn view(app: &App) -> Element<'_, Message> {
         layers.push(w::modal(palette::view(app, pal), core(Event::ClosePalette), w::Placement::Top(72.0)));
     }
 
+    // Over everything, on any screen: a link from outside waits for its answer.
+    if let Some(request) = &app.vm.connection.link_request {
+        layers.push(connect::link_dialog(request));
+    }
+
     stack(layers).into()
 }
 

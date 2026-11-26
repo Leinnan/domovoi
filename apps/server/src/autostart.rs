@@ -31,7 +31,9 @@ pub struct Entry {
 
 impl Entry {
     /// This executable, serving `home` on `host:port` with the icon.
-    pub fn current(home: &std::path::Path, host: &str, port: u16, relays: &[String]) -> std::io::Result<Entry> {
+    /// `carried` are further flags of this run that the login's must have
+    /// too (`--allowed-host`, `--web-url`: `main.rs` `carried_flags`).
+    pub fn current(home: &std::path::Path, host: &str, port: u16, relays: &[String], carried: &[String]) -> std::io::Result<Entry> {
         let home = std::fs::canonicalize(home).unwrap_or_else(|_| home.to_path_buf());
         let mut args = vec!["--tray".to_owned(), "--no-startup-code".to_owned(), "--home-dir".to_owned(), home.to_string_lossy().into_owned(), "--port".to_owned(), port.to_string()];
         if host != "127.0.0.1" {
@@ -40,6 +42,7 @@ impl Entry {
         for relay in relays {
             args.extend(["--relay".to_owned(), relay.clone()]);
         }
+        args.extend(carried.iter().cloned());
         let exe = std::env::current_exe()?;
         // Started at sign-in by the launcher, so no console window opens.
         #[cfg(windows)]

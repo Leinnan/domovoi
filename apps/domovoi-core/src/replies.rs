@@ -1404,6 +1404,16 @@ pub mod http {
         said.unwrap_or_else(|| format!("The server answered {code}."))
     }
 
+    /// What a server says when it was reached under a name it does not
+    /// answer to, or from a page of another origin (`HostNotAllowedError`):
+    /// its own advice on the flag to start it with.
+    pub fn host_not_allowed(body: &Body) -> Option<String> {
+        match RequestRejection::deserialize(&body.0) {
+            Ok(RequestRejection::HostNotAllowed(rejection)) => Some(rejection.message),
+            _ => None,
+        }
+    }
+
     /// The body of an answer, read as the record `T`; one that does not fit
     /// is left out, counted as `what`.
     pub fn read<T: DeserializeOwned>(model: &mut Model, what: &'static str, body: Body) -> Option<T> {

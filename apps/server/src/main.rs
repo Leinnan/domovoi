@@ -34,6 +34,7 @@ mod keep_awake;
 mod keybindings;
 mod lfs;
 mod lifecycle;
+mod local;
 mod logging;
 mod managed;
 mod mcp;
@@ -109,6 +110,18 @@ struct Args {
     /// Origin of the web client, used to print the pairing URL.
     #[arg(long, global = true)]
     web_url: Option<String>,
+    /// Another name this server answers to over plain HTTP (repeatable): a
+    /// reverse proxy's or a DNS name of your own. `.example.com` allows every
+    /// name under it, `*` any name. Requests under other names get 403: a
+    /// web page cannot reach the server through a name of its own.
+    /// Addresses, `localhost`, this machine's names and `*.ts.net`,
+    /// `*.lan`, `*.internal`, `*.home.arpa` need no flag.
+    #[arg(long = "allowed-host", global = true, value_name = "HOST")]
+    allowed_hosts: Vec<String>,
+    /// Don't let apps on this machine sign in by themselves: no
+    /// `<home>/local/server.json` is written, and they pair with a code.
+    #[arg(long, global = true)]
+    no_local_sign_in: bool,
     /// Serve remote clients over iroh (also on when enabled in `remote.json`).
     #[arg(long)]
     remote: bool,
@@ -237,6 +250,23 @@ enum Cmd {
         #[arg(long, default_value_t = 0)]
         bridge_port: u16,
     },
+}
+
+/// The flags of this run that a server started at login (the login item, the
+/// systemd unit, the scheduled task) must be started with too, beside the
+/// home, host, port and relays.
+fn carried_flags(args: &Args) -> Vec<String> {
+    let mut flags = Vec::new();
+    for host in &args.allowed_hosts {
+        flags.extend(["--allowed-host".to_owned(), host.clone()]);
+    }
+    if let Some(url) = &args.web_url {
+        flags.extend(["--web-url".to_owned(), url.clone()]);
+    }
+    if args.no_local_sign_in {
+        flags.push("--no-local-sign-in".to_owned());
+    }
+    flags
 }
 
 fn default_home() -> PathBuf {
@@ -399,12 +429,12 @@ fn run() -> Fallible {
         Some(Cmd::Service { action }) => {
             let _log = logging::init(None);
             let base = base(&args, &paths)?;
-            let exec = service::Exec::current(&paths.home, &args.host, args.port, &args.relays)?;
+            let exec = service::Exec::current(&paths.home, &args.host, args.port, &args.relays, &carried_flags(&args))?;
             service::service(&base, &exec, action)
         }
         Some(Cmd::Autostart { action }) => {
             let _log = logging::init(None);
-            let entry = autostart::Entry::current(&paths.home, &args.host, args.port, &args.relays)?;
+            let entry = autostart::Entry::current(&paths.home, &args.host, args.port, &args.relays, &carried_flags(&args))?;
             let note = match action.as_str() {
                 "on" => autostart::enable(&entry)?,
                 "off" => {
@@ -425,6 +455,10 @@ fn run() -> Fallible {
             let _log = logging::init(Some(&paths.logs));
             tracing::info!(version = env!("CARGO_PKG_VERSION"), commit = env!("DOMOVOI_BUILD_COMMIT"), "domovoi-server starting");
             shell.log();
+            // Before the database opens: a home an older server made is closed to other accounts.
+            for warning in paths.make_private() {
+                tracing::warn!("{warning}");
+            }
             // Before anything listens: a refused configuration never serves, not even briefly.
             let policy = policy::install_from_system()?;
             policy.check_reachability(&args.host, args.remote)?;
@@ -590,6 +624,12 @@ async fn serve(args: &Args, paths: state::Paths, base: Base, shutdown: tokio_uti
         }
     });
     let pulse = Arc::new(tokio::sync::Notify::new());
+    let hosts = {
+        let machine = http::machine_names();
+        let names = [Some(args.host.as_str()), args.web_url.as_deref(), args.hooks_url.as_deref()].into_iter().flatten().chain(machine.iter().map(String::as_str));
+        http::HostRules::new(names, &args.allowed_hosts, args.web_url.as_deref())
+    };
+    let home = paths.home.clone();
     let state = Arc::new(state::AppState {
         paths,
         environment,
@@ -604,6 +644,8 @@ async fn serve(args: &Args, paths: state::Paths, base: Base, shutdown: tokio_uti
         orchestrator,
         connections: connections::Connections::new(pulse.clone()),
         remote: remote.clone(),
+        hosts,
+        local: local::Local::new(&home),
         push_configured: apns.is_some(),
         shutdown: shutdown.clone(),
         pulse,
@@ -759,6 +801,18 @@ async fn serve(args: &Args, paths: state::Paths, base: Base, shutdown: tokio_uti
         // Plain TCP sessions count as the local owner: no rate limit, no device binding.
         tracing::warn!("--host {} exposes the server beyond this machine without TLS; prefer --remote (iroh) for other devices", args.host);
     }
+    // Now that the port is this server's: apps on this machine can find it and sign in by themselves.
+    if args.no_local_sign_in {
+        tracing::info!("Apps on this machine pair with a code (--no-local-sign-in)");
+    } else if !policy::current().allows_desktop_client() {
+        tracing::info!("Apps on this machine pair with a code: the managed policy leaves out the desktop client");
+    } else {
+        match state.local.publish(local, &state.environment.environment_id, &state.environment.label) {
+            Ok(true) => tracing::info!("Apps on this machine sign in without a code ({})", domovoi_local::descriptor_path(&state.paths.home).display()),
+            Ok(false) => tracing::info!("Apps on this machine pair with a code: the server listens beyond this machine"),
+            Err(e) => tracing::warn!("Apps on this machine pair with a code: {} could not be written: {e}", domovoi_local::descriptor_path(&state.paths.home).display()),
+        }
+    }
     if let Some(pairing) = &pairing {
         tracing::info!("Authentication required. Open T3 Code using the pairing URL.");
         // stdout, not the log: the code grants full access for a day.
@@ -766,7 +820,7 @@ async fn serve(args: &Args, paths: state::Paths, base: Base, shutdown: tokio_uti
     }
     lifecycle::watch_signals(shutdown.clone());
     // An entry left by an older copy of this executable is brought up to date.
-    let login_entry = autostart::Entry::current(&state.paths.home, &args.host, args.port, &args.relays).ok();
+    let login_entry = autostart::Entry::current(&state.paths.home, &args.host, args.port, &args.relays, &carried_flags(args)).ok();
     if let Some(entry) = &login_entry {
         autostart::ensure(entry);
     }
@@ -774,7 +828,9 @@ async fn serve(args: &Args, paths: state::Paths, base: Base, shutdown: tokio_uti
         on_ready(control::Control::new(state.clone(), login_entry));
     }
     let served = {
-        let serving = axum::serve(listener, http::router(state.clone())).with_graceful_shutdown(shutdown.clone().cancelled_owned());
+        // Each request knows the address it came from: what "this machine" is decided by.
+        let service = http::router(state.clone()).into_make_service_with_connect_info::<std::net::SocketAddr>();
+        let serving = axum::serve(listener, service).with_graceful_shutdown(shutdown.clone().cancelled_owned());
         let state = state.clone();
         let stop = shutdown.clone();
         tokio::select! {
@@ -795,6 +851,7 @@ async fn serve(args: &Args, paths: state::Paths, base: Base, shutdown: tokio_uti
     }
     // Don't leave login shells running after the server exits.
     state.terminals.shutdown();
+    state.local.retract();
     remote.stop().await;
     tracing::info!("Stopped");
     Ok(served?)

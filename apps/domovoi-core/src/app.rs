@@ -1,6 +1,7 @@
 //! The Crux app: events (user intents and shell callbacks), effects, and the
 //! `App` impl that hands off to `update` and `present`.
 
+use crate::local::{LocalOperation, LocalOutput};
 use crate::model::Model;
 use crate::notify::NotifyOperation;
 use crate::socket::{SocketEvent, SocketOperation};
@@ -76,8 +77,19 @@ pub enum Event {
     /// A local server by URL: pair with a one-time code, or (empty code)
     /// reuse this device's saved token.
     Connect { server_url: String, pairing_code: String },
-    /// A remote server from a `domovoi://connect?ticket=…&code=…` link (over iroh).
+    /// A remote server from a `domovoi://connect?ticket=…&code=…` link (over
+    /// iroh) that the user gave the app: pasted, typed or scanned. Connects
+    /// at once. A link that reached the app from outside is `OpenLink`.
     ConnectRemote { link: String },
+    /// A `domovoi://connect` link the system handed the app (clicked in a
+    /// browser, a mail, another app). Nothing connects yet: the core asks
+    /// first (`ConnectionView.link_request`), and what is connected stays so.
+    OpenLink { link: String },
+    /// The user's answer to `ConnectionView.link_request` (`id` is its id).
+    AnswerLinkRequest { id: u32, accept: bool },
+    /// Signs in to the server running on this machine
+    /// (`ConnectionView.local_server`), with no pairing code.
+    ConnectLocalServer,
     SelectEnvironment { id: String },
     /// Signs this device out of the server (when reachable) and forgets it.
     ForgetEnvironment { id: String },
@@ -457,6 +469,46 @@ pub enum Event {
     #[serde(skip)]
     #[facet(skip)]
     SignedOut { id: String },
+    /// The token of a server being forgotten that is not the connected one:
+    /// `url` is where to end its sign-in (empty for a remote server).
+    #[serde(skip)]
+    #[facet(skip)]
+    ForgetTokenLoaded { id: String, label: String, url: String, value: Option<String> },
+    /// A forgotten server answered (or did not) the request to end this device's sign-in.
+    #[serde(skip)]
+    #[facet(skip)]
+    ForgottenSignedOut {
+        label: String,
+        #[facet(opaque)]
+        res: crux_http::Result<crux_http::Response<Vec<u8>>>,
+    },
+    /// Whether this install has signed in to its machine's server by itself before.
+    #[serde(skip)]
+    #[facet(skip)]
+    LocalAutoLoaded { value: Option<String> },
+    /// The descriptor of the server on this machine, now or after a change.
+    #[serde(skip)]
+    #[facet(skip)]
+    LocalServer {
+        #[facet(opaque)]
+        out: LocalOutput,
+    },
+    /// The request file for a sign-in to this machine's server was written (or could not be).
+    #[serde(skip)]
+    #[facet(skip)]
+    LocalRequested {
+        attempt: u64,
+        #[facet(opaque)]
+        out: LocalOutput,
+    },
+    /// This machine's server answered a sign-in without a code.
+    #[serde(skip)]
+    #[facet(skip)]
+    LocalSignedIn {
+        attempt: u64,
+        #[facet(opaque)]
+        res: crux_http::Result<crux_http::Response<Vec<u8>>>,
+    },
     #[serde(skip)]
     #[facet(skip)]
     RemoteAccessLoaded(#[facet(opaque)] crux_http::Result<crux_http::Response<Vec<u8>>>),
@@ -517,6 +569,7 @@ pub enum Effect {
     Notify(NotifyOperation),
     Tunnel(TunnelOperation),
     Store(StoreOperation),
+    Local(LocalOperation),
 }
 
 #[derive(Default)]

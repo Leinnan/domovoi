@@ -60,6 +60,47 @@ pub fn make_private(path: &std::path::Path) -> std::io::Result<()> {
     }
 }
 
+/// Makes `path` private ([`make_private`]) when it is not already: `true`
+/// when something changed, `false` when it was private or is not there.
+/// A link is refused, and on Unix so is a path another user owns (root
+/// could change it; it is not this server's to change).
+pub fn tighten(path: &std::path::Path) -> std::io::Result<bool> {
+    let meta = match std::fs::symlink_metadata(path) {
+        Ok(meta) => meta,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(e),
+    };
+    if is_link(path) {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "it is a link"));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if meta.permissions().mode() & 0o077 == 0 {
+            return Ok(false);
+        }
+        if !owned_by_this_user(&meta) {
+            return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, "another user owns it"));
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = meta;
+        if is_private(path) != Some(false) {
+            return Ok(false);
+        }
+    }
+    make_private(path).map(|()| true)
+}
+
+/// Whether the user this process runs as owns the file `meta` describes.
+#[cfg(unix)]
+pub fn owned_by_this_user(meta: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    // SAFETY: `geteuid` has no preconditions and cannot fail.
+    meta.uid() == unsafe { libc::geteuid() }
+}
+
 /// `path` without the `\\?\` Windows puts before a canonical path
 /// (`\\?\UNC\host\share` becomes `\\host\share`): `cmd.exe`, batch files and
 /// some CLIs refuse it, and it takes no `/`. Other paths are as given.
@@ -169,4 +210,43 @@ pub fn seconds_until(iso: &str) -> i64 {
 /// later request into another.
 pub fn locked<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(unix)]
+    fn mode(path: &std::path::Path) -> u32 {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::symlink_metadata(path).unwrap().permissions().mode() & 0o777
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn tighten_closes_what_is_open_and_leaves_the_rest() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("domovoi-tighten-{}", new_uuid()));
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        let file = dir.join("file");
+        std::fs::write(&file, "x").unwrap();
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
+        std::fs::set_permissions(dir.join("sub"), std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert!(tighten(&file).unwrap(), "an open file changes");
+        assert_eq!(mode(&file), 0o600);
+        assert!(!tighten(&file).unwrap(), "a private one does not");
+        assert!(tighten(&dir.join("sub")).unwrap());
+        assert_eq!(mode(&dir.join("sub")), 0o700);
+        assert!(!tighten(&dir.join("missing")).unwrap(), "a missing path is no error");
+
+        // A link is refused, and what it points at keeps its mode.
+        let target = dir.join("target");
+        std::fs::write(&target, "x").unwrap();
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o644)).unwrap();
+        std::os::unix::fs::symlink(&target, dir.join("link")).unwrap();
+        assert!(tighten(&dir.join("link")).is_err());
+        assert_eq!(mode(&target), 0o644);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 domovoi_core = { path = "../../apps/domovoi-core" }
 domovoi-remote = { path = "../domovoi-remote", default-features = false, features = ["bridge"] }
+domovoi-local = { path = "../domovoi-local" }
 crux_core = "=0.20.0"
 crux_http = "=0.20.0"
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util"] }

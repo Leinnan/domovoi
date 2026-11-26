@@ -14,8 +14,10 @@ pub mod diff;
 pub mod environments;
 pub mod highlight;
 pub mod ffi;
+pub mod ffi_local;
 #[cfg(feature = "remote")]
 pub mod ffi_remote;
+pub mod local;
 pub mod markdown;
 pub mod diagrams;
 mod artifacts;

@@ -7,6 +7,7 @@ use crux_core::App;
 use crux_http::protocol::{HttpRequest, HttpResponse, HttpResult};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use domovoi_core::local::{LocalOperation, LocalOutput};
 use domovoi_core::socket::{SocketEvent, SocketOperation};
 use domovoi_core::store::{StoreOperation, StoreOutput};
 use domovoi_core::tunnel::{TunnelOperation, TunnelOutput};
@@ -419,6 +420,12 @@ struct Shell {
     /// When set, the commands and launches the server would not read as
     /// sent are listed here; otherwise one is a failure where it is sent.
     refused: Option<Vec<String>>,
+    /// The descriptor of the server on this machine, as its file's text.
+    descriptor: Option<String>,
+    /// What writing a request file gives: its id and secret (`None`: it cannot be written).
+    local_request: Option<(String, String)>,
+    /// What the core asked about this machine's server.
+    local_asked: Vec<LocalOperation>,
 }
 
 impl Shell {
@@ -438,9 +445,18 @@ impl Shell {
             let mut cmd = DomovoiApp.update(event, model);
             loop {
                 let effects: Vec<Effect> = cmd.effects().collect();
-                let answered = effects.iter().any(|e| matches!(e, Effect::Store(_) | Effect::Http(_)));
+                let answered = effects.iter().any(|e| matches!(e, Effect::Store(_) | Effect::Http(_) | Effect::Local(_)));
                 for effect in effects {
                     match effect {
+                        Effect::Local(mut req) => {
+                            self.local_asked.push(req.operation.clone());
+                            let out = match (&req.operation, &self.local_request) {
+                                (LocalOperation::Watch, _) => LocalOutput::Descriptor { text: self.descriptor.clone() },
+                                (LocalOperation::Request, Some((id, secret))) => LocalOutput::Request { id: id.clone(), secret: secret.clone() },
+                                (LocalOperation::Request, None) => LocalOutput::Unavailable,
+                            };
+                            req.resolve(out).unwrap();
+                        }
                         Effect::Store(mut req) => {
                             let value = match &req.operation {
                                 StoreOperation::Load { key } => self.store.get(key).cloned(),
@@ -1452,11 +1468,16 @@ fn links_and_taps_at_a_cold_start_wait_for_the_saved_servers() {
     while let Some(event) = queue.pop_front() {
         let _ = shell.drive(&mut model, event);
     }
-    // Both servers are kept, and the link's server is the one connecting.
+    // Both servers are there, and the link's server is the one connecting.
     assert_eq!(model.environments.len(), 2, "{:?}", model.environments);
     assert!(model.environments.iter().any(|e| e.id == saved));
-    assert!(shell.store["environments"].contains("endpointnew") && shell.store["environments"].contains("http://a:1"));
     assert_eq!(model.active_environment().unwrap().label, "New");
+    // It is saved once this device has signed in to it, not before.
+    assert!(!shell.store["environments"].contains("endpointnew") && shell.store["environments"].contains("http://a:1"));
+    assert_eq!(shell.store["activeEnvironment"], saved);
+    let _ = shell.drive_tunnel(&mut model, TunnelOutput::Started { port: 4000 });
+    assert!(shell.store["environments"].contains("endpointnew") && shell.store["environments"].contains("http://a:1"));
+    assert_eq!(Some(&shell.store["activeEnvironment"]), model.active_env.as_ref());
 }
 
 #[test]
@@ -5453,4 +5474,602 @@ fn opening_workspace_artifact_path_reads_source_and_requests_bundle_url() {
     assert_eq!(active.path.as_deref(), Some("dist/index.html"));
     assert_eq!(active.source, "<!doctype html><h1>Bundle</h1>");
     assert_eq!(active.preview_url.as_deref(), Some("http://127.0.0.1:1/api/assets/artifact/b1/dist/index.html"));
+}
+
+// ---- the server on this machine, links from outside, and what is saved when ----
+
+const LOCAL_URL: &str = "http://127.0.0.1:13773";
+
+/// A shell beside a running server: its descriptor, a request file that can
+/// be written, and the server's answer to it.
+fn beside_a_server() -> Shell {
+    let mut shell = Shell::paired();
+    shell.descriptor = Some(json!({ "version": 1, "url": LOCAL_URL, "environmentId": "srv-local", "label": "Studio" }).to_string());
+    shell.local_request = Some(("ab".repeat(16), "5ec2e7".into()));
+    shell.routes.insert("/api/domovoi/local/session".into(), (200, json!({ "accessToken": "tok-local", "proof": "5ec2e7", "environmentId": "srv-local" })));
+    shell
+}
+
+fn launch(shell: &mut Shell, model: &mut Model, surface: &str) -> Vec<Effect> {
+    shell.drive(model, Event::Launch { surface: surface.into(), device_label: "Test Mac".into(), device_os: "macOS".into() })
+}
+
+fn bearer(request: &HttpRequest) -> Option<&str> {
+    request.headers.iter().find(|h| h.name.eq_ignore_ascii_case("authorization")).map(|h| h.value.as_str())
+}
+
+fn socket_closed(effects: &[Effect]) -> bool {
+    effects.iter().any(|e| matches!(e, Effect::Socket(r) if r.operation == SocketOperation::Close))
+}
+
+#[test]
+fn a_fresh_install_signs_in_to_the_server_on_its_machine_by_itself() {
+    let mut shell = beside_a_server();
+    let mut model = Model::default();
+    let effects = launch(&mut shell, &mut model, "desktop");
+    assert_eq!(shell.local_asked, [LocalOperation::Watch, LocalOperation::Request]);
+
+    // The request file's id went to the server at the descriptor's address, with what this app is.
+    let sign_in = shell.requests.iter().find(|r| r.url.ends_with("/api/domovoi/local/session")).expect("signed in without a code");
+    assert_eq!((sign_in.url.as_str(), sign_in.method.as_str()), ("http://127.0.0.1:13773/api/domovoi/local/session", "POST"));
+    assert_eq!(serde_json::from_slice::<Value>(&sign_in.body).unwrap(), json!({ "request": "ab".repeat(16), "clientLabel": "Test Mac", "clientDeviceType": "desktop", "clientOs": "macOS" }));
+    assert!(shell.requests.iter().all(|r| !r.url.ends_with("/oauth/token")), "no pairing code involved");
+    // Its token opens the socket there.
+    let ticket = shell.requests.iter().find(|r| r.url.ends_with("/api/auth/websocket-ticket/rpc")).expect("a ticket");
+    assert_eq!((ticket.url.as_str(), bearer(ticket)), ("http://127.0.0.1:13773/api/auth/websocket-ticket/rpc", Some("Bearer tok-local")));
+    assert!(socket_url(&effects).unwrap().starts_with("ws://127.0.0.1:13773/ws?"));
+
+    // Saved: the server under the machine's name, that it is the active one, its token, and that this happened.
+    let id = model.active_env.clone().expect("the server is active");
+    assert_eq!(shell.store.get(&format!("token:{id}")).map(String::as_str), Some("tok-local"));
+    assert_eq!(shell.store.get("activeEnvironment"), Some(&id));
+    assert_eq!(shell.store.get("localAuto").map(String::as_str), Some("1"));
+    let saved: Value = serde_json::from_str(&shell.store["environments"]).unwrap();
+    assert_eq!(saved, json!([{ "id": id, "label": "Studio", "url": LOCAL_URL, "ticket": "", "server_id": "srv-local" }]));
+    let view = DomovoiApp.view(&model);
+    assert!(view.connection.local_server.is_none(), "nothing to offer: the app is using it");
+    assert!(!view.connection.needs_pairing);
+
+    // The next launch is an ordinary one: the saved token, no new sign-in.
+    let mut model = Model::default();
+    shell.requests.clear();
+    shell.local_asked.clear();
+    let effects = launch(&mut shell, &mut model, "desktop");
+    assert!(socket_url(&effects).is_some());
+    assert_eq!(shell.local_asked, [LocalOperation::Watch]);
+    assert_eq!(shell.requests.iter().map(|r| r.url.rsplit('/').next().unwrap()).collect::<Vec<_>>(), ["rpc"], "only a ticket");
+}
+
+#[test]
+fn while_signing_in_to_this_machine_the_app_is_connecting_not_asking_for_a_code() {
+    // A launch with nothing saved, the store answered at once; then the
+    // shell reports the descriptor, and has not written the request file yet.
+    let mut shell = Shell::paired();
+    let mut model = Model::default();
+    let _ = launch(&mut shell, &mut model, "desktop");
+    assert_eq!(DomovoiApp.view(&model).connection.state, "disconnected");
+    let effects = run(&mut model, Event::LocalServer { out: LocalOutput::Descriptor { text: beside_a_server().descriptor } });
+    assert!(effects.iter().any(|e| matches!(e, Effect::Local(r) if r.operation == LocalOperation::Request)), "the request file is asked for");
+    assert!(effects.iter().all(|e| !matches!(e, Effect::Http(_))), "nothing is sent before it is written");
+    let view = DomovoiApp.view(&model);
+    assert_eq!(view.connection.state, "connecting", "not pairing: there is no code to type");
+    assert!(!view.connection.needs_pairing && view.connection.attempting);
+    assert!(view.connection.local_server.is_none(), "not offered while it is being joined");
+    assert!(!shell.store.contains_key("environments") && !shell.store.contains_key("activeEnvironment"), "nothing is saved before the server has answered");
+
+    // An answer for a sign-in the user has left behind (they connected elsewhere meanwhile) is not used.
+    let attempt = model.attempt;
+    let _ = shell.drive(&mut model, Event::Connect { server_url: "http://other:2".into(), pairing_code: "CODE".into() });
+    shell.requests.clear();
+    let _ = shell.drive(&mut model, Event::LocalRequested { attempt, out: LocalOutput::Request { id: "ab".repeat(16), secret: "5ec2e7".into() } });
+    assert!(shell.requests.is_empty());
+    assert_eq!(model.environments.len(), 1, "the entry made for it went with it");
+    assert_eq!(model.environments[0].url, "http://other:2");
+}
+
+#[test]
+fn with_saved_servers_this_machines_server_is_only_offered() {
+    let mut shell = beside_a_server();
+    let mut model = Model::default();
+    connected_to(&mut shell, &mut model, "http://other:2", "CODE");
+    let other = model.active_env.clone().unwrap();
+
+    let mut model = Model::default();
+    shell.requests.clear();
+    let _ = launch(&mut shell, &mut model, "desktop");
+    assert_eq!(model.active_env.as_ref(), Some(&other), "the last server is the one connected to");
+    assert!(shell.requests.iter().all(|r| !r.url.contains("/local/")), "no sign-in nobody asked for");
+    assert_eq!(shell.local_asked, [LocalOperation::Watch]);
+    assert!(!shell.store.contains_key("localAuto"));
+    let _ = sock(&mut model, SocketEvent::Opened);
+    let offered = DomovoiApp.view(&model).connection.local_server.expect("offered beside the saved servers");
+    assert_eq!((offered.label.as_str(), offered.url.as_str()), ("Studio", LOCAL_URL));
+
+    // One click: the other server is left, and this one signed in to and saved.
+    let effects = shell.drive(&mut model, Event::ConnectLocalServer);
+    assert!(socket_closed(&effects), "the server in use is left");
+    assert!(socket_url(&effects).unwrap().starts_with("ws://127.0.0.1:13773/ws?"));
+    let id = model.active_env.clone().unwrap();
+    assert_ne!(id, other);
+    assert_eq!(shell.store.get(&format!("token:{id}")).map(String::as_str), Some("tok-local"));
+    assert_eq!(shell.store.get("activeEnvironment"), Some(&id));
+    assert!(shell.store["environments"].contains(LOCAL_URL) && shell.store["environments"].contains("http://other:2"));
+    assert!(DomovoiApp.view(&model).connection.local_server.is_none());
+    // Its saved entry is the one used from then on: no second one.
+    let _ = sock(&mut model, SocketEvent::Opened);
+    let _ = shell.drive(&mut model, Event::SelectEnvironment { id: other });
+    assert!(DomovoiApp.view(&model).connection.local_server.is_none(), "it is among the saved servers now");
+    assert_eq!(model.environments.len(), 2);
+
+    // Without a server beside it, a client asked for the card's action only says so.
+    let (mut model, _) = connected();
+    let effects = run(&mut model, Event::ConnectLocalServer);
+    assert!(!socket_closed(&effects));
+    assert!(DomovoiApp.view(&model).toast.unwrap().message.contains("No Domovoi server is running"));
+}
+
+#[test]
+fn an_answer_without_the_request_files_secret_is_dropped() {
+    // Something else listens on the port the descriptor names (the server
+    // died and left it; another program took the port): it can answer, but
+    // it cannot have read the request file.
+    for answer in [
+        (200, json!({ "accessToken": "tok-evil", "proof": "guess", "environmentId": "srv-local" })),
+        (200, json!({ "accessToken": "tok-evil", "proof": "", "environmentId": "srv-local" })),
+        (200, json!({ "accessToken": "tok-evil", "environmentId": "srv-local" })),
+        (200, json!({ "accessToken": "tok-evil", "proof": "5ec2e7", "environmentId": "another-server" })),
+        (200, json!({ "accessToken": "", "proof": "5ec2e7", "environmentId": "srv-local" })),
+        (401, json!({ "_tag": "EnvironmentAuthInvalidError" })),
+        (404, json!({})),
+    ] {
+        let mut shell = beside_a_server();
+        shell.routes.insert("/api/domovoi/local/session".into(), answer.clone());
+        let mut model = Model::default();
+        let effects = launch(&mut shell, &mut model, "desktop");
+        assert!(socket_url(&effects).is_none(), "{answer:?}");
+        assert!(shell.requests.iter().all(|r| bearer(r).is_none()), "the token it sent is used for nothing: {answer:?}");
+        // Nothing of it is kept: no server, no token; only that the app tried once.
+        assert_eq!(shell.store.keys().collect::<Vec<_>>(), ["localAuto"], "{answer:?}");
+        assert!(model.environments.is_empty() && model.active_env.is_none() && model.token.is_none(), "{answer:?}");
+        let view = DomovoiApp.view(&model);
+        assert_eq!(view.connection.state, "disconnected", "the plain connect screen: {answer:?}");
+        assert!(view.toast.is_none() && view.connection.error.is_none(), "nobody asked, nobody is told: {answer:?}");
+        assert!(view.connection.local_server.is_some(), "still offered");
+
+        // Asked for, the failure is said; and still nothing is saved.
+        let _ = shell.drive(&mut model, Event::ConnectLocalServer);
+        let view = DomovoiApp.view(&model);
+        assert!(view.toast.unwrap().message.contains("Could not sign in to the server on this computer"), "{answer:?}");
+        assert_eq!(view.connection.state, "disconnected");
+        assert_eq!(shell.store.keys().collect::<Vec<_>>(), ["localAuto"], "{answer:?}");
+        assert!(model.environments.is_empty());
+    }
+
+    // No request file can be written (the folder is not this user's): the same.
+    let mut shell = beside_a_server();
+    shell.local_request = None;
+    let mut model = Model::default();
+    let _ = launch(&mut shell, &mut model, "desktop");
+    assert!(shell.requests.is_empty(), "nothing is sent");
+    assert_eq!(shell.store.keys().collect::<Vec<_>>(), ["localAuto"]);
+    assert!(model.environments.is_empty());
+}
+
+#[test]
+fn a_saved_entry_for_this_machines_server_is_signed_in_again_once() {
+    let mut shell = beside_a_server();
+    shell.descriptor = Some(json!({ "version": 1, "url": "http://127.0.0.1:1", "environmentId": "srv-local", "label": "Studio" }).to_string());
+    let mut model = Model::default();
+    // Paired the old way, by address, before the server said who it is.
+    connected_to(&mut shell, &mut model, "http://localhost:1", "CODE");
+    let id = model.active_env.clone().unwrap();
+    assert_eq!(shell.store[&format!("token:{id}")], "tok-1");
+
+    // The server ended that sign-in (`remote revoke`): the next launch gets 401 for its token.
+    let mut model = Model::default();
+    shell.requests.clear();
+    shell.routes.insert("/api/auth/websocket-ticket/rpc".into(), (401, json!({ "_tag": "EnvironmentAuthInvalidError" })));
+    let effects = launch(&mut shell, &mut model, "desktop");
+    // The app asked the server for a new one, by itself, exactly once: it got one, and the server still said no.
+    let asked: Vec<&str> = shell.requests.iter().map(|r| r.url.strip_prefix("http://").unwrap().split_once('/').unwrap().1).collect();
+    assert_eq!(asked, ["api/auth/websocket-ticket/rpc", "api/domovoi/local/session", "api/auth/websocket-ticket/rpc"], "one renewal, no loop");
+    assert_eq!(shell.requests[0].url, "http://localhost:1/api/auth/websocket-ticket/rpc");
+    assert_eq!(shell.requests[1].url, "http://127.0.0.1:1/api/domovoi/local/session", "at the descriptor's address");
+    assert_eq!(bearer(&shell.requests[2]), Some("Bearer tok-local"));
+    assert!(socket_url(&effects).is_none());
+    let view = DomovoiApp.view(&model);
+    assert_eq!(view.connection.state, "failed");
+    assert!(view.connection.needs_pairing, "then the pairing form, as for any server");
+    assert!(!shell.store.keys().any(|k| k.starts_with("token:")));
+    assert_eq!(model.environments.len(), 1, "the saved entry, not a second one");
+
+    // With a server that takes the new sign-in, the user sees nothing of it.
+    shell.routes.insert("/api/auth/websocket-ticket/rpc".into(), (200, json!({ "ticket": "tick-2", "expiresAt": "2026-11-13T00:00:00.000Z" })));
+    let mut model = Model::default();
+    shell.requests.clear();
+    let effects = launch(&mut shell, &mut model, "desktop");
+    assert!(socket_url(&effects).unwrap().starts_with("ws://127.0.0.1:1/ws?"), "no token saved: signed in, then connected");
+    assert_eq!(shell.store[&format!("token:{id}")], "tok-local");
+    assert_eq!(model.environments.len(), 1);
+    // The entry is this server's now: its id, and the address it listens on.
+    assert_eq!((model.environments[0].url.as_str(), model.environments[0].server_id.as_str()), ("http://127.0.0.1:1", "srv-local"));
+    assert!(shell.store["environments"].contains("srv-local"));
+    let view = DomovoiApp.view(&model);
+    assert!(view.toast.is_none() && !view.connection.needs_pairing);
+
+    // Connected (the server's welcome came), then signed out again by the
+    // server: asked once more, since the last sign-in it gave did work.
+    let sent = sent_requests(&sock(&mut model, SocketEvent::Opened));
+    let lifecycle = sent.iter().find(|r| r["tag"] == "subscribeServerLifecycle").unwrap()["id"].as_str().unwrap().to_owned();
+    let _ = shell.drive_sock(&mut model, chunk(&lifecycle, &[records::welcome(json!({ "environmentId": "srv-local" }))]));
+    shell.routes.insert("/api/auth/websocket-ticket/rpc".into(), (401, json!({})));
+    let _ = sock(&mut model, SocketEvent::Closed { reason: "signed out".into() });
+    shell.requests.clear();
+    let _ = shell.drive(&mut model, Event::Reconnect);
+    assert_eq!(shell.requests.iter().filter(|r| r.url.ends_with("/local/session")).count(), 1);
+    assert!(DomovoiApp.view(&model).connection.needs_pairing, "and then no more");
+
+    // A saved server that is not this machine's is never asked this way.
+    let mut shell = beside_a_server();
+    let mut model = Model::default();
+    connected_to(&mut shell, &mut model, "http://nas.lan:13773", "CODE");
+    shell.routes.insert("/api/auth/websocket-ticket/rpc".into(), (401, json!({})));
+    let mut model = Model::default();
+    shell.requests.clear();
+    let _ = launch(&mut shell, &mut model, "desktop");
+    assert!(shell.requests.iter().all(|r| !r.url.contains("/local/")));
+    assert!(DomovoiApp.view(&model).connection.needs_pairing);
+}
+
+#[test]
+fn a_server_that_starts_after_the_app_signs_its_waiting_entry_in() {
+    let mut shell = beside_a_server();
+    let mut model = Model::default();
+    let _ = launch(&mut shell, &mut model, "desktop");
+    let id = model.active_env.clone().unwrap();
+    // Next launch: the token is gone and the server is not running (no descriptor).
+    shell.store.remove(&format!("token:{id}"));
+    let descriptor = shell.descriptor.take();
+    let mut model = Model::default();
+    shell.requests.clear();
+    let _ = launch(&mut shell, &mut model, "desktop");
+    assert!(DomovoiApp.view(&model).connection.needs_pairing);
+    assert!(shell.requests.is_empty());
+    // The server starts: its descriptor appears, and the entry is signed in.
+    let effects = shell.drive(&mut model, Event::LocalServer { out: LocalOutput::Descriptor { text: descriptor } });
+    assert!(socket_url(&effects).is_some());
+    assert_eq!(shell.store[&format!("token:{id}")], "tok-local");
+}
+
+#[test]
+fn forgetting_a_server_stops_the_app_signing_in_by_itself() {
+    let mut shell = beside_a_server();
+    shell.routes.insert("/api/domovoi/session/end".into(), (200, json!({ "signedOut": true })));
+    let mut model = Model::default();
+    let _ = launch(&mut shell, &mut model, "desktop");
+    let _ = sock(&mut model, SocketEvent::Opened);
+    let id = model.active_env.clone().unwrap();
+    let _ = shell.drive(&mut model, Event::ForgetEnvironment { id: id.clone() });
+    assert!(model.environments.is_empty());
+    let mut left: Vec<(&str, &str)> = shell.store.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+    left.sort_unstable();
+    assert_eq!(left, [("environments", "[]"), ("localAuto", "1")], "no server, token, draft or copy is left: only the note that it happened");
+
+    // Relaunched: offered, not connected.
+    let mut model = Model::default();
+    shell.requests.clear();
+    let effects = launch(&mut shell, &mut model, "desktop");
+    assert!(socket_url(&effects).is_none() && shell.requests.is_empty());
+    let view = DomovoiApp.view(&model);
+    assert_eq!(view.connection.state, "disconnected");
+    assert!(view.connection.local_server.is_some(), "one click away");
+    let effects = shell.drive(&mut model, Event::ConnectLocalServer);
+    assert!(socket_url(&effects).is_some());
+
+    // A server paired by code and then forgotten: the same, though the app never signed in by itself.
+    let mut shell = beside_a_server();
+    shell.descriptor = None;
+    let mut model = Model::default();
+    let _ = launch(&mut shell, &mut model, "desktop");
+    connected_to(&mut shell, &mut model, "http://other:2", "CODE");
+    let other = model.active_env.clone().unwrap();
+    let _ = shell.drive(&mut model, Event::ForgetEnvironment { id: other });
+    assert_eq!(shell.store.get("localAuto").map(String::as_str), Some("1"));
+    shell.requests.clear();
+    let descriptor = beside_a_server().descriptor;
+    let effects = shell.drive(&mut model, Event::LocalServer { out: LocalOutput::Descriptor { text: descriptor } });
+    assert!(socket_url(&effects).is_none() && shell.requests.is_empty(), "a server starting later is offered, not joined");
+    assert!(DomovoiApp.view(&model).connection.local_server.is_some());
+}
+
+#[test]
+fn a_phone_never_looks_for_a_server_beside_it() {
+    let mut shell = beside_a_server();
+    let mut model = Model::default();
+    let effects = launch(&mut shell, &mut model, "mobile");
+    assert!(shell.local_asked.is_empty(), "no watch");
+    assert!(effects.iter().all(|e| !matches!(e, Effect::Local(_))));
+    assert!(shell.requests.is_empty() && model.environments.is_empty());
+    assert!(DomovoiApp.view(&model).connection.local_server.is_none());
+    // Told of one anyway, it is not acted on by itself... and what is not a descriptor is none.
+    let mut model = Model::default();
+    let _ = launch(&mut shell, &mut model, "desktop");
+    for text in ["not json", r#"{"version":2,"url":"http://127.0.0.1:1","environmentId":"e","label":"x"}"#, r#"{"version":1,"url":"http://evil.example:1","environmentId":"e","label":"x"}"#] {
+        let mut model = Model::default();
+        let mut shell = Shell::paired();
+        shell.descriptor = Some(text.into());
+        let _ = launch(&mut shell, &mut model, "desktop");
+        assert!(model.local_server.is_none() && shell.requests.is_empty(), "{text}");
+    }
+}
+
+const LINK: &str = "domovoi://connect?ticket=endpointnew&code=LINKCODE&name=Free%20%E2%80%AEGPUs";
+
+#[test]
+fn a_link_from_outside_the_app_connects_nothing_until_the_user_says_so() {
+    let mut shell = Shell::paired();
+    let mut model = Model::default();
+    connected_to(&mut shell, &mut model, "http://a:1", "CODE");
+    let saved = shell.store.clone();
+    shell.requests.clear();
+
+    // A page opens a link: the connection stays up, nothing is sent, nothing is saved.
+    let effects = shell.drive(&mut model, Event::OpenLink { link: LINK.into() });
+    assert!(!socket_closed(&effects) && tunnel_started(&effects).is_none());
+    assert!(shell.requests.is_empty());
+    assert_eq!(shell.store, saved);
+    let view = DomovoiApp.view(&model);
+    assert_eq!(view.connection.state, "connected");
+    let asked = view.connection.link_request.expect("the user is asked");
+    assert_eq!(asked.title, "Connect to a new server?");
+    assert_eq!((asked.endpoint.as_str(), asked.known_label.as_str(), asked.confirm_label.as_str()), ("endpointne", "", "Connect"));
+    // The name is the link's own claim: shown as that, without the character that would reorder the text.
+    assert_eq!(asked.link_name, "Free GPUs");
+    assert!(asked.message.contains("only if you made this link") && !asked.message.contains("Free"), "{}", asked.message);
+
+    // No: as if the link had never come.
+    let effects = shell.drive(&mut model, Event::AnswerLinkRequest { id: asked.id, accept: false });
+    assert!(effects.iter().all(|e| matches!(e, Effect::Render(_))));
+    let view = DomovoiApp.view(&model);
+    assert!(view.connection.link_request.is_none());
+    assert_eq!((view.connection.state.as_str(), model.environments.len()), ("connected", 1));
+    assert_eq!(shell.store, saved);
+
+    // A second link replaces the first, and an answer to the first is for nothing.
+    let _ = shell.drive(&mut model, Event::OpenLink { link: "domovoi://connect?ticket=endpointone&code=ONE".into() });
+    let first = DomovoiApp.view(&model).connection.link_request.unwrap().id;
+    let _ = shell.drive(&mut model, Event::OpenLink { link: LINK.into() });
+    let second = DomovoiApp.view(&model).connection.link_request.unwrap();
+    assert_ne!(first, second.id);
+    let effects = shell.drive(&mut model, Event::AnswerLinkRequest { id: first, accept: true });
+    assert!(effects.is_empty() && !socket_closed(&effects), "a stale answer");
+    assert_eq!(DomovoiApp.view(&model).connection.link_request.map(|r| r.id), Some(second.id), "the question stays");
+
+    // Yes: now the server in use is left and the link's is paired with.
+    let mut effects = shell.drive(&mut model, Event::AnswerLinkRequest { id: second.id, accept: true });
+    assert!(socket_closed(&effects));
+    assert_eq!(tunnel_start(&mut effects).expect("the tunnel starts").operation, TunnelOperation::Start { ticket: "endpointnew".into() });
+    assert!(DomovoiApp.view(&model).connection.link_request.is_none());
+    assert_eq!(shell.store, saved, "still nothing saved: the server has not answered");
+    let effects = shell.drive_tunnel(&mut model, TunnelOutput::Started { port: 4242 });
+    assert!(String::from_utf8(shell.requests[0].body.clone()).unwrap().contains("subject_token=LINKCODE"));
+    assert!(socket_url(&effects).is_some());
+    assert!(shell.store["environments"].contains("endpointnew"));
+    assert_eq!(model.active_environment().unwrap().label, "Free GPUs");
+
+    // A link that is none says so and asks nothing.
+    for bad in ["domovoi://connect?code=X", "https://example.com/x", "endpointabc", ""] {
+        let effects = shell.drive(&mut model, Event::OpenLink { link: bad.into() });
+        assert!(!socket_closed(&effects), "{bad}");
+        let view = DomovoiApp.view(&model);
+        assert!(view.connection.link_request.is_none(), "{bad}");
+        assert!(view.toast.unwrap().message.contains("not a Domovoi pairing link"), "{bad}");
+        let _ = run(&mut model, Event::DismissToast);
+    }
+}
+
+fn tunnel_started(effects: &[Effect]) -> Option<&TunnelOperation> {
+    effects.iter().find_map(|e| match e {
+        Effect::Tunnel(r) if matches!(r.operation, TunnelOperation::Start { .. }) => Some(&r.operation),
+        _ => None,
+    })
+}
+
+#[test]
+fn a_link_for_a_saved_server_changes_nothing_saved_until_the_server_answers_through_it() {
+    let mut shell = Shell::paired();
+    let mut model = Model::default();
+    let _ = shell.drive(&mut model, Event::ConnectRemote { link: "domovoi://connect?ticket=endpointabc&code=CODE&name=Studio".into() });
+    let _ = shell.drive_tunnel(&mut model, TunnelOutput::Started { port: 4242 });
+    let _ = sock(&mut model, SocketEvent::Opened);
+    let id = model.active_env.clone().unwrap();
+    let _ = shell.drive(&mut model, Event::RenameEnvironment { id: id.clone(), label: "My studio".into() });
+    let saved = shell.store.clone();
+
+    // A link names the same server (same key) with another name and no code: the user is asked about the server they know.
+    let _ = shell.drive(&mut model, Event::OpenLink { link: "domovoi://connect?ticket=endpointabc&name=Totally+Yours".into() });
+    let asked = DomovoiApp.view(&model).connection.link_request.unwrap();
+    assert_eq!((asked.title.as_str(), asked.known_label.as_str(), asked.link_name.as_str()), ("Connect to My studio?", "My studio", "Totally Yours"));
+    assert!(!asked.message.contains("Totally Yours"), "a saved server goes by its saved name: {}", asked.message);
+    let _ = shell.drive(&mut model, Event::AnswerLinkRequest { id: asked.id, accept: true });
+    assert_eq!(model.environments.len(), 1);
+    assert_eq!(model.environments[0].label, "My studio", "the link does not rename it");
+    assert_eq!(shell.store, saved);
+}
+
+#[test]
+fn the_pairing_url_the_server_prints_can_be_pasted_where_a_code_or_a_link_goes() {
+    use domovoi_core::environments::parse_pairing_url;
+    assert_eq!(parse_pairing_url(" http://localhost:13773/pair#token=ABCDEFGH2345 "), Some(("http://localhost:13773".into(), "ABCDEFGH2345".into())));
+    assert_eq!(parse_pairing_url("https://domovoi.example.com/pair?token=ABC&x=1"), Some(("https://domovoi.example.com".into(), "ABC".into())));
+    assert_eq!(parse_pairing_url("http://[::1]:13773/pair#token=ABC"), Some(("http://[::1]:13773".into(), "ABC".into())));
+    for none in ["ABCDEFGH2345", "http://localhost:13773", "http://localhost:13773/pair#token=", "domovoi://connect?ticket=x&token=y", "http:///pair#token=A", "see http://h:1/pair#token=A"] {
+        assert_eq!(parse_pairing_url(none), None, "{none}");
+    }
+
+    // In the code's place: its code, and the address typed beside it.
+    let mut shell = Shell::paired();
+    let mut model = Model::default();
+    let effects = shell.drive(&mut model, Event::Connect { server_url: "http://192.168.1.5:13773".into(), pairing_code: "http://localhost:13773/pair#token=THECODE".into() });
+    assert!(socket_url(&effects).is_some());
+    assert_eq!(shell.requests[0].url, "http://192.168.1.5:13773/oauth/token");
+    assert!(String::from_utf8(shell.requests[0].body.clone()).unwrap().contains("subject_token=THECODE&"));
+    // With no address typed, the URL's own.
+    let mut shell = Shell::paired();
+    let mut model = Model::default();
+    let _ = shell.drive(&mut model, Event::Connect { server_url: " ".into(), pairing_code: "http://localhost:13773/pair#token=THECODE".into() });
+    assert_eq!(shell.requests[0].url, "http://localhost:13773/oauth/token");
+    // In the address's place: both from it.
+    let mut shell = Shell::paired();
+    let mut model = Model::default();
+    let _ = shell.drive(&mut model, Event::Connect { server_url: "http://localhost:13773/pair#token=THECODE".into(), pairing_code: String::new() });
+    assert_eq!(shell.requests[0].url, "http://localhost:13773/oauth/token");
+    assert!(String::from_utf8(shell.requests[0].body.clone()).unwrap().contains("subject_token=THECODE&"));
+    // Where a remote link goes: it is a local server's, and pairs as one.
+    let mut shell = Shell::paired();
+    let mut model = Model::default();
+    let effects = shell.drive(&mut model, Event::ConnectRemote { link: "http://localhost:13773/pair#token=THECODE".into() });
+    assert!(tunnel_started(&effects).is_none() && socket_url(&effects).is_some());
+    assert_eq!(shell.requests[0].url, "http://localhost:13773/oauth/token");
+    assert!(!model.environments[0].is_remote());
+    // And the rule for plain http still holds for it.
+    let mut model = Model::default();
+    let _ = shell.drive(&mut model, Event::ConnectRemote { link: "http://example.com/pair#token=THECODE".into() });
+    assert!(DomovoiApp.view(&model).connection.error.unwrap().contains("outside your network"));
+}
+
+#[test]
+fn a_first_pairing_that_fails_leaves_nothing_saved() {
+    let mut shell = Shell::paired();
+    let mut model = Model::default();
+    connected_to(&mut shell, &mut model, "http://a:1", "CODE");
+    let a = model.active_env.clone().unwrap();
+    let saved = shell.store.clone();
+
+    // A wrong code for a new server, then an address nothing answers on, then a link whose server refuses.
+    shell.routes.insert("/oauth/token".into(), (401, json!({ "_tag": "EnvironmentAuthInvalidError" })));
+    let _ = shell.drive(&mut model, Event::Connect { server_url: "http://b:2".into(), pairing_code: "WRONG".into() });
+    let view = DomovoiApp.view(&model);
+    assert_eq!(view.connection.state, "failed");
+    assert!(view.connection.needs_pairing, "the form stays, to try another code");
+    assert_eq!(shell.store, saved, "no token-less server is left behind");
+    assert_eq!(model.environments.len(), 2, "it is there while it is being paired");
+
+    let _ = shell.drive(&mut model, Event::Connect { server_url: "http://c:3".into(), pairing_code: "WRONG".into() });
+    assert_eq!(model.environments.iter().map(|e| e.url.as_str()).collect::<Vec<_>>(), ["http://a:1", "http://c:3"], "the one before went when another was tried");
+    let _ = shell.drive(&mut model, Event::ConnectRemote { link: "domovoi://connect?ticket=endpointzzz&code=WRONG".into() });
+    let _ = shell.drive_tunnel(&mut model, TunnelOutput::Started { port: 4242 });
+    assert_eq!(DomovoiApp.view(&model).connection.state, "failed");
+    assert_eq!(shell.store, saved);
+
+    // A relaunch is back on the server that was saved.
+    let mut relaunched = Model::default();
+    shell.routes.remove("/oauth/token");
+    let effects = launch(&mut shell, &mut relaunched, "mobile");
+    assert_eq!(relaunched.active_env.as_ref(), Some(&a));
+    assert_eq!(relaunched.environments.len(), 1);
+    assert!(socket_url(&effects).is_some());
+
+    // Forgetting the one that never paired removes it and nothing else; going back to the saved one drops it too.
+    let unpaired = model.active_env.clone().unwrap();
+    let _ = shell.drive(&mut model, Event::ForgetEnvironment { id: unpaired });
+    assert_eq!(shell.store, saved);
+    assert_eq!(model.environments.len(), 1);
+    let _ = shell.drive(&mut model, Event::Connect { server_url: "http://d:4".into(), pairing_code: "WRONG".into() });
+    let effects = shell.drive(&mut model, Event::SelectEnvironment { id: a.clone() });
+    assert!(socket_url(&effects).is_some());
+    assert_eq!(model.environments.len(), 1);
+
+    // The right code, at last: saved with its token, and active.
+    shell.routes.insert("/oauth/token".into(), Shell::paired().routes["/oauth/token"].clone());
+    let _ = shell.drive(&mut model, Event::Connect { server_url: "http://b:2".into(), pairing_code: "RIGHT".into() });
+    let b = model.active_env.clone().unwrap();
+    assert!(shell.store["environments"].contains("http://b:2") && shell.store.contains_key(&format!("token:{b}")));
+    assert_eq!(shell.store["activeEnvironment"], b);
+}
+
+#[test]
+fn forgetting_a_server_that_is_not_the_connected_one_ends_its_sign_in_and_says_what_happened() {
+    let mut shell = Shell::paired();
+    shell.routes.insert("/api/domovoi/session/end".into(), (200, json!({ "signedOut": true })));
+    let mut model = Model::default();
+    connected_to(&mut shell, &mut model, "http://a:1", "CODE");
+    let a = model.active_env.clone().unwrap();
+    shell.routes.insert("/oauth/token".into(), (200, json!({ "access_token": "tok-b", "issued_token_type": "urn:ietf:params:oauth:token-type:access_token", "token_type": "Bearer", "expires_in": 100, "scope": "orchestration:read" })));
+    connected_to(&mut shell, &mut model, "http://b:2", "CODE2");
+    let b = model.active_env.clone().unwrap();
+    // What this device keeps for a server besides its token.
+    shell.store.insert(format!("drafts:{a}"), "{}".into());
+    shell.store.insert(format!("cache:shell:{a}"), "{}".into());
+    shell.requests.clear();
+
+    // Forgetting A while connected to B: B stays up, and A is asked to end A's sign-in with A's token.
+    let effects = shell.drive(&mut model, Event::ForgetEnvironment { id: a.clone() });
+    assert!(!socket_closed(&effects), "the server in use is not left");
+    assert_eq!(shell.requests.len(), 1);
+    assert_eq!((shell.requests[0].url.as_str(), bearer(&shell.requests[0])), ("http://a:1/api/domovoi/session/end", Some("Bearer tok-1")));
+    assert_eq!(model.active_env.as_ref(), Some(&b));
+    let view = DomovoiApp.view(&model);
+    assert_eq!(view.connection.state, "connected");
+    assert!(view.toast.unwrap().message.contains("signed this device out"));
+    assert!(!shell.store.keys().any(|k| k.contains(&a)), "its token, drafts and offline copy are gone: {:?}", shell.store.keys());
+    assert!(shell.store.contains_key(&format!("token:{b}")));
+
+    // A server that cannot be reached: forgotten here, and the user is told the sign-in is still there.
+    let _ = run(&mut model, Event::DismissToast);
+    shell.routes.insert("/oauth/token".into(), Shell::paired().routes["/oauth/token"].clone());
+    connected_to(&mut shell, &mut model, "http://c:3", "CODE3");
+    let c = model.active_env.clone().unwrap();
+    let _ = shell.drive(&mut model, Event::SelectEnvironment { id: b.clone() });
+    let _ = sock(&mut model, SocketEvent::Opened);
+    shell.routes.insert("/api/domovoi/session/end".into(), (503, json!({})));
+    let _ = shell.drive(&mut model, Event::ForgetEnvironment { id: c.clone() });
+    let said = DomovoiApp.view(&model).toast.unwrap().message;
+    assert!(said.contains("could not be reached") && said.contains("until it expires"), "{said}");
+    assert!(!shell.store.contains_key(&format!("token:{c}")));
+
+    // A remote server that is not connected is not dialled just to say goodbye; that is said too.
+    let _ = run(&mut model, Event::DismissToast);
+    let _ = shell.drive(&mut model, Event::ConnectRemote { link: "domovoi://connect?ticket=endpointabc&code=CODE&name=Far".into() });
+    let _ = shell.drive_tunnel(&mut model, TunnelOutput::Started { port: 4242 });
+    let _ = sock(&mut model, SocketEvent::Opened);
+    let far = model.active_env.clone().unwrap();
+    let _ = shell.drive(&mut model, Event::SelectEnvironment { id: b.clone() });
+    let _ = sock(&mut model, SocketEvent::Opened);
+    shell.requests.clear();
+    let effects = shell.drive(&mut model, Event::ForgetEnvironment { id: far.clone() });
+    assert!(shell.requests.is_empty() && tunnel_started(&effects).is_none());
+    let said = DomovoiApp.view(&model).toast.unwrap().message;
+    assert!(said.contains("Forgot Far") && said.contains("stays signed in"), "{said}");
+    assert!(!shell.store.contains_key(&format!("token:{far}")));
+    assert_eq!(model.environments.len(), 1);
+}
+
+#[test]
+fn a_server_reached_under_a_name_it_does_not_answer_to_says_what_to_do() {
+    let refusal = json!({ "_tag": "HostNotAllowedError", "host": "domovoi.example.com", "message": "This server does not answer to the name \"domovoi.example.com\". If you reach it by that name (a reverse proxy, a DNS name of your own), start it with --allowed-host domovoi.example.com." });
+    // Pairing: the server's own words, not "Pairing failed (403)".
+    let mut shell = Shell::paired();
+    shell.routes.insert("/oauth/token".into(), (403, refusal.clone()));
+    let mut model = Model::default();
+    let _ = shell.drive(&mut model, Event::Connect { server_url: "https://domovoi.example.com".into(), pairing_code: "CODE".into() });
+    assert!(DomovoiApp.view(&model).connection.error.unwrap().contains("--allowed-host domovoi.example.com"));
+
+    // A paired device after the server's flags changed: told the same, not told to pair again or to forget the server.
+    let mut shell = Shell::paired();
+    let mut model = Model::default();
+    connected_to(&mut shell, &mut model, "https://domovoi.example.com", "CODE");
+    let id = model.active_env.clone().unwrap();
+    shell.routes.insert("/api/auth/websocket-ticket/rpc".into(), (403, refusal));
+    let _ = sock(&mut model, SocketEvent::Closed { reason: "restarted".into() });
+    let _ = shell.drive(&mut model, Event::Reconnect);
+    let view = DomovoiApp.view(&model);
+    assert_eq!(view.connection.state, "failed");
+    assert!(view.connection.error.unwrap().contains("--allowed-host"));
+    assert!(!view.connection.server_changed && !view.connection.needs_pairing);
+    assert!(shell.store.contains_key(&format!("token:{id}")), "the sign-in is kept");
+    // Fixed on the server, a retry connects.
+    shell.routes.insert("/api/auth/websocket-ticket/rpc".into(), Shell::paired().routes["/api/auth/websocket-ticket/rpc"].clone());
+    let effects = shell.drive(&mut model, Event::Reconnect);
+    assert!(socket_url(&effects).is_some());
 }

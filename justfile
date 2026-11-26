@@ -204,21 +204,23 @@ mac-run: mac-build
     open {{derived}}/Build/Products/Debug/Domovoi.app
 
 # Headless check of the app's core against a running server (mints a pairing
-# code). Fails if the main thread stalls longer than half a frame.
+# code). Fails if the main thread stalls longer than half a frame. The smoke
+# and snapshot runs pair with that code and nothing else: the server on this
+# machine is not looked for (`DOMOVOI_LOCAL_SERVER=off`).
 mac-smoke url=("http://127.0.0.1:" + port) home=home:
     code=$(cargo run -q -p domovoi-server -- --home-dir {{home}} --port {{port}} pair | grep -o 'token=[A-Z0-9-]*' | cut -d= -f2); \
-    DOMOVOI_STORE=memory DOMOVOI_SMOKE_MAX_STALL_MS="${DOMOVOI_SMOKE_MAX_STALL_MS:-8}" {{derived}}/Build/Products/Debug/DomovoiSmoke {{url}} "$code"
+    DOMOVOI_STORE=memory DOMOVOI_LOCAL_SERVER=off DOMOVOI_SMOKE_MAX_STALL_MS="${DOMOVOI_SMOKE_MAX_STALL_MS:-8}" {{derived}}/Build/Products/Debug/DomovoiSmoke {{url}} "$code"
 
 # The same check over iroh (needs the server started with --remote)
 mac-smoke-remote home=home:
     link=$(cargo run -q -p domovoi-server -- --home-dir {{home}} --port {{port}} pair --remote | sed -n 's/^link: //p'); \
-    DOMOVOI_STORE=memory {{derived}}/Build/Products/Debug/DomovoiSmoke "$link"
+    DOMOVOI_STORE=memory DOMOVOI_LOCAL_SERVER=off {{derived}}/Build/Products/Debug/DomovoiSmoke "$link"
 
 # Walk the app's screens against a running server and save window captures
 mac-snapshots out=".reference/snapshots" url=("http://127.0.0.1:" + port) home=home:
     rm -rf {{out}}
     code=$(cargo run -q -p domovoi-server -- --home-dir {{home}} --port {{port}} pair | grep -o 'token=[A-Z0-9-]*' | cut -d= -f2); \
-    DOMOVOI_STORE=memory DOMOVOI_SNAPSHOT_DIR="$PWD/{{out}}" DOMOVOI_PAIRING="$code" DOMOVOI_SERVER={{url}} \
+    DOMOVOI_STORE=memory DOMOVOI_LOCAL_SERVER=off DOMOVOI_SNAPSHOT_DIR="$PWD/{{out}}" DOMOVOI_PAIRING="$code" DOMOVOI_SERVER={{url}} \
       {{derived}}/Build/Products/Debug/Domovoi.app/Contents/MacOS/Domovoi >/dev/null 2>&1 || true
     @ls {{out}}
 
@@ -498,9 +500,11 @@ clean:
 desktop:
     cargo run -p domovoi-iced --release
 
-# Run the Iced desktop app (debug build, quicker compile while iterating)
-desktop-dev:
-    cargo run -p domovoi-iced
+# Run the Iced desktop app (debug build, quicker compile while iterating). The
+# server it finds on this machine is `just server`'s (state in `home`), not the
+# one in ~/.domovoi; `DOMOVOI_LOCAL_SERVER` names another descriptor, or `off`.
+desktop-dev home=home:
+    DOMOVOI_LOCAL_SERVER="${DOMOVOI_LOCAL_SERVER:-$PWD/{{home}}/local/server.json}" cargo run -p domovoi-iced
 
 # Unit tests and headless Iced UI snapshot flows (snapshots in target/ui-snapshots/)
 desktop-test:
@@ -615,7 +619,7 @@ windows-test-server:
 [windows]
 windows-smoke url=("http://127.0.0.1:" + port) home=home: (windows-build "false")
     code=$(cargo run -q -p domovoi-server -- --home-dir {{home}} --port {{port}} pair | grep -o 'token=[A-Z0-9-]*' | cut -d= -f2); \
-    DOMOVOI_STORE=memory DOMOVOI_SMOKE=1 DOMOVOI_SERVER={{url}} DOMOVOI_PAIRING="$code" timeout 60 target/debug/Domovoi.exe
+    DOMOVOI_STORE=memory DOMOVOI_LOCAL_SERVER=off DOMOVOI_SMOKE=1 DOMOVOI_SERVER={{url}} DOMOVOI_PAIRING="$code" timeout 60 target/debug/Domovoi.exe
 
 # The server and its launcher (release) as a zip in dist/, for a machine that takes no installer
 [windows]

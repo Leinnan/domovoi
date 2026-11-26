@@ -177,6 +177,8 @@ fn doctor_reports_a_temp_home() {
     let home = temp_home("doctor");
     let bin = home.join("bin");
     std::fs::create_dir_all(&bin).unwrap();
+    // As the server makes a home: readable by nobody else (one that is gets a warning).
+    std::fs::set_permissions(&home, std::os::unix::fs::PermissionsExt::from_mode(0o700)).unwrap();
     // Stand-ins for the tools doctor asks; nothing else is on PATH.
     script(&bin, "git", r#"case "$1" in --version) echo "git version 2.50.0";; lfs) echo "git-lfs/3.7.0 (GitHub; darwin arm64; go 1.24)";; esac"#);
     script(&bin, "gh", r#"case "$1" in --version) echo "gh version 2.80.0 (2025-09-01)";; auth) echo "not logged in" >&2; exit 1;; esac"#);
@@ -197,7 +199,9 @@ fn doctor_reports_a_temp_home() {
     assert_eq!(check(&report, "provider:claudeAgent")["status"], "ok");
     assert!(check(&report, "provider:claudeAgent")["detail"].as_str().unwrap().starts_with("2.1.0 (Claude Code) at "), "{report}");
     assert_eq!(check(&report, "remote")["status"], "ok");
-    assert!(!home.join("userdata").exists() && !home.join("remote").exists(), "doctor changes nothing");
+    assert_eq!(check(&report, "private")["status"], "ok", "{report}");
+    assert_eq!(check(&report, "local-sign-in")["status"], "ok", "no server, no descriptor: {report}");
+    assert!(!home.join("userdata").exists() && !home.join("remote").exists() && !home.join("local").exists(), "doctor changes nothing");
     assert_eq!(check(&report, "provider:codex")["status"], "warn", "a probe that hangs is reported: {report}");
     assert_eq!(check(&report, "provider:opencode")["status"], "warn", "a missing CLI is a warning: {report}");
     assert_eq!(check(&report, "port")["status"], "ok", "{report}");

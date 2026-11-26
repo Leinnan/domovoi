@@ -1545,7 +1545,7 @@ pub fn update(event: Event, model: &mut Model) -> Cmd {
         // ---- connection ----
         Event::Launch { surface, device_label, device_os } => crate::environments::launch(model, surface, device_label, device_os),
         // A link or a tap while saved servers load waits for them.
-        Event::ConnectRemote { .. } | Event::OpenNotification { .. } | Event::RespondFromNotification { .. } | Event::AnswerFromNotification { .. } | Event::RespondToThread { .. } if model.launching => {
+        Event::ConnectRemote { .. } | Event::OpenLink { .. } | Event::OpenNotification { .. } | Event::RespondFromNotification { .. } | Event::AnswerFromNotification { .. } | Event::RespondToThread { .. } if model.launching => {
             model.deferred.push(event);
             Command::done()
         }
@@ -1557,6 +1557,15 @@ pub fn update(event: Event, model: &mut Model) -> Cmd {
         Event::Stored => Command::done(),
         Event::Connect { server_url, pairing_code } => crate::environments::connect_local(model, server_url, pairing_code),
         Event::ConnectRemote { link } => crate::environments::connect_remote(model, link),
+        Event::OpenLink { link } => crate::environments::open_link(model, link),
+        Event::AnswerLinkRequest { id, accept } => crate::environments::answer_link_request(model, id, accept),
+        Event::ConnectLocalServer => crate::environments::connect_local_asked(model),
+        Event::LocalAutoLoaded { value } => crate::environments::local_auto_loaded(model, value),
+        Event::LocalServer { out } => crate::environments::local_server_output(model, out),
+        Event::LocalRequested { attempt, out } => crate::environments::local_requested(model, attempt, out),
+        Event::LocalSignedIn { attempt, res } => crate::environments::local_signed_in(model, attempt, res),
+        Event::ForgetTokenLoaded { id, label, url, value } => crate::environments::forget_token_loaded(model, id, label, url, value),
+        Event::ForgottenSignedOut { label, res } => crate::environments::forgotten_signed_out(model, label, res),
         Event::SelectEnvironment { id } => {
             model.pending_terminal_target = None;
             if model.active_env.as_deref() == Some(id.as_str()) && model.connection == Connection::Connected {

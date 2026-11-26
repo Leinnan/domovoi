@@ -6,12 +6,12 @@
 //! changes nothing (compaction is `server.reclaimDatabaseSpace`).
 //!
 //! Checked: the home directory (exists, is a directory, is writable, who else
-//! may write it); the database (opens read-only, `PRAGMA integrity_check`);
+//! may read or write it); the folders and files that must be private; the database (opens read-only, `PRAGMA integrity_check`);
 //! each provider CLI (found as the server finds it, `--version` with a hard
 //! timeout); `git`, `git lfs`, `gh` and its sign-in; the iroh key and whether
 //! remote access is on; launch at login and (Linux) the systemd user service;
-//! whether a server already answers on the port, and whether it is this
-//! home's and ready.
+//! the descriptor apps on this machine sign in by; whether a server already
+//! answers on the port, and whether it is this home's and ready.
 //!
 //! Limits: no database compaction or legacy-database report (t3code's
 //! `--fix`); the iroh relays are not dialled (that needs the network and a
@@ -141,6 +141,8 @@ async fn checks(home: &Path, host: &str, port: u16, relays: &[String]) -> Vec<Ch
     out.extend([git, lfs, gh]);
     out.push(check_remote(home, relays));
     out.push(check_secrets(home));
+    out.push(check_private(home));
+    out.push(check_local(home, environment_id.as_deref()));
     out.push(check_autostart(home, host, port, relays));
     if let Some(service) = crate::service::summary() {
         out.push(Check::new("service", Status::Ok, format!("systemd user service {service}")));
@@ -172,6 +174,10 @@ fn check_home(home: &Path) -> Check {
         let mode = meta.permissions().mode() & 0o777;
         if mode & 0o022 != 0 {
             return Check::new(name, Status::Warn, format!("{shown} is writable by other users (mode {mode:03o}); run `chmod go-w {shown}`"));
+        }
+        if crate::state::open_to_others(mode) {
+            // The server closes it at its next start, unless it is not its to close.
+            return Check::new(name, Status::Warn, format!("{shown} is readable by other users (mode {mode:03o}); run `chmod 700 {shown}`"));
         }
         Check::new(name, Status::Ok, format!("{shown} (mode {mode:03o})"))
     }
@@ -334,6 +340,38 @@ fn check_secrets(home: &Path) -> Check {
     Check::new(name, Status::Warn, format!("readable by other users: {}{more}; run `{fix}` on each", shown.join(", ")))
 }
 
+/// The folders and files with threads, logs and addresses in them
+/// (`Paths::private_paths`): each must be readable by this user only. The
+/// server makes them so at every start; this says what it could not.
+fn check_private(home: &Path) -> Check {
+    let name = "private";
+    let paths: Vec<PathBuf> = crate::state::Paths::private_paths(home).into_iter().filter(|p| p.exists()).collect();
+    let open: Vec<&PathBuf> = paths.iter().filter(|p| crate::util::is_private(p) == Some(false)).collect();
+    if open.is_empty() {
+        return Check::new(name, Status::Ok, format!("{} path(s), readable by you only", paths.len()));
+    }
+    let shown: Vec<String> = open.iter().take(3).map(|p| p.display().to_string()).collect();
+    let more = if open.len() > 3 { format!(" and {} more", open.len() - 3) } else { String::new() };
+    Check::new(name, Status::Warn, format!("readable by other users: {}{more}; starting the server makes them private", shown.join(", ")))
+}
+
+/// Sign-in without a code for apps on this machine (`crate::local`): what
+/// the descriptor a running server wrote says, read as an app reads it.
+fn check_local(home: &Path, environment_id: Option<&str>) -> Check {
+    let name = "local-sign-in";
+    let path = domovoi_local::descriptor_path(home);
+    if std::fs::symlink_metadata(&path).is_err() {
+        return Check::new(name, Status::Ok, "no descriptor: apps on this machine pair with a code (it is written while a server listens on loopback, without --no-local-sign-in)");
+    }
+    let Some(descriptor) = domovoi_local::read_descriptor(&path).as_deref().and_then(domovoi_local::Descriptor::parse) else {
+        return Check::new(name, Status::Warn, format!("{} is not a descriptor an app accepts (not a plain file of yours, writable by others, or not this version's); restart the server", path.display()));
+    };
+    if environment_id.is_some_and(|id| id != descriptor.environment_id) {
+        return Check::new(name, Status::Warn, format!("{} names another server; restart the server", path.display()));
+    }
+    Check::new(name, Status::Ok, format!("apps on this machine sign in without a code at {} (while that server runs)", descriptor.url))
+}
+
 /// Every file under `dir` (none when it is missing), links not followed.
 fn files_under(dir: &Path, out: &mut Vec<PathBuf>) {
     let Ok(entries) = std::fs::read_dir(dir) else { return };
@@ -352,7 +390,7 @@ fn check_autostart(home: &Path, host: &str, port: u16, relays: &[String]) -> Che
     if !crate::autostart::is_enabled() {
         return Check::new(name, Status::Ok, "launch at login is off");
     }
-    match crate::autostart::Entry::current(home, host, port, relays) {
+    match crate::autostart::Entry::current(home, host, port, relays, &[]) {
         Ok(entry) => match entry.problem() {
             Some(problem) => Check::new(name, Status::Warn, format!("launch at login is on, but {problem}")),
             None => Check::new(name, Status::Ok, "launch at login is on"),
@@ -474,6 +512,37 @@ mod tests {
         }
         std::fs::write(&db, b"this is not a database, it is long enough to look like a header to nobody").unwrap();
         assert_eq!(check_database(&db).0.status, Status::Fail);
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn the_private_and_local_sign_in_checks() {
+        let home = temp("private");
+        std::fs::create_dir_all(home.join("userdata")).unwrap();
+        assert_eq!(check_local(&home, None).status, Status::Ok, "no descriptor");
+        let local = crate::local::Local::new(&home);
+        local.publish("127.0.0.1:13773".parse().unwrap(), "env-1", "Studio").unwrap();
+        let check = check_local(&home, Some("env-1"));
+        assert_eq!(check.status, Status::Ok, "{check:?}");
+        assert!(check.detail.contains("http://127.0.0.1:13773"), "{check:?}");
+        assert_eq!(check_local(&home, Some("env-2")).status, Status::Warn, "another server's");
+        std::fs::write(domovoi_local::descriptor_path(&home), "{}").unwrap();
+        assert_eq!(check_local(&home, Some("env-1")).status, Status::Warn, "not a descriptor");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(home.join("userdata"), std::fs::Permissions::from_mode(0o700)).unwrap();
+            assert_eq!(check_private(&home).status, Status::Ok);
+            std::fs::set_permissions(home.join("userdata"), std::fs::Permissions::from_mode(0o755)).unwrap();
+            let check = check_private(&home);
+            assert_eq!(check.status, Status::Warn);
+            assert!(check.detail.contains("userdata"), "{check:?}");
+            std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o755)).unwrap();
+            assert_eq!(check_home(&home).status, Status::Warn, "readable by others");
+            std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o711)).unwrap();
+            assert_eq!(check_home(&home).status, Status::Ok, "others may only pass through");
+        }
         let _ = std::fs::remove_dir_all(&home);
     }
 

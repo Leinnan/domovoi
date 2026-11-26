@@ -2100,6 +2100,48 @@ pub(crate) fn composer(model: &Model) -> ComposerView {
     }
 }
 
+/// This machine's server, while offering it is of use: not when the app is
+/// already using it (or signing in to it), and not for a saved entry that
+/// only needs selecting, which the list of saved servers offers.
+fn local_server(model: &Model) -> Option<LocalServerView> {
+    let server = model.local_server.as_ref()?;
+    let offered = match crate::environments::local_environment(model, server) {
+        None => true,
+        // Its entry is open and waits for a pairing code: one click instead.
+        Some(entry) => model.active_env.as_deref() == Some(entry.id.as_str()) && model.token.is_none() && !model.in_flight && !model.local_signing_in(),
+    };
+    offered.then(|| LocalServerView { label: server.label.clone(), url: server.url.clone() })
+}
+
+/// The link waiting for the user's answer, as the question to ask.
+fn link_request(model: &Model) -> Option<LinkRequestView> {
+    let request = model.link_request.as_ref()?;
+    let key = crate::environments::endpoint_key(&request.link.ticket);
+    let endpoint = crate::environments::prefix(&key, 10);
+    let link_name = request.link.name.as_deref().and_then(crate::environments::shown_name).unwrap_or_default();
+    let known = model.environments.iter().find(|e| e.is_remote() && !model.unsaved.contains(&e.id) && crate::environments::endpoint_key(&e.ticket) == key);
+    // The key and the names are the client's to lay out beside this (`endpoint`, `known_label`, `link_name`).
+    let (title, message) = match known {
+        Some(known) => {
+            let sign_in = if request.link.code.is_some() { " It carries a pairing code, which signs this device in to it again." } else { "" };
+            (format!("Connect to {}?", known.label), format!("A link asks this app to connect to a server saved here.{sign_in}"))
+        }
+        None => (
+            "Connect to a new server?".to_owned(),
+            "A link asks this app to connect to a server that is not saved here. Connect only if you made this link on your own server: a server you connect to sees what you send it, and this app shows what it sends back. The name in a link is whatever its author wrote.".to_owned(),
+        ),
+    };
+    Some(LinkRequestView {
+        id: request.id,
+        title,
+        message,
+        confirm_label: "Connect".to_owned(),
+        endpoint,
+        link_name,
+        known_label: known.map(|known| known.label.clone()).unwrap_or_default(),
+    })
+}
+
 /// Connected, or reconnecting to a server this device is signed in to.
 fn can_queue(model: &Model) -> bool {
     match model.connection {
@@ -3310,7 +3352,8 @@ pub fn view(model: &Model) -> ViewModel {
             remote: model.active_environment().is_some_and(crate::model::Environment::is_remote),
             path: if model.tunnel.connected { model.tunnel.path.clone() } else { String::new() },
             rtt_ms: model.tunnel.rtt_ms,
-            needs_pairing: model.active_env.is_some() && (model.token.is_none() || model.server_changed),
+            // Not while this machine's server is signing the app in: there is no code to ask for.
+            needs_pairing: model.active_env.is_some() && (model.token.is_none() || model.server_changed) && !model.local_signing_in(),
             server_changed: model.server_changed,
             hint: if model.connection != Connection::Reconnecting || model.reconnect_attempts < 6 {
                 String::new()
@@ -3329,6 +3372,8 @@ pub fn view(model: &Model) -> ViewModel {
                 beat: model.companion_beat.0.clone(),
                 beat_seq: model.companion_beat.1,
             },
+            local_server: local_server(model),
+            link_request: link_request(model),
         },
         toast: model.toast.as_ref().map(|t| ToastView {
             id: t.id,

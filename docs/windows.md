@@ -99,7 +99,9 @@ value under `HKCU`. No administrator is needed.
 release build of the WinUI app points it at itself too, so a copy run without
 the installer handles links as well. The Iced app takes the scheme only where
 the installer hasn't put the WinUI app (`HKCU\Software\Domovoi\Installer`, or
-the `Domovoi.Installer` mark on the scheme's key).
+the `Domovoi.Installer` mark on the scheme's key). A link opened this way
+connects nothing by itself: the app asks first
+([remote-access.md](remote-access.md), "Links ask first").
 
 When checking this from a terminal inside the Claude desktop app, look at
 the registry from outside it, for example through a scheduled task. That app
@@ -182,6 +184,19 @@ is installed.
 - **The apps' links pipe.** A second launch hands a `domovoi://` link to the
   running app through a named pipe that only you can open (the Unix socket's
   mode 0600); remote clients are refused.
+- **The home folder.** At each start the server gives `userdata`, `remote`
+  and `local` under its home an ACL for your account only (the database,
+  logs, keys and the sign-in files of apps on this machine), and
+  `remote.json` one of its own. The home folder itself keeps the ACL it
+  inherits: a protected one there would spread to `worktrees` and
+  `projects`. `domovoi-server doctor` lists what is not private.
+- **The apps on the server's machine** sign in with no pairing code
+  ([remote-access.md](remote-access.md), "The app on the same machine"):
+  the server writes `%USERPROFILE%\.domovoi\local\server.json` and the app
+  proves itself by writing a request file beside it. The app does not check
+  who owns those files (the folder's ACL is what keeps other accounts out),
+  and the server refuses a request file your account does not own, so an
+  app run elevated, whose files Administrators own, pairs with a code.
 - **Managed policy.** The policy file is `policy.json` in `Program
   Files\Domovoi`, with the folder read from the registry. It is not in
   ProgramData, where any user could create the folder first.

@@ -24,6 +24,17 @@ pub fn stroke() -> Brush {
     ThemeBrush::CardStroke.into()
 }
 
+/// The link dialog's panel. Opaque: a card's fill lets what is under it show
+/// through, and under the dialog that is the dimmed window.
+pub fn panel() -> Brush {
+    ThemeBrush::SolidBackground.into()
+}
+
+/// The shade over the window while the link dialog asks.
+pub fn scrim() -> Brush {
+    Color::argb(0x4D, 0x00, 0x00, 0x00).into()
+}
+
 /// A code block's fill, a shade off its card.
 pub fn code() -> Brush {
     Color::argb(0x14, 0x80, 0x80, 0x80).into()

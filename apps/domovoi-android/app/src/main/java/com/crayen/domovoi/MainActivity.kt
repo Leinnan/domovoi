@@ -8,7 +8,6 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.runtime.mutableStateOf
 import com.crayen.domovoi.app.Event
 import com.crayen.domovoi.core.Notifier
 import com.crayen.domovoi.system.AppRequest
@@ -26,9 +25,6 @@ import com.crayen.domovoi.ui.theme.DomovoiTheme
 class MainActivity : ComponentActivity() {
     private val core by lazy { DomovoiApp.core(this) }
 
-    /** A `domovoi://connect` link that would leave the server in use, waiting for a yes. */
-    private val pendingLink = mutableStateOf<String?>(null)
-
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
@@ -37,14 +33,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             DomovoiTheme {
                 CompositionLocalProvider(LocalCore provides core) {
-                    AppRoot(
-                        core = core,
-                        pendingLink = pendingLink.value,
-                        onConfirmLink = { link ->
-                            pendingLink.value = null
-                            if (link != null) core.update(Event.ConnectRemote(link))
-                        },
-                    )
+                    AppRoot(core)
                 }
             }
         }
@@ -70,13 +59,7 @@ class MainActivity : ComponentActivity() {
         when (uri.host) {
             "thread" -> uri.getQueryParameter("id")?.let { core.openThread(it, uri.getQueryParameter("server").orEmpty()) }
             "new" -> AppRequests.post(AppRequest.NewThread())
-            "connect" -> {
-                val link = uri.toString()
-                val connection = core.view.connection.value
-                // Already connected elsewhere: leaving that server takes a yes.
-                if (connection.state == "connected" && connection.activeEnvironmentId.isNotEmpty()) pendingLink.value = link
-                else core.update(Event.ConnectRemote(link))
-            }
+            "connect" -> core.update(connectLinkEvent(uri.toString()))
         }
     }
 
@@ -103,3 +86,11 @@ class MainActivity : ComponentActivity() {
                 .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
     }
 }
+
+/**
+ * A `domovoi://connect` link the system handed the app (a browser, a mail,
+ * another app). Whoever wrote it is unknown, so it connects nothing: the core
+ * asks first (`ConnectionView.linkRequest`, drawn by `LinkRequestDialog`).
+ * `Event.ConnectRemote` is for a link the user pastes, types or scans in the app.
+ */
+internal fun connectLinkEvent(link: String): Event = Event.OpenLink(link)

@@ -47,6 +47,14 @@ pub struct Environment {
     pub companion: Option<crate::companion::CompanionLook>,
 }
 
+/// A `domovoi://connect` link that reached the app from outside, held until
+/// the user says whether to follow it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinkRequest {
+    pub id: u32,
+    pub link: crate::environments::Link,
+}
+
 /// Retries back off 2, 4, 8, 16 then 30 s, each spread by up to ±25 % so
 /// clients of a restarted server do not all come back at once.
 pub fn retry_delay(attempts: u32, jitter: f64) -> u32 {
@@ -88,6 +96,32 @@ pub struct Model {
     pub device_os: String,
 
     pub environments: Vec<Environment>,
+    /// Environments in `environments` that are not saved yet: made for a
+    /// sign-in that has not succeeded. One becomes saved when it signs in
+    /// (`environments::signed_in`) and is dropped when another is picked, so
+    /// a failed first pairing leaves nothing behind.
+    pub unsaved: HashSet<String>,
+    /// A newer ticket for a saved remote server (its id, the ticket), from a
+    /// link: used for the attempt under way, and saved once the server has
+    /// accepted this device through it.
+    pub pending_ticket: Option<(String, String)>,
+    /// The server running on this machine, as its descriptor says (desktop).
+    pub local_server: Option<crate::local::LocalServer>,
+    /// `localAuto` has been read from the store ...
+    pub local_auto_known: bool,
+    /// ... and this install has signed in to its machine's server by itself
+    /// before (or a server was forgotten): it does not do so again.
+    pub local_auto_done: bool,
+    /// The server a silent sign-in was last tried for: none again until a
+    /// connection succeeds or the descriptor changes, so a server that keeps
+    /// refusing is not asked in a loop.
+    pub local_tried: Option<crate::local::LocalServer>,
+    /// A sign-in to this machine's server, under way.
+    pub local_attempt: Option<crate::local::LocalAttempt>,
+    /// A link from outside the app, waiting for the user's answer.
+    pub link_request: Option<LinkRequest>,
+    /// Numbers link requests: an answer to an earlier one is ignored.
+    pub link_counter: u32,
     pub active_env: Option<String>,
     pub pending_terminal_target: Option<(String, String, String)>,
     /// The active environment's bearer token.
@@ -857,6 +891,11 @@ impl Model {
         self.environments.iter().find(|e| e.id == id)
     }
 
+    /// A sign-in to this machine's server is under way for the current attempt.
+    pub fn local_signing_in(&self) -> bool {
+        self.local_attempt.as_ref().is_some_and(|local| local.attempt == self.attempt)
+    }
+
     /// Forgets everything learned from the server (switching environments).
     pub fn clear_server_state(&mut self) {
         // This server's unsent work waits for it to be active again.
@@ -884,6 +923,15 @@ impl Model {
             device_label: std::mem::take(&mut self.device_label),
             device_os: std::mem::take(&mut self.device_os),
             environments: std::mem::take(&mut self.environments),
+            unsaved: std::mem::take(&mut self.unsaved),
+            pending_ticket: self.pending_ticket.take(),
+            // This machine's server and a link waiting for an answer are not the active server's.
+            local_server: self.local_server.take(),
+            local_auto_known: self.local_auto_known,
+            local_auto_done: self.local_auto_done,
+            local_tried: self.local_tried.take(),
+            link_request: self.link_request.take(),
+            link_counter: self.link_counter,
             active_env: self.active_env.take(),
             pending_terminal_target: self.pending_terminal_target.take(),
             panel: Panel {

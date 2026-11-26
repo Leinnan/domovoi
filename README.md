@@ -66,7 +66,10 @@ account or port forwarding.
   Codex and Antigravity across clients, and can snooze and resume threads once
   a limit resets.
 - **Remote access with pairing**: pair a device once with a link or QR code.
-  Its sign-in is bound to that device's own key.
+  Its sign-in is bound to that device's own key. A link opened from outside
+  an app connects nothing until you confirm it.
+- **No pairing on the same machine**: a desktop app finds the server running
+  beside it and signs in by itself, by proving it runs as the same user.
 - **Push notifications** for "Needs your approval", "Finished" and "Failed": on
   iPhone through APNs, plus Live Activities following the current turn (bring
   your own APNs key); on Android through any UnifiedPush distributor (no Google
@@ -100,6 +103,7 @@ account or port forwarding.
 | `crates/domovoi-contracts` | Wire types for t3code's server API, validated against the real Effect schemas |
 | `crates/domovoi-model` | Typed records and the thread read model, shared by the server and the client core |
 | `crates/domovoi-remote` | HTTP/1.1 over iroh streams, plus a loopback bridge for clients |
+| `crates/domovoi-local` | How a client finds and signs in to the server on the same machine: the descriptor the server writes and the request files a client proves itself with |
 | `crates/domovoi-desktop-host` | Runs the client core's effects on Tokio, with secure storage and `domovoi://` link hand-off, for the Rust desktop clients |
 | `conformance/` | Schema checks and RPC test cases run against t3code's own client code |
 | `fixtures/golden/` | Recorded sessions used for replay tests and benchmarks |
@@ -160,8 +164,10 @@ cargo run -p domovoi-server            # listens on 127.0.0.1:13773, state in ~/
 cargo run -p domovoi-server -- --tray  # with the status bar icon
 ```
 
-The server prints a pairing URL at start. To reach it from your other devices,
-turn remote access on (you only need to do this once) and pair:
+The server prints a pairing URL at start. A desktop app on the same machine
+needs neither it nor a code: it signs in by itself the first time it starts
+(`--no-local-sign-in` turns that off). To reach the server from your other
+devices, turn remote access on (you only need to do this once) and pair:
 
 ```sh
 domovoi-server --remote
@@ -172,8 +178,9 @@ For development, `just server`, `just pair` and `just tray` do the same with a
 throwaway home in `.reference/domovoi-home`.
 
 [docs/remote-access.md](docs/remote-access.md) covers using your own relay,
-managing devices, launch at login, push notifications, webhook tasks, and
-running on a Linux server.
+managing devices, the names the server answers to (`--allowed-host`, for a
+reverse proxy), who can read its home directory, launch at login, push
+notifications, webhook tasks, and running on a Linux server.
 
 ### Build the apps
 

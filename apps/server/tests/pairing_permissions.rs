@@ -34,6 +34,11 @@ impl Drop for Server {
 fn start() -> Server {
     let home = std::env::temp_dir().join(format!("domovoi-perm-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&home);
+    start_in(home)
+}
+
+/// Starts a server on the home directory `home`, as it is.
+fn start_in(home: PathBuf) -> Server {
     let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
     let mut child = Command::new(env!("CARGO_BIN_EXE_domovoi-server")).env("DOMOVOI_NO_SESSION_IMPORT", "1").env("DOMOVOI_NO_SHELL_ENV", "1")
         .args(["--home-dir", home.to_str().unwrap(), "--port", &port.to_string()])
@@ -145,4 +150,84 @@ async fn pair_command_and_permission_enforcement() {
         .await
         .unwrap();
     assert_eq!(again.status(), 401);
+}
+
+/// What other accounts on the machine can do with `path` (its group and other mode bits).
+#[cfg(unix)]
+fn open_bits(path: &std::path::Path) -> u32 {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path).unwrap_or_else(|e| panic!("{}: {e}", path.display())).permissions().mode() & 0o077
+}
+
+/// A home an older server made, with the modes the umask gave: starting the
+/// server closes it to other accounts, and `pair` beside the running server
+/// (which opens the database too) leaves it closed.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn the_home_is_closed_to_other_accounts_at_every_start() {
+    use std::os::unix::fs::PermissionsExt;
+    let home = std::env::temp_dir().join(format!("domovoi-perm-modes-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&home);
+    let userdata = home.join("userdata");
+    std::fs::create_dir_all(userdata.join("logs")).unwrap();
+    std::fs::create_dir_all(home.join("remote")).unwrap();
+    std::fs::create_dir_all(home.join("worktrees")).unwrap();
+    let old = [userdata.join("attachment-signing-key"), home.join("remote.json"), home.join("remote").join("ticket"), userdata.join("logs").join("server.old.log")];
+    for file in &old {
+        std::fs::write(file, if file.ends_with("remote.json") { "{}" } else { "x" }).unwrap();
+        std::fs::set_permissions(file, std::fs::Permissions::from_mode(0o644)).unwrap();
+    }
+    for dir in [&home, &userdata, &userdata.join("logs"), &home.join("remote"), &home.join("worktrees")] {
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    let server = start_in(home.clone());
+    let database = userdata.join("domovoi.sqlite");
+    let private = |when: &str| {
+        for path in [&home, &userdata, &userdata.join("logs"), &home.join("remote"), &database, &old[0], &old[1], &old[2]] {
+            assert_eq!(open_bits(path), 0, "{} {when}", path.display());
+        }
+        for suffix in ["-wal", "-shm"] {
+            let beside = std::path::PathBuf::from(format!("{}{suffix}", database.display()));
+            if beside.exists() {
+                assert_eq!(open_bits(&beside), 0, "{} {when}", beside.display());
+            }
+        }
+    };
+    private("after start");
+    // Not everything under the home is the server's to close: worktrees keep their modes.
+    assert_eq!(open_bits(&home.join("worktrees")), 0o055);
+    // A file inside a closed folder is out of reach whatever its own mode says.
+    assert_eq!(open_bits(&old[3]), 0o044);
+
+    pair_code(&server, &[]);
+    private("after pair");
+    let remote = cli_pair_remote(&server);
+    assert!(remote.contains("link: domovoi://connect"), "{remote}");
+    private("after pair --remote");
+    drop(server);
+
+    // A home others may pass through but not list (for worktrees another
+    // account's agent works in) is left as its owner set it.
+    let home = std::env::temp_dir().join(format!("domovoi-perm-modes-through-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&home);
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o711)).unwrap();
+    let server = start_in(home.clone());
+    assert_eq!(open_bits(&home), 0o011);
+    assert_eq!(open_bits(&home.join("userdata")), 0, "what holds the threads is closed all the same");
+    assert_eq!(open_bits(&home.join("userdata").join("domovoi.sqlite")), 0);
+    drop(server);
+}
+
+#[cfg(unix)]
+fn cli_pair_remote(server: &Server) -> String {
+    let out = Command::new(env!("CARGO_BIN_EXE_domovoi-server"))
+        .env("DOMOVOI_NO_SESSION_IMPORT", "1")
+        .env("DOMOVOI_NO_SHELL_ENV", "1")
+        .args(["--home-dir", server.home.to_str().unwrap(), "--port", &server.port.to_string(), "pair", "--remote"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "pair --remote failed: {}", String::from_utf8_lossy(&out.stderr));
+    String::from_utf8_lossy(&out.stdout).into_owned()
 }

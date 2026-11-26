@@ -317,8 +317,11 @@ pub enum Message {
     /// One-second clock while a turn runs (elapsed time, pulsing mark).
     Clock,
     RetryFired(u64),
-    /// A `domovoi://` link from the OS or a later launch.
+    /// A `domovoi://` link from the OS or a later launch. The core asks
+    /// before it connects (`ConnectionView.link_request`).
     DeepLink(String),
+    /// The answer to the link dialog; `id` is the request's.
+    AnswerLink { id: u32, accept: bool },
     /// Back from a sleep: the core reconnects.
     Woke,
     /// Where the default route leaves from (`None`: no route, offline).
@@ -342,6 +345,8 @@ pub enum Message {
     ConnectCodeChanged(String),
     ConnectLinkChanged(String),
     ConnectSubmit,
+    /// Signs in to the server on this computer (`ConnectionView.local_server`).
+    ConnectLocal,
     ShowAddServer(bool),
     // Sidebar
     SearchChanged(String),
@@ -667,12 +672,13 @@ impl App {
             Message::Woke => self.send_core(Event::Resume),
             Message::DeepLink(link) => {
                 match &self.host {
-                    Some(host) => host.send(Event::ConnectRemote { link }),
+                    Some(host) => host.send(Event::OpenLink { link }),
                     None => self.pending_deep_link = Some(link),
                 }
                 // The link was opened elsewhere: show where it went.
                 return iced::window::oldest().then(|id| id.map_or_else(Task::none, |id| Task::batch([iced::window::minimize(id, false), iced::window::gain_focus(id)])));
             }
+            Message::AnswerLink { id, accept } => self.send_core(Event::AnswerLinkRequest { id, accept }),
             Message::NetworkProbed(from) => {
                 // A server on this machine is there with no network at all
                 // (a remote one is reached through a local port too, so not those).
@@ -716,7 +722,10 @@ impl App {
             }
             Message::Shortcut(name) => return self.handle_shortcut(name),
             Message::Escape => {
-                if self.vm.palette.is_some() {
+                // The link dialog lies over everything else, so Escape answers it first.
+                if let Some(request) = &self.vm.connection.link_request {
+                    self.send_core(Event::AnswerLinkRequest { id: request.id, accept: false });
+                } else if self.vm.palette.is_some() {
                     if self.vm.palette.as_ref().is_some_and(|p| p.mode != "commands") {
                         self.send_core(Event::SetPaletteMode { mode: "commands".into() });
                     } else {
@@ -787,6 +796,7 @@ impl App {
                     }
                 }
             },
+            Message::ConnectLocal => self.send_core(Event::ConnectLocalServer),
             Message::ShowAddServer(show) => {
                 self.connect.adding_server = show;
                 self.overlay = None;
@@ -1371,7 +1381,7 @@ impl App {
                     device_os: host::device_os().into(),
                 });
                 if let Some(link) = self.pending_deep_link.take() {
-                    handle.send(Event::ConnectRemote { link });
+                    handle.send(Event::OpenLink { link });
                 }
                 return Task::perform(probe_route(), Message::NetworkProbed);
             }

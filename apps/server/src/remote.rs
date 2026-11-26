@@ -97,6 +97,10 @@ impl Remote {
     pub fn open(home: &Path, relays: Vec<String>) -> std::io::Result<Self> {
         let dir = home.join("remote");
         let key = load_or_create_key(&dir.join("secret.key"))?;
+        // The keys' folder, whichever command made it.
+        if let Err(e) = crate::util::tighten(&dir) {
+            tracing::warn!("{} could not be made private: {e}", dir.display());
+        }
         let settings_path = home.join("remote.json");
         let mut settings: RemoteSettings =
             std::fs::read(&settings_path).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
@@ -141,7 +145,8 @@ impl Remote {
     }
 
     fn save(&self, settings: &RemoteSettings) -> Result<(), RemoteError> {
-        std::fs::write(&self.settings_path, serde_json::to_vec_pretty(settings).unwrap_or_default()).map_err(|e| RemoteError::Save(e.to_string()))
+        // Private: it names the relays and the LAN port this server answers on.
+        write_private(&self.settings_path, &serde_json::to_vec_pretty(settings).unwrap_or_default()).map_err(|e| RemoteError::Save(e.to_string()))
     }
 
     /// Saves the on/off switch without a running server (`domovoi-server remote
@@ -218,7 +223,8 @@ impl Remote {
     fn write_ticket(&self, server: &RemoteServer) -> String {
         let ticket = server.ticket().encode_string();
         // Remembered for `domovoi-server pair --remote` in another process.
-        let _ = std::fs::write(self.dir.join("ticket"), &ticket);
+        // Private: the ticket says where this machine is reachable.
+        let _ = write_private(&self.dir.join("ticket"), ticket.as_bytes());
         ticket
     }
 

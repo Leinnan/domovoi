@@ -1,16 +1,19 @@
-//! Pairing: a `domovoi://` link (from `domovoi-server pair`, its QR code or
-//! the server's tray menu), or a server URL and one-time code on this network.
+//! Pairing: the server on this computer when the core offers it (one press,
+//! no code), then a `domovoi://` link (from `domovoi-server pair`, its QR
+//! code or the server's tray menu), or a server URL and one-time code on
+//! this network.
 
-use domovoi_core::view::ConnectionView;
+use domovoi_core::view::{ConnectionView, LocalServerView};
 use windows_reactor::{
-    Border, Button, ButtonStyle, Callback, FontWeight, HorizontalAlignment, InfoBar, InfoBarSeverity, Orientation, ProgressRing, StackPanel, TextBlock, TextBox, TextWrapping,
-    Thickness, VerticalAlignment, View,
+    Border, Button, ButtonStyle, Callback, FontWeight, Grid, GridLength, HorizontalAlignment, InfoBar, InfoBarSeverity, Orientation, ProgressRing, ScrollBarVisibility,
+    ScrollViewer, StackPanel, TextBlock, TextBox, TextWrapping, Thickness, VerticalAlignment, View,
 };
 
 use crate::theme;
 
 /// What the pairing form tells the window.
 pub struct Hooks {
+    pub on_connect_local: Callback<()>,
     pub on_link: Callback<std::rc::Rc<str>>,
     pub on_url: Callback<std::rc::Rc<str>>,
     pub on_code: Callback<std::rc::Rc<str>>,
@@ -18,9 +21,14 @@ pub struct Hooks {
     pub on_pair_code: Callback<()>,
 }
 
-/// The form, centred on the window. `draft` is what was typed so far.
+/// The form, centred on the window, under the card for the server on this
+/// computer when there is one. `draft` is what was typed so far.
 pub fn pairing(connection: &ConnectionView, draft: &Draft, hooks: Hooks) -> View {
     let busy = matches!(connection.state.as_str(), "pairing" | "connecting") || connection.attempting;
+    let mut cards: Vec<View> = Vec::new();
+    if let Some(local) = &connection.local_server {
+        cards.push(local_server(local, busy, hooks.on_connect_local));
+    }
     let heading = |text: &str| TextBlock::new().text(text).font_size(theme::BODY).font_weight(FontWeight::SEMI_BOLD).margin(Thickness::new(0.0, 12.0, 0.0, 4.0));
     let mut lines: Vec<View> = vec![
         TextBlock::new().text("Connect to a Domovoi server").font_size(theme::TITLE).font_weight(FontWeight::SEMI_BOLD).into(),
@@ -59,11 +67,58 @@ pub fn pairing(connection: &ConnectionView, draft: &Draft, hooks: Hooks) -> View
         let message = if connection.hint.is_empty() { error.clone() } else { format!("{error}\n{}", connection.hint) };
         lines.push(InfoBar::new().is_open(true).is_closable(false).severity(InfoBarSeverity::Error).title("Couldn't connect").message(message).into());
     }
+    cards.push(card(Thickness::uniform(24.0), lines));
+    // Both cards and an error are taller than the smallest window: they scroll.
+    ScrollViewer::new()
+        .vertical_scroll_bar_visibility(ScrollBarVisibility::Auto)
+        .horizontal_scroll_bar_visibility(ScrollBarVisibility::Disabled)
+        .content(
+            StackPanel::new()
+                .orientation(Orientation::Vertical)
+                .spacing(theme::GAP)
+                .horizontal_alignment(HorizontalAlignment::Center)
+                .vertical_alignment(VerticalAlignment::Center)
+                .max_width(WIDTH)
+                .margin(Thickness::uniform(theme::GAP))
+                .children(cards),
+        )
+        .into()
+}
+
+/// The cards' width.
+const WIDTH: f64 = 520.0;
+
+/// The server on this computer, which the app signs in to with no pairing
+/// code: what and where it is, and the button that connects.
+fn local_server(local: &LocalServerView, busy: bool, on_connect: Callback<()>) -> View {
+    let lines: Vec<View> = vec![
+        TextBlock::new().text("Server on this computer").font_size(theme::BODY).font_weight(FontWeight::SEMI_BOLD).into(),
+        Grid::new()
+            .columns([GridLength::STAR, GridLength::Auto])
+            .column_spacing(12.0)
+            .children((
+                StackPanel::new().orientation(Orientation::Vertical).spacing(2.0).vertical_alignment(VerticalAlignment::Center).children(vec![
+                    TextBlock::new().text(format!("{} · {}", local.label, local.url)).text_wrapping(TextWrapping::Wrap).into(),
+                    TextBlock::new().text("No pairing code needed.").font_size(theme::CAPTION).opacity(0.65).into(),
+                ]),
+                Button::new()
+                    .grid_column(1)
+                    .style(ButtonStyle::Accent)
+                    .automation_name("Connect to the server on this computer")
+                    .is_enabled(!busy)
+                    .vertical_alignment(VerticalAlignment::Center)
+                    .content(TextBlock::new().text("Connect"))
+                    .on_click(move || on_connect.call(())),
+            ))
+            .into(),
+    ];
+    card(Thickness::new(24.0, 16.0, 24.0, 16.0), lines)
+}
+
+/// A card as wide as the column, with `lines` one under the other.
+fn card(padding: Thickness, lines: Vec<View>) -> View {
     Border::new()
-        .horizontal_alignment(HorizontalAlignment::Center)
-        .vertical_alignment(VerticalAlignment::Center)
-        .max_width(520.0)
-        .padding(Thickness::uniform(24.0))
+        .padding(padding)
         .background(theme::card())
         .border_brush(theme::stroke())
         .border_thickness(Thickness::uniform(1.0))

@@ -1,8 +1,12 @@
 //! The effects of `domovoi_core::DomovoiApp`, run on Tokio.
 //!
-//! Runs all six `domovoi_core::Effect` capabilities (`Render`, `Http`,
-//! `Socket`, `Tunnel`, `Store`, `Notify`). Bursts of renders are merged into
-//! one `ViewDelta`. Also fetches images for the UI.
+//! Runs all seven `domovoi_core::Effect` capabilities (`Render`, `Http`,
+//! `Socket`, `Tunnel`, `Store`, `Notify`, `Local`). Bursts of renders are
+//! merged into one `ViewDelta`. Also fetches images for the UI.
+//!
+//! `Local` is the server on this machine (`domovoi_local`): the descriptor
+//! file is read every few seconds and the core told when it changes, and a
+//! request file is written beside it when the core signs in.
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -13,6 +17,7 @@ use crux_core::{Core, Request};
 use crux_http::HttpError;
 use crux_http::protocol::{HttpHeader, HttpRequest, HttpResponse, HttpResult};
 use domovoi_core::delta::ViewDelta;
+use domovoi_core::local::{LocalOperation, LocalOutput};
 use domovoi_core::notify::{NotifyOperation, NotifyOutput};
 use domovoi_core::socket::{SocketEvent, SocketOperation};
 use domovoi_core::store::{StoreOperation, StoreOutput};
@@ -35,6 +40,9 @@ const WS_PING_INTERVAL: Duration = Duration::from_secs(20);
 const WS_PONG_TIMEOUT: Duration = Duration::from_secs(10);
 const WS_MAX_MESSAGE_BYTES: usize = 64 * 1024 * 1024;
 const TUNNEL_POLL_INTERVAL: Duration = Duration::from_secs(3);
+/// How often the descriptor of the server on this machine is read again: a
+/// server started after the app is offered within this long.
+const LOCAL_POLL_INTERVAL: Duration = Duration::from_secs(5);
 /// The UI is slower than the core: this many events waiting is a stuck UI, and
 /// later deltas are queued behind them, not dropped.
 const EVENT_QUEUE: usize = 128;
@@ -50,16 +58,24 @@ pub struct HostConfig {
     pub render_coalesce: Duration,
     /// Posts the core's notifications to the OS (off in tests).
     pub notifications: bool,
+    /// The descriptor file of the server on this machine
+    /// (`domovoi_local::locate`); `None` and the app looks for none.
+    pub local_server: Option<std::path::PathBuf>,
 }
 
 impl HostConfig {
+    /// Looks for the server on this machine, unless `DOMOVOI_SERVER` names
+    /// the server to use (a run pointed at one server on purpose).
     pub fn new(identity: Identity) -> Self {
-        Self { identity, render_coalesce: Duration::from_millis(16), notifications: true }
+        let named = std::env::var_os("DOMOVOI_SERVER").is_some_and(|server| !server.is_empty());
+        let local_server = if named { None } else { domovoi_local::locate() };
+        Self { identity, render_coalesce: Duration::from_millis(16), notifications: true, local_server }
     }
 
-    /// Quick renders and no OS notifications.
+    /// Quick renders, no OS notifications, and no server beside the app
+    /// (the developer's own would be found).
     pub fn for_tests(identity: Identity) -> Self {
-        Self { identity, render_coalesce: Duration::from_millis(5), notifications: false }
+        Self { identity, render_coalesce: Duration::from_millis(5), notifications: false, local_server: None }
     }
 }
 
@@ -164,6 +180,8 @@ struct Engine {
     tunnel: Mutex<Option<ActiveTunnel>>,
     client_endpoint: tokio::sync::OnceCell<ClientEndpoint>,
     tunnel_gen: AtomicU64,
+    /// Numbers the watch of this machine's server: a new one ends the last.
+    local_gen: AtomicU64,
     focus: Mutex<FocusContext>,
     /// Images being fetched now. Only in-flight ones: the UI keeps what has
     /// loaded (and what failed), so a URL it drops can be fetched again.
@@ -190,6 +208,7 @@ impl Engine {
             tunnel: Mutex::new(None),
             client_endpoint: tokio::sync::OnceCell::new(),
             tunnel_gen: AtomicU64::new(0),
+            local_gen: AtomicU64::new(0),
             focus: Mutex::new(FocusContext { focused: true, thread_id: None }),
             fetching_images: Arc::new(Mutex::new(HashSet::new())),
             trace_ws: std::env::var("DOMOVOI_TRACE_WS").ok().filter(|s| !s.is_empty()),
@@ -270,6 +289,57 @@ impl Engine {
                         engine.resolve(&mut req, NotifyOutput::Posted);
                     });
                 }
+                Effect::Local(req) => {
+                    let engine = Arc::clone(self);
+                    tokio::spawn(async move {
+                        engine.handle_local(req).await;
+                    });
+                }
+            }
+        }
+    }
+
+    /// The server on this machine: its descriptor, told at once and then at
+    /// each change, and the request file a sign-in is proven with.
+    async fn handle_local(self: &Arc<Self>, mut req: Request<LocalOperation>) {
+        let Some(path) = self.config.local_server.clone() else {
+            match req.operation {
+                LocalOperation::Watch => self.resolve(&mut req, LocalOutput::Descriptor { text: None }),
+                LocalOperation::Request => self.resolve(&mut req, LocalOutput::Unavailable),
+            }
+            return;
+        };
+        match req.operation {
+            LocalOperation::Watch => {
+                // The core watches again after it starts over: the last watch ends.
+                let gen_id = self.local_gen.fetch_add(1, Ordering::AcqRel) + 1;
+                let mut told: Option<Option<String>> = None;
+                let mut interval = tokio::time::interval(LOCAL_POLL_INTERVAL);
+                loop {
+                    interval.tick().await;
+                    if self.local_gen.load(Ordering::Acquire) != gen_id {
+                        break;
+                    }
+                    let text = domovoi_local::read_descriptor(&path);
+                    if told.as_ref() != Some(&text) {
+                        told = Some(text.clone());
+                        self.resolve(&mut req, LocalOutput::Descriptor { text });
+                    }
+                }
+            }
+            LocalOperation::Request => {
+                let made = domovoi_local::requests_beside(&path).and_then(|dir| match domovoi_local::create_request(&dir) {
+                    Ok(request) => Some(request),
+                    Err(err) => {
+                        tracing::warn!(%err, "no sign-in request for the server on this machine");
+                        None
+                    }
+                });
+                let out = match made {
+                    Some(request) => LocalOutput::Request { id: request.id, secret: request.secret },
+                    None => LocalOutput::Unavailable,
+                };
+                self.resolve(&mut req, out);
             }
         }
     }
@@ -751,6 +821,8 @@ pub fn start(store: Arc<SecureStore>, config: HostConfig) -> (HostHandle, mpsc::
         // Shut down, or every handle is gone: nobody can use the host now.
         engine.close_socket().await;
         engine.stop_tunnel().await;
+        // Ends the watch of this machine's server at its next look.
+        engine.local_gen.fetch_add(1, Ordering::AcqRel);
         render_task.abort();
     });
 

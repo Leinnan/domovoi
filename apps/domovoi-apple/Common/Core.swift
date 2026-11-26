@@ -63,6 +63,11 @@ final class Core: NSObject, ObservableObject, UNUserNotificationCenterDelegate {
     /// after a stop (or after a newer start) is not this one.
     private var tunnelRequest: UInt32?
     private var keepAlive: Timer?
+    #if os(macOS)
+    /// Reads the descriptor of the server on this Mac every few seconds, for
+    /// the core's `watch` (the one running is the latest asked for).
+    private var localWatch: Task<Void, Never>?
+    #endif
     private var launched = false
     private var dismissedToast: UInt32?
     #if os(macOS)
@@ -165,6 +170,11 @@ final class Core: NSObject, ObservableObject, UNUserNotificationCenterDelegate {
     /// The core was replaced after a panic (see `CoreFfi::take_reset`): the
     /// new one starts as at launch, and reconnects to the saved server.
     private func relaunch() {
+        #if os(macOS)
+        // The replaced core's request is gone with it: the one launched here asks again.
+        localWatch?.cancel()
+        localWatch = nil
+        #endif
         launched = false
         launch()
         #if os(macOS)
@@ -191,7 +201,12 @@ final class Core: NSObject, ObservableObject, UNUserNotificationCenterDelegate {
     func update(_ event: Event) {
         #if os(macOS)
         guard keychainState == .ready else {
-            if case .connectRemote = event { pendingPairingLink = event }
+            // A link that opened the app waits for the keychain (`launch`
+            // sends it once the keychain is ready).
+            switch event {
+            case .connectRemote, .openLink: pendingPairingLink = event
+            default: break
+            }
             return
         }
         #endif
@@ -246,6 +261,8 @@ final class Core: NSObject, ObservableObject, UNUserNotificationCenterDelegate {
             resolve(request.id, try! NotifyOutput.posted.bincodeSerialize())
         case .tunnel(let op):
             runTunnel(op, requestId: request.id)
+        case .local(let op):
+            runLocal(op, requestId: request.id)
         }
     }
 
@@ -394,6 +411,56 @@ final class Core: NSObject, ObservableObject, UNUserNotificationCenterDelegate {
                 try? await Task.sleep(for: .seconds(3))
             }
         }
+    }
+
+    // MARK: Local server
+
+    /// The server on this machine: its descriptor file, watched for the
+    /// core, and a sign-in request written beside it. Only a Mac has one.
+    private func runLocal(_ op: LocalOperation, requestId: UInt32) {
+        #if os(macOS)
+        switch op {
+        case .watch:
+            localWatch?.cancel()
+            localWatch = Task { [weak self] in
+                // What the core was last told; `nil` before the first answer.
+                var reported: LocalOutput?
+                while !Task.isCancelled {
+                    // The file is read off the main thread.
+                    let text = await Task.detached(priority: .utility) { localServerDescriptor() }.value
+                    // Cancelled while reading: a newer watch (or a new core) took over.
+                    guard !Task.isCancelled else { return }
+                    let output = LocalOutput.descriptor(text: text.isEmpty ? nil : text)
+                    if output != reported {
+                        reported = output
+                        self?.emitLocal(output, requestId)
+                    }
+                    try? await Task.sleep(for: .seconds(5))
+                }
+            }
+        case .request:
+            Task { [weak self] in
+                // `<id> <secret>`, or nothing when no request could be written.
+                let made = await Task.detached(priority: .userInitiated) { localServerRequest() }.value
+                let parts = made.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: false)
+                let output: LocalOutput = parts.count == 2 && !parts[0].isEmpty && !parts[1].isEmpty
+                    ? .request(id: String(parts[0]), secret: String(parts[1]))
+                    : .unavailable
+                self?.emitLocal(output, requestId)
+            }
+        }
+        #else
+        // No server runs beside the app here.
+        switch op {
+        case .watch: emitLocal(.descriptor(text: nil), requestId)
+        case .request: emitLocal(.unavailable, requestId)
+        }
+        #endif
+    }
+
+    private func emitLocal(_ output: LocalOutput, _ requestId: UInt32) {
+        // swiftlint:disable:next force_try
+        resolve(requestId, try! output.bincodeSerialize())
     }
 
     // MARK: Notifications
@@ -681,8 +748,8 @@ final class CurrentSocket: @unchecked Sendable {
 final class CoreEngine: @unchecked Sendable {
     private let queue = DispatchQueue(label: "domovoi.core", qos: .userInteractive)
     /// Offline copies (`cache:` keys, megabytes) are written here, so the
-    /// core's queue doesn't wait on the disk. Reads of them go through it too,
-    /// after any write still pending.
+    /// core's queue doesn't wait on the disk. Reads and deletes of them go
+    /// through it too, after any write still pending.
     private let cacheQueue = DispatchQueue(label: "domovoi.cache", qos: .utility)
     private let ffi = CoreFfi()
     private let store: SecureStore
@@ -766,6 +833,11 @@ final class CoreEngine: @unchecked Sendable {
                     value = nil
                 case .save(let key, let v):
                     store.save(key, v)
+                    value = nil
+                case .delete(let key) where key.hasPrefix("cache:"):
+                    // After the saves queued before it: a forgotten server's
+                    // copy must not be written back once it is deleted.
+                    cacheQueue.async { [store] in _ = store.delete(key) }
                     value = nil
                 case .delete(let key):
                     store.delete(key)

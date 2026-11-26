@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 use domovoi_model::typed::{
     AgentSessionImportResult, AgentSessionScanResult, AgentSessionSource, AuthAccessStreamEvent, AuthAccessTokenResult,
-    AuthBrowserSessionResult, AuthClientDeviceType, AuthClientSession, AuthSessionState, AuthWebSocketTicketResult,
+    AuthBrowserSessionResult, AuthClientDeviceType, AuthClientSession, AuthSessionState, AuthWebSocketTicketResult, LocalSessionRequest, LocalSessionResult,
     DatabaseStorageItem, HostResourcesSnapshot, RemoteAccessState, RemoteAccessStatus, RemotePairingLink, RequestRejection,
     ScheduledTask, ScheduledTaskList, ScheduledTaskRunStatus, ScheduledTaskSchedule, ServerAuthSessionMethod,
     ServerProcessDiagnosticsResult, StorageCleanupReport, StorageCleanupReportItem, TaggedOption, UsageBucket, UsagePricingStatus,
@@ -183,6 +183,7 @@ fn round_trip_as(kind: &str, payload: &Value) -> Result<(), String> {
         "api.domovoi.remote.pairing" => round_trip::<RemotePairingLink>(payload),
         "auth.access-token" => round_trip::<AuthAccessTokenResult>(payload),
         "auth.ws-ticket" => round_trip::<AuthWebSocketTicketResult>(payload),
+        "api.domovoi.local.session" => round_trip::<LocalSessionResult>(payload),
         "rejected" => round_trip::<RequestRejection>(payload),
         other => Err(format!("no typed record for `{other}`")),
     }
@@ -190,7 +191,7 @@ fn round_trip_as(kind: &str, payload: &Value) -> Result<(), String> {
 
 /// The samples: the file, the kind its payloads are of, and whether it holds
 /// a stream's items (an array) or one document.
-const SAMPLES: [(&str, &str, bool); 18] = [
+const SAMPLES: [(&str, &str, bool); 20] = [
     ("scheduledTasks.subscribe", "scheduledTasks.subscribe", true),
     ("subscribeAuthAccess", "subscribeAuthAccess", true),
     ("server.getDatabaseStorage", "server.getDatabaseStorage", true),
@@ -206,6 +207,8 @@ const SAMPLES: [(&str, &str, bool); 18] = [
     ("api.domovoi.remote.off", "api.domovoi.remote", false),
     ("api.domovoi.remote.pairing", "api.domovoi.remote.pairing", false),
     ("api.domovoi.remote.rejected", "rejected", false),
+    ("api.domovoi.host.rejected", "rejected", false),
+    ("api.domovoi.local.session", "api.domovoi.local.session", false),
     ("auth.access-token", "auth.access-token", false),
     ("auth.ws-ticket", "auth.ws-ticket", false),
     ("auth.rejected", "rejected", false),
@@ -328,6 +331,15 @@ fn samples_decode_into_what_the_pages_read() {
     assert_eq!((rejected.message(), rejected.reason()), (None, Some("invalid_credential")));
     let refused: RequestRejection = serde_json::from_value(sample("api.domovoi.remote.rejected")).unwrap();
     assert_eq!((refused.message(), refused.reason()), (Some("relay relay.example.net: relative URL without a base"), None));
+    // The server reached under a name it does not answer to: its advice is the message, and it is a tagged error of its own.
+    let misnamed: RequestRejection = serde_json::from_value(sample("api.domovoi.host.rejected")).unwrap();
+    let RequestRejection::HostNotAllowed(host) = &misnamed else { panic!("a host rejection: {misnamed:?}") };
+    assert_eq!(host.host, "domovoi.example.com:13773");
+    assert!(misnamed.message().is_some_and(|message| message.contains("--allowed-host domovoi.example.com")) && misnamed.reason().is_none());
+    let local: LocalSessionResult = serde_json::from_value(sample("api.domovoi.local.session")).unwrap();
+    assert_eq!(local.proof.len(), 64);
+    let asked = LocalSessionRequest { request: "ab".repeat(16), client_label: Some("Studio".into()), client_device_type: Some("desktop".into()), client_os: None };
+    assert_eq!(serde_json::to_value(&asked).unwrap(), json!({ "request": "ab".repeat(16), "clientLabel": "Studio", "clientDeviceType": "desktop" }));
 }
 
 fn a_task() -> Value {

@@ -172,6 +172,38 @@ pub struct AuthAccessTokenResult {
     pub scope: String,
 }
 
+/// What a client on the server's own machine posts to
+/// `POST /api/domovoi/local/session` to sign in without a pairing code: the
+/// id of the request file it wrote in the server's home (`domovoi_local`),
+/// and what it says of itself, as when pairing.
+///
+/// Domovoi only.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalSessionRequest {
+    pub request: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_label: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_device_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_os: Option<String>,
+}
+
+/// The body of `POST /api/domovoi/local/session`: a session for a client on
+/// the server's own machine.
+///
+/// Domovoi only: built by `local_session` in the Domovoi server's `http.rs`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalSessionResult {
+    pub access_token: String,
+    /// The secret in the client's request file: only a program that can read
+    /// the server's home knows it, so the client drops an answer without it.
+    pub proof: String,
+    pub environment_id: String,
+}
+
 string_enum! {
     /// How an access token is presented: as it is, or with a proof of the key it is bound to.
     AuthTokenType {
@@ -194,7 +226,7 @@ pub struct AuthWebSocketTicketResult {
 
 /// The body of a response that rejects an HTTP request, named by its `_tag`:
 /// the errors every t3code route may answer with (`EnvironmentHttpCommonError`)
-/// and the two only the Domovoi server sends.
+/// and the three only the Domovoi server sends.
 ///
 /// `Other` is an error this build does not know; a route's own errors, such
 /// as t3code's `EnvironmentHttpForbiddenError`, arrive as it.
@@ -217,6 +249,8 @@ pub enum RequestRejection {
     RateLimited(RateLimitedRejection),
     #[serde(rename = "RemoteAccessError")]
     RemoteAccess(RemoteAccessRejection),
+    #[serde(rename = "HostNotAllowedError")]
+    HostNotAllowed(HostNotAllowedRejection),
     #[serde(untagged)]
     Other(UnknownRejection),
 }
@@ -231,6 +265,7 @@ tagged_union_deserialize! {
         "EnvironmentInternalError" => Internal,
         "EnvironmentRateLimitedError" => RateLimited,
         "RemoteAccessError" => RemoteAccess,
+        "HostNotAllowedError" => HostNotAllowed,
         _ => Other,
     }
 }
@@ -240,6 +275,7 @@ impl RequestRejection {
     pub fn message(&self) -> Option<&str> {
         match self {
             Self::RemoteAccess(rejection) => Some(&rejection.message),
+            Self::HostNotAllowed(rejection) => Some(&rejection.message),
             Self::Other(unknown) => unknown.record().get("message").and_then(Value::as_str),
             _ => None,
         }
@@ -254,7 +290,7 @@ impl RequestRejection {
             Self::ResourceNotFound(rejection) => Some(rejection.reason.as_str()),
             Self::Internal(rejection) => rejection.reason.as_ref().map(InternalErrorReason::as_str),
             Self::Other(unknown) => unknown.record().get("reason").and_then(Value::as_str),
-            Self::ScopeRequired(_) | Self::RateLimited(_) | Self::RemoteAccess(_) => None,
+            Self::ScopeRequired(_) | Self::RateLimited(_) | Self::RemoteAccess(_) | Self::HostNotAllowed(_) => None,
         }
     }
 }
@@ -341,13 +377,17 @@ pub struct OperationForbiddenRejection {
 }
 
 string_enum! {
-    /// Why an operation is refused (`EnvironmentOperationForbiddenReason`, and Domovoi's own two).
+    /// Why an operation is refused (`EnvironmentOperationForbiddenReason`, and Domovoi's own).
     OperationForbiddenReason {
         CurrentSessionRevokeNotAllowed = "current_session_revoke_not_allowed",
         /// Domovoi only: a remote device may not sign out a session on the server's own machine.
         LocalSessionRevokeNotAllowed = "local_session_revoke_not_allowed",
         /// Domovoi only: a remote device may not turn remote access off or change its relays.
         RemoteAccessIsChangedLocally = "remote_access_is_changed_locally",
+        /// Domovoi only: signing in without a code is for a program on the server's own machine.
+        LocalSignInIsForThisMachine = "local_sign_in_is_for_this_machine",
+        /// Domovoi only: this server offers no sign-in without a code.
+        LocalSignInIsOff = "local_sign_in_is_off",
     }
 }
 
@@ -423,6 +463,21 @@ pub struct RateLimitedRejection {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RemoteAccessRejection {
+    pub message: String,
+}
+
+/// A request over plain TCP that named the server by a host it does not
+/// answer to, or came from a web page of another origin, answered with 403.
+/// It is the server's answer to a page that reaches it through a DNS name of
+/// its own (DNS rebinding), and to a reverse proxy the server was not told of.
+///
+/// Domovoi only: built by `guard_host` in the Domovoi server's `http.rs`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostNotAllowedRejection {
+    /// The host (or origin) the request named.
+    pub host: String,
+    /// What to do about it, for the user.
     pub message: String,
 }
 

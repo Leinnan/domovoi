@@ -44,8 +44,10 @@ pub struct Exec {
 }
 
 impl Exec {
-    /// This executable serving `home` on `host:port`, headless.
-    pub fn current(home: &Path, host: &str, port: u16, relays: &[String]) -> std::io::Result<Exec> {
+    /// This executable serving `home` on `host:port`, headless. `carried`
+    /// are further flags of this run that the service's must have too
+    /// (`--allowed-host`, `--web-url`: `main.rs` `carried_flags`).
+    pub fn current(home: &Path, host: &str, port: u16, relays: &[String], carried: &[String]) -> std::io::Result<Exec> {
         let home = std::fs::canonicalize(home).unwrap_or_else(|_| home.to_path_buf());
         let mut args = vec!["--no-startup-code".to_owned(), "--home-dir".to_owned(), home.to_string_lossy().into_owned(), "--port".to_owned(), port.to_string()];
         if host != "127.0.0.1" {
@@ -54,6 +56,7 @@ impl Exec {
         for relay in relays {
             args.extend(["--relay".to_owned(), relay.clone()]);
         }
+        args.extend(carried.iter().cloned());
         let exe = std::env::current_exe()?;
         Ok(Exec { exe: std::fs::canonicalize(&exe).unwrap_or(exe), args })
     }

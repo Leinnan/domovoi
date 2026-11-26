@@ -45,7 +45,15 @@ reason = "Approving from outside the app (Live Activity, widget, ongoing notific
 missing = ["desktop"]
 reason = "Desktop notifications take no typed reply (freedesktop, Windows), and the core's local notice carries no question id; see notify.rs."
 
+[events.ConnectLocalServer]
+missing = ["ios", "android"]
+reason = "Signing in to the server on the same machine with no pairing code: a phone has no server beside it (docs/remote-access.md)."
+
 # ---- fields ----
+
+[fields."ConnectionView.local_server"]
+missing = ["ios", "android"]
+reason = "The server on the same machine is offered by the desktop clients only; the core never looks for one on the mobile surface."
 
 [fields."SettingsView.keybindings"]
 missing = ["ios", "android"]

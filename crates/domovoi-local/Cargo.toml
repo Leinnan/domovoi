@@ -1,0 +1,15 @@
+[package]
+name = "domovoi-local"
+description = "How a Domovoi client finds and signs in to the server running on the same machine: the descriptor the server writes and the request files a client proves itself with"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+getrandom = "0.4.3"
+serde.workspace = true
+serde_json.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+# Who owns a file (`geteuid`). The version domovoi-remote pins for iOS.
+libc = "=0.2.189"

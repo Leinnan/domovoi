@@ -30,3 +30,7 @@ pub const KEY_ACTIVE: &str = "activeEnvironment";
 pub fn token_key(environment_id: &str) -> String {
     format!("token:{environment_id}")
 }
+/// Set once this app has signed in to the server on its machine by itself
+/// (or the user has forgotten a server): it does that at most once per
+/// install, on a first launch with no saved servers.
+pub const KEY_LOCAL_AUTO: &str = "localAuto";

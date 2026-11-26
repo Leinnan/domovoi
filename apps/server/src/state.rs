@@ -21,18 +21,113 @@ pub struct Paths {
 }
 
 impl Paths {
+    /// The home's folders, made when missing: readable by this user only
+    /// (mode 0700; on Windows [`Paths::make_private`] gives them their ACL).
     pub fn new(home: PathBuf) -> std::io::Result<Self> {
         let userdata = home.join("userdata");
         let logs = userdata.join("logs");
         let projects_root = home.join("projects");
         for d in [&home, &userdata, &logs] {
-            std::fs::create_dir_all(d)?;
+            create_private_dir(d)?;
         }
         Ok(Paths { home, userdata, logs, projects_root })
+    }
+
+    /// What in a home must be readable by this user only: the folders with
+    /// the database, logs and iroh keys, and the files that are written
+    /// outside them or were made before they were private. The home itself
+    /// is not listed ([`Paths::make_private`] has its own rule for it).
+    pub fn private_paths(home: &std::path::Path) -> Vec<PathBuf> {
+        let userdata = home.join("userdata");
+        let mut paths = vec![userdata.clone(), userdata.join("logs"), home.join("remote")];
+        paths.extend(crate::db::files(&userdata.join("domovoi.sqlite")));
+        paths.extend([home.join("remote.json"), home.join("remote").join("ticket"), userdata.join("attachment-signing-key")]);
+        paths
+    }
+
+    /// Makes the home private, at every server start: a home made by an older
+    /// server (or copied, or restored) had the modes the umask gave it, so
+    /// other accounts on this machine could read every thread.
+    ///
+    /// Unix: [`Paths::private_paths`] become 0700 and 0600, and the home
+    /// itself 0700 when group or others can read or write it. A home they can
+    /// only pass through (0711) is left alone: that is how worktrees under it
+    /// stay reachable for a server or agent of another user. Windows: the same
+    /// paths get an ACL of their own; never the home itself, whose ACL would
+    /// spread to `worktrees/` and `projects/`.
+    ///
+    /// Returns what could not be made private, a line each. Never a reason
+    /// not to start.
+    pub fn make_private(&self) -> Vec<String> {
+        let mut warnings = Vec::new();
+        #[cfg(unix)]
+        if let Err(why) = make_home_private(&self.home) {
+            warnings.push(format!("{} is left readable by other users: {why}", self.home.display()));
+        }
+        for path in Self::private_paths(&self.home) {
+            if let Err(e) = crate::util::tighten(&path) {
+                warnings.push(format!("{} could not be made private: {e}", path.display()));
+            }
+        }
+        warnings
     }
     pub fn keybindings(&self) -> PathBuf {
         self.userdata.join("keybindings.json")
     }
+}
+
+/// Makes `dir` and what is missing above it; `dir` itself for this user only
+/// (the folders above it get the modes the umask gives).
+fn create_private_dir(dir: &std::path::Path) -> std::io::Result<()> {
+    if dir.is_dir() {
+        return Ok(());
+    }
+    if let Some(parent) = dir.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent)?;
+    }
+    let made = {
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::DirBuilderExt::mode(&mut std::fs::DirBuilder::new(), 0o700).create(dir)
+        }
+        #[cfg(not(unix))]
+        {
+            std::fs::create_dir(dir)
+        }
+    };
+    match made {
+        // Another process (`pair` beside a starting server) made it meanwhile.
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && dir.is_dir() => Ok(()),
+        made => made,
+    }
+}
+
+/// Whether group or others can read or write a folder of this mode (passing
+/// through it, mode 0711, is neither).
+#[cfg(unix)]
+pub fn open_to_others(mode: u32) -> bool {
+    mode & 0o066 != 0
+}
+
+/// The home becomes 0700 when [`open_to_others`]; `Err` says why it was left.
+#[cfg(unix)]
+fn make_home_private(home: &std::path::Path) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+    let meta = std::fs::metadata(home).map_err(|e| e.to_string())?;
+    if !open_to_others(meta.permissions().mode()) {
+        return Ok(());
+    }
+    let resolved = std::fs::canonicalize(home).map_err(|e| e.to_string())?;
+    if resolved.parent().is_none() {
+        return Err("it is the root folder".into());
+    }
+    if dirs::home_dir().and_then(|h| std::fs::canonicalize(h).ok()).is_some_and(|h| h == resolved) {
+        return Err("it is your own home folder; give the server a folder of its own with --home-dir".into());
+    }
+    if !crate::util::owned_by_this_user(&meta) {
+        return Err("another user owns it".into());
+    }
+    std::fs::set_permissions(home, std::fs::Permissions::from_mode(0o700)).map_err(|e| e.to_string())
 }
 
 pub struct AppState {
@@ -54,6 +149,10 @@ pub struct AppState {
     pub connections: crate::connections::Connections,
     /// Remote access over iroh.
     pub remote: Arc<crate::remote::Remote>,
+    /// The names this server answers to over plain TCP (`--allowed-host`).
+    pub hosts: crate::http::HostRules,
+    /// Sign-in without a code for apps on this machine.
+    pub local: crate::local::Local,
     /// APNs credentials are configured (`push.rs`).
     pub push_configured: bool,
     /// Cancelled to stop the server (a signal, the status bar icon, `domovoi-server stop`).

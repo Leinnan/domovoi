@@ -11,6 +11,8 @@ import com.crayen.domovoi.BuildConfig
 import com.crayen.domovoi.app.Effect
 import com.crayen.domovoi.app.Event
 import com.crayen.domovoi.app.HttpRequest
+import com.crayen.domovoi.app.LocalOperation
+import com.crayen.domovoi.app.LocalOutput
 import com.crayen.domovoi.app.NotifyOutput
 import com.crayen.domovoi.app.Request
 import com.crayen.domovoi.app.SocketEvent
@@ -174,6 +176,7 @@ class Core(
                 }
                 resolve(request.id, StoreOutput.Value(value).bincodeSerialize())
             }
+            is Effect.Local -> resolve(request.id, localAnswer(effect.value).bincodeSerialize())
         }
     }
 
@@ -392,4 +395,14 @@ class Core(
         const val GRACE_MS = 25_000L
         val TRACE = BuildConfig.DEBUG && Log.isLoggable("DomovoiTrace", Log.DEBUG)
     }
+}
+
+/**
+ * The answer to the core's search for a server on the same computer. A phone
+ * has none: there is no descriptor file to watch and nowhere to write a
+ * sign-in request, and the core does not ask on the mobile surface.
+ */
+internal fun localAnswer(operation: LocalOperation): LocalOutput = when (operation) {
+    LocalOperation.WATCH -> LocalOutput.Descriptor(null)
+    LocalOperation.REQUEST -> LocalOutput.Unavailable
 }

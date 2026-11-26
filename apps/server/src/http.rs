@@ -11,11 +11,11 @@
 
 #![expect(clippy::disallowed_types, clippy::disallowed_macros, reason = "the MCP route: a JSON-RPC body and its parse-error answer")]
 
-use crate::auth::{AuthError, ClientMeta, METHOD_BEARER, NewSession, Session, origin_matches_host};
+use crate::auth::{AuthError, ClientMeta, METHOD_BEARER, NewSession, Session, TcpAttempt, origin_matches_host};
 use crate::control;
 use crate::rpc;
 use crate::state::{ConnCtx, SharedState};
-use axum::extract::{Extension, Form, Query, Request, State, WebSocketUpgrade};
+use axum::extract::{ConnectInfo, Extension, Form, Query, Request, State, WebSocketUpgrade};
 use axum::middleware::Next;
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
@@ -28,9 +28,10 @@ use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 use domovoi_contracts::auth::{AuthInvalidError, BrowserSessionRequest, BrowserSessionResponse};
 use domovoi_model::typed::{
-    AuthAccessTokenResult, AuthTokenType, AuthWebSocketTicketResult, InternalRejection, OperationForbiddenRejection, RateLimitedRejection,
-    RemoteAccessRejection, RequestInvalidRejection, RequestRejection, ScopeRequiredRejection,
+    AuthAccessTokenResult, AuthTokenType, AuthWebSocketTicketResult, HostNotAllowedRejection, InternalRejection, LocalSessionRequest, LocalSessionResult,
+    OperationForbiddenRejection, RateLimitedRejection, RemoteAccessRejection, RequestInvalidRejection, RequestRejection, ScopeRequiredRejection,
 };
+use std::net::{IpAddr, SocketAddr};
 use domovoi_remote::RemotePeer;
 use domovoi_contracts::environment::ORCHESTRATION_PROTOCOL_VERSION;
 
@@ -39,6 +40,16 @@ type Peer = Option<Extension<RemotePeer>>;
 
 fn peer_id(peer: &Peer) -> Option<String> {
     peer.as_ref().map(|Extension(RemotePeer(id))| id.to_string())
+}
+
+/// The address a plain TCP request came from. Absent over iroh, on the
+/// webhook listener and for a router called without a listener: absent never
+/// means "this machine".
+type Tcp = Option<Extension<ConnectInfo<SocketAddr>>>;
+
+/// The request's address, an IPv4 one written as IPv6 (`::ffff:127.0.0.1`) as IPv4.
+fn tcp_address(tcp: &Tcp) -> Option<IpAddr> {
+    tcp.as_ref().map(|Extension(ConnectInfo(address))| address.ip().to_canonical())
 }
 
 /// Routes an iroh peer without a session may use: discovery and pairing.
@@ -67,6 +78,7 @@ pub fn router(state: SharedState) -> Router {
         .route("/api/domovoi/remote/configure", post(remote_configure))
         .route("/api/domovoi/server/stop", post(server_stop))
         .route("/api/domovoi/session/end", post(end_session))
+        .route("/api/domovoi/local/session", post(local_session))
         .route("/api/domovoi/push/devices", post(push_register).delete(push_unregister))
         .route("/api/domovoi/push/activities", post(activity_register).delete(activity_unregister))
         .merge(crate::push_web::routes())
@@ -94,7 +106,168 @@ pub fn router(state: SharedState) -> Router {
         .route(crate::preview::stream::ROUTE, get(crate::preview::stream::handler).post(crate::preview::stream::upload))
         .route("/api/hooks/{task}/{token}", hooks_route())
         .layer(axum::middleware::from_fn_with_state(state.clone(), gate_unknown_peers))
+        // Outermost: a request under a name this server does not answer to reaches nothing.
+        .layer(axum::middleware::from_fn_with_state(state.clone(), guard_host))
         .with_state(state)
+}
+
+/// Host suffixes always answered to: names that only a local resolver gives
+/// out (the ones a client accepts for plain `http://`, bar `.local`, where
+/// only this machine's own name counts).
+const LOCAL_SUFFIXES: &[&str] = &[".localhost", ".ts.net", ".lan", ".internal", ".home.arpa"];
+
+/// The names this server answers to over plain TCP, and the web origins that
+/// may send it requests.
+///
+/// A web page can reach a loopback server through a DNS name of its own that
+/// it points at 127.0.0.1 (DNS rebinding); the browser then treats the server
+/// as that page's own site. Such a request names the page's host, so a server
+/// that answers only to its own names is out of its reach.
+#[derive(Debug, Default)]
+pub struct HostRules {
+    exact: std::collections::HashSet<String>,
+    suffixes: Vec<String>,
+    any: bool,
+    /// `--web-url`'s origin: the web client's, when it is not served under the server's own name.
+    origins: Vec<String>,
+}
+
+impl HostRules {
+    /// `names` are hosts or URLs the server is known by (`--host`, this
+    /// machine's names, `--web-url`, `--hooks-url`); `allowed` is
+    /// `--allowed-host`: a name, `.suffix` for every name under one, or `*`.
+    pub fn new<'a>(names: impl IntoIterator<Item = &'a str>, allowed: &[String], web_url: Option<&str>) -> Self {
+        let mut rules = HostRules::default();
+        for name in names {
+            let host = match url::Url::parse(name) {
+                Ok(parsed) if parsed.has_host() => parsed.host_str().unwrap_or_default().to_owned(),
+                _ => name.to_owned(),
+            };
+            rules.add(&host);
+        }
+        for entry in allowed {
+            match entry.trim() {
+                "*" => rules.any = true,
+                suffix if suffix.starts_with('.') && suffix.len() > 1 => rules.suffixes.push(suffix.trim_end_matches('.').to_ascii_lowercase()),
+                name => rules.add(name),
+            }
+        }
+        rules.origins.extend(web_url.and_then(origin_of));
+        rules
+    }
+
+    fn add(&mut self, host: &str) {
+        let host = host_name(host);
+        if !host.is_empty() {
+            self.exact.insert(host);
+        }
+    }
+
+    /// Whether a request addressed to `host` (a `Host` header: a name or
+    /// address, with or without a port) is answered.
+    pub fn allows(&self, host: &str) -> bool {
+        let host = host_name(host);
+        // No name at all is no name of a web page's.
+        if self.any || host.is_empty() || host == "localhost" || host.parse::<IpAddr>().is_ok() {
+            return true;
+        }
+        LOCAL_SUFFIXES.iter().any(|suffix| host.ends_with(suffix)) || self.exact.contains(&host) || self.suffixes.iter().any(|suffix| host.ends_with(suffix.as_str()))
+    }
+
+    /// Whether a page of `origin` may send a request that changes something
+    /// to the server addressed as `host`: the server's own pages, and the
+    /// web client's.
+    fn allows_origin(&self, origin: &str, host: &str) -> bool {
+        let origin = origin.trim().trim_end_matches('/').to_ascii_lowercase();
+        let own = origin.split_once("://").is_some_and(|(scheme, rest)| matches!(scheme, "http" | "https") && rest == host.trim().to_ascii_lowercase());
+        own || self.origins.contains(&origin)
+    }
+}
+
+/// A `Host` value without its port and trailing dot, in lower case; an IPv6
+/// address without its brackets.
+fn host_name(host: &str) -> String {
+    let host = host.trim();
+    let name = match host.strip_prefix('[') {
+        Some(v6) => v6.split(']').next().unwrap_or_default(),
+        None => match host.rsplit_once(':') {
+            Some((name, port)) if port.bytes().all(|b| b.is_ascii_digit()) => name,
+            _ => host,
+        },
+    };
+    name.trim_end_matches('.').to_ascii_lowercase()
+}
+
+/// `scheme://host[:port]` of a URL, in lower case.
+fn origin_of(url: &str) -> Option<String> {
+    let origin = url::Url::parse(url.trim()).ok()?.origin();
+    origin.is_tuple().then(|| origin.ascii_serialization().to_ascii_lowercase())
+}
+
+/// The names this machine goes by: its host name as the system gives it,
+/// that name without its domain, and the short name under `.local`.
+pub fn machine_names() -> Vec<String> {
+    let Some(name) = sysinfo::System::host_name().ok().map(|name| name.trim().trim_end_matches('.').to_ascii_lowercase()).filter(|name| !name.is_empty()) else {
+        return Vec::new();
+    };
+    let short = name.split('.').next().unwrap_or_default().to_owned();
+    let mut names = vec![format!("{short}.local"), short, name];
+    names.retain(|name| !name.is_empty() && name != ".local");
+    names.dedup();
+    names
+}
+
+/// A header's value as it can be logged and sent back: no control
+/// characters, and no longer than a host name gets. Bytes that are not
+/// text become a character no host rule matches.
+fn shown(value: &HeaderValue) -> String {
+    String::from_utf8_lossy(value.as_bytes()).chars().filter(|c| !c.is_control()).take(255).collect()
+}
+
+/// HTTP 403 for a host or origin this server does not answer to.
+fn host_not_allowed(host: &str, message: String) -> Response {
+    let rejection = RequestRejection::HostNotAllowed(HostNotAllowedRejection { host: host.to_owned(), message });
+    (StatusCode::FORBIDDEN, [(header::CACHE_CONTROL, "no-store")], Json(rejection)).into_response()
+}
+
+/// Plain TCP requests must name the server by a host it answers to, and
+/// one that changes something must not come from another site's page
+/// ([`HostRules`]). Not asked of iroh peers (no browser, no DNS), of the
+/// health routes (monitors probe by address or by whatever name they have),
+/// nor of webhook URLs, which are public by design and carry their own token.
+async fn guard_host(State(state): State<SharedState>, request: Request, next: Next) -> Response {
+    let path = request.uri().path();
+    if request.extensions().get::<RemotePeer>().is_some() || path == "/health" || path == "/ready" || path.starts_with("/api/hooks/") {
+        return next.run(request).await;
+    }
+    // HTTP/2 has no Host header: the name is in the request's target.
+    let host = match request.headers().get(header::HOST) {
+        Some(value) => shown(value),
+        None => request.uri().authority().map(|authority| authority.as_str().to_owned()).unwrap_or_default(),
+    };
+    if !state.hosts.allows(&host) {
+        let name = host_name(&host);
+        tracing::warn!(%host, "refused a request for a host this server does not answer to");
+        return host_not_allowed(
+            &host,
+            format!("This server does not answer to the name \"{name}\". If you reach it by that name (a reverse proxy, a DNS name of your own), start it with --allowed-host {name}."),
+        );
+    }
+    // `/mcp` is the agents' own route: it takes no cookie, only a token the
+    // server handed its child process, so a page has nothing to ride on, and
+    // an agent CLI that names an origin of its own must not lose its tools.
+    let safe = matches!(*request.method(), axum::http::Method::GET | axum::http::Method::HEAD) || path == "/mcp";
+    if !safe && let Some(origin) = request.headers().get(header::ORIGIN) {
+        let origin = shown(origin);
+        if !state.hosts.allows_origin(&origin, &host) {
+            tracing::warn!(%origin, "refused a request from a page of another origin");
+            return host_not_allowed(
+                &origin,
+                format!("A page of {origin} may not send requests to this server. If that is its web client, start the server with --web-url {origin}."),
+            );
+        }
+    }
+    next.run(request).await
 }
 
 /// Media types whose bodies are compressed already (or are opaque bytes),
@@ -474,10 +647,36 @@ async fn auth_session(State(state): State<SharedState>, headers: HeaderMap, peer
     }
 }
 
-async fn browser_session(State(state): State<SharedState>, peer: Peer, Json(body): Json<BrowserSessionRequest>) -> Response {
+/// Lets a pairing attempt over plain TCP run, within its address's budget
+/// of failed ones (`Auth::begin_tcp_pairing`); `Err` is the 429 to answer
+/// with. Attempts over iroh are counted per device in `gate_unknown_peers`.
+fn begin_pairing(state: &SharedState, peer: &Peer, tcp: &Tcp, code: &str) -> Result<Option<TcpAttempt>, Response> {
+    if peer.is_some() {
+        return Ok(None);
+    }
+    match state.auth.begin_tcp_pairing(tcp_address(tcp), code) {
+        Ok(TcpAttempt::Refused) => Err(rate_limited()),
+        Ok(attempt) => Ok(Some(attempt)),
+        Err(e) => Err(internal(e)),
+    }
+}
+
+/// A pairing attempt that ended in a session no longer counts against its address.
+fn paired(state: &SharedState, tcp: &Tcp, attempt: Option<TcpAttempt>) {
+    if attempt == Some(TcpAttempt::Counted) {
+        state.auth.tcp_pairing_succeeded(tcp_address(tcp));
+    }
+    state.pulse.notify_one();
+}
+
+async fn browser_session(State(state): State<SharedState>, peer: Peer, tcp: Tcp, Json(body): Json<BrowserSessionRequest>) -> Response {
+    let attempt = match begin_pairing(&state, &peer, &tcp, &body.credential) {
+        Ok(attempt) => attempt,
+        Err(refused) => return refused,
+    };
     match state.auth.create_session(&body.credential, NewSession::cookie(peer_id(&peer))) {
         Ok((token, session)) => {
-            state.pulse.notify_one();
+            paired(&state, &tcp, attempt);
             let cookie = state.auth.session_cookie(&token, &session);
             let mut res = Json(BrowserSessionResponse {
                 authenticated: true,
@@ -515,7 +714,7 @@ struct TokenRequest {
 
 /// RFC 8693 token exchange: a pairing code for a bearer access token. Over
 /// iroh the token is bound to the peer's key.
-async fn token_exchange(State(state): State<SharedState>, peer: Peer, Form(body): Form<TokenRequest>) -> Response {
+async fn token_exchange(State(state): State<SharedState>, peer: Peer, tcp: Tcp, Form(body): Form<TokenRequest>) -> Response {
     if body.grant_type != GRANT_TOKEN_EXCHANGE || body.subject_token_type != TOKEN_TYPE_BOOTSTRAP || body.requested_token_type != TOKEN_TYPE_ACCESS {
         return invalid_request("invalid_command");
     }
@@ -531,9 +730,13 @@ async fn token_exchange(State(state): State<SharedState>, peer: Peer, Form(body)
         peer: peer_id(&peer),
         scope,
     };
+    let attempt = match begin_pairing(&state, &peer, &tcp, &body.subject_token) {
+        Ok(attempt) => attempt,
+        Err(refused) => return refused,
+    };
     match state.auth.create_session(&body.subject_token, new) {
         Ok((token, session)) => {
-            state.pulse.notify_one();
+            paired(&state, &tcp, attempt);
             let expires_in = crate::util::seconds_until(&session.expires_at);
             let mut res = Json(AuthAccessTokenResult {
                 access_token: token,
@@ -548,6 +751,47 @@ async fn token_exchange(State(state): State<SharedState>, peer: Peer, Form(body)
         }
         Err(AuthError::InvalidCredential) => unauthorized("invalid_credential"),
         Err(AuthError::InvalidScope) => invalid_request("scope_not_granted"),
+        Err(e) => internal(e),
+    }
+}
+
+/// How long the code a same-machine sign-in is made through lives: it is
+/// minted and used in the same call.
+const LOCAL_SIGN_IN_CODE_TTL: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Domovoi only: a client on this machine signs in without a pairing code, by
+/// naming a request file it wrote in the server's home (`crate::local`). The
+/// session is the one a pairing code from `domovoi-server pair` on this
+/// machine would give: full access, a bearer token, not bound to a device.
+///
+/// Only for a program on this machine: over a loopback TCP connection, never
+/// over iroh, and never from a web page (a browser names the page with
+/// `Origin` on a POST, and a page cannot write the request file anyway).
+async fn local_session(State(state): State<SharedState>, headers: HeaderMap, peer: Peer, tcp: Tcp, Json(body): Json<LocalSessionRequest>) -> Response {
+    let loopback = tcp_address(&tcp).is_some_and(|address| address.is_loopback());
+    if peer.is_some() || !loopback || headers.contains_key(header::ORIGIN) {
+        return forbidden("local_sign_in_is_for_this_machine");
+    }
+    if !state.local.is_published() {
+        return forbidden("local_sign_in_is_off");
+    }
+    let Some(proof) = state.local.redeem(&body.request) else {
+        return unauthorized("invalid_credential");
+    };
+    let trimmed = |v: Option<String>| v.map(|s| s.trim().to_owned()).filter(|s| !s.is_empty());
+    let new = NewSession {
+        method: METHOD_BEARER,
+        client: ClientMeta { label: trimmed(body.client_label), device_type: trimmed(body.client_device_type), os: trimmed(body.client_os) },
+        peer: None,
+        scope: None,
+    };
+    let session = state.auth.issue_local_pairing_code(LOCAL_SIGN_IN_CODE_TTL).and_then(|code| state.auth.create_session(&code, new));
+    match session {
+        Ok((access_token, _)) => {
+            state.pulse.notify_one();
+            let result = LocalSessionResult { access_token, proof, environment_id: state.environment.environment_id.clone() };
+            ([(header::CACHE_CONTROL, "no-store")], Json(result)).into_response()
+        }
         Err(e) => internal(e),
     }
 }
@@ -971,4 +1215,60 @@ fn protocol_incompatible() -> Response {
         orchestration_protocol_version: ORCHESTRATION_PROTOCOL_VERSION,
     };
     (StatusCode::UPGRADE_REQUIRED, Json(body)).into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rules(names: &[&str], allowed: &[&str], web_url: Option<&str>) -> HostRules {
+        HostRules::new(names.iter().copied(), &allowed.iter().map(|s| s.to_string()).collect::<Vec<_>>(), web_url)
+    }
+
+    #[test]
+    fn the_server_answers_to_its_own_names_and_no_page_s() {
+        let plain = rules(&["127.0.0.1", "studio", "studio.local", "https://hooks.example.com/x"], &[], None);
+        for ok in [
+            "", "localhost", "localhost:13773", "LOCALHOST:13773", "localhost.", "app.localhost:1", "127.0.0.1:13773", "192.168.1.5", "[::1]:13773", "[fd00::5]",
+            "box.tail1234.ts.net:13773", "nas.lan", "db.internal:80", "pi.home.arpa", "studio:13773", "Studio.local:13773", "hooks.example.com",
+        ] {
+            assert!(plain.allows(ok), "{ok}");
+        }
+        for bad in ["evil.example", "evil.example:13773", "127.0.0.1.evil.example", "localhost.evil.example", "other.local", "otherbox", "example.com", "ts.net", "xn--lcalhost-x7a:1", "studio.evil.example", "\u{fffd}"] {
+            assert!(!plain.allows(bad), "{bad}");
+        }
+
+        let listed = rules(&["0.0.0.0"], &["domovoi.example.com", ".corp.example", " Other.Example "], None);
+        for ok in ["domovoi.example.com", "domovoi.example.com:443", "a.corp.example", "a.b.corp.example:8443", "other.example"] {
+            assert!(listed.allows(ok), "{ok}");
+        }
+        for bad in ["example.com", "x.domovoi.example.com", "corp.example", "evilcorp.example", "notother.example"] {
+            assert!(!listed.allows(bad), "{bad}");
+        }
+        assert!(rules(&[], &["*"], None).allows("anything.example"));
+    }
+
+    #[test]
+    fn a_page_of_another_origin_may_not_post() {
+        let rules = rules(&["127.0.0.1"], &[], Some("https://App.Example.com/pair"));
+        assert!(rules.allows_origin("http://localhost:13773", "localhost:13773"));
+        assert!(rules.allows_origin("http://LOCALHOST:13773/", "localhost:13773"));
+        assert!(rules.allows_origin("https://domovoi.lan", "domovoi.lan"), "behind TLS the scheme differs");
+        assert!(rules.allows_origin("https://app.example.com", "localhost:13773"), "the web client");
+        for bad in ["http://evil.example", "http://localhost:5733", "null", "", "https://app.example.com.evil.example", "http://app.example.com", "file://localhost:13773"] {
+            assert!(!rules.allows_origin(bad, "localhost:13773"), "{bad}");
+        }
+    }
+
+    #[test]
+    fn host_values_lose_their_port_dot_and_case() {
+        assert_eq!(host_name("Example.COM.:8080"), "example.com");
+        assert_eq!(host_name("[::1]:13773"), "::1");
+        assert_eq!(host_name("[::1]"), "::1");
+        assert_eq!(host_name(" localhost "), "localhost");
+        assert_eq!(host_name("name:notaport"), "name:notaport");
+        assert_eq!(origin_of("http://localhost:5733/pair#token=x").as_deref(), Some("http://localhost:5733"));
+        assert_eq!(origin_of("https://Example.com:443/").as_deref(), Some("https://example.com"));
+        assert_eq!(origin_of("not a url"), None);
+    }
 }

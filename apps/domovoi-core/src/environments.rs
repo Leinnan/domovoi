@@ -7,19 +7,39 @@
 //! socket with a fresh one-time ticket.
 //!
 //! Connecting: (tunnel) → pair (only with a code) → mint ticket → socket.
+//!
+//! What is saved, and when:
+//!
+//! - A server is saved once this device has signed in to it. Until then a
+//!   new one lives in memory only (`Model::unsaved`): a wrong code, an
+//!   unreachable address or a declined link leaves the saved list as it was.
+//! - A link for a server already saved changes nothing saved until the
+//!   server has answered through it: its newer ticket is tried first
+//!   (`Model::pending_ticket`), and the saved name is never the link's.
+//! - A link that reached the app from outside (`OpenLink`) connects nothing
+//!   by itself: the user is asked, and what is connected stays so meanwhile.
+//!
+//! The server on this machine (desktop, `crate::local`): the shell reports
+//! its descriptor, and the core signs in to it without a code by having the
+//! shell write a request file and posting its id. The answer counts only if
+//! it carries the secret in that file, which nothing but the real server can
+//! read. That happens by itself once per install (a first launch with no
+//! saved servers), when the user asks (`ConnectLocalServer`), and once,
+//! silently, when a saved entry for that server has lost its sign-in.
 
 use crate::app::Event;
-use crate::model::{Connection, Environment, Model, TunnelState};
+use crate::local::{LocalAttempt, LocalOperation, LocalOutput, LocalServer};
+use crate::model::{Connection, Environment, LinkRequest, Model, TunnelState};
 use crate::offline::{cache_key, drafts_key, save_cache, save_drafts};
-use crate::replies::http::{Answer, HttpResult, answer, is_servers_own, read, rejection_message};
+use crate::replies::http::{Answer, HttpResult, answer, host_not_allowed, is_servers_own, read, rejection_message};
 use crate::requests;
 use crate::socket::SocketOperation;
-use crate::store::{KEY_ACTIVE, KEY_ENVIRONMENTS, StoreOperation, StoreOutput, token_key};
+use crate::store::{KEY_ACTIVE, KEY_ENVIRONMENTS, KEY_LOCAL_AUTO, StoreOperation, StoreOutput, token_key};
 use crate::tunnel::{TunnelOperation, TunnelOutput};
 use crate::update::{Cmd, open_socket};
 use crux_core::{Command, render::render};
 use crux_http::command::Http;
-use domovoi_model::typed::{AuthAccessTokenResult, AuthWebSocketTicketResult, RemoteAccessStatus, RemotePairingLink};
+use domovoi_model::typed::{AuthAccessTokenResult, AuthWebSocketTicketResult, LocalSessionRequest, LocalSessionResult, RemoteAccessStatus, RemotePairingLink};
 
 /// A pairing link: `domovoi://connect?ticket=…&code=…&name=…`, or a bare ticket.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -48,6 +68,29 @@ pub fn parse_link(text: &str) -> Option<Link> {
         }
     }
     (!link.ticket.is_empty() && link.ticket.is_ascii()).then_some(link)
+}
+
+/// The address and code in the pairing URL a server prints for a client on
+/// its machine, `http://localhost:13773/pair#token=CODE`: what people copy
+/// when asked for "the pairing code".
+pub fn parse_pairing_url(text: &str) -> Option<(String, String)> {
+    let text = text.trim();
+    let scheme = ["http://", "https://"].into_iter().find(|scheme| text.starts_with(scheme))?.len();
+    let code_at = ["#token=", "?token=", "&token="].into_iter().filter_map(|mark| text.find(mark).map(|at| at + mark.len())).min()?;
+    let code = form_decode(text[code_at..].split(['&', '#', '?']).next().unwrap_or_default().trim());
+    let authority_end = text[scheme..].find(['/', '?', '#']).map_or(text.len(), |at| at + scheme);
+    (authority_end > scheme && !code.is_empty() && !text.contains(char::is_whitespace)).then(|| (text[..authority_end].to_owned(), code))
+}
+
+/// A name someone else chose (a link's `name`, a descriptor's label) as it
+/// may be shown: no control characters, none that reorder or hide text, one
+/// line, at most 40 characters. `None` when nothing is left.
+pub fn shown_name(name: &str) -> Option<String> {
+    let hidden = |c: char| c.is_control() || matches!(c, '\u{200b}' | '\u{200e}' | '\u{200f}' | '\u{061c}' | '\u{2060}' | '\u{feff}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}');
+    let visible: String = name.chars().map(|c| if c.is_whitespace() { ' ' } else { c }).filter(|c| !hidden(*c)).collect();
+    let line = prefix(&visible.split(' ').filter(|word| !word.is_empty()).collect::<Vec<_>>().join(" "), 40);
+    let line = line.trim_end().to_owned();
+    (!line.is_empty()).then_some(line)
 }
 
 /// The first `n` characters of `s` (a label never cuts a character in two).
@@ -110,12 +153,16 @@ pub(crate) fn store(op: StoreOperation) -> Cmd {
     Command::request_from_shell(op).then_send(|_| Event::Stored)
 }
 
+/// Saves the list of servers: the ones this device has signed in to.
 pub(crate) fn save_environments(model: &Model) -> Cmd {
-    store(StoreOperation::Save { key: KEY_ENVIRONMENTS.into(), value: serde_json::to_string(&model.environments).expect("plain data serializes") })
+    let saved: Vec<&Environment> = model.environments.iter().filter(|e| !model.unsaved.contains(&e.id)).collect();
+    store(StoreOperation::Save { key: KEY_ENVIRONMENTS.into(), value: serde_json::to_string(&saved).expect("plain data serializes") })
 }
 
 fn save_active(model: &Model) -> Cmd {
     match &model.active_env {
+        // Not a saved server yet: the last one stays the one to come back to.
+        Some(id) if model.unsaved.contains(id) => Command::done(),
         Some(id) => store(StoreOperation::Save { key: KEY_ACTIVE.into(), value: id.clone() }),
         None => store(StoreOperation::Delete { key: KEY_ACTIVE.into() }),
     }
@@ -147,6 +194,7 @@ pub fn launch(model: &mut Model, surface: String, device_label: String, device_o
     Command::request_from_shell(StoreOperation::Load { key: KEY_ENVIRONMENTS.into() })
         .then_send(|out| Event::EnvironmentsLoaded { value: value_of(out) })
         .and(layout)
+        .and(Command::request_from_shell(StoreOperation::Load { key: KEY_LOCAL_AUTO.into() }).then_send(|out| Event::LocalAutoLoaded { value: value_of(out) }))
         .and(Command::request_from_shell(StoreOperation::Load { key: crate::terminal::SPLIT_KEY.into() })
             .then_send(|out| Event::TerminalSplitsLoaded { value: value_of(out) }))
 }
@@ -169,22 +217,45 @@ pub fn active_loaded(model: &mut Model, value: Option<String>) -> Cmd {
     for event in std::mem::take(&mut model.deferred) {
         cmds.push(crate::update::update(event, model));
     }
+    // Only now, so the server on this machine is never heard of before the
+    // saved ones are known; and only on a desktop, where there can be one.
+    if model.surface == "desktop" {
+        cmds.push(Command::stream_from_shell(LocalOperation::Watch).then_send(|out| Event::LocalServer { out }));
+    }
+    cmds.push(local_auto(model));
     Command::all(cmds)
+}
+
+/// Makes `id` the active environment, with nothing connecting yet: what was
+/// connected is closed, and what is saved for `id` on this device is loaded.
+fn activate(model: &mut Model, id: &str) -> Vec<Cmd> {
+    let mut cmds = vec![teardown(model)];
+    model.clear_server_state();
+    // A server made for a sign-in that never happened goes when another is picked.
+    let dropped: Vec<String> = model.unsaved.iter().filter(|unsaved| unsaved.as_str() != id).cloned().collect();
+    model.environments.retain(|e| !dropped.contains(&e.id));
+    for gone in &dropped {
+        model.unsaved.remove(gone);
+        model.parked.remove(gone);
+    }
+    if model.pending_ticket.as_ref().is_some_and(|(environment, _)| environment != id) {
+        model.pending_ticket = None;
+    }
+    model.active_env = Some(id.to_owned());
+    model.unpark();
+    model.token = None;
+    cmds.push(save_active(model));
+    let env_id = id.to_owned();
+    cmds.push(Command::request_from_shell(StoreOperation::Load { key: drafts_key(id) }).then_send(move |out| Event::DraftsLoaded { environment_id: env_id, value: value_of(out) }));
+    let env_id = id.to_owned();
+    cmds.push(Command::request_from_shell(StoreOperation::Load { key: cache_key(id) }).then_send(move |out| Event::CacheLoaded { environment_id: env_id, value: value_of(out) }));
+    cmds
 }
 
 /// Makes `id` the active environment and connects: pairing with `code`, or
 /// with its saved token.
 pub fn select(model: &mut Model, id: String, code: Option<String>) -> Cmd {
-    let mut cmds = vec![teardown(model)];
-    model.clear_server_state();
-    model.active_env = Some(id.clone());
-    model.unpark();
-    model.token = None;
-    cmds.push(save_active(model));
-    let env_id = id.clone();
-    cmds.push(Command::request_from_shell(StoreOperation::Load { key: drafts_key(&id) }).then_send(move |out| Event::DraftsLoaded { environment_id: env_id, value: value_of(out) }));
-    let env_id = id.clone();
-    cmds.push(Command::request_from_shell(StoreOperation::Load { key: cache_key(&id) }).then_send(move |out| Event::CacheLoaded { environment_id: env_id, value: value_of(out) }));
+    let mut cmds = activate(model, &id);
     match code {
         Some(code) => cmds.push(begin(model, Some(code))),
         None => {
@@ -246,6 +317,15 @@ fn bad_input(model: &mut Model, message: &str) -> Cmd {
 
 /// `Connect`: a local server by URL.
 pub fn connect_local(model: &mut Model, url: String, code: String) -> Cmd {
+    // The pairing URL the server prints, pasted whole where the address or
+    // the code goes. In the code's place it gives the code, and the address
+    // only when none was typed (the server prints `localhost`, which from
+    // another machine is the wrong one).
+    let (url, code) = match (parse_pairing_url(&url), parse_pairing_url(&code)) {
+        (Some((address, code)), _) => (address, code),
+        (None, Some((address, code))) => (if url.trim().is_empty() { address } else { url }, code),
+        (None, None) => (url, code),
+    };
     let url = url.trim().trim_end_matches('/').to_owned();
     if url.is_empty() {
         return bad_input(model, "Enter the server address.");
@@ -259,42 +339,124 @@ pub fn connect_local(model: &mut Model, url: String, code: String) -> Cmd {
             let label = url.split("://").nth(1).unwrap_or(&url).to_owned();
             let env = Environment { id: crate::update::uuid(), label, url, ..Default::default() };
             let id = env.id.clone();
+            // Saved once this device has signed in to it (`signed_in`).
+            model.unsaved.insert(id.clone());
             model.environments.push(env);
             id
         }
     };
     let code = Some(code.trim().to_owned()).filter(|c| !c.is_empty());
-    save_environments(model).and(select(model, id, code))
+    select(model, id, code)
 }
 
 /// `ConnectRemote`: a remote server from a pairing link (or a bare ticket of
-/// a server this device already paired with).
+/// a server this device already paired with) that the user gave the app.
 pub fn connect_remote(model: &mut Model, link: String) -> Cmd {
+    // The local pairing URL, pasted where a link goes.
+    if let Some((address, code)) = parse_pairing_url(&link) {
+        return connect_local(model, address, code);
+    }
     let Some(link) = parse_link(&link) else {
         return bad_input(model, "That is not a Domovoi pairing link. On the server, run `domovoi-server pair --remote` or open Settings → Remote Access.");
     };
+    connect_parsed(model, link)
+}
+
+/// Connects to the server a link names. One this device has saved keeps its
+/// name, and its saved ticket until the server has answered through the
+/// link's; a new one is saved once this device has signed in to it.
+fn connect_parsed(model: &mut Model, link: Link) -> Cmd {
     let key = endpoint_key(&link.ticket);
-    let id = match model.environments.iter_mut().find(|e| e.is_remote() && endpoint_key(&e.ticket) == key) {
+    let found = model.environments.iter_mut().find(|e| e.is_remote() && endpoint_key(&e.ticket) == key);
+    let id = match found {
         Some(e) => {
-            e.ticket = link.ticket.clone();
-            if let Some(name) = &link.name {
-                e.label = name.clone();
+            let id = e.id.clone();
+            if model.unsaved.contains(&id) {
+                e.ticket = link.ticket.clone();
+                model.pending_ticket = None;
+            } else {
+                model.pending_ticket = (e.ticket != link.ticket).then(|| (id.clone(), link.ticket.clone()));
             }
-            e.id.clone()
+            id
         }
         None => {
-            let label = link.name.clone().unwrap_or_else(|| format!("Remote {}", prefix(&key, 8)));
+            let label = link.name.as_deref().and_then(shown_name).unwrap_or_else(|| format!("Remote {}", prefix(&key, 8)));
             let env = Environment { id: crate::update::uuid(), label, ticket: link.ticket.clone(), ..Default::default() };
             let id = env.id.clone();
+            model.unsaved.insert(id.clone());
             model.environments.push(env);
             id
         }
     };
-    save_environments(model).and(select(model, id, link.code))
+    select(model, id, link.code)
+}
+
+/// `OpenLink`: a link the system handed the app. A page, a mail or another
+/// app can make the system do that, so nothing connects here: the link waits
+/// for the user's answer (`ConnectionView.link_request`), and a server in use
+/// stays in use. A link that is none only says so.
+pub fn open_link(model: &mut Model, text: String) -> Cmd {
+    let link = parse_link(&text).filter(|_| text.trim().starts_with("domovoi://"));
+    match link {
+        Some(link) => {
+            model.link_counter += 1;
+            model.link_request = Some(LinkRequest { id: model.link_counter, link });
+        }
+        None => model.toast("error", "That link is not a Domovoi pairing link."),
+    }
+    render()
+}
+
+/// `AnswerLinkRequest`: the user's yes or no to the link waiting. An answer
+/// to an earlier request (another link came meanwhile) changes nothing.
+pub fn answer_link_request(model: &mut Model, id: u32, accept: bool) -> Cmd {
+    let Some(request) = model.link_request.take_if(|request| request.id == id) else { return Command::done() };
+    if accept { connect_parsed(model, request.link) } else { render() }
+}
+
+/// This device has signed in to `id`: its token is saved, and so is the
+/// server itself if it was not yet. The one place a new server is saved.
+fn signed_in(model: &mut Model, id: &str, token: String) -> Cmd {
+    let mut cmds = vec![store(StoreOperation::Save { key: token_key(id), value: token.clone() })];
+    let active = model.active_env.as_deref() == Some(id);
+    if model.unsaved.remove(id) {
+        cmds.push(save_environments(model));
+        if active {
+            cmds.push(save_active(model));
+        }
+    }
+    if active {
+        model.token = Some(token);
+    }
+    Command::all(cmds)
+}
+
+/// The server answered this device through the ticket a link brought: that
+/// ticket is the saved one from now on.
+fn adopt_ticket(model: &mut Model) -> Cmd {
+    let Some((id, ticket)) = model.pending_ticket.take_if(|(id, _)| model.active_env.as_deref() == Some(id.as_str())) else { return Command::done() };
+    let Some(env) = model.environments.iter_mut().find(|e| e.id == id) else { return Command::done() };
+    env.ticket = ticket;
+    save_environments(model)
+}
+
+/// What this device keeps for a server besides its entry: its drafts and its
+/// offline copy, and (`token`) its sign-in.
+fn forget_keys(id: &str, token: bool) -> Vec<Cmd> {
+    let mut cmds = vec![store(StoreOperation::Delete { key: drafts_key(id) }), store(StoreOperation::Delete { key: cache_key(id) })];
+    if token {
+        cmds.push(store(StoreOperation::Delete { key: token_key(id) }));
+    }
+    cmds
 }
 
 /// Forgets a server. Connected to it, this device first signs itself out
 /// there, which also stops its pushes; the rest happens in `signed_out`.
+///
+/// A server that is not the connected one is forgotten at once, and what
+/// then happens to this device's sign-in there is said, not assumed: a
+/// server reached by address is asked to end it, with that server's own
+/// token (`forget_token_loaded`); a remote one is not dialled for it.
 pub fn forget(model: &mut Model, id: String) -> Cmd {
     let active = model.active_env.as_deref() == Some(id.as_str());
     if active && model.connection == Connection::Connected && model.token.is_some() && !model.server_url.is_empty() {
@@ -305,18 +467,69 @@ pub fn forget(model: &mut Model, id: String) -> Cmd {
             .then_send(move |_| Event::SignedOut { id: id2 })
             .and(render());
     }
-    remove_environment(model, &id)
+    let Some(env) = model.environments.iter().find(|e| e.id == id).cloned() else { return Command::done() };
+    if model.unsaved.contains(&id) {
+        // Never signed in to: there is nothing saved and no sign-in to end.
+        return remove_environment(model, &id, true);
+    }
+    let url = if env.is_remote() { String::new() } else { env.url.clone() };
+    let (label, forgotten) = (env.label.clone(), id.clone());
+    // The token is deleted once it has been read (`forget_token_loaded`).
+    let load = Command::request_from_shell(StoreOperation::Load { key: token_key(&id) })
+        .then_send(move |out| Event::ForgetTokenLoaded { id: forgotten, label, url, value: value_of(out) });
+    remove_environment(model, &id, false).and(load)
 }
 
 /// The server has been told (or could not be reached): forget it here.
 pub fn signed_out(model: &mut Model, id: String) -> Cmd {
-    remove_environment(model, &id)
+    remove_environment(model, &id, true)
 }
 
-fn remove_environment(model: &mut Model, id: &str) -> Cmd {
+/// The sign-in of a server just forgotten (`forget`), read before it is
+/// deleted here: a server reached by address is asked to end it.
+pub fn forget_token_loaded(model: &mut Model, id: String, label: String, url: String, value: Option<String>) -> Cmd {
+    let delete = store(StoreOperation::Delete { key: token_key(&id) });
+    let Some(token) = value else { return delete };
+    if url.is_empty() {
+        model.toast("info", format!("Forgot {label}. This device stays signed in there until that expires or you remove it in that server's access settings."));
+        return delete.and(render());
+    }
+    let asked = Http::post(format!("{url}/api/domovoi/session/end"))
+        .header("Authorization", format!("Bearer {token}").as_str())
+        .build()
+        .then_send(move |res| Event::ForgottenSignedOut { label, res });
+    delete.and(asked)
+}
+
+pub fn forgotten_signed_out(model: &mut Model, label: String, res: HttpResult) -> Cmd {
+    match answer(res) {
+        Answer::Ok(_) => model.toast("success", format!("Forgot {label} and signed this device out of it.")),
+        // The sign-in was gone already.
+        Answer::Rejected(401, _) => return Command::done(),
+        _ => model.toast("info", format!("Forgot {label}. It could not be reached to sign this device out: that lasts until it expires or you remove this device in that server's access settings.")),
+    }
+    render()
+}
+
+/// Takes `id` out of the saved servers, with what this device kept for it
+/// (its sign-in too, with `token`; otherwise that is still to be read).
+fn remove_environment(model: &mut Model, id: &str, token: bool) -> Cmd {
     model.environments.retain(|e| e.id != id);
     model.parked.remove(id);
-    let mut cmds = vec![save_environments(model), store(StoreOperation::Delete { key: token_key(id) })];
+    let was_saved = !model.unsaved.remove(id);
+    if model.pending_ticket.as_ref().is_some_and(|(environment, _)| environment == id) {
+        model.pending_ticket = None;
+    }
+    let mut cmds = vec![];
+    if was_saved {
+        cmds.push(save_environments(model));
+        cmds.extend(forget_keys(id, token));
+        // Forgetting is a choice: the app does not sign in to this machine's server by itself after it.
+        if !model.local_auto_done {
+            model.local_auto_done = true;
+            cmds.push(store(StoreOperation::Save { key: KEY_LOCAL_AUTO.into(), value: "1".into() }));
+        }
+    }
     if model.active_env.as_deref() == Some(id) {
         cmds.push(teardown(model));
         model.clear_server_state();
@@ -324,7 +537,10 @@ fn remove_environment(model: &mut Model, id: &str) -> Cmd {
         model.active_env = None;
         model.token = None;
         model.connection = Connection::Disconnected;
-        cmds.push(save_active(model));
+        // A server never saved was never the one to come back to either.
+        if was_saved {
+            cmds.push(save_active(model));
+        }
     }
     cmds.push(render());
     Command::all(cmds)
@@ -365,6 +581,10 @@ fn begin(model: &mut Model, code: Option<String>) -> Cmd {
     model.refusals = 0;
     model.pending_code = code;
     if model.token.is_none() && model.pending_code.is_none() {
+        // The server on this machine signs this app in again by itself.
+        if let Some(renewing) = local_renew(model, &env) {
+            return renewing;
+        }
         model.connection = Connection::Failed;
         model.error = Some(format!("Pair this device with {} using a pairing code.", env.label));
         return render();
@@ -388,7 +608,12 @@ fn transport(model: &mut Model, env: &Environment) -> Cmd {
     model.tunnel = TunnelState::default();
     model.tunnel_gen += 1;
     let tunnel_gen = model.tunnel_gen;
-    Command::stream_from_shell(TunnelOperation::Start { ticket: env.ticket.clone() }).then_send(move |out| Event::Tunnel { tunnel_gen, out })
+    // A link's newer ticket for this server is the one to try.
+    let ticket = match &model.pending_ticket {
+        Some((id, ticket)) if *id == env.id => ticket.clone(),
+        _ => env.ticket.clone(),
+    };
+    Command::stream_from_shell(TunnelOperation::Start { ticket }).then_send(move |out| Event::Tunnel { tunnel_gen, out })
 }
 
 fn authenticate(model: &mut Model) -> Cmd {
@@ -439,10 +664,7 @@ pub fn token_issued(model: &mut Model, attempt: u64, environment_id: String, res
             if !model.environments.iter().any(|e| e.id == environment_id) {
                 return Command::done();
             }
-            let save = store(StoreOperation::Save { key: token_key(&environment_id), value: token.clone() });
-            if model.active_env.as_deref() == Some(environment_id.as_str()) {
-                model.token = Some(token);
-            }
+            let save = signed_in(model, &environment_id, token);
             if current { save.and(mint_ticket(model)) } else { save }
         }
         _ if !current => Command::done(),
@@ -451,7 +673,8 @@ pub fn token_issued(model: &mut Model, attempt: u64, environment_id: String, res
         Answer::Rejected(401, _) => Command::request_from_shell(StoreOperation::Load { key: token_key(&environment_id) })
             .then_send(move |out| Event::FallbackTokenLoaded { attempt, environment_id: environment_id, value: value_of(out) }),
         Answer::Rejected(429, _) => failed(model, "Too many pairing attempts. Wait a minute and try again.".into()),
-        Answer::Rejected(code, _) => failed(model, format!("Pairing failed ({code}).")),
+        // Reached under a name it does not answer to: the server says what to do.
+        Answer::Rejected(code, body) => failed(model, host_not_allowed(&body).unwrap_or_else(|| format!("Pairing failed ({code})."))),
         Answer::Unreachable(e) => failed(model, format!("Could not reach the server: {e}")),
     }
 }
@@ -486,22 +709,35 @@ pub fn ticket_issued(model: &mut Model, res: HttpResult) -> Cmd {
         Answer::Ok(body) => {
             model.refusals = 0;
             let ticket = read::<AuthWebSocketTicketResult>(model, "the server's sign-in answer", body).map(|issued| issued.ticket).unwrap_or_default();
-            open_socket(model, &ticket).and(render())
+            // The server took this device's sign-in: it is the one the link named.
+            adopt_ticket(model).and(open_socket(model, &ticket)).and(render())
         }
         Answer::Rejected(401, _) => {
-            // Revoked or expired: pairing again is the only way back.
+            // Revoked or expired: pairing again is the only way back, unless
+            // it is the server on this machine, which signs this app in again.
             model.token = None;
             let label = model.active_environment().map(|e| e.label.clone()).unwrap_or_default();
             let forget = match &model.active_env {
                 Some(id) => store(StoreOperation::Delete { key: token_key(id) }),
                 None => Command::done(),
             };
+            if let Some(env) = model.active_environment().cloned()
+                && let Some(renewing) = local_renew(model, &env)
+            {
+                return forget.and(renewing);
+            }
             forget.and(failed(model, format!("This device is no longer signed in to {label}. Pair it again with a new code.")))
         }
         // Not a Domovoi server any more, or it refuses this device: retrying will not help.
         // A captive portal or proxy can answer these too: only the server's
         // own error, or the same answer three times running, means it.
         Answer::Rejected(code @ (400 | 403 | 404), body) => {
+            // The server's own word that it was reached under a name it does
+            // not answer to: it is there, and so is this device's sign-in.
+            // What changes is how the server is started, so no "pair again".
+            if let Some(message) = host_not_allowed(&body) {
+                return failed(model, message);
+            }
             model.refusals += 1;
             let from_server = is_servers_own(&body);
             if !from_server && model.refusals < 3 {
@@ -640,6 +876,7 @@ pub fn reconnect(model: &mut Model) -> Cmd {
 /// Closes the socket and the tunnel; replies still on their way are dropped.
 fn teardown(model: &mut Model) -> Cmd {
     crate::update::requests_lost(model);
+    model.local_attempt = None;
     model.attempt += 1;
     model.tunnel_gen += 1;
     model.in_flight = false;
@@ -667,6 +904,7 @@ pub fn suspend(model: &mut Model) -> Cmd {
         return Command::done();
     }
     model.suspended = true;
+    model.local_attempt = None;
     let save = save_drafts(model).and(if model.cache_dirty { save_cache(model) } else { Command::done() });
     crate::update::requests_lost(model);
     model.attempt += 1;
@@ -725,6 +963,218 @@ pub fn network_changed(model: &mut Model) -> Cmd {
     probe
 }
 
+// ---- the server on this machine ----
+
+/// The port of a URL on this machine (`http://localhost:13773`).
+fn loopback_port(url: &str) -> Option<u16> {
+    let authority = url.strip_prefix("http://")?.split(['/', '?', '#']).next()?;
+    let (host, port) = authority.rsplit_once(':')?;
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    let loopback = host.eq_ignore_ascii_case("localhost") || host.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback());
+    port.parse().ok().filter(|_| loopback)
+}
+
+/// Whether `env` is the entry for this machine's server: the one with its
+/// id, or, never connected yet, one at its port on this machine.
+fn is_local_server(env: &Environment, server: &LocalServer) -> bool {
+    if env.is_remote() {
+        return false;
+    }
+    if env.server_id.is_empty() { loopback_port(&env.url) == Some(server.port) } else { env.server_id == server.environment_id }
+}
+
+/// The entry for this machine's server, if there is one.
+pub fn local_environment<'a>(model: &'a Model, server: &LocalServer) -> Option<&'a Environment> {
+    let by_id = model.environments.iter().find(|e| !e.is_remote() && e.server_id == server.environment_id);
+    by_id.or_else(|| model.environments.iter().find(|e| is_local_server(e, server)))
+}
+
+/// `LocalAutoLoaded`: whether this install signed in to its machine's server by itself before.
+pub fn local_auto_loaded(model: &mut Model, value: Option<String>) -> Cmd {
+    model.local_auto_known = true;
+    model.local_auto_done = model.local_auto_done || value.is_some();
+    local_auto(model)
+}
+
+/// `LocalServer`: the shell's word on this machine's server, now or after a change.
+pub fn local_server_output(model: &mut Model, out: LocalOutput) -> Cmd {
+    let LocalOutput::Descriptor { text } = out else { return Command::done() };
+    let server = text.as_deref().and_then(LocalServer::parse);
+    if server == model.local_server {
+        return Command::done();
+    }
+    model.local_server = server;
+    // A server that has only now appeared has refused nothing yet.
+    model.local_tried = None;
+    let auto = local_auto(model);
+    // An entry for it that waits to be paired (the server was not running when
+    // the app tried) is signed in now that the server is there.
+    let waiting = model.token.is_none() && !model.in_flight && !model.server_changed && !model.manual_disconnect && !model.suspended && model.connection == Connection::Failed;
+    let renew = match model.active_environment().cloned().filter(|_| waiting) {
+        Some(env) => local_renew(model, &env).unwrap_or_else(Command::done),
+        None => Command::done(),
+    };
+    auto.and(renew).and(render())
+}
+
+/// On a first launch with no saved servers, the app signs in to the server
+/// on its machine by itself: once per install (`KEY_LOCAL_AUTO`), so a user
+/// who then forgets that server is not signed back in at the next launch.
+fn local_auto(model: &mut Model) -> Cmd {
+    let first_run = !model.launching && model.local_auto_known && !model.local_auto_done && model.environments.is_empty() && model.active_env.is_none() && !model.in_flight;
+    let Some(server) = model.local_server.clone().filter(|_| first_run) else { return Command::done() };
+    model.local_auto_done = true;
+    store(StoreOperation::Save { key: KEY_LOCAL_AUTO.into(), value: "1".into() }).and(connect_local_server(model, server, false))
+}
+
+/// `ConnectLocalServer`: the user picked this machine's server.
+pub fn connect_local_asked(model: &mut Model) -> Cmd {
+    match model.local_server.clone() {
+        Some(server) => connect_local_server(model, server, true),
+        None => {
+            model.toast("error", "No Domovoi server is running on this computer.");
+            render()
+        }
+    }
+}
+
+/// Makes this machine's server the active one (its saved entry, or a new
+/// one) and signs in to it without a code.
+fn connect_local_server(model: &mut Model, server: LocalServer, asked: bool) -> Cmd {
+    let (id, made) = match local_environment(model, &server) {
+        Some(env) => (env.id.clone(), model.unsaved.contains(&env.id)),
+        None => {
+            let env = Environment { id: crate::update::uuid(), label: server.label.clone(), url: server.url.clone(), server_id: server.environment_id.clone(), ..Default::default() };
+            let id = env.id.clone();
+            model.unsaved.insert(id.clone());
+            model.environments.push(env);
+            (id, true)
+        }
+    };
+    let mut cmds = activate(model, &id);
+    model.local_tried = Some(server.clone());
+    cmds.push(local_sign_in(model, id, server, asked, made));
+    Command::all(cmds)
+}
+
+/// A saved entry for this machine's server has no sign-in (never had, or
+/// the server ended it): the server gives it a new one, with nobody asked.
+/// Once per server until a connection succeeds; `None` when `env` is not
+/// that server's, or it was tried already.
+fn local_renew(model: &mut Model, env: &Environment) -> Option<Cmd> {
+    let server = model.local_server.clone().filter(|server| is_local_server(env, server) && model.local_tried.as_ref() != Some(server))?;
+    model.local_tried = Some(server.clone());
+    Some(local_sign_in(model, env.id.clone(), server, false, model.unsaved.contains(&env.id)))
+}
+
+/// Starts the sign-in to this machine's server for the active environment
+/// `id`: the shell writes the request file first.
+fn local_sign_in(model: &mut Model, id: String, server: LocalServer, asked: bool, made: bool) -> Cmd {
+    model.error = None;
+    model.manual_disconnect = false;
+    model.suspended = false;
+    model.server_changed = false;
+    model.reconnect_attempts = 0;
+    model.retry_in = 0;
+    model.refusals = 0;
+    model.pending_code = None;
+    // Connecting, not pairing: there is no code, and nothing for the user to do.
+    model.connection = Connection::Connecting;
+    model.attempt += 1;
+    model.in_flight = true;
+    let attempt = model.attempt;
+    model.local_attempt = Some(LocalAttempt { attempt, environment_id: id, server, secret: None, asked, made });
+    Command::request_from_shell(LocalOperation::Request).then_send(move |out| Event::LocalRequested { attempt, out }).and(render())
+}
+
+/// The sign-in under way, if `attempt` is its and still the current one.
+fn local_attempt(model: &Model, attempt: u64) -> Option<LocalAttempt> {
+    model.local_attempt.clone().filter(|local| local.attempt == attempt && attempt == model.attempt && model.active_env.as_deref() == Some(local.environment_id.as_str()))
+}
+
+/// `LocalRequested`: the request file is written; its id goes to the server.
+pub fn local_requested(model: &mut Model, attempt: u64, out: LocalOutput) -> Cmd {
+    let Some(local) = local_attempt(model, attempt) else { return Command::done() };
+    let LocalOutput::Request { id, secret } = out else { return local_failed(model) };
+    if let Some(under_way) = &mut model.local_attempt {
+        under_way.secret = Some(secret);
+    }
+    let said = |value: &str| (!value.is_empty()).then(|| value.to_owned());
+    let body = LocalSessionRequest {
+        request: id,
+        client_label: said(&model.device_label),
+        client_device_type: Some(if model.surface == "mobile" { "mobile" } else { "desktop" }.to_owned()),
+        client_os: said(&model.device_os),
+    };
+    model.server_url = local.server.url.clone();
+    match Http::post(format!("{}/api/domovoi/local/session", local.server.url)).body_json(&body) {
+        Ok(request) => request.build().then_send(move |res| Event::LocalSignedIn { attempt, res }),
+        Err(_) => local_failed(model),
+    }
+}
+
+/// `LocalSignedIn`: the answer to the sign-in. It counts only if it carries
+/// the secret from the request file: the real server read it there, and
+/// another program listening on the server's port cannot know it. Anything
+/// else is dropped, token and all.
+pub fn local_signed_in(model: &mut Model, attempt: u64, res: HttpResult) -> Cmd {
+    let Some(local) = local_attempt(model, attempt) else { return Command::done() };
+    let issued = match answer(res) {
+        Answer::Ok(body) => body.read::<LocalSessionResult>(),
+        _ => None,
+    };
+    let proven = |issued: &LocalSessionResult| local.secret.as_deref().is_some_and(|secret| !secret.is_empty() && secret == issued.proof) && issued.environment_id == local.server.environment_id && !issued.access_token.is_empty();
+    let Some(issued) = issued.filter(proven) else { return local_failed(model) };
+    model.local_attempt = None;
+    let id = local.environment_id;
+    let was_saved = !model.unsaved.contains(&id);
+    let mut cmds = vec![];
+    // A saved entry found by its port (or saved under another address of
+    // this machine) is this server's from now on.
+    if let Some(env) = model.environments.iter_mut().find(|e| e.id == id)
+        && (env.url != local.server.url || env.server_id != local.server.environment_id)
+    {
+        env.url = local.server.url.clone();
+        env.server_id = local.server.environment_id.clone();
+        if was_saved {
+            cmds.push(save_environments(model));
+        }
+    }
+    model.server_url = local.server.url;
+    cmds.push(signed_in(model, &id, issued.access_token));
+    cmds.push(mint_ticket(model));
+    Command::all(cmds)
+}
+
+/// The sign-in to this machine's server did not happen (no request file, no
+/// answer, or one without the proof). An entry made for it goes, and the
+/// plain connect screen is back; a saved one waits to be paired with a code.
+/// Said only when the user asked for the sign-in.
+fn local_failed(model: &mut Model) -> Cmd {
+    let Some(local) = model.local_attempt.take() else { return Command::done() };
+    model.token = None;
+    let said = "Could not sign in to the server on this computer. Is it still running? You can pair with a code instead.";
+    if !local.made {
+        if local.asked {
+            model.toast("error", said);
+        }
+        let label = model.active_environment().map(|e| e.label.clone()).unwrap_or_default();
+        return failed(model, format!("Pair this device with {label} using a pairing code."));
+    }
+    let close = teardown(model);
+    model.clear_server_state();
+    model.environments.retain(|e| e.id != local.environment_id);
+    model.unsaved.remove(&local.environment_id);
+    model.parked.remove(&local.environment_id);
+    model.active_env = None;
+    model.token = None;
+    model.connection = Connection::Disconnected;
+    if local.asked {
+        model.toast("error", said);
+    }
+    close.and(render())
+}
+
 // ---- push notifications ----
 
 /// Connected: the server answered, so backoff starts over; remember the
@@ -732,6 +1182,8 @@ pub fn network_changed(model: &mut Model) -> Cmd {
 /// register this device's push token with it.
 pub fn on_welcome(model: &mut Model) -> Cmd {
     model.reconnect_attempts = 0;
+    // Connected: this machine's server may be asked again, should the sign-in go.
+    model.local_tried = None;
     // The server answered, so there is a network, whatever the device last
     // said (a change while suspended may never have been reported).
     model.offline = false;
@@ -751,7 +1203,8 @@ pub fn on_welcome(model: &mut Model) -> Cmd {
                 env.server_id = server_id;
             }
             for old in &stale {
-                cmds.push(store(StoreOperation::Delete { key: token_key(old) }));
+                model.parked.remove(old);
+                cmds.extend(forget_keys(old, true));
             }
             cmds.push(save_environments(model));
         }

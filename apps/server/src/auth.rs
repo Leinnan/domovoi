@@ -85,6 +85,80 @@ pub struct Auth {
     cookie_name: String,
     /// WebSocket tickets: hash -> (session token hash, expiry ms). Single use.
     tickets: Mutex<HashMap<String, (String, i64)>>,
+    /// Pairing attempts over plain TCP, by address.
+    tcp_pairing: Mutex<TcpPairing>,
+}
+
+/// The window the pairing budgets over plain TCP are counted in.
+const TCP_PAIRING_WINDOW: Duration = Duration::from_secs(60);
+/// Failed pairing attempts one address may make in a window before its
+/// wrong codes are answered with 429 instead of being tried.
+const TCP_FAILURES_PER_ADDRESS: usize = 10;
+/// The same, for every address together.
+const TCP_FAILURES_TOTAL: usize = 100;
+/// With the failure budget spent, how many codes an address may still have
+/// looked at in a window (a live one is let through).
+const TCP_CHECKS_PER_ADDRESS: usize = 120;
+/// The same, for every address together.
+const TCP_CHECKS_TOTAL: usize = 600;
+
+/// What [`Auth::begin_tcp_pairing`] says of a pairing attempt over plain TCP.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TcpAttempt {
+    /// Within the budget: it runs, and counts as a failure until
+    /// [`Auth::tcp_pairing_succeeded`] says otherwise.
+    Counted,
+    /// The budget is spent, but the code is a live one: it runs.
+    Live,
+    /// The budget is spent: answered with 429.
+    Refused,
+}
+
+/// When each counted attempt was made, in all and per key.
+#[derive(Default)]
+struct Window {
+    all: std::collections::VecDeque<std::time::Instant>,
+    by_address: HashMap<std::net::IpAddr, std::collections::VecDeque<std::time::Instant>>,
+}
+
+impl Window {
+    fn forget_old(&mut self, now: std::time::Instant) {
+        let fresh = |q: &mut std::collections::VecDeque<std::time::Instant>| {
+            while q.front().is_some_and(|t| now.duration_since(*t) > TCP_PAIRING_WINDOW) {
+                q.pop_front();
+            }
+        };
+        fresh(&mut self.all);
+        self.by_address.retain(|_, q| {
+            fresh(q);
+            !q.is_empty()
+        });
+    }
+
+    fn spent(&self, address: std::net::IpAddr, per_address: usize, total: usize) -> bool {
+        self.all.len() >= total || self.by_address.get(&address).is_some_and(|q| q.len() >= per_address)
+    }
+
+    fn count(&mut self, address: std::net::IpAddr, now: std::time::Instant) {
+        self.all.push_back(now);
+        self.by_address.entry(address).or_default().push_back(now);
+    }
+
+    /// Takes back the newest count of `address`.
+    fn uncount(&mut self, address: std::net::IpAddr) {
+        let Some(at) = self.by_address.get_mut(&address).and_then(|q| q.pop_back()) else { return };
+        if let Some(i) = self.all.iter().rposition(|t| *t == at) {
+            self.all.remove(i);
+        }
+    }
+}
+
+#[derive(Default)]
+struct TcpPairing {
+    /// Attempts that failed, or have not succeeded yet.
+    failures: Window,
+    /// Codes looked at with the failure budget spent.
+    checks: Window,
 }
 
 /// What a pairing code grants once exchanged.
@@ -137,7 +211,54 @@ impl Auth {
     /// instance key into the cookie name for the same reason).
     pub fn new(db: Db, port: u16, instance_key: &str) -> Self {
         let cookie_name = format!("t3_session_{port}_{}", &sha256_hex(instance_key.as_bytes())[..12]);
-        Auth { db, cookie_name, tickets: Mutex::new(HashMap::new()) }
+        Auth { db, cookie_name, tickets: Mutex::new(HashMap::new()), tcp_pairing: Mutex::default() }
+    }
+
+    /// Whether `code` is a pairing code that would still be accepted.
+    pub fn code_is_live(&self, code: &str) -> Result<bool, AuthError> {
+        let key = sha256_hex(code.trim().as_bytes());
+        let now = now_millis();
+        let found = self.db.with(|c| {
+            c.query_row("SELECT 1 FROM pairing_grants WHERE code_hash = ?1 AND consumed_at IS NULL AND expires_at_ms > ?2", params![key, now], |_| Ok(())).optional()
+        })?;
+        Ok(found.is_some())
+    }
+
+    /// Counts a pairing attempt with `code` over plain TCP from `address`
+    /// (`None` when the listener gave none: one bucket for all of those).
+    /// iroh peers are limited per device instead (`Remote::allow_attempt`).
+    ///
+    /// Only failures use up the budget: the attempt is counted before it
+    /// runs (so parallel ones cannot slip past) and uncounted when it ends in
+    /// a session. With the budget spent a wrong code is answered with 429,
+    /// while a live one still pairs: `domovoi-server pair`, the command line
+    /// and the app on this machine all come from 127.0.0.1, and a program
+    /// that floods the server with guesses must not lock them out. Those
+    /// lookups have a budget of their own, far larger, so guessing is capped
+    /// either way; what makes a guess hopeless is the code's 60 bits.
+    pub fn begin_tcp_pairing(&self, address: Option<std::net::IpAddr>, code: &str) -> Result<TcpAttempt, AuthError> {
+        let address = address.unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED));
+        let now = std::time::Instant::now();
+        {
+            let mut pairing = crate::util::locked(&self.tcp_pairing);
+            pairing.failures.forget_old(now);
+            if !pairing.failures.spent(address, TCP_FAILURES_PER_ADDRESS, TCP_FAILURES_TOTAL) {
+                pairing.failures.count(address, now);
+                return Ok(TcpAttempt::Counted);
+            }
+            pairing.checks.forget_old(now);
+            if pairing.checks.spent(address, TCP_CHECKS_PER_ADDRESS, TCP_CHECKS_TOTAL) {
+                return Ok(TcpAttempt::Refused);
+            }
+            pairing.checks.count(address, now);
+        }
+        Ok(if self.code_is_live(code)? { TcpAttempt::Live } else { TcpAttempt::Refused })
+    }
+
+    /// A [`TcpAttempt::Counted`] attempt from `address` ended in a session.
+    pub fn tcp_pairing_succeeded(&self, address: Option<std::net::IpAddr>) {
+        let address = address.unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED));
+        crate::util::locked(&self.tcp_pairing).failures.uncount(address);
     }
 
     pub fn cookie_name(&self) -> &str {
@@ -663,6 +784,67 @@ mod tests {
         let remote = NewSession { peer: Some("peer-key".into()), ..NewSession::cookie(None) };
         assert!(matches!(a.create_session(&code, remote), Err(AuthError::InvalidCredential)));
         assert!(a.create_session(&code, NewSession::cookie(None)).is_ok(), "the refused attempt did not use the code up");
+    }
+
+    #[test]
+    fn failed_pairing_over_tcp_spends_a_budget_that_a_live_code_passes() {
+        let a = auth();
+        let here: Option<std::net::IpAddr> = Some("127.0.0.1".parse().unwrap());
+        let other: Option<std::net::IpAddr> = Some("192.168.1.7".parse().unwrap());
+
+        // Attempts that succeed use nothing up.
+        for _ in 0..TCP_FAILURES_PER_ADDRESS * 3 {
+            assert_eq!(a.begin_tcp_pairing(here, "whatever").unwrap(), TcpAttempt::Counted);
+            a.tcp_pairing_succeeded(here);
+        }
+        // Failed ones do, for their address.
+        for _ in 0..TCP_FAILURES_PER_ADDRESS {
+            assert_eq!(a.begin_tcp_pairing(here, "WRONGWRONGWR").unwrap(), TcpAttempt::Counted);
+        }
+        assert_eq!(a.begin_tcp_pairing(here, "WRONGWRONGWR").unwrap(), TcpAttempt::Refused);
+        assert_eq!(a.begin_tcp_pairing(other, "WRONGWRONGWR").unwrap(), TcpAttempt::Counted, "another address has its own");
+
+        // A live code still pairs, as often as codes are minted; a used or expired one does not.
+        let code = a.issue_pairing_code(Duration::from_secs(60)).unwrap();
+        assert!(a.code_is_live(&code).unwrap() && a.code_is_live(&format!(" {code}\n")).unwrap());
+        assert_eq!(a.begin_tcp_pairing(here, &code).unwrap(), TcpAttempt::Live);
+        a.create_browser_session(&code).unwrap();
+        assert!(!a.code_is_live(&code).unwrap());
+        assert_eq!(a.begin_tcp_pairing(here, &code).unwrap(), TcpAttempt::Refused, "used");
+        let expired = a.issue_pairing_code(Duration::from_secs(0)).unwrap();
+        assert_eq!(a.begin_tcp_pairing(here, &expired).unwrap(), TcpAttempt::Refused);
+
+        // Looking at codes with the budget spent is capped too: then even a live one waits.
+        let code = a.issue_pairing_code(Duration::from_secs(60)).unwrap();
+        for _ in 0..TCP_CHECKS_PER_ADDRESS {
+            let _ = a.begin_tcp_pairing(here, "WRONGWRONGWR").unwrap();
+        }
+        assert_eq!(a.begin_tcp_pairing(here, &code).unwrap(), TcpAttempt::Refused);
+        assert!(a.code_is_live(&code).unwrap(), "refused, not used up");
+
+        // The window passing gives the budget back.
+        let earlier = std::time::Instant::now().checked_sub(TCP_PAIRING_WINDOW + Duration::from_secs(1)).unwrap();
+        {
+            let mut pairing = crate::util::locked(&a.tcp_pairing);
+            let TcpPairing { failures, checks } = &mut *pairing;
+            for window in [failures, checks] {
+                window.all.iter_mut().for_each(|t| *t = earlier);
+                window.by_address.values_mut().flatten().for_each(|t| *t = earlier);
+            }
+        }
+        assert_eq!(a.begin_tcp_pairing(here, "WRONGWRONGWR").unwrap(), TcpAttempt::Counted);
+    }
+
+    #[test]
+    fn every_address_together_has_a_budget_of_failed_pairings() {
+        let a = auth();
+        let address = |i: usize| Some(std::net::IpAddr::V4(std::net::Ipv4Addr::new(10, 0, (i / 250) as u8, (i % 250) as u8 + 1)));
+        for i in 0..TCP_FAILURES_TOTAL {
+            assert_eq!(a.begin_tcp_pairing(address(i), "WRONGWRONGWR").unwrap(), TcpAttempt::Counted);
+        }
+        assert_eq!(a.begin_tcp_pairing(address(TCP_FAILURES_TOTAL + 1), "WRONGWRONGWR").unwrap(), TcpAttempt::Refused);
+        let code = a.issue_pairing_code(Duration::from_secs(60)).unwrap();
+        assert_eq!(a.begin_tcp_pairing(Some("127.0.0.1".parse().unwrap()), &code).unwrap(), TcpAttempt::Live, "this machine still pairs");
     }
 
     #[test]
