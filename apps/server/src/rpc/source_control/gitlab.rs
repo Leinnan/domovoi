@@ -1683,6 +1683,59 @@ pub async fn activity(p: &Supported, number: u64) -> Result<Option<PullRequestAc
 }
 
 // ---------------------------------------------------------------------------
+// A merge request made from a branch (`git_workflow`)
+// ---------------------------------------------------------------------------
+
+/// A merge request as making or finding one names it.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct MadeMergeRequest {
+    #[serde(rename = "iid")]
+    pub number: u64,
+    #[serde(rename = "web_url")]
+    pub url: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default, rename = "target_branch")]
+    pub base_branch: Option<String>,
+    #[serde(default, rename = "source_branch")]
+    pub head_branch: Option<String>,
+}
+
+#[derive(Serialize)]
+struct NewMergeRequest<'a> {
+    source_branch: &'a str,
+    target_branch: &'a str,
+    title: String,
+    description: &'a str,
+}
+
+/// What a new merge request is made of.
+pub struct MergeRequestDraft<'a> {
+    pub source_branch: &'a str,
+    pub target_branch: &'a str,
+    pub title: &'a str,
+    pub description: &'a str,
+    /// GitLab marks a draft in the title.
+    pub draft: bool,
+}
+
+/// The open merge request of `branch` in `repository`, if it has one.
+pub async fn find_open_merge_request(cwd: Option<&str>, host: &str, repository: &str, branch: &str) -> Result<Option<MadeMergeRequest>, GhError> {
+    let path = format!("projects/{}/merge_requests?{}", glab::project_path(repository), glab::query(&[("state", "opened"), ("source_branch", branch), ("per_page", "1")]));
+    let found: Vec<MadeMergeRequest> = glab::api_json(cwd, host, &Api::get(&path)).await?;
+    Ok(found.into_iter().next())
+}
+
+/// Opens a merge request from a pushed branch.
+pub async fn create_merge_request(cwd: Option<&str>, host: &str, repository: &str, new: &MergeRequestDraft<'_>) -> Result<MadeMergeRequest, GhError> {
+    let path = format!("projects/{}/merge_requests", glab::project_path(repository));
+    let already = new.title.trim_start().to_lowercase().starts_with("draft:");
+    let title = if new.draft && !already { format!("Draft: {}", new.title) } else { new.title.to_owned() };
+    let body = NewMergeRequest { source_branch: new.source_branch, target_branch: new.target_branch, title, description: new.description };
+    glab::api_json(cwd, host, &Api::send("POST", &path, &body)?.slow()).await
+}
+
+// ---------------------------------------------------------------------------
 // Writes
 // ---------------------------------------------------------------------------
 

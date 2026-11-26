@@ -1,0 +1,427 @@
+{
+ "env": {
+  "GIT_AUTHOR_DATE": "2024-01-02T03:04:05Z",
+  "GIT_COMMITTER_DATE": "2024-01-02T03:04:05Z",
+  "DOMOVOI_CODEX_BINARY": "$DIR/bin/textgen",
+  "DOMOVOI_CLAUDE_BINARY": "$DIR/bin/textgen"
+ },
+ "cases": [
+  {
+   "tag": "projects.mutate",
+   "payload": {
+    "type": "project.create",
+    "commandId": "create-widgets",
+    "projectId": "widgets",
+    "title": "widgets",
+    "workspaceRoot": "$DIR/repos/work",
+    "createWorkspaceRootIfMissing": false,
+    "defaultModelSelection": null
+   }
+  },
+  {
+   "tag": "projects.mutate",
+   "payload": {
+    "type": "project.create",
+    "commandId": "create-topicp",
+    "projectId": "topicp",
+    "title": "topicp",
+    "workspaceRoot": "$DIR/repos/topic",
+    "createWorkspaceRootIfMissing": false,
+    "defaultModelSelection": null
+   }
+  },
+  {
+   "tag": "projects.mutate",
+   "payload": {
+    "type": "project.create",
+    "commandId": "create-labp",
+    "projectId": "labp",
+    "title": "labp",
+    "workspaceRoot": "$DIR/repos/lab",
+    "createWorkspaceRootIfMissing": false,
+    "defaultModelSelection": null
+   }
+  },
+  {
+   "tag": "git.preparePullRequest",
+   "payload": {
+    "cwd": "$DIR/repos/notrepo"
+   },
+   "note": "not a repository"
+  },
+  {
+   "tag": "git.preparePullRequest",
+   "payload": {
+    "cwd": "$DIR/repos/plain"
+   },
+   "note": "no remote to push to"
+  },
+  {
+   "tag": "git.preparePullRequest",
+   "payload": {
+    "cwd": "$DIR/repos/work"
+   },
+   "note": "the default branch with nothing changed: nothing to open one for"
+  },
+  {
+   "tag": "orchestration.launchThread",
+   "payload": {
+    "commandId": "launch-tt",
+    "creationSource": "web",
+    "threadId": "tt",
+    "projectId": "topicp",
+    "title": "Thread tt",
+    "modelSelection": {
+     "instanceId": "claudeAgent",
+     "model": "claude-haiku-5-5"
+    },
+    "runtimeMode": "approval-required",
+    "interactionMode": "default",
+    "workspaceStrategy": {
+     "type": "root"
+    }
+   }
+  },
+  {
+   "tag": "orchestration.dispatchCommand",
+   "payload": {
+    "type": "thread.issue.link",
+    "commandId": "focus-tt",
+    "threadId": "tt",
+    "tracker": "github",
+    "host": "github.com",
+    "scope": "acme/widgets",
+    "key": "7",
+    "projectId": "topicp",
+    "url": "https://github.com/acme/widgets/issues/7",
+    "displayKey": "#7",
+    "title": "Adding negative numbers fails",
+    "source": "manual",
+    "role": "focus"
+   }
+  },
+  {
+   "tag": "git.preparePullRequest",
+   "payload": {
+    "cwd": "$DIR/repos/topic",
+    "threadId": "tt"
+   },
+   "note": "what the sheet opens with: the branch, what is not pushed, the changed files, the base, the line that closes the issue"
+  },
+  {
+   "tag": "git.preparePullRequest",
+   "payload": {
+    "cwd": "$DIR/repos/topic",
+    "threadId": "tt",
+    "generate": true
+   },
+   "note": "and its title and body, the closing line after the generated text"
+  },
+  {
+   "sh": "echo fail > textgen/mode",
+   "tag": "git.preparePullRequest",
+   "payload": {
+    "cwd": "$DIR/repos/topic",
+    "threadId": "tt",
+    "generate": true
+   },
+   "note": "the text is not written: the issue's title, the closing line, and why"
+  },
+  {
+   "sh": "echo ok > textgen/mode",
+   "tag": "git.runStackedAction",
+   "payload": {
+    "actionId": "pr-action-1",
+    "cwd": "$DIR/repos/topic",
+    "action": "commit_push_pr",
+    "threadId": "tt",
+    "filePaths": [
+     "topic2.txt"
+    ],
+    "commitMessage": "Add the second topic file",
+    "pullRequest": {
+     "title": "Fix negative numbers",
+     "body": "Adds the missing case.\n\nCloses #7",
+     "draft": true,
+     "baseBranch": "main"
+    }
+   },
+   "all": true,
+   "note": "the sheet as its reader left it: one of the two changed files, a draft, their title and body"
+  },
+  {
+   "sh": "grep -q -- '--title Fix negative numbers --body Adds the missing case.' gh/log && grep -q -- '--base main --draft' gh/log && git -C repos/topic status --porcelain | grep -q '^ M topic.txt' || { cat gh/log; git -C repos/topic status --porcelain; exit 1; }",
+   "tag": "pullRequests.linkedThreads",
+   "payload": {
+    "projectId": "topicp",
+    "host": "github.com",
+    "repository": "acme/widgets",
+    "number": 12
+   },
+   "save": {
+    "LINKED": "/threads/0/id"
+   },
+   "note": "made as written, the file not chosen left as it was, and the pull request linked to the thread"
+  },
+  {
+   "tag": "git.preparePullRequest",
+   "payload": {
+    "cwd": "$DIR/repos/topic",
+    "threadId": "tt"
+   },
+   "note": "it is open now, and the thread links it"
+  },
+  {
+   "tag": "git.runStackedAction",
+   "payload": {
+    "actionId": "pr-action-2",
+    "cwd": "$DIR/repos/topic",
+    "action": "create_pr",
+    "threadId": "tt",
+    "pullRequest": {
+     "title": "Another",
+     "body": ""
+    }
+   },
+   "all": true,
+   "note": "asked again: the open one"
+  },
+  {
+   "tag": "git.runStackedAction",
+   "payload": {
+    "actionId": "pr-action-3",
+    "cwd": "$DIR/repos/topic",
+    "action": "commit_push_pr",
+    "threadId": "tt",
+    "filePaths": [],
+    "commitMessage": "Nothing"
+   },
+   "all": true,
+   "note": "a commit of chosen files that chooses none takes nothing"
+  },
+  {
+   "sh": "git -C repos/topic status --porcelain | grep -q '^ M topic.txt'",
+   "tag": "git.preparePullRequest",
+   "payload": {
+    "cwd": "$DIR/repos/topic",
+    "threadId": "tt"
+   }
+  },
+  {
+   "tag": "orchestration.launchThread",
+   "payload": {
+    "commandId": "launch-tm",
+    "creationSource": "web",
+    "threadId": "tm",
+    "projectId": "widgets",
+    "title": "Thread tm",
+    "modelSelection": {
+     "instanceId": "claudeAgent",
+     "model": "claude-haiku-5-5"
+    },
+    "runtimeMode": "approval-required",
+    "interactionMode": "default",
+    "workspaceStrategy": {
+     "type": "root"
+    }
+   }
+  },
+  {
+   "tag": "orchestration.dispatchCommand",
+   "payload": {
+    "type": "thread.issue.link",
+    "commandId": "focus-tm",
+    "threadId": "tm",
+    "tracker": "github",
+    "host": "github.com",
+    "scope": "acme/widgets",
+    "key": "9",
+    "projectId": "widgets",
+    "url": "https://github.com/acme/widgets/issues/9",
+    "displayKey": "#9",
+    "title": "Rounding is off",
+    "source": "manual",
+    "role": "focus"
+   }
+  },
+  {
+   "sh": "echo change >> repos/work/README.md",
+   "tag": "git.preparePullRequest",
+   "payload": {
+    "cwd": "$DIR/repos/work",
+    "threadId": "tm",
+    "generate": true
+   },
+   "note": "on the default branch with a change: the work goes onto a branch named for the issue"
+  },
+  {
+   "tag": "git.runStackedAction",
+   "payload": {
+    "actionId": "pr-action-4",
+    "cwd": "$DIR/repos/work",
+    "action": "commit_push_pr",
+    "threadId": "tm",
+    "featureBranch": true,
+    "commitMessage": "Fix rounding",
+    "pullRequest": {
+     "title": "Fix rounding",
+     "body": "Closes #9"
+    }
+   },
+   "all": true,
+   "note": "branch, commit, push and pull request from the default branch"
+  },
+  {
+   "sh": "git -C repos/work for-each-ref --format='%(refname:short)' refs/heads | grep -Eq '(^|/)9-rounding-is-off$' || { git -C repos/work branch -a; exit 1; }",
+   "tag": "git.preparePullRequest",
+   "payload": {
+    "cwd": "$DIR/repos/work",
+    "threadId": "tm"
+   },
+   "note": "on its own branch now, the pull request open"
+  },
+  {
+   "sh": "rm gh/list/feature_topic.json",
+   "tag": "git.runStackedAction",
+   "payload": {
+    "actionId": "pr-action-5",
+    "cwd": "$DIR/repos/topic",
+    "action": "create_pr",
+    "threadId": "tt",
+    "pullRequest": {
+     "title": "  ",
+     "body": "x"
+    }
+   },
+   "all": true,
+   "note": "no title: refused before anything is made",
+   "expect": "failure",
+   "error": "GitManagerError"
+  },
+  {
+   "tag": "orchestration.launchThread",
+   "payload": {
+    "commandId": "launch-tw",
+    "creationSource": "web",
+    "threadId": "tw",
+    "projectId": "widgets",
+    "title": "Thread tw",
+    "modelSelection": {
+     "instanceId": "claudeAgent",
+     "model": "claude-haiku-5-5"
+    },
+    "runtimeMode": "approval-required",
+    "interactionMode": "default",
+    "workspaceStrategy": {
+     "type": "worktree",
+     "baseRef": "main"
+    }
+   },
+   "save": {
+    "WT": "/projection/thread/worktreePath"
+   }
+  },
+  {
+   "tag": "git.preparePullRequest",
+   "payload": {
+    "cwd": "$WT",
+    "threadId": "tw"
+   },
+   "note": "a worktree cut from main (fetched from its remote): main is the base it offers first, and there is nothing to open one for yet"
+  },
+  {
+   "sh": "echo 'To get started with GitHub CLI, please run:  gh auth login' > gh/fail",
+   "tag": "git.preparePullRequest",
+   "payload": {
+    "cwd": "$DIR/repos/loggedout"
+   },
+   "note": "gh is signed out: said before the sheet is filled in"
+  },
+  {
+   "tag": "orchestration.launchThread",
+   "payload": {
+    "commandId": "launch-tl",
+    "creationSource": "web",
+    "threadId": "tl",
+    "projectId": "labp",
+    "title": "Thread tl",
+    "modelSelection": {
+     "instanceId": "claudeAgent",
+     "model": "claude-haiku-5-5"
+    },
+    "runtimeMode": "approval-required",
+    "interactionMode": "default",
+    "workspaceStrategy": {
+     "type": "root"
+    }
+   }
+  },
+  {
+   "tag": "orchestration.dispatchCommand",
+   "payload": {
+    "type": "thread.issue.link",
+    "commandId": "focus-tl",
+    "threadId": "tl",
+    "tracker": "gitlab",
+    "host": "gitlab.com",
+    "scope": "group/project",
+    "key": "3",
+    "projectId": "labp",
+    "url": "https://gitlab.com/group/project/-/issues/3",
+    "displayKey": "#3",
+    "title": "Lab is slow",
+    "source": "manual",
+    "role": "focus"
+   }
+  },
+  {
+   "sh": "rm gh/fail && glab-rule out 'merge_requests\\?state=opened' '[]' out 'merge_requests --method POST' '{\"iid\":5,\"web_url\":\"https://gitlab.com/group/project/-/merge_requests/5\",\"title\":\"Draft: Lab work\",\"target_branch\":\"main\",\"source_branch\":\"feature/lab\"}'",
+   "tag": "git.preparePullRequest",
+   "payload": {
+    "cwd": "$DIR/repos/lab",
+    "threadId": "tl",
+    "generate": true
+   },
+   "note": "GitLab: a merge request"
+  },
+  {
+   "tag": "git.runStackedAction",
+   "payload": {
+    "actionId": "pr-action-6",
+    "cwd": "$DIR/repos/lab",
+    "action": "create_pr",
+    "threadId": "tl",
+    "pullRequest": {
+     "title": "Lab work",
+     "body": "Faster.\n\nCloses #3",
+     "draft": true
+    }
+   },
+   "all": true,
+   "note": "pushed, then opened through glab as a draft"
+  },
+  {
+   "sh": "grep -q 'merge_requests --method POST.*\"title\":\"Draft: Lab work\".*Closes #3' glab-data/log || { cat glab-data/log; exit 1; }",
+   "tag": "pullRequests.linkedThreads",
+   "payload": {
+    "projectId": "labp",
+    "host": "gitlab.com",
+    "repository": "group/project",
+    "number": 5
+   },
+   "save": {
+    "LINKED_MR": "/threads/0/id"
+   },
+   "note": "the draft is in the title, the closing line in the description, and the merge request is linked"
+  },
+  {
+   "sh": "glab-rule err 'merge_requests' 'glab: 401 Unauthorized'",
+   "tag": "git.preparePullRequest",
+   "payload": {
+    "cwd": "$DIR/repos/lab",
+    "threadId": "tl"
+   },
+   "note": "glab is signed out"
+  }
+ ]
+}

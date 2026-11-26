@@ -80,5 +80,7 @@
   { "tag": "git.runStackedAction", "payload": { "actionId": "act-1", "cwd": "$WORKSPACE", "action": "push" }, "expect": "chunk" },
   { "tag": "git.runStackedAction", "payload": { "actionId": "act-2", "cwd": "$WORKSPACE", "action": "commit", "commitMessage": "Nothing to see", "filePaths": ["README.md"] }, "expect": "chunk" },
   { "tag": "git.runStackedAction", "payload": { "actionId": "act-3", "cwd": "$WORKSPACE", "action": "create_pr", "threadId": "$THREAD", "projectId": "$PROJECT" }, "expect": "chunk" },
-  { "tag": "git.runStackedAction", "payload": { "actionId": "act-4", "cwd": "/nonexistent-domovoi-path", "action": "commit_push_pr" }, "expect": "chunk" }
+  { "tag": "git.runStackedAction", "payload": { "actionId": "act-4", "cwd": "/nonexistent-domovoi-path", "action": "commit_push_pr" }, "expect": "chunk" },
+  { "tag": "git.preparePullRequest", "payload": { "cwd": "$WORKSPACE", "threadId": "$THREAD" }, "expect": "success" },
+  { "tag": "git.preparePullRequest", "payload": { "cwd": "/nonexistent-domovoi-path", "generate": true }, "expect": "success" }
 ]

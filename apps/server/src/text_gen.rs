@@ -531,7 +531,11 @@ pub fn commit_message_prompt(branch: Option<&str>, staged_summary: &str, staged_
 }
 
 /// `buildPrContentPrompt`: `{title, body}`.
-pub fn pr_content_prompt(base: &str, head: &str, commits: &str, diff_stat: &str, diff_patch: &str, template: Option<&str>, extra: Option<&str>) -> Prompt<PrContent> {
+///
+/// `issue` is the issue the change is the work on (`#12 Login crashes`), when
+/// its thread was started on one: the title and body may speak of it, and
+/// the line that closes it is the caller's to add.
+pub fn pr_content_prompt(base: &str, head: &str, commits: &str, diff_stat: &str, diff_patch: &str, template: Option<&str>, extra: Option<&str>, issue: Option<&str>) -> Prompt<PrContent> {
     let template = template.map(str::trim).filter(|t| !t.is_empty());
     let mut lines = vec![
         "You write source control change request content.".to_owned(),
@@ -554,9 +558,15 @@ pub fn pr_content_prompt(base: &str, head: &str, commits: &str, diff_stat: &str,
             "- under Testing, include bullet points with concrete checks or 'Not run' where appropriate",
         ].map(String::from));
     }
+    if issue.is_some() {
+        lines.push("- do not write a closing keyword for the issue (Closes, Fixes, Resolves): the application adds that line".into());
+    }
     lines.extend(instructions(extra));
     if let Some(t) = template {
         lines.extend([String::new(), "Repository change request template:".into(), limit(t, 8_000)]);
+    }
+    if let Some(issue) = issue {
+        lines.extend([String::new(), format!("The change is the work on this issue: {}", limit(issue, 400))]);
     }
     lines.extend([String::new(), format!("Base branch: {base}"), format!("Head branch: {head}"), String::new(), "Commits:".into(), limit(commits, 12_000),
         String::new(), "Diff stat:".into(), limit(diff_stat, 12_000), String::new(), "Diff patch:".into(), limit(diff_patch, 40_000), String::new(),

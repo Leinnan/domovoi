@@ -2,8 +2,15 @@
 //! `git.runStackedAction`, after t3code's `GitManager`.
 //!
 //! The source control provider of a checkout comes from its primary remote
-//! (`origin`, else the first); only GitHub is served (through `gh`), and other
-//! hosts fail as t3code's unregistered providers do.
+//! (`origin`, else the first). GitHub is served through `gh`; a pull request
+//! is also made on GitLab (gitlab.com, or a host whose name says it is one)
+//! through `glab`; other hosts fail as t3code's unregistered providers do.
+//!
+//! `git.preparePullRequest` answers what a pull request from a checkout
+//! would be, for a sheet a person reads before `git.runStackedAction` makes
+//! it with the title, body, base and draft state they left (`pullRequest`).
+//! With a `threadId` the pull request is linked to the thread (`created`),
+//! and the issue the thread was started on is closed by a line in the body.
 //!
 //! Differences from t3code:
 //! - commit messages and pull request text come from the local text
@@ -19,6 +26,7 @@
 #![expect(clippy::disallowed_types, reason = "what `gh pr view` and `gh pr list` printed, read into private records")]
 
 use crate::gh;
+use crate::orchestration::commands::Orchestrator;
 use crate::state::{AppState, ConnCtx};
 use crate::text_gen::TextGenerationError;
 use crate::vcs_ops::GitCommandError;
@@ -35,7 +43,10 @@ use domovoi_model::typed::{
     GitActionToastCta, GitActionToastNoCta, GitActionToastOpenPr, GitActionToastRun, GitActionToastRunAction, GitBranchStep, GitBranchStepStatus,
     GitCommitStep, GitCommitStepStatus, GitPrStep, GitPrStepStatus, GitPreparePullRequestThreadResult, GitPullRequestState, GitPushStep,
     GitPushStepStatus, GitResolvePullRequestResult, GitResolvedPullRequest, GitRunStackedActionResult, GitStackedAction,
+    PullRequestClosingRef, PullRequestDirtyFile, PullRequestExisting, PullRequestLinkSource, PullRequestPrepareInput, PullRequestPrepareResult,
+    PullRequestUnavailable, StackedPullRequest, ThreadIssueLink,
 };
+use domovoi_model::typed::command::ThreadPullRequestLink;
 
 // ---------------------------------------------------------------------------
 // failures
@@ -200,6 +211,8 @@ fn provider_kind(host: &str) -> &'static str {
         "github.com" => "github",
         "gitlab.com" => "gitlab",
         "bitbucket.org" => "bitbucket",
+        // A self-managed GitLab, by its name.
+        host if crate::glab::recognizes_host(host) => "gitlab",
         _ => "unknown",
     }
 }
@@ -473,6 +486,12 @@ struct StackedInput {
     feature_branch: Option<bool>,
     #[serde(default)]
     file_paths: Option<Vec<String>>,
+    /// The thread the work is of: the pull request is linked to it.
+    #[serde(default)]
+    thread_id: Option<String>,
+    /// The pull request as the sheet's reader left it; without one its text is generated.
+    #[serde(default)]
+    pull_request: Option<StackedPullRequest>,
 }
 
 fn is_commit_action(action: &str) -> bool {
@@ -530,20 +549,48 @@ async fn generate_commit_message(cwd: &str, branch: Option<&str>, paths: Option<
     Ok((subject, body, answer.branch))
 }
 
+/// What a pull request's text is written from.
+struct PrSource<'a> {
+    base: &'a str,
+    head: &'a str,
+    /// Count what is not committed yet too: the sheet is read before the commit is made.
+    uncommitted: bool,
+    /// The issue the change is the work on, as `#12 Title`.
+    issue: Option<&'a str>,
+}
+
+/// `base` as this checkout knows the remote's: `origin/main`, else the local branch.
+async fn base_ref_of(cwd: &str, base: &str) -> String {
+    let remote = primary_remote(cwd).await.map_or_else(|| "origin".to_owned(), |(name, _)| name);
+    let remote_base = format!("{remote}/{base}");
+    if git(cwd, &["rev-parse", "--verify", "--quiet", &format!("refs/remotes/{remote_base}")]).await.ok { remote_base } else { base.to_owned() }
+}
+
 /// A pull request title and body from the branch's commits and diff.
-async fn generate_pr_content(cwd: &str, base: &str, head: &str) -> Result<(String, String), TextGenerationError> {
-    let remote_base = format!("origin/{base}");
-    let base_ref = if git(cwd, &["rev-parse", "--verify", "--quiet", &remote_base]).await.ok { remote_base } else { base.to_owned() };
+async fn generate_pr_content(cwd: &str, source: PrSource<'_>) -> Result<(String, String), TextGenerationError> {
+    let PrSource { base, head, uncommitted, issue } = source;
+    let base_ref = base_ref_of(cwd, base).await;
     let range = format!("{base_ref}...HEAD");
     let commits = git(cwd, &["log", "--format=- %s%n%b", &format!("{base_ref}..HEAD")]).await.stdout;
-    let stat = git(cwd, &["diff", "--stat", &range]).await.stdout;
-    let patch = git(cwd, &["diff", "--no-color", &range]).await.stdout;
+    let fork_point = git(cwd, &["merge-base", &base_ref, "HEAD"]).await;
+    let (stat, patch) = match fork_point.ok.then(|| fork_point.stdout.trim().to_owned()).filter(|point| uncommitted && !point.is_empty()) {
+        // From where the branch left its base to the files as they are now.
+        Some(point) => {
+            let mut stat = git(cwd, &["diff", "--stat", &point]).await.stdout;
+            let untracked = git(cwd, &["ls-files", "--others", "--exclude-standard"]).await.stdout;
+            if !untracked.trim().is_empty() {
+                stat.push_str(&format!("\nNew files, not yet added:\n{}", untracked.trim_end()));
+            }
+            (stat, git(cwd, &["diff", "--no-color", &point]).await.stdout)
+        }
+        None => (git(cwd, &["diff", "--stat", &range]).await.stdout, git(cwd, &["diff", "--no-color", &range]).await.stdout),
+    };
     let settings = writer_settings().await;
     let template = (writing_style(&settings).and_then(|style| style.follow_change_request_templates) != Some(false)).then(|| {
         [".github/pull_request_template.md", ".github/PULL_REQUEST_TEMPLATE.md", "docs/pull_request_template.md", "PULL_REQUEST_TEMPLATE.md", "pull_request_template.md"]
             .iter().find_map(|p| std::fs::read_to_string(Path::new(cwd).join(p)).ok())
     }).flatten();
-    let prompt = crate::text_gen::pr_content_prompt(base, head, &commits, &stat, &patch, template.as_deref(), writing_instructions(&settings).as_deref());
+    let prompt = crate::text_gen::pr_content_prompt(base, head, &commits, &stat, &patch, template.as_deref(), writing_instructions(&settings).as_deref(), issue);
     let answer = crate::text_gen::generate(crate::text_gen::Request {
         operation: "generatePrContent", cwd: Some(cwd), prompt, model: crate::text_gen::model_for(&settings, crate::text_gen::Writer::SourceControl), investigate: false,
     }).await?;
@@ -680,45 +727,322 @@ impl ListedPullRequest {
     }
 }
 
-async fn find_open_pr(ctx: &ProviderContext, cwd: &str, branch: &str) -> Option<ListedPullRequest> {
+/// The branch's open pull request, or why the host could not be asked.
+async fn open_change_request(ctx: &ProviderContext, cwd: &str, branch: &str) -> Result<Option<ListedPullRequest>, gh::GhError> {
+    if ctx.kind == "gitlab" {
+        let found = super::gitlab::find_open_merge_request(Some(cwd), &ctx.host, &ctx.repository, branch).await?;
+        return Ok(found.map(ListedPullRequest::of_merge_request));
+    }
     // What `gh pr list` printed, read into a record here.
     let raw = gh::run_json::<Value>(
         Some(cwd), &ctx.host,
         &["pr", "list", "--repo", &ctx.repository, "--head", branch, "--state", "open", "--limit", "1", "--json", "number,url,title,baseRefName,headRefName"],
     )
-    .await
-    .ok()?;
-    let first = raw.as_array()?.first()?;
+    .await?;
+    let Some(first) = raw.as_array().and_then(|rows| rows.first()) else { return Ok(None) };
     let text = |key: &str| first[key].as_str().map(str::to_owned);
-    Some(ListedPullRequest { number: first["number"].as_u64(), url: text("url"), title: text("title"), base_branch: text("baseRefName"), head_branch: text("headRefName") })
+    Ok(Some(ListedPullRequest { number: first["number"].as_u64(), url: text("url"), title: text("title"), base_branch: text("baseRefName"), head_branch: text("headRefName") }))
 }
 
-async fn run_pr_step(cwd: &str, fallback: Option<&str>) -> Result<GitPrStep, Failure> {
+async fn find_open_pr(ctx: &ProviderContext, cwd: &str, branch: &str) -> Option<ListedPullRequest> {
+    open_change_request(ctx, cwd, branch).await.ok().flatten()
+}
+
+impl ListedPullRequest {
+    fn of_merge_request(made: super::gitlab::MadeMergeRequest) -> Self {
+        ListedPullRequest { number: Some(made.number), url: Some(made.url), title: Some(made.title), base_branch: made.base_branch, head_branch: made.head_branch }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The thread a pull request is made from
+// ---------------------------------------------------------------------------
+
+/// What a pull request takes from the thread it is made from.
+#[derive(Default)]
+struct ThreadContext {
+    /// The branch the thread's worktree was cut from.
+    base_branch: Option<String>,
+    /// The issues the thread was started on.
+    focus: Vec<ThreadIssueLink>,
+    /// The pull requests it links already.
+    linked: Vec<u64>,
+}
+
+fn thread_context(orchestrator: Option<&Orchestrator>, thread_id: Option<&str>) -> ThreadContext {
+    let thread = orchestrator.zip(thread_id).and_then(|(orchestrator, id)| orchestrator.store().app_thread(id).ok().flatten());
+    let Some(thread) = thread else { return ThreadContext::default() };
+    ThreadContext {
+        base_branch: thread.base_branch.clone(),
+        focus: thread.issues.iter().flatten().filter(|link| link.is_focus()).cloned().collect(),
+        linked: crate::orchestration::commands::pull_requests::links_of(&thread).iter().filter(|link| crate::orchestration::commands::pull_requests::is_visible(link)).map(|link| link.number).collect(),
+    }
+}
+
+impl ThreadContext {
+    /// The issue the work is on, as the text generation model is told: `#12 Title`.
+    fn issue_hint(&self) -> Option<String> {
+        self.focus.first().map(|link| format!("{} {}", link.display_key, link.title))
+    }
+}
+
+/// The line that closes `issue` when a pull request in `repository` on
+/// `host` merges. An issue of the same repository is `Closes #12`; one of
+/// another repository of the host names it; Linear reads `Fixes ENG-12`; an
+/// issue on another host is cited by its URL (nothing closes it by itself).
+fn closing_reference(issue: &ThreadIssueLink, host: &str, repository: &str) -> PullRequestClosingRef {
+    let key = &issue.key;
+    let reference = if key.tracker == "linear" {
+        format!("Fixes {}", issue.display_key)
+    } else if !key.host.eq_ignore_ascii_case(host) {
+        format!("Closes {}", issue.url)
+    } else if key.scope.eq_ignore_ascii_case(repository) {
+        format!("Closes #{}", key.key)
+    } else {
+        format!("Closes {}#{}", key.scope, key.key)
+    };
+    PullRequestClosingRef { display_key: issue.display_key.clone(), reference, url: issue.url.clone() }
+}
+
+/// `body` ending with the closing lines it does not have yet.
+fn with_closing(body: &str, closing: &[PullRequestClosingRef]) -> String {
+    let lower = body.to_lowercase();
+    let missing: Vec<&str> = closing.iter().map(|c| c.reference.as_str()).filter(|line| !lower.contains(&line.to_lowercase())).collect();
+    match (body.trim().is_empty(), missing.is_empty()) {
+        (_, true) => body.trim().to_owned(),
+        (true, false) => missing.join("\n"),
+        (false, false) => format!("{}\n\n{}", body.trim(), missing.join("\n")),
+    }
+}
+
+/// Links a pull request a git action made, or found open, to its thread.
+async fn link_to_thread(orchestrator: &Orchestrator, thread_id: &str, ctx: &ProviderContext, step: &GitPrStep) {
+    let (Some(number), Some(url)) = (step.number, step.url.as_deref()) else { return };
+    let link = ThreadPullRequestLink {
+        command_id: format!("git-action-pr:{}", crate::util::new_uuid()).into(),
+        thread_id: thread_id.into(),
+        host: ctx.host.clone(),
+        repository: ctx.repository.clone(),
+        number,
+        url: url.to_owned(),
+        source: if step.status == GitPrStepStatus::Created { PullRequestLinkSource::Created } else { PullRequestLinkSource::Manual },
+        repository_web_url: Some(format!("https://{}/{}", ctx.host, ctx.repository)),
+    };
+    if let Err(e) = orchestrator.dispatch(link.into()).await {
+        tracing::warn!(%thread_id, number, "the pull request was not linked to its thread: {e}");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// preparePullRequest
+// ---------------------------------------------------------------------------
+
+/// The most changed files a sheet lists.
+const MOST_DIRTY_FILES: usize = 200;
+/// The most base branches it offers.
+const MOST_BASE_BRANCHES: usize = 20;
+
+/// `git.preparePullRequest`. What stands in the way of a pull request is
+/// answered (`unavailable`), not failed: the sheet shows it.
+async fn prepare_pull_request(orchestrator: &Orchestrator, input: PullRequestPrepareInput) -> Result<PullRequestPrepareResult, Failure> {
+    let cwd = input.cwd.as_str();
+    let mut out = PullRequestPrepareResult { provider: "unknown".into(), ..Default::default() };
+    let unavailable = |mut out: PullRequestPrepareResult, reason: &str, detail: String| {
+        out.unavailable = Some(PullRequestUnavailable { reason: reason.to_owned(), detail });
+        Ok(out)
+    };
+    let Ok(status) = status_details(cwd).await else {
+        return unavailable(out, "not-a-repository", "This folder is not a git repository.".into());
+    };
+    out.branch = status.branch.clone();
+    out.has_upstream = status.upstream_ref.is_some();
+    let files = crate::vcs::local_status(cwd).await.working_tree.files;
+    out.dirty_truncated = files.len() > MOST_DIRTY_FILES;
+    out.dirty_files = files.into_iter().take(MOST_DIRTY_FILES).map(|f| PullRequestDirtyFile { path: f.path, insertions: f.insertions, deletions: f.deletions }).collect();
+    let thread = thread_context(Some(orchestrator), input.thread_id.as_ref().map(|id| id.as_str()));
+
+    let Some((remote, _)) = primary_remote(cwd).await else {
+        return unavailable(out, "no-remote", "This repository has no remote to push to.".into());
+    };
+    let Some(ctx) = detect_provider(cwd).await.ok().flatten() else {
+        return unavailable(out, "unsupported", "The repository's remote is not one a pull request can be made on from here.".into());
+    };
+    out.provider = ctx.kind.to_owned();
+    out.repository = Some(ctx.repository.clone());
+    if !matches!(ctx.kind, "github" | "gitlab") {
+        return unavailable(out, "unsupported", format!("Pull requests cannot be made on {} from here yet.", ctx.host));
+    }
+    out.supports_draft = true;
+    out.closing = thread.focus.iter().map(|issue| closing_reference(issue, &ctx.host, &ctx.repository)).collect();
+
+    // The bases: the one asked for, the thread's own, the default, then the remote's other branches by latest commit.
+    let default = default_branch(cwd).await;
+    out.on_default_branch = match (&status.branch, &default) {
+        (Some(branch), Some(default)) => default == branch,
+        (Some(branch), None) => branch == "main" || branch == "master",
+        (None, _) => false,
+    };
+    // The branch the pull request comes from is no base for it; work on the default branch leaves it first.
+    let head = status.branch.as_deref().filter(|_| !out.on_default_branch);
+    let mut bases: Vec<String> = vec![];
+    for wanted in [input.base_branch.clone(), thread.base_branch.clone(), default.clone()].into_iter().flatten() {
+        let on_remote = git(cwd, &["show-ref", "--verify", "--quiet", &format!("refs/remotes/{remote}/{wanted}")]).await.ok;
+        if on_remote && Some(wanted.as_str()) != head && !bases.contains(&wanted) {
+            bases.push(wanted);
+        }
+    }
+    let others = git(cwd, &["for-each-ref", "--sort=-committerdate", "--format=%(refname:lstrip=3)", &format!("refs/remotes/{remote}")]).await.stdout;
+    for branch in others.lines().filter(|b| !b.is_empty() && *b != "HEAD") {
+        if bases.len() >= MOST_BASE_BRANCHES {
+            break;
+        }
+        if Some(branch) != head && !bases.iter().any(|b| b == branch) {
+            bases.push(branch.to_owned());
+        }
+    }
+    out.base_branch = bases.first().cloned().or(default.clone()).unwrap_or_else(|| "main".into());
+    out.base_branches = bases;
+
+    let Some(branch) = status.branch.clone() else {
+        return unavailable(out, "detached", "No branch is checked out here: a pull request needs one.".into());
+    };
+    let base_ref = base_ref_of(cwd, &out.base_branch).await;
+    let count = |args: Vec<String>| async move {
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        git(cwd, &args).await.stdout.trim().parse::<u64>().unwrap_or(0)
+    };
+    out.commits_ahead_of_base = count(vec!["rev-list".into(), "--count".into(), format!("{base_ref}..HEAD")]).await;
+    out.unpushed = match status.upstream_ref {
+        Some(_) => status.ahead,
+        None => count(vec!["rev-list".into(), "--count".into(), "HEAD".into(), "--not".into(), format!("--remotes={remote}")]).await,
+    };
+    if out.on_default_branch {
+        // The work leaves the default branch for one of its own, named for the issue when there is one.
+        let naming = writer_settings().await;
+        out.new_branch = match issue_branch_of(&naming, &thread) {
+            Some(wanted) => Some(crate::vcs_ops::free_branch_name(cwd, &wanted).await),
+            None => None,
+        };
+        if out.dirty_files.is_empty() {
+            return unavailable(out, "no-changes", format!("{branch} is the repository's default branch and nothing here is changed: there is nothing to open a pull request for yet."));
+        }
+    } else {
+        match open_change_request(&ctx, cwd, &branch).await {
+            Ok(Some(open)) => {
+                if let (Some(number), Some(url)) = (open.number, open.url.clone()) {
+                    out.existing = Some(PullRequestExisting { number, url, title: open.title.clone().unwrap_or_default(), linked: thread.linked.contains(&number) });
+                }
+            }
+            Ok(None) => {}
+            Err(e) if e.is_unusable() => {
+                let reason = if e.reason == gh::GhReason::MissingTool { "tool-missing" } else { "unauthenticated" };
+                let detail = match (ctx.kind, reason) {
+                    ("gitlab", "tool-missing") => crate::glab::REQUIREMENT_MISSING,
+                    ("gitlab", _) => crate::glab::REQUIREMENT_UNAUTHENTICATED,
+                    (_, "tool-missing") => gh::REQUIREMENT_MISSING,
+                    _ => gh::REQUIREMENT_UNAUTHENTICATED,
+                };
+                return unavailable(out, reason, detail.to_owned());
+            }
+            // Any other failure of the lookup: making the pull request will say what is wrong.
+            Err(e) => tracing::info!(%cwd, "the branch's open pull request was not looked up: {}", e.detail),
+        }
+        if out.existing.is_none() && out.dirty_files.is_empty() && out.commits_ahead_of_base == 0 {
+            let detail = format!("{branch} has no commits ahead of {} and nothing here is changed: there is nothing to open a pull request for yet.", out.base_branch);
+            return unavailable(out, "no-changes", detail);
+        }
+    }
+
+    if input.generate == Some(true) && out.existing.is_none() {
+        let hint = thread.issue_hint();
+        let head = out.new_branch.as_deref().unwrap_or(&branch);
+        match generate_pr_content(cwd, PrSource { base: &out.base_branch, head, uncommitted: true, issue: hint.as_deref() }).await {
+            Ok((title, body)) => {
+                out.title = Some(title);
+                out.body = Some(with_closing(&body, &out.closing));
+            }
+            Err(e) => {
+                // A sheet that can still be filled in: the issue's title, else the latest commit's subject.
+                let subject = git(cwd, &["log", "-1", "--format=%s", &format!("{base_ref}..HEAD")]).await.stdout.trim().to_owned();
+                out.title = Some(thread.focus.first().map(|issue| issue.title.clone()).filter(|t| !t.is_empty()).or(Some(subject).filter(|s| !s.is_empty())).unwrap_or_default());
+                out.body = Some(with_closing("", &out.closing));
+                out.generation_error = Some(e.detail);
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// The branch a thread started on an issue commits to when its work is on the default branch.
+fn issue_branch_of(settings: &ServerSettings, thread: &ThreadContext) -> Option<String> {
+    let issue = thread.focus.first()?;
+    let mode = settings.branch_naming_mode.as_ref().map_or("static", |mode| mode.as_str());
+    Some(crate::orchestration::naming::issue_branch(&issue.display_key, &issue.title, mode, settings.branch_name_prefix.as_deref().unwrap_or("domovoi")))
+}
+
+/// What the pull request step takes from the action it is a step of.
+struct PrStep<'a> {
+    /// The branch, when HEAD does not say (just created).
+    fallback: Option<&'a str>,
+    /// The pull request as the sheet's reader left it.
+    sheet: Option<&'a StackedPullRequest>,
+    thread: &'a ThreadContext,
+}
+
+async fn run_pr_step(cwd: &str, step: PrStep<'_>) -> Result<(GitPrStep, ProviderContext), Failure> {
     let ctx = match detect_provider(cwd).await? {
-        Some(ctx) if ctx.kind == "github" => ctx,
+        Some(ctx) if matches!(ctx.kind, "github" | "gitlab") => ctx,
         other => {
             let kind = other.map(|c| c.kind).unwrap_or("unknown");
             return Err(provider_error(kind, "createChangeRequest", cwd, None, format!("No {kind} source control provider is registered.")));
         }
     };
     let status = status_details(cwd).await?;
-    let Some(branch) = status.branch.clone().or(fallback.map(str::to_owned)) else {
+    let Some(branch) = status.branch.clone().or(step.fallback.map(str::to_owned)) else {
         return Err(manager_error("runPrStep", cwd, "Cannot create a pull request from detached HEAD."));
     };
     if status.upstream_ref.is_none() {
         return Err(manager_error("runPrStep", cwd, "Current branch has not been pushed. Push before creating a PR."));
     }
     if let Some(existing) = find_open_pr(&ctx, cwd, &branch).await {
-        return Ok(existing.step(GitPrStepStatus::OpenedExisting));
+        return Ok((existing.step(GitPrStepStatus::OpenedExisting), ctx));
     }
-    let base = default_branch(cwd).await;
-    let content = match generate_pr_content(cwd, base.as_deref().unwrap_or("main"), &branch).await {
-        Ok(c) => Some(c),
-        Err(e) => {
-            tracing::info!(%cwd, "pull request text not generated, using the commits: {}", e.detail);
-            None
+    let closing: Vec<PullRequestClosingRef> = step.thread.focus.iter().map(|issue| closing_reference(issue, &ctx.host, &ctx.repository)).collect();
+    let asked_base = step.sheet.and_then(|sheet| sheet.base_branch.clone()).filter(|b| !b.trim().is_empty());
+    let base = match asked_base {
+        Some(base) => Some(base),
+        None => default_branch(cwd).await,
+    };
+    let content = match step.sheet {
+        // As the person left it: nothing is added to what they read.
+        Some(sheet) => {
+            if sheet.title.trim().is_empty() {
+                return Err(manager_error("runPrStep", cwd, "A pull request needs a title."));
+            }
+            Some((sheet.title.trim().to_owned(), sheet.body.trim().to_owned()))
+        }
+        None => {
+            let hint = step.thread.issue_hint();
+            match generate_pr_content(cwd, PrSource { base: base.as_deref().unwrap_or("main"), head: &branch, uncommitted: false, issue: hint.as_deref() }).await {
+                Ok((title, body)) => Some((title, with_closing(&body, &closing))),
+                Err(e) => {
+                    tracing::info!(%cwd, "pull request text not generated, using the commits: {}", e.detail);
+                    None
+                }
+            }
         }
     };
+    let draft = step.sheet.is_some_and(|sheet| sheet.draft == Some(true));
+    if ctx.kind == "gitlab" {
+        let target = base.clone().unwrap_or_else(|| "main".into());
+        let subject = git(cwd, &["log", "-1", "--format=%s"]).await.stdout.trim().to_owned();
+        let (title, description) = content.unwrap_or_else(|| (if subject.is_empty() { branch.clone() } else { subject }, with_closing("", &closing)));
+        let new = super::gitlab::MergeRequestDraft { source_branch: &branch, target_branch: &target, title: &title, description: &description, draft };
+        let made = super::gitlab::create_merge_request(Some(cwd), &ctx.host, &ctx.repository, &new)
+            .await
+            .map_err(|e| provider_error("gitlab", "createChangeRequest", cwd, Some(&branch), e.detail))?;
+        return Ok((ListedPullRequest::of_merge_request(made).step(GitPrStepStatus::Created), ctx));
+    }
     let mut args = vec!["pr", "create", "--repo", ctx.repository.as_str(), "--head", branch.as_str()];
     match &content {
         Some((title, body)) => args.extend(["--title", title.as_str(), "--body", body.as_str()]),
@@ -727,18 +1051,25 @@ async fn run_pr_step(cwd: &str, fallback: Option<&str>) -> Result<GitPrStep, Fai
     if let Some(b) = &base {
         args.extend(["--base", b.as_str()]);
     }
+    if draft {
+        args.push("--draft");
+    }
     gh::run(Some(cwd), &ctx.host, &args, None)
         .await
         .map_err(|e| provider_error("github", "createChangeRequest", cwd, Some(&branch), e.detail))?;
-    Ok(match find_open_pr(&ctx, cwd, &branch).await {
+    let made = match find_open_pr(&ctx, cwd, &branch).await {
         Some(created) => created.step(GitPrStepStatus::Created),
         None => GitPrStep { status: GitPrStepStatus::Created, url: None, number: None, base_branch: None, head_branch: None, title: None },
-    })
+    };
+    Ok((made, ctx))
 }
 
-fn run_stacked_action(input: StackedInput) -> BoxStream<'static, Result<GitActionProgressEvent, Failure>> {
+/// `orchestrator` is where the action's thread is read and its pull request
+/// linked; without one the action knows no thread.
+fn run_stacked_action(orchestrator: Option<Arc<Orchestrator>>, input: StackedInput) -> BoxStream<'static, Result<GitActionProgressEvent, Failure>> {
     async_stream::stream! {
         let cwd = input.cwd.clone();
+        let thread = thread_context(orchestrator.as_deref(), input.thread_id.as_deref());
         let action = GitStackedAction::from(input.action.as_str());
         let (action_id, of_cwd, of_action) = (input.action_id.clone(), cwd.clone(), action.clone());
         let phase_started = move |phase: GitActionProgressPhase, label: String| {
@@ -752,7 +1083,8 @@ fn run_stacked_action(input: StackedInput) -> BoxStream<'static, Result<GitActio
                 Ok(s) => s,
                 Err(e) => { failure = e.into(); break 'run; }
             };
-            let wants_commit = is_commit_action(&input.action);
+            // A commit of chosen files that chooses none commits nothing (and must not take everything).
+            let wants_commit = is_commit_action(&input.action) && !input.file_paths.as_ref().is_some_and(Vec::is_empty);
             let wants_push = matches!(action, GitStackedAction::Push | GitStackedAction::CommitPush | GitStackedAction::CommitPushPr)
                 || (action == GitStackedAction::CreatePr && (status.upstream_ref.is_none() || status.ahead > 0));
             let wants_pr = matches!(action, GitStackedAction::CreatePr | GitStackedAction::CommitPushPr);
@@ -787,18 +1119,25 @@ fn run_stacked_action(input: StackedInput) -> BoxStream<'static, Result<GitActio
                     Ok(false) => { failure = manager_error("runFeatureBranchStep", &cwd, "Cannot create a feature branch because there are no changes to commit."); break 'run; }
                     Err(e) => { failure = e.into(); break 'run; }
                 }
-                let fragment = match custom.clone() {
-                    Some((subject, _)) => subject,
-                    None => match generate_commit_message(&cwd, current_branch.as_deref(), paths, true).await {
-                        Ok((subject, body, branch)) => {
-                            custom = Some((subject.clone(), body));
-                            branch.filter(|b| !b.trim().is_empty()).unwrap_or(subject)
-                        }
-                        Err(e) => { failure = e.into(); break 'run; }
-                    },
+                // A thread started on an issue commits to a branch named for it; nothing is generated for the name.
+                let naming = writer_settings().await;
+                let name = match issue_branch_of(&naming, &thread) {
+                    Some(wanted) => crate::vcs_ops::free_branch_name(&cwd, &wanted).await,
+                    None => {
+                        let fragment = match custom.clone() {
+                            Some((subject, _)) => subject,
+                            None => match generate_commit_message(&cwd, current_branch.as_deref(), paths, true).await {
+                                Ok((subject, body, branch)) => {
+                                    custom = Some((subject.clone(), body));
+                                    branch.filter(|b| !b.trim().is_empty()).unwrap_or(subject)
+                                }
+                                Err(e) => { failure = e.into(); break 'run; }
+                            },
+                        };
+                        let existing: Vec<String> = git(&cwd, &["for-each-ref", "--format=%(refname:lstrip=2)", "refs/heads"]).await.stdout.lines().map(str::to_owned).collect();
+                        resolve_feature_branch(&existing, &sanitize_feature_branch(&fragment))
+                    }
                 };
-                let existing: Vec<String> = git(&cwd, &["for-each-ref", "--format=%(refname:lstrip=2)", "refs/heads"]).await.stdout.lines().map(str::to_owned).collect();
-                let name = resolve_feature_branch(&existing, &sanitize_feature_branch(&fragment));
                 if let Err(e) = git_ok("GitVcsDriver.switchRef", &cwd, &["switch", "-c", &name]).await { failure = e.into(); break 'run; }
                 branch_step = GitBranchStep { status: GitBranchStepStatus::Created, name: Some(name.clone()) };
                 current_branch = Some(name);
@@ -848,8 +1187,13 @@ fn run_stacked_action(input: StackedInput) -> BoxStream<'static, Result<GitActio
             if wants_pr {
                 yield Ok(phase_started(GitActionProgressPhase::Pr, format!("Preparing {short_label}...")));
                 phase = Some(GitActionProgressPhase::Pr);
-                match run_pr_step(&cwd, current_branch.as_deref()).await {
-                    Ok(p) => pr_step = p,
+                match run_pr_step(&cwd, PrStep { fallback: current_branch.as_deref(), sheet: input.pull_request.as_ref(), thread: &thread }).await {
+                    Ok((made, ctx)) => {
+                        if let (Some(orchestrator), Some(thread_id)) = (orchestrator.as_deref(), input.thread_id.as_deref()) {
+                            link_to_thread(orchestrator, thread_id, &ctx, &made).await;
+                        }
+                        pr_step = made;
+                    }
                     Err(e) => { failure = e; break 'run; }
                 }
             }
@@ -874,7 +1218,8 @@ fn run_stacked_action(input: StackedInput) -> BoxStream<'static, Result<GitActio
 pub fn register(r: Router<ConnCtx>) -> Router<ConnCtx> {
     r.unary("git.resolvePullRequest", |_, input: ResolveInput| resolve_pull_request(input))
         .unary("git.preparePullRequestThread", |ctx: Arc<ConnCtx>, input: PrepareInput| prepare_pull_request_thread(ctx.state.clone(), input))
-        .stream("git.runStackedAction", |_, input: StackedInput| run_stacked_action(input))
+        .unary("git.preparePullRequest", |ctx: Arc<ConnCtx>, input: PullRequestPrepareInput| async move { prepare_pull_request(&ctx.state.orchestrator, input).await })
+        .stream("git.runStackedAction", |ctx: Arc<ConnCtx>, input: StackedInput| run_stacked_action(Some(ctx.state.orchestrator.clone()), input))
 }
 
 #[cfg(test)]
@@ -896,6 +1241,45 @@ mod tests {
         for settings in [of(json!("Use emoji")), ServerSettings::default()] {
             assert_eq!((writing_instructions(&settings), templates(&settings)), (None, true));
         }
+    }
+
+    #[test]
+    fn the_line_that_closes_an_issue_says_where_the_issue_is() {
+        use domovoi_model::typed::{ThreadIssueKey, ThreadIssueLinkSource, ThreadIssueRole};
+        let issue = |tracker: &str, host: &str, scope: &str, key: &str, display: &str| ThreadIssueLink {
+            key: ThreadIssueKey { tracker: tracker.into(), host: host.into(), scope: scope.into(), key: key.into() },
+            project_id: "p".into(),
+            url: format!("https://{host}/{scope}/issues/{key}"),
+            source: ThreadIssueLinkSource::Manual,
+            linked_at: "t".into(),
+            display_key: display.into(),
+            title: "A bug".into(),
+            role: Some(ThreadIssueRole::Focus),
+        };
+        let line = |issue: &ThreadIssueLink| closing_reference(issue, "github.com", "acme/app").reference;
+        assert_eq!(line(&issue("github", "GitHub.com", "Acme/App", "12", "#12")), "Closes #12");
+        assert_eq!(line(&issue("github", "github.com", "acme/upstream", "12", "#12")), "Closes acme/upstream#12", "a fork's issue lives upstream");
+        assert_eq!(line(&issue("linear", "linear.app", "ENG", "ENG-4", "ENG-4")), "Fixes ENG-4");
+        assert_eq!(line(&issue("gitlab", "gitlab.com", "g/p", "3", "#3")), "Closes https://gitlab.com/g/p/issues/3", "another host is cited");
+        assert_eq!(closing_reference(&issue("gitlab", "gitlab.com", "g/p", "3", "#3"), "gitlab.com", "g/p").reference, "Closes #3");
+    }
+
+    #[test]
+    fn closing_lines_end_a_body_once() {
+        let closing = |lines: &[&str]| -> Vec<PullRequestClosingRef> {
+            lines.iter().map(|line| PullRequestClosingRef { display_key: "#1".into(), reference: (*line).to_owned(), url: "u".into() }).collect()
+        };
+        assert_eq!(with_closing("## Summary\n- x\n", &closing(&["Closes #12"])), "## Summary\n- x\n\nCloses #12");
+        assert_eq!(with_closing("", &closing(&["Closes #12", "Fixes ENG-4"])), "Closes #12\nFixes ENG-4");
+        assert_eq!(with_closing("Done.\n\ncloses #12", &closing(&["Closes #12"])), "Done.\n\ncloses #12", "the model wrote it anyway");
+        assert_eq!(with_closing("  Done.  ", &[]), "Done.");
+    }
+
+    #[test]
+    fn a_gitlab_named_host_is_a_gitlab() {
+        assert_eq!(provider_kind("gitlab.example.com"), "gitlab");
+        assert_eq!(provider_kind("github.com"), "github");
+        assert_eq!(provider_kind("git.example.com"), "unknown");
     }
 
     #[test]
@@ -1003,7 +1387,7 @@ mod tests {
 
     /// The events of a git action as JSON, and the failure it ended with.
     async fn collect(input: StackedInput) -> (Vec<Value>, Option<Value>) {
-        let items: Vec<Result<GitActionProgressEvent, Failure>> = run_stacked_action(input).collect().await;
+        let items: Vec<Result<GitActionProgressEvent, Failure>> = run_stacked_action(None, input).collect().await;
         let mut events = vec![];
         let mut failure = None;
         for item in items {
@@ -1018,7 +1402,7 @@ mod tests {
     fn stacked(cwd: &std::path::Path, action: &str, message: Option<&str>) -> StackedInput {
         StackedInput {
             action_id: "a".into(), cwd: cwd.to_string_lossy().into_owned(), action: action.into(),
-            commit_message: message.map(str::to_owned), feature_branch: None, file_paths: None,
+            commit_message: message.map(str::to_owned), feature_branch: None, file_paths: None, thread_id: None, pull_request: None,
         }
     }
 

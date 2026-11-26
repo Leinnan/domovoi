@@ -357,6 +357,113 @@ pub struct GitPrStep {
     pub title: Option<String>,
 }
 
+// ---- a pull request made from a thread ----
+
+/// `git.preparePullRequest`: what a pull request from the checkout at `cwd`
+/// would be, for the sheet a person reads before it is made.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PullRequestPrepareInput {
+    /// The thread the work is of: its base branch, its issue and its links.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<super::ids::ThreadId>,
+    pub cwd: String,
+    /// The base the person picked, when not the one first answered.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_branch: Option<String>,
+    /// Write a title and a body from the changes (a text generation call).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generate: Option<bool>,
+}
+
+/// A changed file a pull request's commit would take.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PullRequestDirtyFile {
+    /// Relative to the working tree's root.
+    pub path: String,
+    pub insertions: u64,
+    pub deletions: u64,
+}
+
+/// The open pull request the branch has already.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PullRequestExisting {
+    pub number: u64,
+    pub url: String,
+    pub title: String,
+    /// The thread links it already.
+    pub linked: bool,
+}
+
+/// An issue the pull request closes when it merges.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PullRequestClosingRef {
+    pub display_key: String,
+    /// The line that closes it, as the body carries it: `Closes #12`.
+    pub reference: String,
+    pub url: String,
+}
+
+/// Why no pull request can be made from a checkout.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PullRequestUnavailable {
+    /// `not-a-repository`, `detached`, `no-remote`, `unsupported`,
+    /// `no-changes`, `tool-missing` or `unauthenticated`.
+    pub reason: String,
+    pub detail: String,
+}
+
+/// What `git.preparePullRequest` answers.
+#[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PullRequestPrepareResult {
+    /// `github`, `gitlab`, or the host's kind when it has no driver.
+    pub provider: String,
+    pub repository: Option<String>,
+    pub branch: Option<String>,
+    /// The branch is the repository's default one: the work goes onto a
+    /// branch of its own (`newBranch`) before a pull request is made.
+    pub on_default_branch: bool,
+    /// The branch the commit would be made on, when not the one checked out.
+    pub new_branch: Option<String>,
+    pub has_upstream: bool,
+    /// Commits the remote's branch does not have.
+    pub unpushed: u64,
+    pub commits_ahead_of_base: u64,
+    pub dirty_files: Vec<PullRequestDirtyFile>,
+    /// More files changed than `dirtyFiles` lists.
+    pub dirty_truncated: bool,
+    pub existing: Option<PullRequestExisting>,
+    pub base_branch: String,
+    /// The thread's own base first, then the default branch, then others.
+    pub base_branches: Vec<String>,
+    pub supports_draft: bool,
+    /// Present once asked for with `generate`.
+    pub title: Option<String>,
+    pub body: Option<String>,
+    /// Why the title and body are not the text generation model's.
+    pub generation_error: Option<String>,
+    pub closing: Vec<PullRequestClosingRef>,
+    pub unavailable: Option<PullRequestUnavailable>,
+}
+
+/// The pull request a git action is to make, as the sheet's reader left it
+/// (`git.runStackedAction` `pullRequest`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StackedPullRequest {
+    pub title: String,
+    pub body: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub draft: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_branch: Option<String>,
+}
+
 /// The git action a toast's button runs next (`GitRunStackedActionToastRunAction`).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

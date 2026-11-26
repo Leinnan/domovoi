@@ -1103,8 +1103,31 @@ listed is not done.
   them; a remote that does not answer is a warning on the Fetch stage and
   the worktree starts from what is here. The branch the worktree was cut
   from is kept as `AppThread.baseBranch`, for the pull request's base.
+- Pull request (`rpc/source_control/git_workflow.rs`): two calls.
+  `git.preparePullRequest` answers what a pull request from a checkout would
+  be: the branch, what is not pushed, the changed files (200 at most), the
+  bases (the one asked for, the thread's `baseBranch`, the default, then the
+  remote's others by latest commit), the branch's open pull request and
+  whether the thread links it, and the lines that close the thread's focus
+  issues (`Closes #12`; `Closes owner/repo#12` for another repository of the
+  host; `Fixes ENG-4` for Linear; the URL for another host). With `generate`
+  it writes a title and a body from the commits and from what is not
+  committed yet, the closing lines after the body; when the text is not
+  generated the title is the issue's and `generationError` says why. What
+  stands in the way is answered as `unavailable` (`not-a-repository`,
+  `no-remote`, `unsupported`, `detached`, `no-changes`, `tool-missing`,
+  `unauthenticated`), not failed. `git.runStackedAction` then takes
+  `pullRequest { title, body, draft, baseBranch }` as the person left it
+  (nothing is added to what they read; no title is refused) and `threadId`:
+  the pull request made, or found open, is linked to the thread (`created`,
+  else `manual`). `filePaths` chooses what the commit takes, and an empty
+  list commits nothing. On the default branch the work goes onto a branch
+  first (`featureBranch`), named for the issue when the thread has one.
+  GitLab (gitlab.com, or a host named as one): a merge request through
+  `glab api`, a draft by its title.
 - Not done: comments past the first read of the tracker are not paged in;
-  images in an issue stay URLs.
+  images in an issue stay URLs. A pull request from a fork to its upstream
+  (`--head` names no owner). The watch on the new pull request (stage 4).
 - Verified: RPC group `issues-launch` (resolve by number, URL, another
   repository, no tracker; a launch with no words, the same launch again with
   the tracker down, a launch refused with the tracker down and carried out
@@ -1118,7 +1141,15 @@ listed is not done.
   kept and refused when taken), `vcs_ops`
   (`a_new_worktree_starts_from_the_remote_unless_the_local_branch_is_ahead`,
   `a_branch_name_that_is_taken_here_or_on_a_remote_gets_a_number`) and
-  `naming` (`an_issues_branch_is_its_key_and_title`).
+  `naming` (`an_issues_branch_is_its_key_and_title`). Stage 3: RPC group
+  `vcs-pr-create` (every `unavailable`; the sheet's first answer, its
+  generated text and the fallback; a draft made as written from one of two
+  changed files, linked to its thread; the open one found again; an empty
+  choice of files; from the default branch onto a branch named for the
+  issue; no title; a worktree's base; `gh` and `glab` signed out; a GitLab
+  draft merge request with its closing line), `git_workflow` unit tests
+  (`the_line_that_closes_an_issue_says_where_the_issue_is`,
+  `closing_lines_end_a_body_once`, `a_gitlab_named_host_is_a_gitlab`).
 
 ## Managed policy
 

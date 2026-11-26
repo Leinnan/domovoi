@@ -911,7 +911,7 @@
    "all": true,
    "expect": "failure",
    "error": "SourceControlProviderError",
-   "note": "not GitHub"
+   "note": "GitLab, with no glab to open the merge request through"
   },
   {
    "sh": "echo 'To get started with GitHub CLI, please run:  gh auth login' > gh/fail",
