@@ -4039,6 +4039,86 @@ async fn perf_connecting_and_one_call() {
     println!("PERF call.small_unary_round_trip.p50 {calls:.4} us");
 }
 
+/// The Mac app's core through its Swift shell, against this server: the
+/// headless `DomovoiSmoke` (built by `just mac-build`) pairs, takes the shell
+/// and a thread, runs the panels and a streamed turn, and fails if anything
+/// it waits for does not come. Once over TCP, and once over iroh, where the
+/// app asks for packed frames and its socket is a WebSocket through the
+/// tunnel. It is the check that a change to the wire still reaches a shell
+/// that is not written in Rust.
+///
+/// ```sh
+/// just mac-build
+/// DOMOVOI_MAC_SMOKE=$PWD/apps/domovoi-apple/build/Build/Products/Debug/DomovoiSmoke \
+///   cargo test -p domovoi-server --test provider_turns the_mac_apps_core -- --ignored --nocapture
+/// ```
+#[cfg(target_os = "macos")]
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs the Mac smoke tool: DOMOVOI_MAC_SMOKE names it"]
+async fn the_mac_apps_core_passes_its_smoke_check_over_tcp_and_over_iroh() {
+    let smoke = std::env::var("DOMOVOI_MAC_SMOKE").expect("DOMOVOI_MAC_SMOKE names the smoke tool");
+    let server = start("mac-smoke");
+    let token = signed_in(&server).await;
+    let mut ws = socket(&server, &token).await;
+    let workspace = server.dir.join("w").canonicalize().unwrap();
+    git(&workspace, &["init", "-q", "-b", "main"]);
+    std::fs::write(workspace.join("notes.txt"), "hello\n").unwrap();
+    git(&workspace, &["add", "."]);
+    git(&workspace, &["commit", "-qm", "init"]);
+    let r = call(&mut ws, "1", "projects.mutate", json!({ "type": "project.create", "commandId": "c1", "projectId": "p1", "title": "w",
+        "workspaceRoot": workspace, "createWorkspaceRootIfMissing": false, "defaultModelSelection": null })).await;
+    assert_eq!(r["exit"]["_tag"], "Success", "{r}");
+    let r = call(&mut ws, "2", "orchestration.launchThread", json!({ "commandId": "c2", "creationSource": "web", "threadId": "t1", "projectId": "p1",
+        "title": "Smoke", "generateTitle": false, "modelSelection": { "instanceId": "claudeAgent", "model": "claude-haiku-5-5" },
+        "runtimeMode": "full-access", "interactionMode": "default", "workspaceStrategy": { "type": "root" },
+        "initialMessage": { "messageId": "m1", "text": "DONE", "attachments": [] } })).await;
+    assert_eq!(r["exit"]["_tag"], "Success", "{r}");
+    until(&mut ws, "t1", "the first run", |all| last(all, "run.updated").is_some_and(|r| r["status"] == "completed")).await;
+
+    let cli = |args: &[&str]| {
+        let out = Command::new(server_bin())
+            .env("DOMOVOI_NO_SESSION_IMPORT", "1")
+            .env("DOMOVOI_NO_SHELL_ENV", "1")
+            .args(["--home-dir", server.dir.join("home").to_str().unwrap(), "--port", &server.port.to_string()])
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    // A turn of 20,000 characters streamed over ten seconds, launched from the app's composer.
+    let run = |args: Vec<String>| {
+        let out = Command::new(&smoke)
+            .args(&args)
+            .env("DOMOVOI_STORE", "memory")
+            .env("DOMOVOI_LOCAL_SERVER", "off")
+            // The thread made above: the newest one is the last run's own, which it deletes as it ends.
+            .env("DOMOVOI_SMOKE_THREAD", "t1")
+            .env("DOMOVOI_SMOKE_TURN", "1")
+            .env("DOMOVOI_SMOKE_PROMPT", "LOADTEST")
+            .output()
+            .unwrap();
+        let said = String::from_utf8_lossy(&out.stdout).into_owned();
+        println!("{said}{}", String::from_utf8_lossy(&out.stderr));
+        assert!(out.status.success() && said.lines().last() == Some("PASS"), "the smoke check failed over {}", if args.len() == 1 { "iroh" } else { "TCP" });
+    };
+
+    let code = cli(&["pair"]).lines().find_map(|l| l.split("#token=").nth(1)).unwrap().trim().to_owned();
+    run(vec![format!("http://127.0.0.1:{}", server.port), code]);
+
+    // Over iroh: remote access on, reachable by this machine's addresses only.
+    let on = http()
+        .post(format!("http://127.0.0.1:{}/api/domovoi/remote/configure", server.port))
+        .bearer_auth(&token)
+        .json(&json!({ "enabled": true, "relays": ["disabled"] }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(on.status(), 200, "{}", on.text().await.unwrap_or_default());
+    let link = cli(&["pair", "--remote"]).split_whitespace().find(|word| word.starts_with("domovoi://connect?")).expect("a pairing link").to_owned();
+    run(vec![link]);
+}
+
 /// Whether a `caffeinate` holds the machine awake for this server.
 fn held_awake(server: &Server) -> bool {
     let out = Command::new("/usr/bin/pgrep").args(["-f", &format!("caffeinate -i -w {}$", server.child.id())]).output().unwrap();

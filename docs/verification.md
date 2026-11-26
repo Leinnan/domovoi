@@ -52,6 +52,12 @@ test -n "$requirement" && codesign --verify --deep --strict -R "=$requirement" .
   (`domovoi_model::PROTOCOL_VERSION`) gets a socket that only tells it which
   side to update; `apps/domovoi-core/tests/client_replay.rs` checks the app
   says so and does not connect.
+- `the_mac_apps_core_passes_its_smoke_check_over_tcp_and_over_iroh` (ignored,
+  `provider_turns.rs`; needs `DOMOVOI_MAC_SMOKE`, the `DomovoiSmoke` tool
+  `just mac-build` makes): the Mac app's core through its Swift shell against
+  a scripted server, over TCP and over iroh, with a 20,000-character reply
+  streamed. It is the check that a change to the wire still reaches a shell
+  that is not written in Rust (over iroh the app asks for packed frames).
 - `domovoi-server doctor --records [--events]` reads every stored row the way
   the server does and counts those that do not decode. Run it on a copy of a
   real home before and after a change to how records are written.

@@ -32,6 +32,12 @@ spread (half the range over the median; at least 20% for a time, the noise
 floor below; nothing for bytes and counts, which are exact). A change inside
 the spread reads as "same". Every measure is a cost: lower is better.
 
+Three runs are not enough for a measure that waits between its samples
+(`turn.flush.*` sleeps 130 ms before each flush, and times a core that has
+gone cold): it has read 0.2 ms and 0.6 ms for the same build within one
+hour. Run such a test by itself, alternating the two builds five times or
+more, before believing a change in it.
+
 ### What is measured
 
 | Group | Measures | Where |
@@ -253,6 +259,63 @@ What the stored records are made of, measured to decide what to do next
 output 85 MB and tool calls 40 MB (four screenshots are the largest thread);
 conversation messages 35 MB, each a copy of the text of the turn item that
 shows it; the nodes deleted here 20 MB; explicit `null`s 4%.
+
+### M6, M7 and M8: the desktop socket as an iroh stream, names, comments (`1204694` → `0f23fc6`)
+
+Expected of M6: a cheaper socket for a desktop app that reaches its server
+over iroh. Expected of M7 and M8: nothing; they are measured as a guard.
+
+The two ways a remote socket can be opened are measured on the same build
+(`remote.*`, both ends on this machine, so this is what each way adds and
+not what a network takes):
+
+| Measure | As a WebSocket through the tunnel's port | As an iroh stream | |
+|---|---|---|---|
+| Opening the socket (the ticket, then the socket) | 1.36 ms | 0.96 ms | -29% |
+| One small call there and back | 236 µs | 170 µs | -28% |
+| A packed kilobyte of JSON (the configuration's frame) | 100 bytes | 81 bytes | -19% |
+
+Not measured: the same over a relay or a real network path, and the Apple
+and Android apps, whose sockets were not changed.
+
+The guard, M5 against the final commit: every measure of size is the same
+(the database 388.2 MB, a snapshot's and a reply's bytes, events per flush),
+the binary is 61.07 MB → 61.17 MB, and the lines that mention t3code went
+from 1,103 to 756. Of the times, these read worse in the three paired runs:
+
+| Measure | M5 | Final | |
+|---|---|---|---|
+| `turn.flush.100`, `.5000` | 0.34, 0.32 ms | 0.51, 0.49 ms | +51%, +52% |
+| `load.1.server_cpu` | 0.4 s | 0.5 s | +25% |
+| `load.10.latency_p99`, `load.50.latency_p50` | 2.6, 2.3 ms | 3.5, 2.9 ms | +35%, +27% |
+| Server peak memory with 1 / 10 / 50 clients | 43.4 / 48.2 / 57.9 MB | 44.3 / 49.1 / 60.1 MB | +2% to +4% |
+| `thread.snapshot.build.100`, `.pack.100` | 121, 197 µs | 163, 251 µs | +35%, +27% |
+
+Nothing between the two commits touches what these measure, so the flush
+was run again by itself, five times each in alternation: M5 gave 0.30 to
+0.63 ms (median 0.39) and the final commit 0.22 to 0.49 ms (median 0.28).
+That measure sleeps 130 ms before each flush and so times a core that has
+gone cold; three runs do not settle it, and it should not be read from
+three. The others are inside what the same builds showed in other rounds
+(M4's peak memory with 50 clients was 58.4 to 60.4 MB over six runs; M5's
+own was 58.5 to 59.8 MB an hour earlier). They are counted as noise, and
+this is the weakest row of the ledger: a guard that needed a second look
+to pass.
+
+### What is left on the table
+
+Measured, and not yet acted on:
+
+- Conversation messages are kept beside the turn items that show them:
+  35 MB of the real home's 250 MB of records, sent in every snapshot.
+- The largest threads are images held as base64 inside records. They do not
+  pack, and they are read whole to open a thread.
+- The client core still reads a frame into a JSON tree before its records
+  (`view.socket_snapshot.2000`: 83 ms for 2.17 MB). Decoding records
+  straight from the frame's text needs the model's hand-written decoders
+  replaced by derived ones.
+- The Apple and Android apps open their socket with a ticket request and a
+  WebSocket through the tunnel, and acknowledge every chunk.
 
 ## History
 

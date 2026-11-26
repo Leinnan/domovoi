@@ -33,8 +33,10 @@ from 1,125 MB to 388 MB ([performance.md](performance.md) has the numbers).
 `domovoi-server doctor --records` reads every stored record and counts those
 that do not decode; it is the check to run before and after.
 
-A server older than the database refuses to start on it, and says so. To go
-back, stop the server and put the backup in the database's place.
+To go back, stop the server and put the backup in the database's place. A
+server of this version or later refuses a database written by a newer one,
+and says so; a build from before this change does not check, so do not start
+one on a home that has been migrated.
 
 Sessions of the web client (signed in with a cookie) are deleted. Paired
 devices stay paired.
