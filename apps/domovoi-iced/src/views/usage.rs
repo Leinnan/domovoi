@@ -42,10 +42,13 @@ pub fn view(app: &App) -> Element<'_, Message> {
         .spacing(S)
         .align_y(Alignment::Center),
     )
-    .padding([S, L])
+    .height(SUB_BAR_HEIGHT)
+    .align_y(Alignment::Center)
+    .padding([0.0, CONTENT_GUTTER])
+    .width(Length::Fill)
     .style(w::surface);
 
-    let mut col = Column::new().spacing(L).padding(L).max_width(1100);
+    let mut col = Column::new().spacing(L).padding(CONTENT_GUTTER).max_width(1100);
 
     if let Some(err) = &u.error {
         col = col.push(container(w::colored(err, TEXT_SMALL, |c| c.danger)).padding(M).width(Length::Fill).style(w::banner_style(|c| c.danger)));
@@ -71,7 +74,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
     if !u.providers.is_empty() {
         let mut chips = row![
             button(text("All providers").size(TEXT_SMALL))
-                .padding([4.0, S])
+                .padding(CHIP_PAD)
                 .style(w::chip_style(u.selected_provider.is_empty()))
                 .on_press(core(Event::FilterUsageProvider { provider: String::new() })),
         ]
@@ -81,7 +84,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
             let active = u.selected_provider == p.key;
             chips = chips.push(
                 button(text(format!("{} · {} · {}", p.label, p.tokens_label, percent_label(p.share_percent, p.tokens))).size(TEXT_SMALL))
-                    .padding([4.0, S])
+                    .padding(CHIP_PAD)
                     .style(w::chip_style(active))
                     .on_press(core(Event::FilterUsageProvider { provider: p.key.clone() })),
             );
@@ -152,24 +155,20 @@ pub fn view(app: &App) -> Element<'_, Message> {
     if !u.limits.is_empty() {
         let mut lim_col = Column::new().spacing(S).push(w::heading("Provider account limits"));
         for pl in &u.limits {
-            let mut card_col = Column::new().spacing(XS).push(
-                row![
-                    text(&pl.provider).size(TEXT_UI).font(fonts::SEMIBOLD).width(Length::Fill),
-                    if !pl.checked.is_empty() { w::faint(format!("Checked {}", pl.checked), TEXT_CAPTION) } else { w::faint("", TEXT_CAPTION) },
-                    if !pl.external_url.is_empty() {
-                        w::small_button(
-                            if pl.external_label.is_empty() { "Open" } else { pl.external_label.as_str() },
-                            w::ghost_style,
-                            Some(Message::OpenUrl(pl.external_url.clone())),
-                        )
-                        .into()
-                    } else {
-                        Element::from(Space::new())
-                    },
-                ]
+            let mut hdr = row![text(&pl.provider).size(TEXT_UI).font(fonts::SEMIBOLD).width(Length::Fill)]
                 .spacing(S)
-                .align_y(Alignment::Center),
-            );
+                .align_y(Alignment::Center);
+            if !pl.checked.is_empty() {
+                hdr = hdr.push(w::faint(format!("Checked {}", pl.checked), TEXT_CAPTION));
+            }
+            if !pl.external_url.is_empty() {
+                hdr = hdr.push(w::small_button(
+                    if pl.external_label.is_empty() { "Open" } else { pl.external_label.as_str() },
+                    w::ghost_style,
+                    Some(Message::OpenUrl(pl.external_url.clone())),
+                ));
+            }
+            let mut card_col = Column::new().spacing(S).push(hdr);
             if !pl.notice.is_empty() {
                 card_col = card_col.push(w::muted(&pl.notice, TEXT_SMALL));
             }

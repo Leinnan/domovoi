@@ -70,20 +70,17 @@ pub fn view<'a>(_app: &'a App, pal: &'a PaletteView) -> Element<'a, Message> {
                 "match" => Icon::Search,
                 _ => Icon::Command,
             };
+            let mut info = Column::new().spacing(XXS).width(Length::Fill).push(
+                text(&item.title)
+                    .size(TEXT_UI)
+                    .font(if item.kind == "match" { fonts::MONO } else { fonts::MEDIUM }),
+            );
+            if !item.subtitle.is_empty() {
+                info = info.push(w::muted(&item.subtitle, TEXT_CAPTION));
+            }
             let mut r = row![
                 w::themed_icon(ic, ICON_SMALL, move |c| if selected { c.accent } else { c.muted }),
-                column![
-                    text(&item.title)
-                        .size(TEXT_UI)
-                        .font(if item.kind == "match" { fonts::MONO } else { fonts::MEDIUM }),
-                    if !item.subtitle.is_empty() {
-                        w::muted(&item.subtitle, TEXT_CAPTION)
-                    } else {
-                        w::muted("", TEXT_CAPTION)
-                    },
-                ]
-                .spacing(1.0)
-                .width(Length::Fill),
+                info,
             ]
             .spacing(S)
             .align_y(Alignment::Center);
@@ -120,11 +117,11 @@ pub fn view<'a>(_app: &'a App, pal: &'a PaletteView) -> Element<'a, Message> {
             w::divider(),
             container(hints).padding(Padding { top: XS, left: XS, right: XS, bottom: 0.0 }),
         ]
-        .spacing(S),
+        .spacing(M),
     )
     .width(620)
     .max_height(500)
-    .padding(M)
+    .padding(L)
     .style(w::popover_style)
     .into()
 }

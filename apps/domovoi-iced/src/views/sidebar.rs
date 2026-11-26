@@ -1,9 +1,10 @@
-//! Left sidebar: thread search, unread filter, status/project grouping,
-//! thread rows with status badges, and project/session creation actions.
+//! Left sidebar: primary thread creation, search, status/project grouping,
+//! unread filter, cleanly grouped thread sections with single-line right-click
+//! rows, and a two-slot workspace/server footer.
 
 use domovoi_core::Event;
-use domovoi_core::view::{SidebarProjectView, SidebarSectionView, SidebarView, ThreadRowView};
-use iced::widget::{Column, Space, button, column, container, row, text};
+use domovoi_core::view::{ProjectIconView, SidebarProjectView, SidebarSectionView, SidebarView, ThreadRowView};
+use iced::widget::{Column, Space, button, column, container, mouse_area, row, stack, text};
 use iced::{Alignment, Background, Border, Element, Length, Padding, Theme};
 
 use crate::app::{App, Message, Overlay, now_ms};
@@ -21,10 +22,57 @@ pub fn view(app: &App) -> Element<'_, Message> {
     let sb = &app.vm.sidebar;
     let by_status = sb.grouping != "project";
 
-    let search_bar = row![
+    // Row 1: Primary creation group (New Thread + Scratch Thread).
+    let new_thread_btn = w::with_tooltip(
+        button(
+            row![
+                w::themed_icon(Icon::Plus, ICON_SMALL, |c| c.accent),
+                text("New Thread").size(TEXT_UI).font(fonts::MEDIUM),
+            ]
+            .spacing(ICON_GAP)
+            .align_y(Alignment::Center),
+        )
+        .width(Length::Fill)
+        .padding([6.0, M])
+        .style(w::secondary_style)
+        .on_press(core(Event::NewThread { project_id: None })),
+        &format!("New thread ({})", w::shortcut_label("Mod+N")),
+    );
+    let creation_bar = row![
+        new_thread_btn,
+        w::icon_button(
+            Icon::MessageSquare,
+            &format!("Scratch thread ({})", w::shortcut_label("Mod+Shift+N")),
+            Some(core(Event::OpenScratch)),
+        ),
+    ]
+    .spacing(XS)
+    .align_y(Alignment::Center);
+
+    // Row 2: Search threads input with inline clear when active.
+    let mut search_bar = row![
         w::input("Search threads…", &app.search_input)
             .on_input(Message::SearchChanged)
             .width(Length::Fill),
+    ]
+    .spacing(XS)
+    .align_y(Alignment::Center);
+    if !app.search_input.is_empty() {
+        search_bar = search_bar.push(w::icon_button_compact(
+            Icon::X,
+            "Clear search",
+            Some(Message::SearchChanged(String::new())),
+        ));
+    }
+
+    // Row 3: Grouping & filter group (Status/Project + Unread + Attention jump).
+    let mut filter_bar = row![
+        w::segmented(
+            &[(true, Some(Icon::Inbox), "Status"), (false, Some(Icon::Folder), "Project")],
+            by_status,
+            |status| core(Event::SetSidebarGrouping { grouping: if status { "status" } else { "project" }.into() }),
+        ),
+        Space::new().width(Length::Fill),
         w::icon_button_tinted(
             Icon::Bell,
             if sb.unread_only { "Showing unread only" } else { "Filter unread & waiting" },
@@ -34,20 +82,9 @@ pub fn view(app: &App) -> Element<'_, Message> {
     ]
     .spacing(XS)
     .align_y(Alignment::Center);
-
-    let mut grouping_bar = row![
-        w::segmented(
-            &[(true, Some(Icon::Inbox), "Status"), (false, Some(Icon::Folder), "Project")],
-            by_status,
-            |status| core(Event::SetSidebarGrouping { grouping: if status { "status" } else { "project" }.into() }),
-        ),
-        Space::new().width(Length::Fill),
-    ]
-    .spacing(XS)
-    .align_y(Alignment::Center);
     if sb.threads_needing_attention > 0 {
         let n = sb.threads_needing_attention;
-        grouping_bar = grouping_bar.push(w::with_tooltip(
+        filter_bar = filter_bar.push(w::with_tooltip(
             button(icon_capsule(Icon::Bell, n.to_string(), |c| c.warning))
                 .padding(0)
                 .style(w::ghost_style)
@@ -55,23 +92,21 @@ pub fn view(app: &App) -> Element<'_, Message> {
             &format!("{n} {} you — go to the next one", if n == 1 { "thread needs" } else { "threads need" }),
         ));
     }
-    let grouping_bar = grouping_bar.push(row![
-        w::icon_button(Icon::Plus, "New thread (Mod+N)", Some(core(Event::NewThread { project_id: None }))),
-        w::icon_button(Icon::MessageSquare, "Scratch thread (Mod+Shift+N)", Some(core(Event::OpenScratch))),
-    ]
-    .spacing(XS)
-    .align_y(Alignment::Center));
 
-    let mut list = Column::new().spacing(XXS).padding([0.0, XS]);
+    let mut list = Column::new().spacing(SECTION_GAP).padding([S, S]);
 
     if !sb.search_query.is_empty() && !sb.search_results.is_empty() {
-        list = list.push(w::section("Message matches"));
+        let mut group = Column::new()
+            .spacing(XXS)
+            .push(group_header(Icon::Search, |c| c.accent, "Message matches", Some(sb.search_results.len())));
         for hit in &sb.search_results {
             let selected = sb.selected_thread_id.as_deref() == Some(hit.thread_id.as_str());
-            list = list.push(
+            group = group.push(
                 w::list_row(
                     column![
-                        text(&hit.title).size(TEXT_UI).font(fonts::MEDIUM),
+                        container(text(&hit.title).size(TEXT_UI).font(fonts::MEDIUM).wrapping(text::Wrapping::None))
+                            .width(Length::Fill)
+                            .clip(true),
                         w::muted(&hit.snippet, TEXT_SMALL),
                         w::faint(&hit.project_title, TEXT_CAPTION),
                     ]
@@ -83,12 +118,15 @@ pub fn view(app: &App) -> Element<'_, Message> {
                 .on_press(core(Event::SelectThread { thread_id: hit.thread_id.clone() })),
             );
         }
+        list = list.push(group);
     }
 
     let mut listed_any = !sb.search_results.is_empty();
     if app.all_terminal_servers {
         listed_any = true;
-        list = list.push(w::section("All Servers"));
+        let mut group = Column::new()
+            .spacing(XXS)
+            .push(group_header(Icon::Globe, |c| c.info, "All Servers", Some(app.vm.connection.environments.len())));
         for environment in &app.vm.connection.environments {
             let server = app.terminal_servers.get(&environment.id);
             let state = match server {
@@ -96,49 +134,85 @@ pub fn view(app: &App) -> Element<'_, Message> {
                 Some(server) if server.loaded => "",
                 _ => " · Loading",
             };
-            list = list.push(w::muted(format!("{}{state}", environment.label), TEXT_SMALL));
+            group = group.push(
+                container(w::muted(format!("{}{state}", environment.label), TEXT_CAPTION).font(fonts::SEMIBOLD))
+                    .padding(Padding { top: XS, bottom: XXS, left: S, right: S }),
+            );
             if let Some(server) = server {
                 for terminal in &server.terminals {
-                    let status = match terminal.agent.as_ref().map(|agent| agent.activity.as_str()) {
-                        Some("needsInput") => "Needs input",
-                        Some("working") => "Working",
-                        Some("finished") => "Finished",
-                        _ if terminal.exit_code.is_some_and(|code| code != 0) => "Process failed",
+                    let (status, tone): (&str, w::Tone) = match terminal.agent.as_ref().map(|agent| agent.activity.as_str()) {
+                        Some("needsInput") => ("Needs input", |c| c.warning),
+                        Some("working") => ("Working", |c| c.success),
+                        Some("finished") => ("Finished", |c| c.info),
+                        _ if terminal.exit_code.is_some_and(|code| code != 0) => ("Failed", |c| c.danger),
                         _ => continue,
                     };
-                    list = list.push(w::small_button(
-                        format!("{} · {status}", terminal.title.as_deref().unwrap_or(&terminal.label)),
-                        w::ghost_style,
-                        (!server.stale).then(|| core(Event::OpenTerminalOnEnvironment {
-                            environment_id: environment.id.clone(), thread_id: terminal.thread_id.clone(), terminal_id: terminal.terminal_id.clone(),
-                        })),
-                    ));
+                    let name = terminal.title.as_deref().unwrap_or(&terminal.label);
+                    group = group.push(
+                        w::list_row(
+                            row![
+                                w::themed_icon(Icon::Terminal, ICON_SMALL, tone),
+                                container(text(name).size(TEXT_SMALL).wrapping(text::Wrapping::None))
+                                    .width(Length::Fill)
+                                    .clip(true),
+                                w::badge_capsule(status, Some(tone)),
+                            ]
+                            .spacing(S)
+                            .align_y(Alignment::Center),
+                            false,
+                            false,
+                        )
+                        .on_press_maybe((!server.stale).then(|| core(Event::OpenTerminalOnEnvironment {
+                            environment_id: environment.id.clone(),
+                            thread_id: terminal.thread_id.clone(),
+                            terminal_id: terminal.terminal_id.clone(),
+                        }))),
+                    );
                 }
             }
         }
+        list = list.push(group);
     }
     if !app.all_terminal_servers && !sb.terminal_attention.is_empty() {
         listed_any = true;
-        list = list.push(w::section("Terminal activity"));
+        let mut group = Column::new()
+            .spacing(XXS)
+            .push(group_header(Icon::Terminal, |c| c.warning, "Terminal activity", Some(sb.terminal_attention.len())));
         for terminal in &sb.terminal_attention {
-            let status = match terminal.agent.as_ref().map(|agent| agent.activity.as_str()) {
-                Some("needsInput") => "Needs input",
-                Some("finished") => "Finished",
-                _ => "Working",
+            let (status, tone): (&str, w::Tone) = match terminal.agent.as_ref().map(|agent| agent.activity.as_str()) {
+                Some("needsInput") => ("Needs input", |c| c.warning),
+                Some("finished") => ("Finished", |c| c.info),
+                _ => ("Working", |c| c.success),
             };
-            list = list.push(w::list_row(
+            let name = terminal.title.as_deref().unwrap_or(&terminal.label);
+            let mut row_content = row![
+                w::themed_icon(Icon::Terminal, ICON_SMALL, tone),
                 column![
-                    text(terminal.title.as_deref().unwrap_or(&terminal.label)).size(TEXT_UI),
-                    w::muted(status, TEXT_SMALL),
-                ].width(Length::Fill),
-                false,
-                true,
-            ).on_press(core(Event::OpenTerminalAttention { thread_id: terminal.thread_id.clone(), terminal_id: terminal.terminal_id.clone() })));
+                    container(text(name).size(TEXT_UI).font(fonts::MEDIUM).wrapping(text::Wrapping::None))
+                        .width(Length::Fill)
+                        .clip(true),
+                    w::colored(status, TEXT_CAPTION, tone),
+                ]
+                .spacing(XXS)
+                .width(Length::Fill),
+            ]
+            .spacing(S)
+            .align_y(Alignment::Center);
             if let Some(thread_id) = &terminal.agent_thread_id {
-                list = list.push(w::small_button("Open conversation", w::ghost_style,
-                    Some(core(Event::SelectThread { thread_id: thread_id.clone() }))));
+                row_content = row_content.push(w::icon_button_compact(
+                    Icon::MessageSquare,
+                    "Open conversation",
+                    Some(core(Event::SelectThread { thread_id: thread_id.clone() })),
+                ));
             }
+            group = group.push(
+                w::list_row(row_content, false, true).on_press(core(Event::OpenTerminalAttention {
+                    thread_id: terminal.thread_id.clone(),
+                    terminal_id: terminal.terminal_id.clone(),
+                })),
+            );
         }
+        list = list.push(group);
     }
 
     if by_status {
@@ -153,10 +227,13 @@ pub fn view(app: &App) -> Element<'_, Message> {
         }
         if !sb.snoozed.is_empty() && sb.search_query.is_empty() {
             listed_any = true;
-            list = list.push(w::section("Snoozed"));
+            let mut snoozed_group = Column::new()
+                .spacing(XXS)
+                .push(group_header(Icon::Clock, |c| c.info, "Snoozed", Some(sb.snoozed.len())));
             for t in &sb.snoozed {
-                list = list.push(thread_row(app, t, true));
+                snoozed_group = snoozed_group.push(thread_row(app, t, true));
             }
+            list = list.push(snoozed_group);
         }
     }
 
@@ -171,29 +248,45 @@ pub fn view(app: &App) -> Element<'_, Message> {
         list = list.push(container(w::faint(note, TEXT_SMALL)).padding([L, M]));
     }
 
-    let footer = container(
+    // Two-slot footer: Workspace Add menu on the left, server scope toggle on the right.
+    let add_menu_btn = button(
         row![
-            w::small_button(
-                "+ Project",
-                w::ghost_style,
-                Some(Message::Overlay(Some(Overlay::NewProject { name: String::new(), path: String::new() }))),
-            ),
-            w::small_button(if app.all_terminal_servers { "This Server" } else { "All Servers" }, w::ghost_style, Some(Message::ToggleAllTerminalServers)),
-            w::small_button("Browse", w::ghost_style, Some(Message::Overlay(Some(Overlay::FolderBrowser)))),
-            w::small_button(
-                "Import",
-                w::ghost_style,
-                Some(Message::Overlay(Some(Overlay::ImportSessions { selected: Vec::new() }))),
-            ),
+            w::themed_icon(Icon::Plus, ICON_SMALL, |c| c.accent),
+            text("Add…").size(TEXT_SMALL).font(fonts::MEDIUM),
+            w::themed_icon(Icon::ChevronDown, ICON_XS, |c| c.muted),
         ]
         .spacing(XS)
         .align_y(Alignment::Center),
     )
-    .padding([TIGHT, S])
+    .padding(SMALL_BUTTON_PAD)
+    .style(w::secondary_style)
+    .on_press(Message::Overlay(Some(Overlay::SidebarAddMenu)));
+
+    let all_servers = app.all_terminal_servers;
+    let servers_btn = button(
+        row![
+            w::themed_icon(if all_servers { Icon::Server } else { Icon::Globe }, ICON_SMALL, move |c| {
+                if all_servers { c.accent } else { c.muted }
+            }),
+            text(if all_servers { "This Server" } else { "All Servers" }).size(TEXT_SMALL).font(fonts::MEDIUM),
+        ]
+        .spacing(XS)
+        .align_y(Alignment::Center),
+    )
+    .padding(SMALL_BUTTON_PAD)
+    .style(w::bar_chip_style(all_servers))
+    .on_press(Message::ToggleAllTerminalServers);
+
+    let footer = container(
+        row![add_menu_btn, Space::new().width(Length::Fill), servers_btn]
+            .spacing(S)
+            .align_y(Alignment::Center),
+    )
+    .padding([S, CHROME_PAD_X])
     .width(Length::Fill);
 
     column![
-        container(column![search_bar, grouping_bar].spacing(S)).padding([S, S]),
+        container(column![creation_bar, search_bar, filter_bar].spacing(S)).padding([M, CHROME_PAD_X]),
         w::divider(),
         w::scroll(list).height(Length::Fill),
         w::divider(),
@@ -201,6 +294,20 @@ pub fn view(app: &App) -> Element<'_, Message> {
     ]
     .height(Length::Fill)
     .into()
+}
+
+/// Consistent non-collapsible section header matching `status_section` geometry.
+fn group_header<'a>(ic: Icon, tone: w::Tone, title: &'a str, count: Option<usize>) -> Element<'a, Message> {
+    let mut r = row![
+        w::themed_icon(ic, ICON_SMALL, tone),
+        text(title).size(TEXT_SMALL).font(fonts::SEMIBOLD).width(Length::Fill),
+    ]
+    .spacing(TIGHT)
+    .align_y(Alignment::Center);
+    if let Some(n) = count {
+        r = r.push(w::badge_capsule(n.to_string(), None));
+    }
+    container(r).padding([TIGHT, S]).width(Length::Fill).into()
 }
 
 /// The next thread waiting on you after the selected one (wrapping around).
@@ -288,7 +395,7 @@ fn status_section<'a>(app: &'a App, sec: &'a SidebarSectionView) -> Element<'a, 
                     w::ghost_style,
                     Some(core(Event::ShowAllInSection { section: sec.kind.clone() })),
                 ))
-                .padding(Padding { left: L, ..Padding::ZERO }),
+                .padding(Padding { left: SIDEBAR_ICON_COL + S, ..Padding::ZERO }),
             );
         }
     }
@@ -302,7 +409,9 @@ fn project_section<'a>(app: &'a App, proj: &'a SidebarProjectView) -> Element<'a
             row![
                 w::themed_icon(chev, ICON_XS, |c| c.faint),
                 w::project_icon_tile(&proj.icon, 20.0, &app.images),
-                text(&proj.title).size(TEXT_UI).font(fonts::SEMIBOLD).width(Length::Fill),
+                container(text(&proj.title).size(TEXT_UI).font(fonts::SEMIBOLD).wrapping(text::Wrapping::None))
+                    .width(Length::Fill)
+                    .clip(true),
             ]
             .spacing(TIGHT)
             .align_y(Alignment::Center),
@@ -311,12 +420,12 @@ fn project_section<'a>(app: &'a App, proj: &'a SidebarProjectView) -> Element<'a
         .padding([TIGHT, S])
         .style(w::ghost_style)
         .on_press(core(Event::ToggleProject { project_id: proj.id.clone() })),
-        w::icon_button(
+        w::icon_button_compact(
             Icon::Plus,
             "New thread in project",
             Some(core(Event::NewThread { project_id: Some(proj.id.clone()) })),
         ),
-        w::icon_button(
+        w::icon_button_compact(
             Icon::Ellipsis,
             "Project options",
             Some(Message::Overlay(Some(Overlay::ProjectMenu(proj.id.clone())))),
@@ -327,22 +436,23 @@ fn project_section<'a>(app: &'a App, proj: &'a SidebarProjectView) -> Element<'a
 
     let mut col = Column::new().spacing(XXS).push(header);
     if proj.expanded {
+        let mut nested = Column::new().spacing(XXS);
         for t in &proj.threads {
-            col = col.push(thread_row(app, t, false));
+            nested = nested.push(thread_row(app, t, false));
         }
         if proj.hidden_count > 0 {
-            col = col.push(
+            nested = nested.push(
                 container(w::small_button(
                     format!("Show {} more", proj.hidden_count),
                     w::ghost_style,
                     Some(core(Event::ShowAllThreads { project_id: proj.id.clone() })),
                 ))
-                .padding(Padding { left: L, ..Padding::ZERO }),
+                .padding(Padding { left: SIDEBAR_STATUS_COL + S, ..Padding::ZERO }),
             );
         }
         if proj.earlier_count > 0 {
             let open = app.earlier_shown.contains(&proj.id);
-            col = col.push(
+            nested = nested.push(
                 container(w::small_button(
                     if open {
                         format!("Hide earlier sessions ({})", proj.earlier_count)
@@ -352,16 +462,47 @@ fn project_section<'a>(app: &'a App, proj: &'a SidebarProjectView) -> Element<'a
                     w::ghost_style,
                     Some(Message::ToggleEarlier(proj.id.clone())),
                 ))
-                .padding(Padding { left: L, ..Padding::ZERO }),
+                .padding(Padding { left: SIDEBAR_STATUS_COL + S, ..Padding::ZERO }),
             );
             if open {
                 for t in &proj.earlier {
-                    col = col.push(thread_row(app, t, false));
+                    nested = nested.push(thread_row(app, t, false));
                 }
             }
         }
+        col = col.push(container(nested).padding(Padding { left: M, ..Padding::ZERO }).width(Length::Fill));
     }
     col.into()
+}
+
+/// Project avatar tile with an optional status dot badged cleanly at the bottom-right corner.
+fn project_avatar_badged<'a>(
+    icon_view: &'a ProjectIconView,
+    status_tone: Option<w::Tone>,
+    images: &'a std::collections::HashMap<String, iced::widget::image::Handle>,
+) -> Element<'a, Message> {
+    let tile = w::project_icon_tile(icon_view, SIDEBAR_ICON_COL, images);
+    let Some(tone) = status_tone else {
+        return container(tile).width(SIDEBAR_ICON_COL).height(SIDEBAR_ICON_COL).into();
+    };
+    let badge = container(w::dot(tone, 7.0))
+        .padding(1.5)
+        .style(|t: &Theme| container::Style {
+            background: Some(Background::Color(colors(t).surface)),
+            border: Border { radius: RADIUS_PILL.into(), ..Border::default() },
+            ..Default::default()
+        });
+    stack![
+        tile,
+        container(badge)
+            .width(SIDEBAR_ICON_COL)
+            .height(SIDEBAR_ICON_COL)
+            .align_x(Alignment::End)
+            .align_y(Alignment::End),
+    ]
+    .width(SIDEBAR_ICON_COL)
+    .height(SIDEBAR_ICON_COL)
+    .into()
 }
 
 fn thread_row<'a>(app: &'a App, t: &'a ThreadRowView, show_project: bool) -> Element<'a, Message> {
@@ -372,11 +513,11 @@ fn thread_row<'a>(app: &'a App, t: &'a ThreadRowView, show_project: bool) -> Ele
     let working_tone: w::Tone = if planning { |c| c.violet } else { |c| c.success };
     let now = now_ms();
 
-    let status_dot: Option<Element<'a, Message>> = match t.status.as_str() {
-        "working" => Some(w::dot(working_tone, 7.0)),
-        "approval" => Some(w::dot(move |c: &crate::ui::theme::Hearth| if t.question { c.info } else { c.warning }, 7.0)),
-        "failed" => Some(w::dot(|c| c.danger, 7.0)),
-        _ if t.unread => Some(w::dot(|c| c.accent, 6.0)),
+    let status_tone: Option<w::Tone> = match t.status.as_str() {
+        "working" => Some(working_tone),
+        "approval" => Some(if t.question { |c| c.info } else { |c| c.warning }),
+        "failed" => Some(|c| c.danger),
+        _ if t.unread => Some(|c| c.accent),
         _ => None,
     };
 
@@ -422,14 +563,28 @@ fn thread_row<'a>(app: &'a App, t: &'a ThreadRowView, show_project: bool) -> Ele
     if t.pinned {
         title_line = title_line.push(w::themed_icon(Icon::Pin, ICON_XS, |c| c.accent));
     }
-    title_line = title_line
-        .push(text(title).size(TEXT_UI).font(if t.unread || selected { fonts::SEMIBOLD } else { fonts::INTER }).width(Length::Fill));
+    title_line = title_line.push(
+        container(
+            text(title)
+                .size(TEXT_UI)
+                .font(if t.unread || selected { fonts::SEMIBOLD } else { fonts::INTER })
+                .wrapping(text::Wrapping::None),
+        )
+        .width(Length::Fill)
+        .clip(true),
+    );
     if snoozed {
         title_line = title_line.push(w::with_tooltip(w::themed_icon(Icon::Clock, ICON_XS, |c| c.info), "Snoozed"));
     }
     title_line = title_line.push(right_el);
 
-    let mut sub_line = row![container(w::muted(meta, TEXT_CAPTION).wrapping(text::Wrapping::None)).width(Length::Fill).clip(true)].spacing(XS).align_y(Alignment::Center);
+    let mut sub_line = row![
+        container(w::muted(meta, TEXT_CAPTION).wrapping(text::Wrapping::None))
+            .width(Length::Fill)
+            .clip(true),
+    ]
+    .spacing(XS)
+    .align_y(Alignment::Center);
     if t.plan_ready {
         sub_line = sub_line.push(w::badge_capsule("Plan", Some(|c| c.violet)));
     }
@@ -452,24 +607,23 @@ fn thread_row<'a>(app: &'a App, t: &'a ThreadRowView, show_project: bool) -> Ele
         sub_line = sub_line.push(w::badge_capsule(t.source.clone(), None));
     }
 
-    let mut row_body = row![].spacing(S).align_y(Alignment::Center);
-    if show_project {
-        row_body = row_body.push(w::project_icon_tile(&t.project_icon, 24.0, &app.images));
-    }
-    if let Some(dot) = status_dot {
-        row_body = row_body.push(dot);
-    }
-    row_body = row_body.push(column![title_line, sub_line].spacing(XXS).width(Length::Fill));
+    // Fixed-width leading indicator column keeps all thread titles aligned vertically.
+    let leading: Element<'a, Message> = if show_project {
+        project_avatar_badged(&t.project_icon, status_tone, &app.images)
+    } else {
+        let mark: Element<'a, Message> = match status_tone {
+            Some(tone) => w::dot(tone, 7.0),
+            None => Space::new().into(),
+        };
+        container(mark).width(SIDEBAR_STATUS_COL).center_x(SIDEBAR_STATUS_COL).into()
+    };
 
-    row![
-        w::list_row(row_body, selected, true).on_press(core(Event::SelectThread { thread_id: t.id.clone() })),
-        w::icon_button(
-            Icon::Ellipsis,
-            "Thread actions",
-            Some(Message::Overlay(Some(Overlay::ThreadMenu(t.id.clone())))),
-        ),
-    ]
-    .spacing(XXS)
-    .align_y(Alignment::Center)
-    .into()
+    let row_body = row![leading, column![title_line, sub_line].spacing(XXS).width(Length::Fill)]
+        .spacing(S)
+        .align_y(Alignment::Center);
+
+    let row_btn = w::list_row(row_body, selected, true).on_press(core(Event::SelectThread { thread_id: t.id.clone() }));
+    mouse_area(row_btn)
+        .on_right_press(Message::Overlay(Some(Overlay::ThreadMenu(t.id.clone()))))
+        .into()
 }

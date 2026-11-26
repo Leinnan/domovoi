@@ -23,7 +23,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
     let search = container(
         w::input("Search files…", &app.file_query_input).on_input(Message::FileQueryChanged),
     )
-    .padding(S);
+    .padding([S, CHROME_PAD_X]);
 
     let mut main = Column::new();
     if !files.root.is_empty() {
@@ -38,11 +38,11 @@ pub fn view(app: &App) -> Element<'_, Message> {
                 .align_y(Alignment::Center),
                 &files.root,
             ))
-            .padding(Padding { top: S, right: S, bottom: 0.0, left: M }),
+            .padding(Padding { top: M, right: CHROME_PAD_X, bottom: 0.0, left: CHROME_PAD_X }),
         );
     }
 
-    let mut tree = Column::new().spacing(XXS).padding([0.0, XS]);
+    let mut tree = Column::new().spacing(XXS).padding([0.0, S]);
     if !files.query.is_empty() {
         for entry in &files.results {
             tree = tree.push(file_row(entry, true, files.preview.as_ref().map(|p| p.path.as_str())));
@@ -143,7 +143,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
 /// A file preview's header bar over its body, as the Files and Artifacts panels show it.
 pub fn preview_frame<'a>(header: impl Into<Element<'a, Message>>, body: Element<'a, Message>) -> Column<'a, Message> {
     column![
-        container(header).padding([TIGHT, S]).style(w::surface),
+        container(header).padding([S, CHROME_PAD_X]).style(w::surface),
         w::divider(),
         container(body).width(Length::Fill).height(Length::Fill).style(w::sunken),
     ]

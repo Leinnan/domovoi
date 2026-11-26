@@ -179,7 +179,7 @@ pub fn view<'a>(app: &'a App, images: &'a [ImageView], index: usize) -> Element<
 pub fn menu<'a>(images: &'a [ImageView], index: usize) -> Element<'a, Message> {
     let Some(img) = images.get(index) else { return Space::new().into() };
     let act = |action: ImageAction| Message::Image { action, image: img.clone() };
-    w::dialog(
+    w::menu_dialog(
         column![
             w::dialog_header(Some((Icon::Image, |c| c.accent)), img.name.as_str(), Some(Message::Overlay(None))),
             w::menu_item(Icon::Eye, "Open", Message::OpenImages { images: images.to_vec(), index }, false),

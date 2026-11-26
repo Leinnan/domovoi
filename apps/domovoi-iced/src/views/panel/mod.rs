@@ -63,7 +63,11 @@ pub fn view(app: &App) -> Element<'_, Message> {
     };
 
     column![
-        container(bar).padding([TIGHT, S]).width(Length::Fill),
+        container(bar)
+            .height(SUB_BAR_HEIGHT)
+            .align_y(Alignment::Center)
+            .padding([0.0, CHROME_PAD_X])
+            .width(Length::Fill),
         w::divider(),
         container(content).width(Length::Fill).height(Length::Fill),
     ]

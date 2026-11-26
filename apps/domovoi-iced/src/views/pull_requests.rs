@@ -28,7 +28,10 @@ pub fn view(app: &App) -> Element<'_, Message> {
         .spacing(S)
         .align_y(Alignment::Center),
     )
-    .padding([S, L])
+    .height(SUB_BAR_HEIGHT)
+    .align_y(Alignment::Center)
+    .padding([0.0, CONTENT_GUTTER])
+    .width(Length::Fill)
     .style(w::surface);
 
     // Master list
@@ -53,31 +56,31 @@ pub fn view(app: &App) -> Element<'_, Message> {
                 _ if pr.draft => |c| c.muted,
                 _ => |c| c.success,
             };
-            left = left.push(
-                w::list_row(
-                    column![
-                        row![
-                            text(format!("#{} {}", pr.number, pr.title)).size(TEXT_UI).font(fonts::MEDIUM).width(Length::Fill),
-                            w::badge_capsule(if pr.draft { "Draft" } else { pr.state.as_str() }, Some(state_tone)),
-                        ]
-                        .spacing(XS)
-                        .align_y(Alignment::Center),
-                        w::muted(format!("{} · {} · {}", pr.repository, pr.author, pr.age), TEXT_CAPTION),
-                        if !pr.checks.is_empty() { w::faint(&pr.checks, TEXT_CAPTION) } else { w::faint("", TEXT_CAPTION) },
+            let mut item_col = Column::new()
+                .spacing(XXS)
+                .width(Length::Fill)
+                .push(
+                    row![
+                        text(format!("#{} {}", pr.number, pr.title)).size(TEXT_UI).font(fonts::MEDIUM).width(Length::Fill),
+                        w::badge_capsule(if pr.draft { "Draft" } else { pr.state.as_str() }, Some(state_tone)),
                     ]
-                    .spacing(XXS)
-                    .width(Length::Fill),
-                    selected,
-                    true,
+                    .spacing(XS)
+                    .align_y(Alignment::Center),
                 )
-                .on_press(core(Event::SelectPullRequest { key: pr.key.clone() })),
+                .push(w::muted(format!("{} · {} · {}", pr.repository, pr.author, pr.age), TEXT_CAPTION));
+            if !pr.checks.is_empty() {
+                item_col = item_col.push(w::faint(&pr.checks, TEXT_CAPTION));
+            }
+            left = left.push(
+                w::list_row(item_col, selected, true)
+                    .on_press(core(Event::SelectPullRequest { key: pr.key.clone() })),
             );
         }
     }
 
     // Detail pane
     let right: Element<'_, Message> = if let Some(d) = &prs.selected {
-        let mut col = Column::new().spacing(M).padding(L);
+        let mut col = Column::new().spacing(L).padding(CONTENT_GUTTER);
         col = col.push(
             row![
                 column![

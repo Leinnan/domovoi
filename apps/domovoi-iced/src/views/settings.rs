@@ -39,7 +39,7 @@ const SECTIONS: [(SettingsSection, Icon, &str, bool); 10] = [
 pub fn view(app: &App, active: SettingsSection) -> Element<'_, Message> {
     let connected = matches!(app.vm.connection.state.as_str(), "connected" | "reconnecting");
 
-    let mut nav = Column::new().spacing(XXS).padding(S).width(Length::Fixed(184.0));
+    let mut nav = Column::new().spacing(XS).padding(M).width(Length::Fixed(192.0));
     for (sec, ic, label, needs_conn) in SECTIONS {
         if needs_conn && !connected {
             continue;
@@ -81,7 +81,7 @@ pub fn view(app: &App, active: SettingsSection) -> Element<'_, Message> {
             row![
                 container(nav).height(Length::Fill).style(w::surface),
                 w::vdivider(),
-                container(w::scroll(container(content).padding(L)).height(Length::Fill))
+                container(w::scroll(container(content).padding(CONTENT_GUTTER)).height(Length::Fill))
                     .width(Length::Fill)
                     .height(Length::Fill)
                     .style(w::page),
@@ -123,7 +123,7 @@ fn appearance_tab(app: &App) -> Element<'_, Message> {
 
 fn general_tab(app: &App) -> Element<'_, Message> {
     let conn = &app.vm.connection;
-    let mut col = Column::new().spacing(M).push(
+    let mut col = Column::new().spacing(L).push(
         w::card(
             column![
                 w::heading("Connected Server"),
@@ -131,13 +131,14 @@ fn general_tab(app: &App) -> Element<'_, Message> {
                 kv_row("Environment", &conn.environment_label),
                 kv_row("Version", &conn.server_version),
                 kv_row("Platform", &conn.platform),
+                Space::new().height(XS),
                 row![
                     w::small_button("Disconnect", w::danger_style, Some(core(Event::Disconnect))),
                     w::small_button("Resync", w::secondary_style, Some(core(Event::Resync))),
                 ]
                 .spacing(S),
             ]
-            .spacing(XS),
+            .spacing(S),
         )
         .width(Length::Fill),
     );
@@ -183,17 +184,17 @@ fn general_tab(app: &App) -> Element<'_, Message> {
                     .into()
                 }
             };
+            let mut label_col = Column::new()
+                .spacing(XXS)
+                .width(Length::Fill)
+                .push(text(&field.label).size(TEXT_UI).font(fonts::MEDIUM));
+            if !field.help.is_empty() {
+                label_col = label_col.push(w::muted(&field.help, TEXT_CAPTION));
+            }
             g_col = g_col.push(
-                row![
-                    column![
-                        text(&field.label).size(TEXT_UI).font(fonts::MEDIUM),
-                        if !field.help.is_empty() { w::muted(&field.help, TEXT_CAPTION) } else { w::muted("", TEXT_CAPTION) },
-                    ]
-                    .width(Length::Fill),
-                    control,
-                ]
-                .spacing(M)
-                .align_y(Alignment::Center),
+                row![label_col, control]
+                    .spacing(M)
+                    .align_y(Alignment::Center),
             );
         }
         col = col.push(w::card(g_col).width(Length::Fill));
@@ -695,13 +696,13 @@ fn icon_file_picker<'a>(app: &'a App, p: &'a ProjectSettingsView) -> Element<'a,
     if files.truncated {
         col = col.push(w::faint("Search to narrow the results.", TEXT_CAPTION));
     }
-    container(col).padding(S).width(Length::Fill).style(w::sunken).into()
+    container(col).padding(M).width(Length::Fill).style(w::inset_sunken).into()
 }
 
 fn maintenance_tab(app: &App) -> Element<'_, Message> {
     let st = &app.vm.settings.storage;
     let diag = &app.vm.settings.diagnostics;
-    let mut proc_col = Column::new().spacing(XXS).push(w::heading("Server processes"));
+    let mut proc_col = Column::new().spacing(XS).push(Space::new().height(XS)).push(w::heading("Server processes"));
     for pr in &diag.processes {
         proc_col = proc_col.push(
             row![
@@ -720,13 +721,14 @@ fn maintenance_tab(app: &App) -> Element<'_, Message> {
                 kv_row("Database size", &st.database_size),
                 kv_row("Reclaimable", &st.reclaimable),
                 kv_row("Last cleanup", &st.last_cleanup),
+                Space::new().height(XS),
                 row![
                     w::small_button("Run Cleanup", w::secondary_style, (!st.busy).then(|| core(Event::RunStorageCleanup))),
                     w::small_button("Reclaim Space", w::secondary_style, (!st.busy).then(|| core(Event::ReclaimDatabase))),
                 ]
                 .spacing(S),
             ]
-            .spacing(XS),
+            .spacing(S),
         )
         .width(Length::Fill),
         w::card(
@@ -736,17 +738,17 @@ fn maintenance_tab(app: &App) -> Element<'_, Message> {
                 kv_row("Memory", &diag.memory),
                 proc_col,
             ]
-            .spacing(XS),
+            .spacing(S),
         )
         .width(Length::Fill),
     ]
-    .spacing(M)
+    .spacing(L)
     .into()
 }
 
 fn access_tab(app: &App) -> Element<'_, Message> {
     let rem = &app.vm.settings.remote;
-    let mut col = Column::new().spacing(M);
+    let mut col = Column::new().spacing(L);
 
     if rem.available {
         let mut r_col = Column::new().spacing(S).push(
@@ -778,7 +780,7 @@ fn access_tab(app: &App) -> Element<'_, Message> {
             r_col = r_col.push(w::colored(err, TEXT_SMALL, |c| c.danger));
         }
         if rem.enabled {
-            r_col = r_col.push(w::icon_label_button(
+            r_col = r_col.push(Space::new().height(XS)).push(w::icon_label_button(
                 Icon::QrCode,
                 "Create Pairing Link & QR",
                 w::Kind::Primary,
@@ -869,13 +871,13 @@ fn companion_tab(app: &App) -> Element<'_, Message> {
         None => (String::new(), app.vm.connection.companion.look.clone()),
     };
 
-    let mut col = Column::new().spacing(M);
+    let mut col = Column::new().spacing(L);
     if !envs.is_empty() {
         let mut srv_row = row![].spacing(XS);
         for e in envs {
             srv_row = srv_row.push(
                 button(text(&e.label).size(TEXT_SMALL))
-                    .padding([4.0, S])
+                    .padding(CHIP_PAD)
                     .style(w::chip_style(e.id == env_id))
                     .on_press(Message::CompanionServerSelected(e.id.clone())),
             );
@@ -1057,5 +1059,5 @@ fn webhook_deliveries(deliveries: &[WebhookDeliveryView]) -> Element<'_, Message
             .align_y(Alignment::Center),
         );
     }
-    container(col).padding(S).width(Length::Fill).style(w::sunken).into()
+    container(col).padding(M).width(Length::Fill).style(w::inset_sunken).into()
 }

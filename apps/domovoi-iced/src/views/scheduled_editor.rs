@@ -199,7 +199,7 @@ fn field<'a>(label: &'a str, control: impl Into<Element<'a, Message>>) -> Elemen
 
 fn pick<'a>(options: Vec<Choice>, current: &str, placeholder: &'a str, on_pick: impl Fn(Choice) -> Message + 'a) -> Element<'a, Message> {
     let selected = options.iter().find(|c| c.key == current).cloned();
-    iced::widget::pick_list(options, selected, on_pick).placeholder(placeholder).text_size(TEXT_UI).padding([6.0, 10.0]).width(Length::Fill).into()
+    iced::widget::pick_list(options, selected, on_pick).placeholder(placeholder).text_size(TEXT_UI).padding(INPUT_PAD).width(Length::Fill).into()
 }
 
 fn choices<K: ToString + Copy>(items: &[(K, &str)]) -> Vec<Choice> {
@@ -225,7 +225,7 @@ pub fn view<'a>(app: &'a App, d: &'a ScheduledDraft) -> Element<'a, Message> {
     col = col.push(what);
 
     // When
-    let mut when = Column::new().spacing(S).push(w::section("When"));
+    let mut when = Column::new().spacing(S).push(w::heading("When"));
     when = when.push(w::segmented(
         &[("interval", None, "Every"), ("fixed_time", None, "At a time"), ("once", None, "Once"), ("webhook", None, "Webhook")],
         e.schedule_kind.as_str(),
@@ -270,7 +270,7 @@ pub fn view<'a>(app: &'a App, d: &'a ScheduledDraft) -> Element<'a, Message> {
     col = col.push(when);
 
     // Where
-    let mut where_ = Column::new().spacing(S).push(w::section("Where"));
+    let mut where_ = Column::new().spacing(S).push(w::heading("Where"));
     let projects: Vec<Choice> = s.projects.iter().map(|p| Choice { key: p.id.clone(), label: p.title.clone() }).collect();
     where_ = where_.push(field("Project", pick(projects, &e.project_id, "Choose a project", move |c| update(d, |n| {
         if n.edit.project_id != c.key {
@@ -321,7 +321,7 @@ pub fn view<'a>(app: &'a App, d: &'a ScheduledDraft) -> Element<'a, Message> {
     col = col.push(where_);
 
     // Agent
-    let mut agent = Column::new().spacing(S).push(w::section("Agent"));
+    let mut agent = Column::new().spacing(S).push(w::heading("Agent"));
     let permissions = if d.bound_to_chosen_thread() {
         d.thread_runtime_mode.clone().or_else(|| chosen.map(|t| if t.runtime_mode.is_empty() { "approval-required".to_owned() } else { t.runtime_mode.clone() })).unwrap_or_else(|| "approval-required".into())
     } else {
@@ -404,8 +404,8 @@ fn thread_picker<'a>(d: &'a ScheduledDraft, threads: &[&'a ScheduledThreadChoice
         list = list.push(w::faint(if threads.is_empty() { "This project has no threads yet." } else { "No threads match." }, TEXT_SMALL));
     }
     container(column![w::input("Search threads…", &d.thread_query).on_input(move |v| update(d, |n| n.thread_query = v)), w::scroll(list).height(Length::Fixed(200.0))].spacing(S))
-        .padding(S)
-        .style(w::sunken)
+        .padding(M)
+        .style(w::inset_sunken)
         .into()
 }
 

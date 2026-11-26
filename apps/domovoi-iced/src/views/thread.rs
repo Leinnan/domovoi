@@ -73,7 +73,10 @@ pub fn thread_view<'a>(app: &'a App, thread: &'a ThreadPageView) -> Element<'a, 
     }
 
     // Banners: waiting children, usage limit reset (plan and tasks sit above the composer).
-    let mut banners = Column::new().spacing(XS).padding([S, L]).max_width(TRANSCRIPT_MAX_WIDTH);
+    let mut banners = Column::new()
+        .spacing(S)
+        .padding(Padding { top: M, bottom: 0.0, left: CONTENT_GUTTER, right: CONTENT_GUTTER })
+        .max_width(TRANSCRIPT_MAX_WIDTH);
     let mut has_banners = false;
 
     for child in &thread.waiting_children {
@@ -124,7 +127,7 @@ pub fn thread_view<'a>(app: &'a App, thread: &'a ThreadPageView) -> Element<'a, 
     }
 
     // Transcript body
-    let mut transcript = Column::new().spacing(M).padding([L, L]).max_width(TRANSCRIPT_MAX_WIDTH).width(Length::Fill);
+    let mut transcript = Column::new().spacing(L).padding([L, CONTENT_GUTTER]).max_width(TRANSCRIPT_MAX_WIDTH).width(Length::Fill);
 
     if thread.loading && thread.items.is_empty() {
         transcript = transcript.push(w::muted("Loading thread…", TEXT_UI));
@@ -193,7 +196,7 @@ pub fn thread_view<'a>(app: &'a App, thread: &'a ThreadPageView) -> Element<'a, 
                 .spacing(S)
                 .align_y(Alignment::Center),
             )
-            .padding(S)
+            .padding(CARD_PAD_COMPACT)
             .style(w::card_style),
         );
     }
@@ -242,7 +245,7 @@ fn work_progress<'a>(app: &'a App, t: &'a ThreadPageView) -> Element<'a, Message
     }
     strip = strip.push(w::themed_icon(if open { Icon::ChevronDown } else { Icon::ChevronUp }, ICON_XS, |c| c.muted));
     let strip = w::with_tooltip(
-        button(strip).width(Length::Fill).padding([TIGHT, M]).style(w::chip_style(open)).on_press(Message::ToggleProgress),
+        button(strip).width(Length::Fill).padding([S, M]).style(w::bar_chip_style(open)).on_press(Message::ToggleProgress),
         if open { "Hide plan and checklist" } else { "Show plan and checklist" },
     );
 
@@ -287,7 +290,10 @@ fn work_progress<'a>(app: &'a App, t: &'a ThreadPageView) -> Element<'a, Message
         col = col.push(w::card(w::scroll(details).height(Length::Shrink)).max_height(360.0).width(Length::Fill));
     }
     col = col.push(strip);
-    container(col).center_x(Length::Fill).padding(Padding { top: XS, bottom: 0.0, left: L, right: L }).into()
+    container(col)
+        .center_x(Length::Fill)
+        .padding(Padding { top: XS, bottom: XS, left: CONTENT_GUTTER, right: CONTENT_GUTTER })
+        .into()
 }
 
 /// A to-do list: done, under way and waiting steps.
@@ -309,7 +315,8 @@ fn thread_header<'a>(app: &'a App, t: &'a ThreadPageView) -> Element<'a, Message
     let mut left = row![
         text(if t.title.is_empty() { "New thread" } else { t.title.as_str() })
             .size(TEXT_BODY)
-            .font(fonts::SEMIBOLD),
+            .font(fonts::SEMIBOLD)
+            .wrapping(text::Wrapping::None),
     ]
     .spacing(S)
     .align_y(Alignment::Center);
@@ -364,7 +371,9 @@ fn thread_header<'a>(app: &'a App, t: &'a ThreadPageView) -> Element<'a, Message
     right = right.push(w::icon_button(Icon::Ellipsis, "Thread actions", Some(Message::Overlay(Some(Overlay::ThreadMenu(t.id.clone()))))));
 
     container(row![left, Space::new().width(Length::Fill), right].spacing(S).align_y(Alignment::Center))
-        .padding([S, L])
+        .height(SUB_BAR_HEIGHT)
+        .align_y(Alignment::Center)
+        .padding([0.0, CONTENT_GUTTER])
         .width(Length::Fill)
         .style(w::surface)
         .into()
@@ -393,7 +402,7 @@ fn find_bar<'a>(app: &'a App, find: &'a domovoi_core::view::FindView) -> Element
         .spacing(XS)
         .align_y(Alignment::Center),
     )
-    .padding([TIGHT, L])
+    .padding([S, CONTENT_GUTTER])
     .style(w::surface)
     .into()
 }
@@ -442,7 +451,7 @@ fn tool_group_view<'a>(app: &'a App, items: &'a [ItemView]) -> Element<'a, Messa
         col = col.push(container(turn_footer(last)).padding([0.0, S]));
     }
 
-    container(col).padding(XS).width(Length::Fill).style(w::surface).into()
+    container(col).padding([XS, S]).width(Length::Fill).style(w::inset_surface).into()
 }
 
 fn item_view<'a>(app: &'a App, item: &'a ItemView) -> Element<'a, Message> {
@@ -457,13 +466,7 @@ fn item_view<'a>(app: &'a App, item: &'a ItemView) -> Element<'a, Message> {
             if !item.images.is_empty() {
                 bubble_col = bubble_col.push(image_viewer::entry_images(app, &item.images, 200.0));
             }
-            let actions = row![
-                Space::new().width(Length::Fill),
-                w::icon_button(Icon::Copy, "Copy message", Some(Message::CopyText(item.text.clone()))),
-                w::icon_button(Icon::Pencil, "Edit & resend", Some(core(Event::EditMessage { text: item.text.clone() }))),
-            ]
-            .spacing(XXS);
-            let bubble = container(column![bubble_col, actions].spacing(XS))
+            let bubble = container(bubble_col)
                 .padding([M, L])
                 .max_width(680)
                 .style(|t: &Theme| {
@@ -475,7 +478,16 @@ fn item_view<'a>(app: &'a App, item: &'a ItemView) -> Element<'a, Message> {
                         ..Default::default()
                     }
                 });
-            container(bubble).width(Length::Fill).align_x(Alignment::End).into()
+            let actions = row![
+                w::icon_button_compact(Icon::Copy, "Copy message", Some(Message::CopyText(item.text.clone()))),
+                w::icon_button_compact(Icon::Pencil, "Edit & resend", Some(core(Event::EditMessage { text: item.text.clone() }))),
+            ]
+            .spacing(XXS)
+            .align_y(Alignment::Center);
+            container(column![bubble, actions].spacing(XXS).align_x(Alignment::End))
+                .width(Length::Fill)
+                .align_x(Alignment::End)
+                .into()
         }
         "assistant" => {
             let content: Element<'a, Message> = if item.blocks.is_empty() {
@@ -529,7 +541,7 @@ fn item_view<'a>(app: &'a App, item: &'a ItemView) -> Element<'a, Message> {
             col.into()
         }
         "plan" => {
-            let mut col = Column::new().spacing(S);
+            let mut col = Column::new().spacing(M);
             let mut hdr = row![
                 w::themed_icon(Icon::ClipboardList, ICON, |c| c.violet),
                 text(if item.title.is_empty() { "Proposed Plan" } else { item.title.as_str() })
@@ -563,7 +575,7 @@ fn item_view<'a>(app: &'a App, item: &'a ItemView) -> Element<'a, Message> {
             } else if !item.text.is_empty() {
                 col = col.push(text(&item.text).size(body_size));
             }
-            container(col).padding(M).width(Length::Fill).style(w::banner_style(|c| c.violet)).into()
+            container(col).padding(CARD_PAD).width(Length::Fill).style(w::banner_style(|c| c.violet)).into()
         }
         "todo" => {
             let mut col = Column::new().spacing(XS).push(
@@ -662,7 +674,7 @@ fn item_view<'a>(app: &'a App, item: &'a ItemView) -> Element<'a, Message> {
             if item.can_retry {
                 r = r.push(w::small_button("Retry", w::primary_style, Some(core(Event::Retry))));
             }
-            container(r).padding(M).width(Length::Fill).style(w::banner_style(|c| c.danger)).into()
+            container(r).padding(CARD_PAD).width(Length::Fill).style(w::banner_style(|c| c.danger)).into()
         }
         "artifact" => artifact_card(app, item),
         "notice" => container(
@@ -757,9 +769,9 @@ fn step_row_view<'a>(app: &'a App, item: &'a ItemView) -> Element<'a, Message> {
             && !output.is_empty() {
                 details = details.push(
                     container(text(output.as_ref()).font(fonts::MONO).size(TEXT_CODE))
-                        .padding(S)
+                        .padding([S, M])
                         .width(Length::Fill)
-                        .style(w::sunken),
+                        .style(w::inset_sunken),
                 );
             }
         if let Some(diff) = &item.diff {
@@ -818,7 +830,7 @@ fn work_link_chip(link: &WorkLinkView) -> Element<'_, Message> {
 /// A secret the agent asked for: a password field, Save and Decline. What
 /// is typed stays in this window (`App::secret_drafts`) until it is sent.
 fn secret_request_card<'a>(app: &'a App, asked: &'a SecretRequestView) -> Element<'a, Message> {
-    let mut col = Column::new().spacing(S).push(
+    let mut col = Column::new().spacing(M).push(
         row![
             w::themed_icon(Icon::Key, ICON, |c| c.warning),
             text(format!("The agent asks for {}", asked.label)).size(TEXT_UI).font(fonts::SEMIBOLD).width(Length::Fill),
@@ -852,13 +864,13 @@ fn secret_request_card<'a>(app: &'a App, asked: &'a SecretRequestView) -> Elemen
         ]
         .spacing(S),
     );
-    container(col).padding(M).width(Length::Fill).style(w::card_style).into()
+    container(col).padding(CARD_PAD).width(Length::Fill).style(w::card_style).into()
 }
 
 fn pending_request_card<'a>(app: &'a App, req: &'a RequestView) -> Element<'a, Message> {
     let is_question = !req.questions.is_empty();
     let tone: w::Tone = if is_question { |c| c.info } else { |c| c.warning };
-    let mut col = Column::new().spacing(S).push(
+    let mut col = Column::new().spacing(M).push(
         row![
             w::themed_icon(if is_question { Icon::CircleHelp } else { Icon::Shield }, ICON, tone),
             text(&req.prompt).size(TEXT_UI).font(fonts::SEMIBOLD).width(Length::Fill),
@@ -869,7 +881,7 @@ fn pending_request_card<'a>(app: &'a App, req: &'a RequestView) -> Element<'a, M
 
     if let Some(detail) = &req.detail
         && !detail.is_empty() {
-            col = col.push(container(text(detail).font(fonts::MONO).size(TEXT_CODE)).padding(S).width(Length::Fill).style(w::sunken));
+            col = col.push(container(text(detail).font(fonts::MONO).size(TEXT_CODE)).padding([S, M]).width(Length::Fill).style(w::inset_sunken));
         }
 
     for f in &req.files {
@@ -891,6 +903,13 @@ fn pending_request_card<'a>(app: &'a App, req: &'a RequestView) -> Element<'a, M
             q_col = q_col.push(q_line);
             for opt in &q.options {
                 let checked = q_draft.is_some_and(|d| d.selected.iter().any(|v| v == &opt.value));
+                let mut opt_col = Column::new()
+                    .spacing(XXS)
+                    .width(Length::Fill)
+                    .push(text(&opt.label).size(TEXT_UI).font(fonts::MEDIUM));
+                if !opt.description.is_empty() {
+                    opt_col = opt_col.push(w::muted(&opt.description, TEXT_SMALL));
+                }
                 q_col = q_col.push(
                     w::list_row(
                         row![
@@ -899,16 +918,7 @@ fn pending_request_card<'a>(app: &'a App, req: &'a RequestView) -> Element<'a, M
                                 ICON_SMALL,
                                 move |c| if checked { c.accent } else { c.muted },
                             ),
-                            column![
-                                text(&opt.label).size(TEXT_UI).font(fonts::MEDIUM),
-                                if !opt.description.is_empty() {
-                                    w::muted(&opt.description, TEXT_SMALL)
-                                } else {
-                                    w::muted("", TEXT_SMALL)
-                                },
-                            ]
-                            .spacing(1.0)
-                            .width(Length::Fill),
+                            opt_col,
                         ]
                         .spacing(S)
                         .align_y(Alignment::Center),
@@ -1078,7 +1088,7 @@ pub fn new_thread_view(app: &App) -> Element<'_, Message> {
                         .spacing(XS)
                         .align_y(Alignment::Center),
                 )
-                .padding([4.0, S])
+                .padding(CHIP_PAD)
                 .style(w::chip_style(active))
                 .on_press(core(Event::NewThread { project_id: Some(p.id.clone()) })),
             );
@@ -1099,7 +1109,7 @@ pub fn new_thread_view(app: &App) -> Element<'_, Message> {
             let active = comp.base_branch.as_deref() == Some(br.as_str());
             ws_row = ws_row.push(
                 button(text(br).size(TEXT_SMALL).font(fonts::MONO))
-                    .padding([4.0, S])
+                    .padding(CHIP_PAD)
                     .style(w::chip_style(active))
                     .on_press(core(Event::SetBaseBranch { branch: br.clone() })),
             );
@@ -1261,7 +1271,7 @@ fn usage_meter<'a>(app: &'a App, u: &'a domovoi_core::view::SessionUsageView) ->
         tip.push(format!("{} limits: {}", lim.provider, u.limits_notice));
     }
     w::with_tooltip(
-        button(r).padding([3.0, S]).style(w::chip_style(matches!(app.overlay, Some(Overlay::ContextPopover)))).on_press(Message::Overlay(Some(Overlay::ContextPopover))),
+        button(r).padding(CHIP_PAD).style(w::chip_style(matches!(app.overlay, Some(Overlay::ContextPopover)))).on_press(Message::Overlay(Some(Overlay::ContextPopover))),
         &tip.join("\n"),
     )
 }

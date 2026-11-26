@@ -1050,3 +1050,59 @@ fn a_link_from_outside_asks_before_anything_connects() {
     let pressed = messages_after_click_at(&app, iced::Point::new(720.0, 120.0));
     assert!(pressed.is_empty(), "{pressed:?}");
 }
+
+#[test]
+fn sidebar_grouping_add_menu_and_right_click_thread_actions() {
+    use iced::mouse;
+
+    let (mut app, _) = App::new();
+    app.prefs.appearance = Appearance::Dark;
+    app.vm = sample_connected_vm();
+
+    // Verify center thread header and right panel tab bar align horizontally.
+    {
+        let mut ui = Simulator::with_size(crate::ui::fonts::settings(), Size::new(1440.0, 900.0), crate::views::view(&app));
+        let header_y = ui.find("Artifacts (1)").unwrap().visible_bounds().unwrap().center().y;
+        let panel_tab_y = ui.find("Diff").unwrap().visible_bounds().unwrap().center().y;
+        assert!(
+            (header_y - panel_tab_y).abs() <= 2.0,
+            "thread header ({header_y}) and panel tab bar ({panel_tab_y}) should align"
+        );
+    }
+
+    // Footer "Add…" button opens SidebarAddMenu with all workspace/scratch items.
+    click(&mut app, "Add…");
+    assert_eq!(app.overlay, Some(Overlay::SidebarAddMenu));
+    snapshot(&app, "32-sidebar-add-menu");
+    {
+        let mut ui = Simulator::with_size(crate::ui::fonts::settings(), Size::new(1440.0, 900.0), crate::views::view(&app));
+        for item in ["New Project…", "Browse Server Folders…", "Import Agent Sessions…", "New Scratch Thread"] {
+            assert!(ui.find(item).is_ok(), "missing menu item: {item}");
+        }
+    }
+    let _ = app.update(Message::Overlay(None));
+
+    // Right-clicking a sidebar thread row opens ThreadMenu for that thread.
+    let row_center = {
+        let mut ui = Simulator::with_size(crate::ui::fonts::settings(), Size::new(1440.0, 900.0), crate::views::view(&app));
+        ui.find("Audit iroh relay reconnects").unwrap().visible_bounds().unwrap().center()
+    };
+    let right_clicked: Vec<Message> = {
+        let mut ui = Simulator::with_size(crate::ui::fonts::settings(), Size::new(1440.0, 900.0), crate::views::view(&app));
+        ui.point_at(row_center);
+        ui.simulate([
+            iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Right)),
+            iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Right)),
+        ]);
+        ui.into_messages().collect()
+    };
+    assert!(
+        right_clicked.iter().any(|m| matches!(m, Message::Overlay(Some(Overlay::ThreadMenu(id))) if id == "t2")),
+        "right-clicking thread row should open ThreadMenu(t2): {right_clicked:?}"
+    );
+
+    // Project grouping view with nested threads and earlier sessions toggle.
+    app.vm.sidebar.grouping = "project".into();
+    app.vm.sidebar.projects[0].earlier_count = 3;
+    snapshot(&app, "33-sidebar-project-grouping");
+}

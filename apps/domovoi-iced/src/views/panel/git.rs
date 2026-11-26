@@ -30,7 +30,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
         );
     }
 
-    let mut col = Column::new().spacing(M).padding(M);
+    let mut col = Column::new().spacing(M).padding(L);
 
     // Branch header & actions
     let branch_label = git.branch.as_deref().unwrap_or("(detached)");
@@ -62,7 +62,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
         for step in &git.progress {
             pcol = pcol.push(w::muted(step, TEXT_CAPTION));
         }
-        col = col.push(container(pcol).padding(S).width(Length::Fill).style(w::surface));
+        col = col.push(container(pcol).padding([S, M]).width(Length::Fill).style(w::inset_surface));
     }
 
     // Active Pull Request badge if present

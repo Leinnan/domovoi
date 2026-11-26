@@ -37,7 +37,7 @@ pub fn section<'a, M: 'a>(s: &str) -> Element<'a, M> {
 }
 
 pub fn heading<'a, M: 'a>(s: &str) -> Element<'a, M> {
-    container(section_text(s)).padding(Padding { top: S, bottom: XS, left: 0.0, right: 0.0 }).into()
+    container(section_text(s)).padding(Padding { top: 0.0, bottom: XS, left: 0.0, right: 0.0 }).into()
 }
 
 pub fn kbd<'a, M: 'a>(shortcut: &str) -> Element<'a, M> {
@@ -158,6 +158,14 @@ pub fn chip_style(active: bool) -> impl Fn(&Theme, button::Status) -> button::St
     }
 }
 
+pub fn bar_chip_style(active: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
+    move |t, status| {
+        let mut s = chip_style(active)(t, status);
+        s.border.radius = RADIUS_CHIP.into();
+        s
+    }
+}
+
 pub fn row_style(selected: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
     move |t, status| {
         let c = colors(t);
@@ -266,9 +274,18 @@ pub fn icon_button_tinted<'a, M: Clone + 'a>(i: Icon, tip: &str, msg: Option<M>,
             c.muted
         }
     }))
-    .padding(6.0)
+    .padding(TIGHT)
     .style(ghost_style)
     .on_press_maybe(msg);
+    with_tooltip(b, tip)
+}
+
+pub fn icon_button_compact<'a, M: Clone + 'a>(i: Icon, tip: &str, msg: Option<M>) -> Element<'a, M> {
+    let enabled = msg.is_some();
+    let b = button(themed_icon(i, ICON_SMALL, move |c| if enabled { c.muted } else { c.faint }))
+        .padding(XS)
+        .style(ghost_style)
+        .on_press_maybe(msg);
     with_tooltip(b, tip)
 }
 
@@ -350,8 +367,28 @@ pub fn banner_style(pick: Tone) -> impl Fn(&Theme) -> container::Style {
     }
 }
 
+pub fn inset_surface(t: &Theme) -> container::Style {
+    let c = colors(t);
+    container::Style {
+        background: Some(Background::Color(c.surface)),
+        text_color: Some(c.text),
+        border: Border { radius: RADIUS_CHIP.into(), width: 1.0, color: c.border },
+        ..Default::default()
+    }
+}
+
+pub fn inset_sunken(t: &Theme) -> container::Style {
+    let c = colors(t);
+    container::Style {
+        background: Some(Background::Color(c.sunken)),
+        text_color: Some(c.text),
+        border: Border { radius: RADIUS_CHIP.into(), width: 1.0, color: c.border },
+        ..Default::default()
+    }
+}
+
 pub fn card<'a, M: 'a>(content: impl Into<Element<'a, M>>) -> container::Container<'a, M> {
-    container(content).padding(M).style(card_style)
+    container(content).padding(CARD_PAD).style(card_style)
 }
 
 pub fn divider<'a, M: 'a>() -> Element<'a, M> {
@@ -408,7 +445,7 @@ pub fn input_style(t: &Theme, status: text_input::Status) -> text_input::Style {
 }
 
 pub fn input<'a, M: Clone + 'a>(placeholder: &str, value: &str) -> text_input::TextInput<'a, M> {
-    text_input(placeholder, value).size(TEXT_UI).padding([7.0, 10.0]).style(input_style)
+    text_input(placeholder, value).size(TEXT_UI).padding(INPUT_PAD).style(input_style)
 }
 
 pub fn editor_style(t: &Theme, status: text_editor::Status) -> text_editor::Style {
@@ -478,6 +515,10 @@ fn modal_layer<'a, M: Clone + 'a>(content: impl Into<Element<'a, M>>, close: Opt
 
 pub fn dialog<'a, M: 'a>(content: impl Into<Element<'a, M>>, width: f32) -> container::Container<'a, M> {
     container(content).padding(XL).width(width).style(popover_style)
+}
+
+pub fn menu_dialog<'a, M: 'a>(content: impl Into<Element<'a, M>>, width: f32) -> container::Container<'a, M> {
+    container(content).padding(L).width(width).style(popover_style)
 }
 
 pub fn dialog_header<'a, M: Clone + 'a>(i: Option<(Icon, Tone)>, title: impl text::IntoFragment<'a>, close: Option<M>) -> Element<'a, M> {

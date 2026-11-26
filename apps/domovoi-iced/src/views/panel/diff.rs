@@ -24,7 +24,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
         let active = src.value == diff.selected_source;
         source_row = source_row.push(
             button(text(&src.label).size(TEXT_SMALL))
-                .padding([4.0, S])
+                .padding(CHIP_PAD)
                 .style(w::chip_style(active))
                 .on_press(core(Event::SelectDiffSource { source: src.value.clone() })),
         );
@@ -44,7 +44,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
     } else {
         let total_add: u32 = diff.files.iter().map(|f| f.additions).sum();
         let total_del: u32 = diff.files.iter().map(|f| f.deletions).sum();
-        let mut col = Column::new().spacing(M).padding(M).push(
+        let mut col = Column::new().spacing(M).padding(L).push(
             row![
                 w::muted(
                     format!("{} file{}", diff.files.len(), if diff.files.len() == 1 { "" } else { "s" }),
@@ -65,7 +65,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
         w::scroll(col).height(Length::Fill).into()
     };
 
-    column![container(source_row).padding([S, M]), w::divider(), body].height(Length::Fill).into()
+    column![container(source_row).padding([S, CHROME_PAD_X]), w::divider(), body].height(Length::Fill).into()
 }
 
 fn diff_file_card(file: &DiffFileView, expanded: bool) -> Element<'_, Message> {

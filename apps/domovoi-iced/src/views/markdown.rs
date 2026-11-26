@@ -76,7 +76,7 @@ fn render_block<'a, M: Clone + 'a>(
             if block.level <= 2 {
                 c = c.push(w::divider());
             }
-            container(c).padding(Padding { top: XS, ..Padding::ZERO }).into()
+            container(c).padding(Padding { top: S, ..Padding::ZERO }).into()
         }
         "code" => render_code_block(block, body_size, dark, diagrams, images, map),
         "list_item" => {
@@ -111,7 +111,7 @@ fn render_block<'a, M: Clone + 'a>(
                         border: Border { radius: 2.0.into(), ..Border::default() },
                         ..Default::default()
                     }),
-                    container(content).width(Length::Fill).padding([XS, S]),
+                    container(content).width(Length::Fill).padding([S, M]),
                 ]
                 .spacing(S),
             )
@@ -175,7 +175,7 @@ fn render_code_block<'a, M: Clone + 'a>(
             .spacing(M)
             .align_y(Alignment::Center),
         )
-        .padding(M)
+        .padding(CARD_PAD)
         .width(Length::Fill)
         .style(w::card_style)
         .into();
@@ -248,7 +248,7 @@ fn render_code_block<'a, M: Clone + 'a>(
     .align_y(Alignment::Center);
 
     let body = w::code_spans_view(&block.spans, &block.text, dark, code_size);
-    container(column![header, w::divider(), container(body).padding([S, M])].spacing(0.0))
+    container(column![container(header).padding([TIGHT, M]), w::divider(), container(body).padding([S, M])].spacing(0.0))
         .width(Length::Fill)
         .style(|t: &Theme| {
             let c = colors(t);

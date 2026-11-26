@@ -147,7 +147,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
         )
     };
 
-    column![container(tab_row).padding([TIGHT, S]), w::divider(), body].height(Length::Fill).into()
+    column![container(tab_row).padding([S, CHROME_PAD_X]), w::divider(), body].height(Length::Fill).into()
 }
 
 fn terminal_canvas(screen: &TerminalScreenView, focused: bool, split: bool) -> Element<'_, Message> {

@@ -47,7 +47,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
     }
 
     let tid = app.vm.thread.as_ref().map(|t| t.id.clone()).unwrap_or_default();
-    let mut col = Column::new().spacing(S).padding(M).push(w::heading("Thread artifacts"));
+    let mut col = Column::new().spacing(S).padding(L).push(w::heading("Thread artifacts"));
     for item in &arts.items {
         let title = if item.title.is_empty() {
             markdown::artifact_kind_label(&item.kind).to_owned()
@@ -220,12 +220,12 @@ fn active_artifact_view<'a>(app: &'a App, art: &'a ActiveArtifactView) -> Elemen
         .spacing(XS)
         .align_y(Alignment::Center),
     )
-    .padding(S)
+    .padding([S, CHROME_PAD_X])
     .style(w::surface);
 
     column![
-        container(header).padding([S, M]).style(w::surface),
-        container(subbar).padding([XS, M]).style(w::surface),
+        container(header).padding([S, CHROME_PAD_X]).style(w::surface),
+        container(subbar).padding([XS, CHROME_PAD_X]).style(w::surface),
         w::divider(),
         container(body).width(Length::Fill).height(Length::Fill).style(w::page),
         w::divider(),
@@ -302,10 +302,10 @@ fn native_preview<'a>(app: &'a App, art: &'a ActiveArtifactView) -> Element<'a, 
                     container(w::code_spans_view(&art.spans, &art.source, app.is_dark(), TEXT_CODE))
                         .padding(M)
                         .width(Length::Fill)
-                        .style(w::sunken),
+                        .style(w::inset_sunken),
                 ]
                 .spacing(M)
-                .padding(M),
+                .padding(L),
             )
             .height(Length::Fill)
             .into()

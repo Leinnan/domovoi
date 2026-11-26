@@ -128,9 +128,25 @@ fn top_bar(app: &App, shows_panel: bool) -> Element<'_, Message> {
     .style(w::ghost_style)
     .on_press(Message::Overlay(Some(Overlay::ServerMenu)));
 
-    let route_is_pr = app.vm.route == "pull-requests";
-    let route_is_usage = app.vm.route == "usage";
-    let route_is_chat = !route_is_pr && !route_is_usage;
+    let route_key: &str = match app.vm.route.as_str() {
+        "pull-requests" => "pull-requests",
+        "usage" => "usage",
+        _ => "thread",
+    };
+
+    let route_tabs = w::segmented(
+        &[
+            ("thread", Some(Icon::MessageSquare), "Threads"),
+            ("pull-requests", Some(Icon::GitPullRequest), "Pull Requests"),
+            ("usage", Some(Icon::BarChart2), "Usage"),
+        ],
+        route_key,
+        |r| match r {
+            "pull-requests" => core(Event::ShowRoute { route: "pull-requests".into() }),
+            "usage" => core(Event::ShowRoute { route: "usage".into() }),
+            _ => core(Event::NewThread { project_id: None }),
+        },
+    );
 
     let nav = row![
         w::icon_button_tinted(
@@ -140,31 +156,8 @@ fn top_bar(app: &App, shows_panel: bool) -> Element<'_, Message> {
             app.prefs.show_sidebar,
         ),
         server_btn,
-        Space::new().width(S),
-        button(
-            row![w::themed_icon(Icon::MessageSquare, ICON_SMALL, move |c| if route_is_chat { c.accent } else { c.muted }), text("Threads").size(TEXT_SMALL)]
-                .spacing(XS)
-                .align_y(Alignment::Center)
-        )
-        .padding(SMALL_BUTTON_PAD)
-        .style(w::segment_style(route_is_chat))
-        .on_press(core(Event::NewThread { project_id: None })),
-        button(
-            row![w::themed_icon(Icon::GitPullRequest, ICON_SMALL, move |c| if route_is_pr { c.accent } else { c.muted }), text("Pull Requests").size(TEXT_SMALL)]
-                .spacing(XS)
-                .align_y(Alignment::Center)
-        )
-        .padding(SMALL_BUTTON_PAD)
-        .style(w::segment_style(route_is_pr))
-        .on_press(core(Event::ShowRoute { route: "pull-requests".into() })),
-        button(
-            row![w::themed_icon(Icon::BarChart2, ICON_SMALL, move |c| if route_is_usage { c.accent } else { c.muted }), text("Usage").size(TEXT_SMALL)]
-                .spacing(XS)
-                .align_y(Alignment::Center)
-        )
-        .padding(SMALL_BUTTON_PAD)
-        .style(w::segment_style(route_is_usage))
-        .on_press(core(Event::ShowRoute { route: "usage".into() })),
+        Space::new().width(XS),
+        route_tabs,
     ]
     .spacing(XS)
     .align_y(Alignment::Center);
@@ -182,6 +175,7 @@ fn top_bar(app: &App, shows_panel: bool) -> Element<'_, Message> {
         .padding([4.0, S])
         .style(w::secondary_style)
         .on_press(core(Event::OpenPalette)),
+        Space::new().width(XS),
         w::icon_button_tinted(
             Icon::PanelRight,
             &format!("Toggle side panel ({})", w::shortcut_label("Mod+J")),
@@ -199,7 +193,7 @@ fn top_bar(app: &App, shows_panel: bool) -> Element<'_, Message> {
 
     container(row![nav, Space::new().width(Length::Fill), right].align_y(Alignment::Center))
         .height(TOP_BAR)
-        .padding([0.0, S])
+        .padding([0.0, CHROME_PAD_X])
         .width(Length::Fill)
         .style(w::sunken)
         .into()
@@ -259,7 +253,7 @@ fn status_bar(app: &App) -> Element<'_, Message> {
 
     container(row![left, Space::new().width(Length::Fill), right].align_y(Alignment::Center))
         .height(STATUS_BAR)
-        .padding([0.0, M])
+        .padding([0.0, CHROME_PAD_X])
         .width(Length::Fill)
         .style(w::surface)
         .into()
@@ -335,7 +329,34 @@ fn render_overlay<'a>(app: &'a App, ov: &'a Overlay) -> Element<'a, Message> {
                 .push(w::menu_item(Icon::Plus, "Add Server…", Message::ShowAddServer(true), false))
                 .push(w::menu_item(Icon::Smile, "Customize Companion…", Message::OpenSettings(SettingsSection::Companion), false))
                 .push(w::menu_item(Icon::Power, "Disconnect", core(Event::Disconnect), true));
-            w::dialog(col, 360.0).into()
+            w::menu_dialog(col, 360.0).into()
+        }
+        Overlay::SidebarAddMenu => {
+            let col = column![
+                w::dialog_header(Some((Icon::FolderPlus, |c| c.accent)), "Workspace & Threads", Some(close.clone())),
+                w::menu_item(
+                    Icon::FolderPlus,
+                    "New Project…",
+                    Message::Overlay(Some(Overlay::NewProject { name: String::new(), path: String::new() })),
+                    false,
+                ),
+                w::menu_item(
+                    Icon::FolderOpen,
+                    "Browse Server Folders…",
+                    Message::Overlay(Some(Overlay::FolderBrowser)),
+                    false,
+                ),
+                w::menu_item(
+                    Icon::Download,
+                    "Import Agent Sessions…",
+                    Message::Overlay(Some(Overlay::ImportSessions { selected: Vec::new() })),
+                    false,
+                ),
+                w::divider(),
+                w::menu_item(Icon::MessageSquare, "New Scratch Thread", core(Event::OpenScratch), false),
+            ]
+            .spacing(XXS);
+            w::menu_dialog(col, 320.0).into()
         }
         Overlay::ThreadMenu(tid) => {
             let found = find_thread_row(app, tid);
@@ -375,7 +396,7 @@ fn render_overlay<'a>(app: &'a App, ov: &'a Overlay) -> Element<'a, Message> {
                 w::menu_item(Icon::Trash2, "Delete Thread…", Message::Overlay(Some(Overlay::ConfirmDeleteThread { thread_id: tid.clone(), title })), true),
             ]
             .spacing(XXS);
-            w::dialog(col, 340.0).into()
+            w::menu_dialog(col, 340.0).into()
         }
         Overlay::ProjectMenu(pid) => {
             let proj = app.vm.sidebar.projects.iter().find(|p| p.id == *pid);
@@ -416,7 +437,7 @@ fn render_overlay<'a>(app: &'a App, ov: &'a Overlay) -> Element<'a, Message> {
                     ));
                 }
             }
-            w::dialog(col, 340.0).into()
+            w::menu_dialog(col, 340.0).into()
         }
         Overlay::RenameThread { thread_id, value } => {
             let tid = thread_id.clone();
@@ -544,7 +565,7 @@ fn render_overlay<'a>(app: &'a App, ov: &'a Overlay) -> Element<'a, Message> {
                         .on_press(core(Event::SnoozeThread { thread_id: thread_id.clone(), until_ms })),
                 );
             }
-            w::dialog(col, 360.0).into()
+            w::menu_dialog(col, 360.0).into()
         }
         Overlay::NewProject { name, path } => {
             let p_clone = path.clone();

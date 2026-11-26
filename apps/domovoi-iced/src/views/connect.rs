@@ -57,12 +57,12 @@ pub fn view(app: &App) -> Element<'_, Message> {
         ]
         .spacing(S)
         .align_y(Alignment::Center);
-        let local_col = column![w::heading("Server on this computer"), container(r).padding([TIGHT, S]).style(w::surface)].spacing(XS);
+        let local_col = column![w::heading("Server on this computer"), container(r).padding([S, M]).style(w::inset_surface)].spacing(S);
         body = body.push(w::card(local_col).width(Length::Fill));
     }
 
     if !conn.environments.is_empty() {
-        let mut envs_col = Column::new().spacing(XS).push(w::heading("Saved servers"));
+        let mut envs_col = Column::new().spacing(S).push(w::heading("Saved servers"));
         for env in &conn.environments {
             let icon = if env.remote { Icon::Globe } else { Icon::Laptop };
             let r = row![
@@ -89,7 +89,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
             ]
             .spacing(S)
             .align_y(Alignment::Center);
-            envs_col = envs_col.push(container(r).padding([TIGHT, S]).style(w::surface));
+            envs_col = envs_col.push(container(r).padding([S, M]).style(w::inset_surface));
         }
         body = body.push(w::card(envs_col).width(Length::Fill));
     }
@@ -117,7 +117,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
                         w::input("http://127.0.0.1:13773", &app.connect.server_url)
                             .on_input(Message::ConnectUrlChanged)
                             .on_submit(Message::ConnectSubmit),
-                        Space::new().height(XS),
+                        Space::new().height(S),
                         w::muted("Pairing code (optional if already paired)", TEXT_SMALL).font(fonts::MEDIUM),
                         w::input("XXXX-XXXX", &app.connect.pairing_code)
                             .on_input(Message::ConnectCodeChanged)
@@ -237,7 +237,7 @@ pub fn link_dialog(request: &LinkRequestView) -> Element<'_, Message> {
         column![
             w::dialog_header(Some((Icon::Link, |c| c.accent)), &request.title, None),
             w::muted(&request.message, TEXT_UI),
-            container(facts).padding([S, M]).width(Length::Fill).style(w::surface),
+            container(facts).padding([S, M]).width(Length::Fill).style(w::inset_surface),
             w::dialog_actions(vec![
                 w::label_button("Cancel", w::secondary_style, Some(answer(false))).into(),
                 w::label_button(&request.confirm_label, w::primary_style, Some(answer(true))).into(),

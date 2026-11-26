@@ -103,6 +103,7 @@ impl SettingsSection {
 pub enum Overlay {
     Settings(SettingsSection),
     ServerMenu,
+    SidebarAddMenu,
     ThreadMenu(String),
     ProjectMenu(String),
     RenameThread { thread_id: String, value: String },

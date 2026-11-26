@@ -102,8 +102,8 @@ pub fn view(app: &App) -> Element<'_, Message> {
                     .spacing(XS)
                     .align_y(Alignment::Center),
                 )
-                .padding([3.0, S])
-                .style(w::surface),
+                .padding(CHIP_PAD)
+                .style(w::inset_surface),
             );
         }
         panel_col = panel_col.push(att_row);
@@ -146,7 +146,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
         .on_action(Message::DraftAction)
         .key_binding(move |kp| composer_key(&key_cx, kp))
         .size(app.prefs.text_size)
-        .padding([S, S])
+        .padding([S, M])
         .min_height(56.0)
         .max_height(200.0)
         .style(w::editor_style);
@@ -181,11 +181,11 @@ pub fn view(app: &App) -> Element<'_, Message> {
             .spacing(XS)
             .align_y(Alignment::Center)
         )
-        .padding([4.0, S])
+        .padding(CHIP_PAD)
         .style(w::chip_style(app.composer_popover == Some(ComposerPopover::Model)))
         .on_press(Message::ComposerPopover(Some(ComposerPopover::Model))),
     ]
-    .spacing(XS)
+    .spacing(TIGHT)
     .align_y(Alignment::Center);
 
     if !comp.efforts.is_empty() {
@@ -197,7 +197,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
             .unwrap_or(&comp.effort_label);
         controls = controls.push(
             button(text(eff_label).size(TEXT_SMALL).font(fonts::MEDIUM))
-                .padding([4.0, S])
+                .padding(CHIP_PAD)
                 .style(w::chip_style(app.composer_popover == Some(ComposerPopover::Effort)))
                 .on_press(Message::ComposerPopover(Some(ComposerPopover::Effort))),
         );
@@ -213,7 +213,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
                 .spacing(XS)
                 .align_y(Alignment::Center),
             )
-            .padding([4.0, S])
+            .padding(CHIP_PAD)
             .style(w::chip_style(planning))
             .on_press(core(Event::SetInteractionMode {
                 mode: if planning { "default" } else { "plan" }.into(),
@@ -238,7 +238,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
                 .spacing(XS)
                 .align_y(Alignment::Center),
             )
-            .padding([4.0, S])
+            .padding(CHIP_PAD)
             .style(w::chip_style(app.composer_popover == Some(ComposerPopover::Permissions)))
             .on_press(Message::ComposerPopover(Some(ComposerPopover::Permissions))),
         );
@@ -247,7 +247,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
     if !comp.limits_chip.is_empty() {
         controls = controls.push(
             button(w::colored(&comp.limits_chip, TEXT_CAPTION, |c| c.warning))
-                .padding([3.0, S])
+                .padding(CHIP_PAD)
                 .style(w::chip_style(app.composer_popover == Some(ComposerPopover::Limits)))
                 .on_press(Message::ComposerPopover(Some(ComposerPopover::Limits))),
         );
@@ -261,7 +261,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
     if !comp.stash.is_empty() {
         controls = controls.push(
             button(w::muted(format!("Stash ({})", comp.stash.len()), TEXT_CAPTION))
-                .padding([4.0, S])
+                .padding(CHIP_PAD)
                 .style(w::chip_style(app.composer_popover == Some(ComposerPopover::Stash)))
                 .on_press(Message::ComposerPopover(Some(ComposerPopover::Stash))),
         );
@@ -319,7 +319,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
 
     container(stack_col)
         .center_x(Length::Fill)
-        .padding(Padding { top: XS, bottom: M, left: L, right: L })
+        .padding(Padding { top: XS, bottom: L, left: CONTENT_GUTTER, right: CONTENT_GUTTER })
         .into()
 }
 
@@ -353,19 +353,16 @@ fn commands_popover<'a>(
 ) -> Element<'a, Message> {
     let mut col = Column::new().spacing(XXS);
     for (idx, item) in items.iter().take(LIST_LIMIT).enumerate() {
+        let mut line = row![text(format!("{sigil}{}", item.name)).size(TEXT_UI).font(fonts::MONO_BOLD)]
+            .spacing(S)
+            .align_y(Alignment::Center);
+        if !item.hint.is_empty() {
+            line = line.push(w::faint(&item.hint, TEXT_SMALL));
+        }
+        line = line.push(w::muted(&item.description, TEXT_SMALL).width(Length::Fill));
         col = col.push(
-            w::list_row(
-                row![
-                    text(format!("{sigil}{}", item.name)).size(TEXT_UI).font(fonts::MONO_BOLD),
-                    if !item.hint.is_empty() { w::faint(&item.hint, TEXT_SMALL) } else { w::faint("", TEXT_SMALL) },
-                    w::muted(&item.description, TEXT_SMALL).width(Length::Fill),
-                ]
-                .spacing(S)
-                .align_y(Alignment::Center),
-                idx == highlighted,
-                false,
-            )
-            .on_press(pick(item.name.clone())),
+            w::list_row(line, idx == highlighted, false)
+                .on_press(pick(item.name.clone())),
         );
     }
     container(w::scroll(col).height(Length::Shrink)).max_height(240.0).padding(XS).width(Length::Fill).style(w::popover_style).into()
@@ -482,40 +479,39 @@ fn option_popover(app: &App, pop: ComposerPopover) -> Element<'_, Message> {
         ComposerPopover::Limits => {
             let mut col = Column::new().spacing(XS).push(w::heading("Provider limits"));
             for w_lim in &comp.limits {
-                col = col.push(
-                    row![
-                        text(&w_lim.label).size(TEXT_SMALL).font(fonts::MEDIUM).width(Length::Fill),
-                        w::colored(format!("{}%", w_lim.percent), TEXT_SMALL, if w_lim.high { |c| c.warning } else { |c| c.muted }),
-                        if !w_lim.resets.is_empty() { w::faint(format!("· {}", w_lim.resets), TEXT_CAPTION) } else { w::faint("", TEXT_CAPTION) },
-                    ]
-                    .spacing(S)
-                    .align_y(Alignment::Center),
-                );
+                let mut line = row![
+                    text(&w_lim.label).size(TEXT_SMALL).font(fonts::MEDIUM).width(Length::Fill),
+                    w::colored(format!("{}%", w_lim.percent), TEXT_SMALL, if w_lim.high { |c| c.warning } else { |c| c.muted }),
+                ]
+                .spacing(S)
+                .align_y(Alignment::Center);
+                if !w_lim.resets.is_empty() {
+                    line = line.push(w::faint(format!("· {}", w_lim.resets), TEXT_CAPTION));
+                }
+                col = col.push(line);
             }
             col.into()
         }
     };
-    container(body).padding(M).width(Length::Fill).style(w::popover_style).into()
+    container(body).padding(L).width(Length::Fill).style(w::popover_style).into()
 }
 
 fn model_row(m: &domovoi_core::view::ModelRowView) -> Element<'_, Message> {
     let fav = m.favorite;
     let hidden = m.hidden;
+    let mut info = Column::new()
+        .spacing(XXS)
+        .width(Length::Fill)
+        .push(text(&m.name).size(TEXT_UI).font(if m.chosen { fonts::SEMIBOLD } else { fonts::INTER }));
+    if !m.detail.is_empty() {
+        info = info.push(w::faint(&m.detail, TEXT_CAPTION));
+    }
     row![
-        w::list_row(
-            column![
-                text(&m.name).size(TEXT_UI).font(if m.chosen { fonts::SEMIBOLD } else { fonts::INTER }),
-                if !m.detail.is_empty() { w::faint(&m.detail, TEXT_CAPTION) } else { w::faint("", TEXT_CAPTION) },
-            ]
-            .spacing(1.0)
-            .width(Length::Fill),
-            m.chosen,
-            !m.detail.is_empty(),
-        )
-        .on_press(core(Event::SelectModel {
-            instance_id: m.option.instance_id.clone(),
-            model: m.option.model.clone(),
-        })),
+        w::list_row(info, m.chosen, !m.detail.is_empty())
+            .on_press(core(Event::SelectModel {
+                instance_id: m.option.instance_id.clone(),
+                model: m.option.model.clone(),
+            })),
         w::icon_button_tinted(
             Icon::Star,
             if fav { "Unfavorite" } else { "Favorite" },
