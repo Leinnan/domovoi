@@ -317,8 +317,16 @@ fn fixture() -> Vec<Value> {
     std::fs::read_to_string(path).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect()
 }
 
-/// (shell stream items, this thread's snapshot + events, the thread's last shell as the server sent it)
+/// The recorded thread `t1` (a scripted Codex turn with every kind of item).
 fn recorded() -> (Vec<Value>, Vec<Value>, Value) {
+    recorded_of(THREAD)
+}
+
+/// The recorded thread whose second reply streams 20,000 characters.
+const STREAMED_THREAD: &str = "t2";
+
+/// (shell stream items, `thread`'s snapshot + events and appended text, the thread's last shell as the server sent it)
+fn recorded_of(thread: &str) -> (Vec<Value>, Vec<Value>, Value) {
     let mut reqs: BTreeMap<(i64, String), Value> = BTreeMap::new();
     let (mut shell, mut thread_items, mut last_shell) = (vec![], BTreeMap::new(), Value::Null);
     let mut snapshot = None;
@@ -339,15 +347,15 @@ fn recorded() -> (Vec<Value>, Vec<Value>, Value) {
         for v in f["values"].as_array().unwrap() {
             match req["tag"].as_str() {
                 Some("orchestration.subscribeShell") => {
-                    if v["kind"] == "thread.updated" && v["thread"]["id"] == THREAD {
+                    if v["kind"] == "thread.updated" && v["thread"]["id"] == thread {
                         last_shell = v["thread"].clone();
                     }
                     shell.push(v.clone());
                 }
-                Some("orchestration.subscribeThread") if req["payload"]["threadId"] == THREAD => {
+                Some("orchestration.subscribeThread") if req["payload"]["threadId"] == thread => {
                     if v["kind"] == "snapshot" {
                         snapshot.get_or_insert_with(|| v.clone());
-                    } else if v["kind"] == "event" {
+                    } else if v["kind"] == "event" || v["kind"] == "append" {
                         thread_items.insert(v["sequence"].as_u64().unwrap(), v.clone());
                     }
                 }
@@ -626,7 +634,7 @@ fn pairing_exchanges_the_code_for_a_saved_token() {
     // The ticket request carries the token; the socket URL the ticket.
     let ticket = &shell.requests[1];
     assert!(ticket.headers.iter().any(|h| h.name.eq_ignore_ascii_case("authorization") && h.value == "Bearer tok-1"));
-    assert!(socket_url(&effects).unwrap().starts_with("ws://h:1/ws?protocol=3&wsTicket=tick-1"));
+    assert!(socket_url(&effects).unwrap().starts_with(&format!("ws://h:1/ws?protocol={}&wsTicket=tick-1", domovoi_model::PROTOCOL_VERSION)));
     // Saved: the environment, which one is active, and its token.
     let env_id = model.active_env.clone().unwrap();
     assert_eq!(shell.store.get(&format!("token:{env_id}")).map(String::as_str), Some("tok-1"));
@@ -2460,6 +2468,44 @@ fn resumed_after(model: &mut Model) -> Value {
     sent.iter().find(|r| r["tag"] == "orchestration.subscribeThread").expect("thread subscription")["payload"]["afterSequence"].clone()
 }
 
+/// A reply as it streams: its turn item first, then the text each flush
+/// added. The row grows, and nothing else of the page is built again. Text
+/// the thread already holds (a snapshot taken after it was written) is not
+/// added twice; text that does not follow what is held starts the stream over.
+#[test]
+fn a_streamed_reply_grows_by_the_text_it_is_sent() {
+    let (mut model, _) = connected();
+    let stream = open_stream(&mut model);
+    let reply = |text: &str| json!({ "id": "reply", "type": "assistant_message", "messageId": "m-reply", "text": text, "streaming": true, "status": "running", "ordinal": 2 });
+    let snapshot = records::snapshot(1, json!({ "turnItems": [{ "id": "ask", "type": "user_message", "messageId": "m-ask", "text": "hello", "ordinal": 1 }] }));
+    let _ = sock(&mut model, chunk(&stream, &[snapshot, records::stream_event(2, "turn-item.updated", "2", reply("Hel"))]));
+    let text = |model: &Model| DomovoiApp.view(model).thread.unwrap().items.iter().find(|i| i.id == "reply").map(|i| (i.text.clone(), i.streaming));
+    assert_eq!(text(&model), Some(("Hel".into(), true)));
+
+    let append = |sequence: u64, at: usize, text: &str| json!({ "kind": "append", "sequence": sequence, "threadId": "t1", "itemId": "reply", "at": at, "text": text, "updatedAt": "3" });
+    let sent = sent_requests(&sock(&mut model, chunk(&stream, &[append(3, 3, "lo, wör"), append(4, "Hello, wör".len(), "ld")])));
+    assert!(sent.iter().any(|r| r["_tag"] == "Ack"), "the chunk is acknowledged");
+    assert_eq!(text(&model), Some(("Hello, wörld".into(), true)));
+    assert_eq!(model.thread_sequence, 4, "the stream resumes after the last text added");
+
+    // Sent again (the snapshot already held it): nothing changes.
+    let _ = sock(&mut model, chunk(&stream, &[append(4, "Hello, wör".len(), "ld")]));
+    assert_eq!(text(&model), Some(("Hello, wörld".into(), true)));
+
+    // The whole reply ends it, like any other item's new version.
+    let mut whole = reply("Hello, wörld.");
+    whole["streaming"] = json!(false);
+    whole["status"] = json!("completed");
+    let _ = sock(&mut model, chunk(&stream, &[records::stream_event(5, "turn-item.updated", "4", whole)]));
+    assert_eq!(text(&model), Some(("Hello, wörld.".into(), false)));
+
+    // Text that does not follow what is held: the thread is asked for again, from a snapshot.
+    let sent = sent_requests(&sock(&mut model, chunk(&stream, &[append(6, 99, "lost")])));
+    assert!(sent.iter().any(|r| r["_tag"] == "Interrupt" && r["requestId"] == json!(stream)), "{sent:?}");
+    let again = sent.iter().find(|r| r["tag"] == "orchestration.subscribeThread").expect("the thread is subscribed to again");
+    assert!(again["payload"].get("afterSequence").is_none(), "from a snapshot: {again}");
+}
+
 #[test]
 fn a_codex_patch_shows_as_the_change_an_approval_would_make() {
     let (mut model, _) = connected();
@@ -2614,7 +2660,7 @@ fn the_open_thread_comes_back_from_the_offline_copy_if_it_can_be_read() {
         "thread", "runs", "attempts", "nodes", "subagents", "providerSessions", "providerThreads", "providerTurns", "runtimeRequests", "messages",
         "plans", "turnItems", "checkpointScopes", "checkpoints", "contextHandoffs", "contextTransfers", "visibleTurnItems", "updatedAt",
     ]);
-    assert_eq!(copy["thread"]["visibleTurnItems"][1], json!({ "position": 1, "visibility": "local", "sourceThreadId": "t1", "sourceItemId": "ic", "item": copy["thread"]["turnItems"][1] }));
+    assert_eq!(copy["thread"]["visibleTurnItems"], json!([]), "the rows shown are derived from the items, not kept beside them");
 
     // A launch without the server, with the thread selected as the saved drafts say.
     let restore = |saved: String| {
@@ -3964,6 +4010,18 @@ fn turning_a_setting_on_still_patches_that_key() {
 /// every snapshot and event of it, scrolling the panel away and closing it).
 #[test]
 fn deltas_applied_in_order_reproduce_the_view_after_every_frame() {
+    // A thread of many rows, and one whose reply streams.
+    let (_, rows, whole) = deltas_reproduce_the_view(THREAD);
+    assert!(rows * 4 < whole, "rows sent ({rows} B) are a fraction of every row every time ({whole} B)");
+    let (from_rows, _, _) = deltas_reproduce_the_view(STREAMED_THREAD);
+    assert!(from_rows > 0, "the recorded reply streamed: some views were made from their rows alone");
+}
+
+/// Replays `thread` of the recorded session, checking after every frame that
+/// the deltas applied so far make the view. Returns how many views were made
+/// from the rows that changed alone, the bytes of the rows sent, and the
+/// bytes sending every row every time would have taken.
+fn deltas_reproduce_the_view(thread: &str) -> (usize, usize, usize) {
     use domovoi_core::delta::{FfiApp, ThreadChange, ViewDelta};
     // Checked: a view made from the rows that changed must equal the view built whole.
     let ffi = FfiApp::checked();
@@ -3985,12 +4043,12 @@ fn deltas_applied_in_order_reproduce_the_view_after_every_frame() {
     };
     check(&model, "connecting");
     let shell_id = sent.iter().find(|r| r["tag"] == "orchestration.subscribeShell").expect("shell subscription")["id"].as_str().unwrap().to_owned();
-    let (shell, thread_items, _) = recorded();
+    let (shell, thread_items, _) = recorded_of(thread);
     for (i, v) in shell.iter().enumerate() {
         let _ = sock(&mut model, chunk(&shell_id, std::slice::from_ref(v)));
         check(&model, &format!("shell item {i}"));
     }
-    let sent = sent_requests(&run(&mut model, Event::SelectThread { thread_id: THREAD.into() }));
+    let sent = sent_requests(&run(&mut model, Event::SelectThread { thread_id: thread.into() }));
     check(&model, "selecting the thread");
     let thread_id = sent.iter().find(|r| r["tag"] == "orchestration.subscribeThread").expect("thread subscription")["id"].as_str().unwrap().to_owned();
     for (i, v) in thread_items.iter().enumerate() {
@@ -4000,12 +4058,11 @@ fn deltas_applied_in_order_reproduce_the_view_after_every_frame() {
     // Another thread, then none.
     let _ = run(&mut model, Event::NewThread { project_id: None });
     check(&model, "a new thread");
-    let _ = run(&mut model, Event::SelectThread { thread_id: THREAD.into() });
+    let _ = run(&mut model, Event::SelectThread { thread_id: thread.into() });
     check(&model, "the thread again");
     assert!(renders > thread_items.len());
-    assert!(ffi.views_from_rows() > 0, "the recorded replies streamed: some views were made from their rows alone");
-    println!("{renders} views, {} of them from the rows that changed", ffi.views_from_rows());
-    assert!(row_bytes * 4 < full_bytes, "rows sent ({row_bytes} B) are a fraction of every row every time ({full_bytes} B)");
+    println!("{thread}: {renders} views, {} of them from the rows that changed", ffi.views_from_rows());
+    (ffi.views_from_rows() as usize, row_bytes, full_bytes)
 }
 
 fn bincode_len<T: serde::Serialize>(v: &T) -> usize {

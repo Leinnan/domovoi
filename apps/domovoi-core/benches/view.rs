@@ -199,23 +199,22 @@ fn connected_thread(items: usize) -> (Model, String) {
     (model, thread_id)
 }
 
-/// A streamed flush as the server sends it: the reply's node, message and
-/// turn item, each with the whole text so far, in one frame.
-fn flush_frame(request: &str, items: usize, text: &str, k: u64) -> String {
-    let turn = items / 4 - 1;
-    let (message_id, at) = (last_message_id(items), format!("2.{k}"));
-    let streamed = |n: u64, ty: &str, payload: Value| json!({ "kind": "event", "sequence": 2_000_000 + 3 * k + n, "event": event(3 * k + n, ty, &at, payload) });
-    let node = json!({
-        "id": "n1", "threadId": "t1", "runId": null, "parentNodeId": null, "rootNodeId": "n0", "kind": "assistant_message", "status": "running",
-        "countsForRun": true, "providerThreadId": null, "providerTurnId": null, "nativeItemRef": null, "runtimeRequestId": null,
-        "checkpointScopeId": null, "startedAt": null, "completedAt": null,
-    });
-    let reply = json!({ "type": "assistant_message", "messageId": message_id, "text": text, "streaming": true });
-    chunk(request, &[
-        streamed(0, "node.updated", node),
-        streamed(1, "message.updated", message(&message_id, "assistant", text, true, &at)),
-        streamed(2, "turn-item.updated", turn_item(&format!("ia{turn}"), &format!("r{turn}"), (turn * 4 + 3) as u64, "running", &at, reply)),
-    ])
+/// The reply the socket benches stream: a new item after the thread's last.
+const LIVE_ITEM: &str = "ia-live";
+/// What each streamed flush adds.
+const ADDED: &str = "more words ";
+
+/// A reply's first flush as the server sends it: its turn item, with `text`.
+fn first_flush_frame(request: &str, items: usize, text: &str) -> String {
+    let reply = json!({ "type": "assistant_message", "messageId": "ma-live", "text": text, "streaming": true });
+    let item = turn_item(LIVE_ITEM, &format!("r{}", items / 4 - 1), items as u64 + 1, "running", "2", reply);
+    chunk(request, &[json!({ "kind": "event", "sequence": 2_000_000, "event": event(0, "turn-item.updated", "2", item) })])
+}
+
+/// A later flush as the server sends it: the text added to the reply, which
+/// was `at` bytes long.
+fn flush_frame(request: &str, at: usize, k: u64) -> String {
+    chunk(request, &[json!({ "kind": "append", "sequence": 2_000_000 + k, "threadId": "t1", "itemId": LIVE_ITEM, "at": at, "text": ADDED, "updatedAt": format!("2.{k}") })])
 }
 
 const SOCKET_SIZES: [usize; 3] = [500, 2000, 10_000];
@@ -225,7 +224,9 @@ fn main() {
         let (mut model, request) = connected_thread(2000);
         let app = FfiApp::default();
         let first = render_delta(&app, &model);
-        feed(&mut model, flush_frame(&request, 2000, "more words ", 1));
+        feed(&mut model, first_flush_frame(&request, 2000, ""));
+        let _ = render_delta(&app, &model);
+        feed(&mut model, flush_frame(&request, 0, 1));
         eprintln!("2000 items, booted: first delta {first} bytes, then {} bytes per streamed flush", render_delta(&app, &model));
     }
     for n in SIZES {
@@ -304,13 +305,15 @@ fn streaming_token_delta(b: divan::Bencher, n: usize) {
 fn socket_flushes(b: divan::Bencher, n: usize, start: &str) {
     let (mut model, request) = connected_thread(n);
     let app = FfiApp::default();
+    feed(&mut model, first_flush_frame(&request, n, start));
     let _ = render_delta(&app, &model);
-    let mut text = start.to_owned();
+    let mut at = start.len();
     let mut k = 0u64;
     b.with_inputs(|| {
         k += 1;
-        text.push_str("more words ");
-        flush_frame(&request, n, &text, k)
+        let frame = flush_frame(&request, at, k);
+        at += ADDED.len();
+        frame
     })
     .bench_local_values(|frame| {
         feed(&mut model, frame);
@@ -324,7 +327,7 @@ fn socket_token(b: divan::Bencher, n: usize) {
     socket_flushes(b, n, "");
 }
 
-/// A flush 20,000 characters into a reply (each carries the whole text).
+/// A flush 20,000 characters into a reply.
 #[divan::bench(args = [2000])]
 fn socket_token_long_reply(b: divan::Bencher, n: usize) {
     socket_flushes(b, n, &"more words ".repeat(1818));
@@ -347,11 +350,11 @@ fn socket_snapshot(b: divan::Bencher, n: usize) {
     });
 }
 
-/// Decoding that frame alone (`RpcClient::receive`), 20,000 characters in.
+/// Decoding a flush's frame alone (`RpcClient::receive`).
 #[divan::bench]
 fn receive_flush_frame(b: divan::Bencher) {
     let (mut model, request) = connected_thread(100);
-    let frame = flush_frame(&request, 100, &"more words ".repeat(1818), 1);
+    let frame = flush_frame(&request, 20_000, 1);
     b.bench_local(|| model.rpc.receive(&frame).len());
 }
 
@@ -393,14 +396,16 @@ fn composer_keystroke(b: divan::Bencher, models: usize) {
 fn keystroke_then_token(b: divan::Bencher, n: usize) {
     let (mut model, request) = connected_thread(n);
     let app = FfiApp::default();
+    feed(&mut model, first_flush_frame(&request, n, ""));
     let _ = render_delta(&app, &model);
-    let mut text = String::new();
+    let mut at = 0;
     let mut k = 0u64;
     b.with_inputs(|| {
         k += 1;
-        text.push_str("more words ");
         let draft = if k % 2 == 0 { "a reply" } else { "a reply." };
-        (draft, flush_frame(&request, n, &text, k))
+        let frame = flush_frame(&request, at, k);
+        at += ADDED.len();
+        (draft, frame)
     })
     .bench_local_values(|(draft, frame)| {
         let _ = DomovoiApp.update(Event::SetDraft { text: draft.into() }, &mut model);

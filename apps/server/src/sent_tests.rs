@@ -171,9 +171,9 @@ fn digests(store: &Store) -> BTreeMap<String, Digest> {
     let through = store.latest_sequence().expect("sequence");
     for id in stored_thread_ids(store) {
         let digest = all.entry(id.clone()).or_default();
-        let item = crate::orchestration::stream::snapshot_item(store, &id).map(|(_, item)| sent(&Sent::Item(item))).map_err(|failure| sent(&failure));
+        let item = crate::orchestration::stream::snapshot_item(store, &id, false).map(|(_, item)| sent(&Sent::Item(item))).map_err(|failure| sent(&failure));
         digest_snapshot(digest, item.as_ref());
-        let replayed = crate::orchestration::stream::replay(store, &id, 0, through).expect("events");
+        let replayed = crate::orchestration::stream::replay(store, &id, 0, through, false).expect("events");
         let items: Vec<Value> = replayed.into_iter().map(|item| sent(&Sent::Item(item))).collect();
         digest_resume(digest, &items);
     }

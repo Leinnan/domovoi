@@ -158,6 +158,11 @@ pub fn sweep(state: &AppState) {
         Ok((events, entities, receipts)) => tracing::info!(events, entities, receipts, "pruned the event log"),
         Err(e) => tracing::warn!("event log pruning failed: {e}"),
     }
+    match state.store.trim_event_log(crate::orchestration::events::EVENT_LOG_KEEPS) {
+        Ok(0) => {}
+        Ok(events) => tracing::debug!(events, "trimmed the event log"),
+        Err(e) => tracing::warn!("event log trimming failed: {e}"),
+    }
     for hash in state.connections.live_hashes() {
         let _ = state.auth.session_for_hash(&hash);
     }

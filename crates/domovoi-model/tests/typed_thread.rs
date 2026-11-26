@@ -141,9 +141,12 @@ impl Checked {
         assert!(rebuilt == self.thread, "the projection describes another thread after {after}");
 
         // The timeline as shown: each row carries the item at its place, and the shell counts the rows.
+        // A projection sends none of it: the rows are derived from the items.
+        assert!(projection.visible_turn_items.is_empty(), "a projection carries visible rows after {after}");
         let visible = self.thread.visible_turn_item_refs();
-        assert_eq!(projection.visible_turn_items.len(), visible.len(), "the visible turn items differ after {after}");
-        for (position, (row, item)) in (0..).zip(projection.visible_turn_items.iter().zip(&visible)) {
+        let rows = self.thread.visible_turn_items();
+        assert_eq!(rows.len(), visible.len(), "the visible turn items differ after {after}");
+        for (position, (row, item)) in (0..).zip(rows.iter().zip(&visible)) {
             let own = row.position == position && row.visibility == typed::ItemVisibility::Local;
             assert!(own && *row.item == **item && row.source_item_id == *item.id(), "the visible row {position} is not its item after {after}");
         }
@@ -254,7 +257,7 @@ fn applied_name(applied: &Applied) -> String {
 fn recorded_threads_follow_the_rules() {
     // By thread: the thread and the sequence of the last event it holds.
     let mut threads: BTreeMap<String, (Checked, u64)> = BTreeMap::new();
-    let (mut snapshots, mut events, mut repeated, mut unheld) = (0, 0, 0, 0);
+    let (mut snapshots, mut events, mut appends, mut repeated, mut unheld) = (0, 0, 0, 0, 0);
     let mut applied_kinds: BTreeMap<String, usize> = BTreeMap::new();
     for name in FIXTURES {
         for (thread, item) in thread_stream(name) {
@@ -283,6 +286,24 @@ fn recorded_threads_follow_the_rules() {
                         None => unheld += 1,
                     }
                 }
+                // The text a flush added to a reply that streams.
+                Some("append") => {
+                    let ThreadStreamItem::Append { sequence, item_id, at, text, updated_at, .. } = typed_item else { panic!("an append") };
+                    match threads.get_mut(&thread) {
+                        Some((checked, held)) if sequence > *held => {
+                            let before = checked.thread.turn_items.get(&item_id).and_then(|item| item.growing_text()).map(str::len);
+                            let applied = checked.thread.append(&item_id, at, &text, &updated_at).unwrap_or_else(|| panic!("the text at {sequence} follows what the thread holds"));
+                            let after = checked.thread.turn_items.get(&item_id).and_then(|item| item.growing_text()).map(str::len);
+                            assert_eq!(after, before.map(|was| was + text.len()), "the reply grew by the text sent at {sequence}");
+                            checked.check(&format!("the text added at {sequence}"));
+                            *applied_kinds.entry(format!("Append:{}", applied_name(&applied))).or_default() += 1;
+                            *held = sequence;
+                            appends += 1;
+                        }
+                        Some(_) => repeated += 1,
+                        None => unheld += 1,
+                    }
+                }
                 _ => {}
             }
         }
@@ -295,8 +316,8 @@ fn recorded_threads_follow_the_rules() {
         checked.check_stored();
         println!("  {thread}: {} turn items, {} records in all, up to event {held}", checked.thread.turn_items.len(), record_count(&checked.held));
     }
-    assert_eq!((snapshots, unheld), (4, 0), "the fixtures hold 4 snapshots, and every event follows one");
-    assert!(events >= 220, "the fixtures hold over 220 events");
+    assert_eq!((snapshots, unheld), (4, 0), "the fixture holds 4 snapshots, and every event follows one");
+    assert!(events >= 80 && appends >= 40, "the fixture holds events ({events}) and the text added to replies that streamed ({appends})");
 }
 
 /// A small deterministic generator (xorshift64*).
@@ -332,12 +353,10 @@ const ITEM_TYPES: [&str; 10] = [
     "run_interrupt_result", "system_notice", "hologram",
 ];
 
-/// The capabilities of a provider session, as the TypeScript server sent them.
+/// The capabilities of a provider session, as the server writes them for a Codex session.
 fn capabilities() -> Value {
-    thread_stream("session1")
-        .into_iter()
-        .find_map(|(_, item)| (item["event"]["type"] == "provider-session.updated").then(|| item["event"]["payload"]["capabilities"].clone()))
-        .expect("the fixture holds a provider session")
+    let by_driver: Value = serde_json::from_str(include_str!("../../domovoi-contracts/defaults/provider-capabilities.json")).unwrap();
+    by_driver["codex"].clone()
 }
 
 /// Generates events for a thread: records of every kind that fit the schema,
@@ -953,12 +972,13 @@ fn generated_events_follow_the_rules() {
         assert!(generator.statuses.get(status).copied().unwrap_or(0) > 5, "the generated thread's shell was `{status}` too rarely");
     }
 
-    // A snapshot of the thread as it is now, sent the compact way: the items of
-    // its visible rows left out of `turnItems`. A row inherited from another
+    // A snapshot of the thread as it is now, sent with its visible rows and the
+    // items of those rows left out of `turnItems`. A row inherited from another
     // thread is not one of this thread's items, and is not restored as one.
     generator.checked.check_stored();
     let mut projection = generator.checked.held.clone();
-    let visible: Vec<Value> = projection["visibleTurnItems"].as_array().unwrap().clone();
+    let visible: Vec<Value> = serde_json::to_value(generator.checked.thread.visible_turn_items()).unwrap().as_array().unwrap().clone();
+    projection["visibleTurnItems"] = json!(visible);
     assert!(visible.len() > 20 && visible.len() < generator.checked.thread.turn_items.len(), "some items are visible and some are hidden");
     projection["turnItems"].as_array_mut().unwrap().retain(|item| !visible.iter().any(|row| row["sourceItemId"] == item["id"]));
     let mut inherited = visible[0].clone();

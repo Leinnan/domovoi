@@ -130,6 +130,8 @@ struct Written {
     /// Where the record starts in `text`.
     record_at: usize,
     command_id: Option<String>,
+    /// `StoredEvent::grew_from`.
+    grew_from: Option<usize>,
 }
 
 impl Written {
@@ -141,7 +143,7 @@ impl Written {
         // Everything before the record is the envelope: strings only, in
         // which a quote is written `\"`. The first `,"payload":` is the key.
         let record_at = text.find(PAYLOAD_KEY).map(|at| at + PAYLOAD_KEY.len()).ok_or_else(|| does_not_fit(event.event_type(), "it carries no record"))?;
-        Ok(Written { event, text, record_at, command_id: origin.command_id.clone() })
+        Ok(Written { event, text, record_at, command_id: origin.command_id.clone(), grew_from: None })
     }
 
     /// The JSON of the record the event carries.
@@ -155,7 +157,7 @@ impl Written {
         let sequence =
             crate::store::insert_event(tx, "thread", thread_id, &event_type, &self.text, self.event.occurred_at.as_str(), self.command_id.as_deref())?;
         project(tx, thread_id, &self.event, self.record(), sequence as i64)?;
-        Ok(StoredEvent { sequence, aggregate_kind: "thread".into(), aggregate_id: thread_id.to_owned(), event_type, thread_event: Some(self.event) })
+        Ok(StoredEvent { sequence, aggregate_kind: "thread".into(), aggregate_id: thread_id.to_owned(), event_type, thread_event: Some(self.event), grew_from: self.grew_from })
     }
 }
 
@@ -249,6 +251,7 @@ fn thread_events_on(c: &rusqlite::Connection, thread_id: &str, after: i64, throu
             aggregate_id: thread_id.to_owned(),
             event_type,
             thread_event: Some(event),
+            grew_from: None,
         });
     }
     Ok(events)
@@ -365,10 +368,25 @@ pub struct Outline {
     pub context_transfers: Vec<Arc<ContextTransfer>>,
 }
 
+/// How many of the newest events the log keeps. A reply that streams is a
+/// few events a second, so this is hours of work across the server's
+/// threads: more than a phone that lost its connection needs to catch up,
+/// and a few tens of megabytes at most.
+pub const EVENT_LOG_KEEPS: u64 = 20_000;
+
 impl Store {
     /// Appends an event built from typed records.
     pub fn append_event(&self, thread_id: &str, body: EventBody, origin: &Origin) -> Result<Arc<StoredEvent>, StoreError> {
         self.commit(thread_id, Written::new(event_now(thread_id, body, origin), origin)?)
+    }
+
+    /// Appends a turn item's new version that is its last one with more text
+    /// (`grew_from` bytes long before): stored whole like any event, and sent
+    /// to subscribers as the text added.
+    pub fn append_grown_item(&self, thread_id: &str, item: TurnItem, grew_from: usize, origin: &Origin) -> Result<Arc<StoredEvent>, StoreError> {
+        let mut written = Written::new(event_now(thread_id, EventBody::TurnItemUpdated(item), origin), origin)?;
+        written.grew_from = Some(grew_from);
+        self.commit(thread_id, written)
     }
 
     /// Appends several events of one thread in one transaction (an import).
@@ -424,6 +442,23 @@ impl Store {
             // Uncommitted writes must not reach the cache: the batch may roll back.
             return Ok(super::projection::thread_shell(self, thread_id)?.map(Arc::new));
         }
+        self.cache_thread(thread_id)?;
+        Ok(self.thread_cache().shell(thread_id))
+    }
+
+    /// The thread as it is now, from the thread cache: a thread someone
+    /// watches is already there, kept current event by event, and is not
+    /// read from the database again for each client that opens it.
+    pub fn thread(&self, thread_id: &str) -> Result<Option<Arc<Thread>>, StoreError> {
+        if self.db().in_batch() {
+            return Ok(self.load_thread(thread_id)?.map(Arc::new));
+        }
+        self.cache_thread(thread_id)?;
+        Ok(self.thread_cache().thread(thread_id))
+    }
+
+    /// Puts the thread in the thread cache, unless it is there or there is no such thread.
+    fn cache_thread(&self, thread_id: &str) -> Result<(), StoreError> {
         if !self.thread_cache().contains(thread_id) {
             // Loaded on a reader, in one read transaction: a long thread takes
             // milliseconds, and the writer is not held for them.
@@ -448,7 +483,7 @@ impl Store {
                 })?;
             }
         }
-        Ok(self.thread_cache().shell(thread_id))
+        Ok(())
     }
 
     /// Reads the record `id` of the thread, lets `change` edit it, and appends
@@ -707,7 +742,24 @@ impl Store {
         })?)
     }
 
-    /// Event-log maintenance (t3code ProjectionMaintenance): drops the events
+    /// Drops every event but the newest `keep` (`EVENT_LOG_KEEPS`); how many
+    /// went. The log is read for one thing: to send a client that reconnects
+    /// what it missed. The records themselves are in the projection tables,
+    /// so a client that was away for longer than the log reaches is sent a
+    /// snapshot instead ([`Store::replays_from`]).
+    pub fn trim_event_log(&self, keep: u64) -> Result<usize, StoreError> {
+        Ok(self.db().with(|c| c.execute("DELETE FROM events WHERE sequence <= (SELECT COALESCE(MAX(sequence), 0) FROM events) - ?1", params![keep as i64]))?)
+    }
+
+    /// Whether the log still holds every event after sequence `after`: then
+    /// a client that has everything up to `after` can be sent the events it
+    /// missed, and otherwise it starts from a snapshot.
+    pub fn replays_from(&self, after: u64) -> Result<bool, StoreError> {
+        let oldest: i64 = self.db().read(|c| c.prepare_cached("SELECT COALESCE(MIN(sequence), 0) FROM events")?.query_row([], |r| r.get(0)))?;
+        Ok(after.saturating_add(1) >= oldest as u64)
+    }
+
+    /// Event-log maintenance: drops the events
     /// and entities of threads deleted before `deleted_before`, keeping their
     /// thread record as a tombstone, and command receipts older than
     /// `receipts_before` (or with no time, from before receipts had one).

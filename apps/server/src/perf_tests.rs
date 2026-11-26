@@ -632,7 +632,7 @@ fn perf_thread_snapshot_by_thread_size() {
         let (mut build, mut encode, mut bytes) = (Duration::ZERO, Duration::ZERO, 0);
         for _ in 0..reps {
             let started = Instant::now();
-            let (_, item) = crate::orchestration::stream::snapshot_item(&store, "t1").expect("snapshot");
+            let (_, item) = crate::orchestration::stream::snapshot_item(&store, "t1", false).expect("snapshot");
             build += started.elapsed();
             let started = Instant::now();
             bytes = thread_frame(&item).len();
@@ -672,7 +672,8 @@ async fn perf_wire_and_disk_bytes_per_streamed_reply() {
     let (mut text, mut sent, mut events, mut peak) = (String::new(), 0usize, 0u32, 0i64);
     let mut drain = |sent: &mut usize, events: &mut u32| {
         while let Ok(event) = live.try_recv() {
-            if event.thread_event.is_some() {
+            // As a client watching the thread is sent it.
+            if event.thread_event.as_ref().is_some_and(|sent| !sent.body.for_the_server_only()) {
                 *sent += thread_frame(&crate::orchestration::stream::Sent::Live(event)).len();
                 *events += 1;
             }
@@ -717,8 +718,27 @@ fn perf_real_home() {
     std::fs::create_dir_all(&dir).expect("temp dir");
     let path = dir.join("domovoi.sqlite");
     std::fs::copy(&source, &path).unwrap_or_else(|e| panic!("{} could not be copied: {e}", source.display()));
-    // The first open brings the schema up to date; the second is a start's.
-    drop(Db::open(&path).expect("db"));
+    // The first open brings the schema up to date, and the records to this
+    // build's format as a server's start does: timed, step by step.
+    let size_before = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+    {
+        let db = Db::open(&path).expect("db");
+        let started = Instant::now();
+        let upgraded = crate::data_format::upgrade(&db, &dir.join("backups")).expect("the records are brought to this format");
+        let took = started.elapsed();
+        match upgraded {
+            Some(done) => {
+                println!("perf real home: {done} (in all {:.2} s)", took.as_secs_f64());
+                report("migration.backup", done.backup_took.as_secs_f64() * 1e6, "us");
+                for (to, _, step) in &done.steps {
+                    report(&format!("migration.to_format_{to}"), step.as_secs_f64() * 1e6, "us");
+                }
+                report("migration.total", took.as_secs_f64() * 1e6, "us");
+            }
+            None => println!("perf real home: the records are in this build's format already"),
+        }
+    }
+    report("real.database_bytes_before_upgrade", size_before as f64, "bytes");
     let started = Instant::now();
     let store = Store::new(Db::open(&path).expect("db"));
     let opened = started.elapsed();
@@ -731,14 +751,14 @@ fn perf_real_home() {
         .read(|c| c.query_row("SELECT thread_id FROM thread_entities GROUP BY thread_id ORDER BY SUM(LENGTH(record)) DESC LIMIT 1", [], |r| r.get(0)))
         .expect("a thread with records");
     let started = Instant::now();
-    let (_, item) = crate::orchestration::stream::snapshot_item(&store, &largest).expect("thread snapshot");
+    let (_, item) = crate::orchestration::stream::snapshot_item(&store, &largest, false).expect("thread snapshot");
     let build = started.elapsed();
     let started = Instant::now();
     let thread_bytes = thread_frame(&item).len();
     let encode = started.elapsed();
     drop(item);
     let started = Instant::now();
-    let again = crate::orchestration::stream::snapshot_item(&store, &largest).expect("thread snapshot");
+    let again = crate::orchestration::stream::snapshot_item(&store, &largest, false).expect("thread snapshot");
     let build_again = started.elapsed();
     drop(again);
 
@@ -775,7 +795,14 @@ fn perf_real_home() {
     report("real.largest_thread.snapshot.bytes", thread_bytes as f64, "bytes");
     report("real.read_every_thread", every.as_secs_f64() * 1e6, "us");
     drop(store);
-    let _ = std::fs::remove_dir_all(dir);
+    // `DOMOVOI_PERF_KEEP` keeps the upgraded copy, to look at (`doctor --records --home-dir <it>`).
+    if std::env::var_os("DOMOVOI_PERF_KEEP").is_some() {
+        std::fs::create_dir_all(dir.join("userdata")).expect("userdata");
+        std::fs::rename(&path, dir.join("userdata").join("domovoi.sqlite")).expect("the copy is kept");
+        println!("perf real home: the upgraded copy is the home {}", dir.display());
+    } else {
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }
 
 /// Every statement a thread's ordinary life runs (launch, a streamed and a
@@ -853,7 +880,9 @@ async fn hot_queries_use_an_index() {
     assert!(scans.is_empty(), "statements that read a whole table:\n{}", scans.join("\n"));
 }
 
-/// A streamed update is its node, message and turn item: three events, one commit.
+/// A reply's first flush is its node and its turn item, in one commit. The
+/// flushes after it are the turn item alone, with the node as it was; the
+/// last is the node closed, the reply's message and the turn item.
 #[tokio::test]
 async fn a_streamed_update_is_one_commit() {
     let store = Store::new(Db::open_in_memory().expect("db"));
@@ -863,11 +892,24 @@ async fn a_streamed_update_is_one_commit() {
     let mut turn = turn_of(&store, "t1");
     let mut live = store.subscribe();
     let commits = count_commits(&store);
+    let written = |live: &mut tokio::sync::broadcast::Receiver<Arc<crate::store::StoredEvent>>| {
+        let mut types = vec![];
+        while let Ok(event) = live.try_recv() {
+            types.push(event.event_type.clone());
+        }
+        types
+    };
     turn.assistant("live", "Hello", true, None);
-    assert_eq!(commits.load(Ordering::Relaxed), 1, "the reply's three events commit together");
-    let first = live.try_recv().expect("the node's event");
-    assert_eq!(first.event_type, "node.updated");
-    assert_eq!([live.try_recv().expect("message").event_type.as_str(), live.try_recv().expect("item").event_type.as_str()], ["message.updated", "turn-item.updated"]);
+    assert_eq!(commits.load(Ordering::Relaxed), 1, "the reply's events commit together");
+    assert_eq!(written(&mut live), ["node.updated", "turn-item.updated"]);
+    std::thread::sleep(Duration::from_millis(130));
+    turn.assistant("live", "Hello there", true, None);
+    assert_eq!(commits.load(Ordering::Relaxed), 2);
+    assert_eq!(written(&mut live), ["turn-item.updated"], "a streaming flush is the turn item alone");
+    turn.assistant("live", "Hello there.", false, None);
+    assert_eq!(commits.load(Ordering::Relaxed), 3);
+    assert_eq!(written(&mut live), ["node.updated", "message.updated", "turn-item.updated"], "the whole reply is written with its message");
     turn.item("tool-1", Work::Command { input: "ls".into(), output: None, exit_code: None }, TurnItemStatus::Running);
-    assert_eq!(commits.load(Ordering::Relaxed), 2, "a tool item's two events commit together");
+    assert_eq!(commits.load(Ordering::Relaxed), 4, "a tool item's two events commit together");
+    assert_eq!(written(&mut live), ["node.updated", "turn-item.updated"]);
 }

@@ -20,8 +20,11 @@ list, then to each thread as it is opened:
   20,000-character reply streamed over about ten seconds;
 - both threads subscribed to once more at the end, for their whole snapshots.
 
-The requests that drive the turns go over a second socket and are not in the
-recording.
+Connection 1 is that socket, recorded whole: it holds what a client is sent
+(a reply that streams as its turn item and then the text each flush added,
+and none of the records only the server works with). The calls that drive
+the turns go over a second socket; each with its answer is connection 2.
+Then the calls a client reads with, a setting changed and a file edited.
 
 ## Recording again
 

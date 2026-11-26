@@ -13,6 +13,7 @@ use super::message::ConversationMessage;
 use super::plan::PlanArtifact;
 use super::provider::{ProviderSession, ProviderThread, ProviderTurn, RuntimeRequest};
 use super::run::{ExecutionNode, Run, RunAttempt, Subagent};
+use super::ids::{ThreadId, TurnItemId};
 use super::thread::AppThread;
 use super::turn_item::{ProjectedTurnItem, TurnItem};
 use super::wire::{nullable, optional, required};
@@ -46,6 +47,23 @@ pub struct ThreadProjection {
     pub context_transfers: Vec<Arc<ContextTransfer>>,
     pub visible_turn_items: Vec<ProjectedTurnItem>,
     pub updated_at: Timestamp,
+}
+
+impl ThreadProjection {
+    /// The projection as a client is sent it: without the records only the
+    /// server works with (attempts, execution nodes, provider sessions and
+    /// turns, checkpoint scopes, context handoffs and transfers). A client
+    /// shows none of them, and for a long thread they are thousands of records.
+    pub fn for_client(mut self) -> Self {
+        self.attempts = Vec::new();
+        self.nodes = Vec::new();
+        self.provider_sessions = Vec::new();
+        self.provider_turns = Vec::new();
+        self.checkpoint_scopes = Vec::new();
+        self.context_handoffs = Vec::new();
+        self.context_transfers = Vec::new();
+        self
+    }
 }
 
 /// A thread as of one point in the server's log, which a subscription starts
@@ -97,6 +115,14 @@ pub enum ThreadStreamItem {
     Snapshot(Box<ThreadSnapshot>),
     /// An event, with its place in the server's log.
     Event { sequence: u64, event: Box<DomainEvent> },
+    /// The event at `sequence` gave the turn item `item_id` a new version
+    /// that is its last one with more text, and this is the text added: the
+    /// item's growing text ([`TurnItem::growing_text`]) was `at` bytes long.
+    /// A reply that streams is sent as its first version and then these, so
+    /// each flush costs what it adds, not the whole reply so far. A replay of
+    /// the log sends the events themselves.
+    #[serde(rename_all = "camelCase")]
+    Append { sequence: u64, thread_id: ThreadId, item_id: TurnItemId, at: u64, text: String, updated_at: Timestamp },
 }
 
 impl ThreadStreamItem {
@@ -127,6 +153,14 @@ impl ThreadStreamItem {
                     None => Err(E::missing_field("event")),
                 }
             }
+            "append" => Ok(Self::Append {
+                sequence: required(&mut fields, "sequence")?,
+                thread_id: required(&mut fields, "threadId")?,
+                item_id: required(&mut fields, "itemId")?,
+                at: required(&mut fields, "at")?,
+                text: required(&mut fields, "text")?,
+                updated_at: required(&mut fields, "updatedAt")?,
+            }),
             other => Err(E::custom(format_args!("unknown thread stream item kind `{other}`"))),
         }
     }

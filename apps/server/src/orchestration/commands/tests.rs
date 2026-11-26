@@ -614,7 +614,7 @@ async fn launch_emits_thread_run_message_and_starts_turn() {
     assert_eq!(p.runs[0].status, RunStatus::Starting);
     assert_eq!(p.messages[0].text, "hello");
     assert_eq!(p.turn_items[0].ordinal(), 1_000_001);
-    assert_eq!(p.visible_turn_items.len(), 1);
+    assert!(p.visible_turn_items.is_empty(), "the timeline as shown is derived by the reader");
     assert_eq!(p.thread.active_provider_thread_id.as_ref(), Some(&p.provider_threads[0].id));
     assert!(matches!(fx.recv().await, Some(Effect::StartTurn { .. })));
     // Idempotent by commandId.

@@ -179,8 +179,8 @@ fn shell_stream(ctx: Arc<ConnCtx>, input: ShellSubscription) -> BoxStream<'stati
         let high_water = match state.store.latest_sequence() { Ok(s) => s, Err(e) => { yield Err(failure(e)); return; } };
         let mut last_sent;
         match input.after_sequence {
-            Some(after) if after <= high_water => {
-                // Resumable: we keep the full event log.
+            Some(after) if after <= high_water && state.store.replays_from(after).unwrap_or(false) => {
+                // The log still reaches back to where the client was.
                 let snap = match projects_snapshot_off_runtime(state.clone()).await { Ok(s) => s, Err(e) => { yield Err(failure(e)); return; } };
                 if let Some(item) = identity_item(snap) { yield Ok(item); }
                 match state.store.events_after(after, high_water) {

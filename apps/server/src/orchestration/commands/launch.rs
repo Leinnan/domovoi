@@ -146,7 +146,8 @@ impl Orchestrator {
         if unnamed_branch && input.initial_message.is_some() {
             self.send_effect(Effect::NameBranch { thread_id: thread_id.as_str().to_owned() });
         }
-        let projection = crate::orchestration::projection::thread_projection(&self.store, thread_id.as_str())?.ok_or(LaunchRefusal::ThreadVanished)?;
+        // As the client that launched it is sent the thread.
+        let projection = crate::orchestration::projection::thread_projection(&self.store, thread_id.as_str())?.ok_or(LaunchRefusal::ThreadVanished)?.for_client();
         let result = LaunchResult { thread_id, projection, resumed: false, sequence };
         self.store.put_command_receipt(command_id.as_str(), &result)?;
         Ok(result)

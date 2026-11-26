@@ -19,6 +19,11 @@ pub struct StoredEvent {
     pub event_type: String,
     /// A thread's event. `None` for a project's, whose new state is read from the store.
     pub thread_event: Option<DomainEvent>,
+    /// For an event that carries a turn item's new version: how long the
+    /// item's growing text was, when the new version is the last one with
+    /// more text and nothing else changed. A subscriber that has the last
+    /// version is then sent the text added, not the item again.
+    pub grew_from: Option<usize>,
 }
 
 /// Where an event is in the log and what it changed, without what it says.
@@ -117,6 +122,7 @@ impl Store {
                 aggregate_id: aggregate_id.into(),
                 event_type: event_type.into(),
                 thread_event: None,
+                grew_from: None,
             });
             self.publish(&stored);
             Ok(stored)

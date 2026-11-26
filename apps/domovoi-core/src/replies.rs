@@ -354,6 +354,27 @@ fn thread_chunk(model: &mut Model, tid: &str, item: Value) -> Vec<Cmd> {
             }
             vec![]
         }
+        // A reply as it streams: the text added since the item's last version.
+        ThreadStreamItem::Append { sequence, thread_id, item_id, at, text, updated_at } => {
+            if thread_id.as_str() != tid {
+                note_misrouted(model, tid, "text added to an item of another thread");
+                return vec![];
+            }
+            let Some(thread) = model.thread.as_mut() else { return vec![] };
+            match thread.append(&item_id, at, &text, &updated_at) {
+                Some(applied) => match reach(thread, &applied) {
+                    Reach::Nothing => {}
+                    Reach::Row(item) => model.changes.row(&item),
+                    // Text the thread already held changes nothing.
+                    Reach::Everything if matches!(applied, Applied::Nothing) => {}
+                    Reach::Everything => model.changes.frame_is_wide(),
+                },
+                // The thread does not hold what this text follows: it is read again.
+                None => return reload_thread(model, tid, "text that does not follow what the thread holds"),
+            }
+            model.thread_sequence = model.thread_sequence.max(sequence);
+            vec![]
+        }
     }
 }
 

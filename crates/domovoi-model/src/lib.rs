@@ -21,8 +21,10 @@ pub mod typed;
 /// up with every change one side makes that the other must know about, so a
 /// server and a client of different versions say which of them needs
 /// updating instead of misreading each other. 2 was the last version shared
-/// with t3code.
-pub const PROTOCOL_VERSION: u32 = 3;
+/// with t3code; since 4 a reply is streamed as the text added
+/// (`ThreadStreamItem::Append`) and a client is not sent the records only
+/// the server works with.
+pub const PROTOCOL_VERSION: u32 = 4;
 
 /// `encodeURIComponent` for the id characters t3code uses (`:` and `%`).
 pub fn enc(s: &str) -> String {

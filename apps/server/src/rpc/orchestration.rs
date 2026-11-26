@@ -715,7 +715,7 @@ pub fn register(r: Router<ConnCtx>) -> Router<ConnCtx> {
         Ok::<_, Failure>(Forgotten { forgotten: crate::thread_permissions::forget(&ctx.state.store, &input.thread_id) })
     })
     .unary("orchestration.getThreadProjection", |ctx: Arc<ConnCtx>, input: ThreadOnly| async move {
-        crate::orchestration::stream::snapshot(&ctx.state.store, &input.thread_id).map(|snapshot| snapshot.projection)
+        crate::orchestration::stream::snapshot(&ctx.state.store, &input.thread_id, true).map(|snapshot| snapshot.projection)
     })
     .unary("orchestration.getThreadTitles", |ctx: Arc<ConnCtx>, input: ThreadIds| async move { of_threads(&ctx.state, &input.thread_ids, |t| t.title) })
     .unary("orchestration.getThreadLinkMetadata", |ctx: Arc<ConnCtx>, input: ThreadIds| async move {

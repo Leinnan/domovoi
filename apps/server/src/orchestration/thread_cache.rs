@@ -66,6 +66,17 @@ impl ThreadCache {
         entries.insert(thread_id.to_owned(), Entry { thread: Arc::new(thread), sequence, shell: None, used: *clock });
     }
 
+    /// The thread as of the latest applied event, shared with the cache.
+    /// `None` if the thread is not cached.
+    pub fn thread(&self, thread_id: &str) -> Option<Arc<Thread>> {
+        let mut guard = crate::util::locked(&self.entries);
+        let (entries, clock) = &mut *guard;
+        *clock += 1;
+        let e = entries.get_mut(thread_id)?;
+        e.used = *clock;
+        Some(e.thread.clone())
+    }
+
     /// Forgets threads (pruned ones).
     pub fn remove(&self, thread_ids: &[String]) {
         let mut guard = crate::util::locked(&self.entries);

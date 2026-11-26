@@ -27,12 +27,10 @@ const THREAD: &str = "thread";
 const THREAD_SHELLS: &str = "threadShells";
 const VISIBLE_TURN_ITEMS: &str = "visibleTurnItems";
 
-/// Kinds the recorded sessions are known to contain. Checking none of one of
-/// these means the walk over the fixtures broke, not that the types are right.
-const KINDS_IN_FIXTURES: [&str; 14] = [
-    THREAD, THREAD_SHELLS, VISIBLE_TURN_ITEMS, "runs", "attempts", "nodes", "providerSessions", "providerThreads",
-    "providerTurns", "runtimeRequests", "messages", "turnItems", "checkpointScopes", "checkpoints",
-];
+/// Kinds the recorded session is known to contain: those a client is sent
+/// (the records only the server works with are not in it). Checking none of
+/// one of these means the walk over the fixture broke, not that the types are right.
+const KINDS_IN_FIXTURES: [&str; 8] = [THREAD, THREAD_SHELLS, "runs", "providerThreads", "runtimeRequests", "messages", "turnItems", "checkpoints"];
 
 /// Every `type` of `OrchestrationV2TurnItem`.
 const TURN_ITEM_TYPES: [&str; 25] = [

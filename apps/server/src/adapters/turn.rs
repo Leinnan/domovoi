@@ -97,6 +97,44 @@ impl TurnEnd {
     }
 }
 
+/// The message of a reply that ended without one: a reply's message is
+/// written when the reply is whole, so a turn the server did not see end (it
+/// stopped mid-reply) left only the turn item. `shown` is that item, closed.
+pub(crate) fn message_of_reply(shown: &domovoi_model::typed::AssistantMessageItem, at: &Timestamp) -> ConversationMessage {
+    ConversationMessage {
+        notification: None,
+        created_by: Actor::Agent,
+        creation_source: CreationSource::Provider,
+        scheduled_task_id: None,
+        sender_thread_id: None,
+        linked_sender: None,
+        idle_compaction: None,
+        workflow_script: None,
+        id: shown.message_id.clone(),
+        thread_id: shown.thread_id.clone(),
+        run_id: shown.run_id.clone(),
+        node_id: shown.node_id.clone(),
+        role: MessageRole::Assistant,
+        text: shown.text.clone(),
+        context: None,
+        attachments: Vec::new(),
+        streaming: false,
+        created_at: shown.started_at.clone().unwrap_or_else(|| at.clone()),
+        updated_at: at.clone(),
+        delegated_completion: None,
+    }
+}
+
+/// The capabilities a session of `driver` reports, from the bundled defaults:
+/// read and decoded once, not for every session a turn records.
+fn capabilities_of(driver: &str) -> Option<ProviderCapabilities> {
+    static BY_DRIVER: std::sync::LazyLock<HashMap<String, ProviderCapabilities>> = std::sync::LazyLock::new(|| {
+        let Value::Object(by_driver) = domovoi_contracts::defaults::provider_capabilities() else { return HashMap::new() };
+        by_driver.into_iter().filter_map(|(driver, capabilities)| Some((driver, serde_json::from_value(capabilities).ok()?))).collect()
+    });
+    BY_DRIVER.get(driver).cloned()
+}
+
 /// The newest streaming update held back by the throttle; the turn's end
 /// sends it, so a stop doesn't lose the tail.
 enum Held {
@@ -407,13 +445,9 @@ impl Turn {
     }
 
     pub fn session(&self, status: ProviderSessionStatus, cwd: &str, model: &str, last_error: Option<&str>) {
-        let capabilities = domovoi_contracts::defaults::provider_capabilities().get_mut(&self.driver).map(Value::take).unwrap_or_default();
-        let capabilities: ProviderCapabilities = match serde_json::from_value(capabilities) {
-            Ok(capabilities) => capabilities,
-            Err(e) => {
-                tracing::error!(thread = %self.thread_id, "no capabilities to report for a {} session: {e}", self.driver);
-                return;
-            }
+        let Some(capabilities) = capabilities_of(&self.driver) else {
+            tracing::error!(thread = %self.thread_id, "no capabilities to report for a {} session", self.driver);
+            return;
         };
         let ts = now();
         let created_at = self.store.record::<ProviderSession>(&self.thread_id, &self.session_id).ok().flatten().map_or_else(|| ts.clone(), |s| s.created_at);
@@ -508,9 +542,10 @@ impl Turn {
         self.emit(EventBody::ProviderTurnUpdated(Box::new(turn)));
     }
 
-    /// The context window's use after the provider's latest model call: the
-    /// provider turn carries it live, and the provider thread keeps the
-    /// latest as its `contextUsage` (sent when the turn ends).
+    /// The context window's use after the provider's latest model call. The
+    /// provider turn and the provider thread keep the latest, and both are
+    /// written when the turn ends: nobody reads it before then, and a
+    /// provider reports it after every model call.
     pub fn token_usage(&mut self, usage: WindowUse) {
         let Some(turn) = self.provider_turn.as_mut() else { return };
         turn.token_usage = Some(ContextWindowUsage {
@@ -525,8 +560,6 @@ impl Turn {
             prompt_cache_expires_at: None,
             updated_at: now(),
         });
-        let turn = turn.clone();
-        self.emit(EventBody::ProviderTurnUpdated(Box::new(turn)));
         // A window of unknown size is left out, never written as none.
         self.provider_thread.context_usage = Some(Some(ContextUsage {
             used_tokens: usage.used_tokens,
@@ -551,6 +584,20 @@ impl Turn {
 
     fn native_item_id(&self, prefix: &str, native_id: &str) -> String {
         format!("{prefix}:provider:{}:native-item:{}", self.driver, enc(native_id))
+    }
+
+    /// Brings the node of the native item `native_id` to `status` and records
+    /// it if that changed it; the node's id. A streaming reply flushes many
+    /// times in one status: its node is written once when it starts and once
+    /// when it ends.
+    fn node_in(&mut self, native_id: &str, kind: NodeKind, status: NodeStatus, node_id: String) -> NodeId {
+        let before = self.nodes.get(native_id).cloned();
+        let node = self.node_for(native_id, kind, status, Some(self.root.clone()), None, node_id);
+        let id = node.id.clone();
+        if before.as_ref() != Some(&node) {
+            self.emit(EventBody::NodeUpdated(Box::new(node)));
+        }
+        id
     }
 
     /// The node of the native item `native_id` in `status`: the one already
@@ -637,13 +684,26 @@ impl Turn {
     fn write_item(&mut self, native_id: &str, work: Work, status: TurnItemStatus) {
         // This state supersedes a streaming update the throttle held back.
         self.held.remove(native_id);
-        let node = self.node_for(native_id, work.node_kind(), node_status(&status), Some(self.root.clone()), None, self.native_item_id("node", native_id));
-        let node_id = node.id.clone();
-        self.emit(EventBody::NodeUpdated(Box::new(node)));
+        let node_id = self.node_in(native_id, work.node_kind(), node_status(&status), self.native_item_id("node", native_id));
         let shared = self.shared(native_id, self.native_item_id("turn-item", native_id), &node_id, native_id, status);
         let item = self.work_item(shared, work, self.items.get(native_id));
-        self.items.insert(native_id.to_owned(), item.clone());
-        self.emit(EventBody::TurnItemUpdated(item));
+        self.put_item(native_id, item);
+    }
+
+    /// Records the new version of the turn item kept under `key`. One that is
+    /// the last version with more text (a reply, reasoning or a command's
+    /// output as it streams) is stored whole like any other, and sent to
+    /// those watching the thread as the text added.
+    fn put_item(&mut self, key: &str, mut item: TurnItem) {
+        let grew_from = self.items.remove(key).and_then(|earlier| item.grew_from(earlier));
+        self.items.insert(key.to_owned(), item.clone());
+        let recorded = match grew_from {
+            Some(at) => self.store.append_grown_item(&self.thread_id, item, at, &self.origin()),
+            None => self.store.append_event(&self.thread_id, EventBody::TurnItemUpdated(item), &self.origin()),
+        };
+        if let Err(e) = recorded {
+            tracing::error!(thread = %self.thread_id, "failed to record turn-item.updated: {e}");
+        }
     }
 
     /// The turn item that shows `work`. What `work` does not say (a command's
@@ -787,7 +847,19 @@ impl Turn {
     /// as the reply so far (throttled like any streaming update).
     pub fn assistant_delta(&mut self, native_id: &str, text: &mut String, delta: &str) {
         text.push_str(delta);
-        self.assistant(native_id, text, true, None);
+        if !self.may_flush(native_id, text.len()) {
+            // Held back by the throttle: what is held grows by the delta. The
+            // whole reply is copied once per flush, not once per token.
+            match self.held.get_mut(native_id) {
+                Some(Held::Assistant { text: held, .. }) if held.len() + delta.len() == text.len() => held.push_str(delta),
+                _ => {
+                    self.held.insert(native_id.to_owned(), Held::Assistant { text: text.clone(), phase: None });
+                }
+            }
+            return;
+        }
+        self.held.remove(native_id);
+        self.together(|turn| turn.write_assistant(native_id, text, true, None));
     }
 
     /// Assistant text. While streaming, updates are throttled; the final call
@@ -829,9 +901,7 @@ impl Turn {
 
     fn write_assistant(&mut self, native_id: &str, text: &str, streaming: bool, phase: Option<&str>) {
         let status = if streaming { TurnItemStatus::Running } else { TurnItemStatus::Completed };
-        let node = self.node_for(native_id, NodeKind::AssistantMessage, node_status(&status), Some(self.root.clone()), None, self.native_item_id("node", native_id));
-        let node_id = node.id.clone();
-        self.emit(EventBody::NodeUpdated(Box::new(node)));
+        let node_id = self.node_in(native_id, NodeKind::AssistantMessage, node_status(&status), self.native_item_id("node", native_id));
         let message_id = MessageId::from(self.native_item_id("message", native_id));
         let ts = now();
         let previous = match self.items.get(native_id) {
@@ -840,7 +910,12 @@ impl Turn {
         };
         let created_at = previous.and_then(|p| p.started_at.clone()).unwrap_or_else(|| ts.clone());
         let phase = phase.and_then(spelled).or_else(|| previous.and_then(|p| p.phase.clone()));
-        self.emit(EventBody::MessageUpdated(Box::new(self.assistant_message(message_id.clone(), Some(node_id.clone()), text.to_owned(), streaming, created_at, ts))));
+        // While a reply streams its turn item carries it. The message, which
+        // holds the same text for whoever reads a conversation's messages,
+        // is written once the reply is whole: each flush sends the text once.
+        if !streaming {
+            self.emit(EventBody::MessageUpdated(Box::new(self.assistant_message(message_id.clone(), Some(node_id.clone()), text.to_owned(), false, created_at, ts))));
+        }
         let shared = self.shared(native_id, self.native_item_id("turn-item", native_id), &node_id, native_id, status);
         let item = turn_item!(AssistantMessage(AssistantMessageItem), shared, {
             phase: phase,
@@ -850,8 +925,7 @@ impl Turn {
             attachments: None,
             streaming: streaming,
         });
-        self.items.insert(native_id.to_owned(), item.clone());
-        self.emit(EventBody::TurnItemUpdated(item));
+        self.put_item(native_id, item);
     }
 
     /// The id of a new request for `native_request_id`, its node (waiting,

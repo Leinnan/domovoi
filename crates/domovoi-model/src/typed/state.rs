@@ -25,7 +25,8 @@ use super::record::{Put, Record, RecordRef, Records, StoredRecord};
 use super::run::{ExecutionNode, Run, RunAttempt, Subagent};
 use super::stream::{ThreadProjection, ThreadSnapshot};
 use super::thread::AppThread;
-use super::turn_item::{ItemVisibility, TurnItem};
+use super::common::Timestamp;
+use super::turn_item::{Appended, ItemVisibility, TurnItem};
 use rustc_hash::FxHashSet;
 
 /// A thread: its own record and every record that belongs to it, each at its
@@ -256,6 +257,24 @@ impl Thread {
         applied
     }
 
+    /// Adds `text` to the growing text of the turn item `item`, which must be
+    /// `at` bytes long ([`ThreadStreamItem::Append`]), and says what changed:
+    /// the item with more text, nothing (the thread already held the text),
+    /// or `None` when the thread does not hold what the text follows. Then
+    /// something was missed, and the thread is to be read again.
+    pub fn append(&mut self, item: &TurnItemId, at: u64, text: &str, updated_at: &Timestamp) -> Option<Applied> {
+        let mut appended = None;
+        let known = self.turn_items.change(item, |held| appended = Some(held.append(usize::try_from(at).unwrap_or(usize::MAX), text, updated_at)));
+        match (known, appended) {
+            (true, Some(Appended::Added)) => {
+                self.record.updated_at = updated_at.clone();
+                Some(Applied::Replaced { record: RecordRef::TurnItem(item.clone()), order_changed: false, only_text_grew: true })
+            }
+            (true, Some(Appended::AlreadyThere)) => Some(Applied::Nothing),
+            _ => None,
+        }
+    }
+
     /// Replaces the thread's link to the same pull request as `link` (same
     /// host, repository and number, as written) with `link`.
     fn replace_pull_request_link(&mut self, link: PullRequestLink) -> Applied {
@@ -269,7 +288,10 @@ impl Thread {
         }
     }
 
-    /// Everything the thread consists of, as the server sends it.
+    /// Everything the thread consists of, as the server sends it. The
+    /// timeline as shown is left out: it is derived from the records
+    /// ([`Thread::visible_turn_items`]), and sending it would send every
+    /// visible item a second time.
     pub fn projection(&self) -> ThreadProjection {
         ThreadProjection {
             thread: self.record.clone(),
@@ -288,7 +310,7 @@ impl Thread {
             checkpoints: self.checkpoints.as_slice().to_vec(),
             context_handoffs: self.context_handoffs.as_slice().to_vec(),
             context_transfers: self.context_transfers.as_slice().to_vec(),
-            visible_turn_items: self.visible_turn_items(),
+            visible_turn_items: Vec::new(),
             updated_at: self.record.updated_at.clone(),
         }
     }

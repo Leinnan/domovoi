@@ -218,6 +218,26 @@ event_bodies! {
 }
 
 impl EventBody {
+    /// Whether the event carries a record only the server works with (the
+    /// kinds [`ThreadProjection::for_client`](super::ThreadProjection::for_client)
+    /// leaves out): a client is not sent it.
+    pub fn for_the_server_only(&self) -> bool {
+        matches!(
+            self,
+            Self::RunAttemptCreated(_)
+                | Self::RunAttemptUpdated(_)
+                | Self::NodeUpdated(_)
+                | Self::ProviderSessionAttached(_)
+                | Self::ProviderSessionUpdated(_)
+                | Self::ProviderSessionDetached(_)
+                | Self::ProviderTurnUpdated(_)
+                | Self::CheckpointScopeCreated(_)
+                | Self::ContextHandoffUpdated(_)
+                | Self::ContextTransferCreated(_)
+                | Self::ContextTransferUpdated(_)
+        )
+    }
+
     /// The record this event carries the new version of, if it carries one of
     /// a thread's collections.
     pub fn record(&self) -> Option<RecordRef> {

@@ -202,6 +202,17 @@ turn_items! {
     "dynamic_tool" => DynamicTool(DynamicToolItem),
 }
 
+/// What adding to an item's growing text found ([`TurnItem::append`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Appended {
+    /// The text was added.
+    Added,
+    /// The item held the text already: it was read after the text was written.
+    AlreadyThere,
+    /// The item does not hold what the text follows: something was missed.
+    Gap,
+}
+
 impl TurnItem {
     /// The conversation message this item shows, for the items that show one.
     pub fn message_id(&self) -> Option<&MessageId> {
@@ -209,6 +220,56 @@ impl TurnItem {
             Self::UserMessage(item) => Some(&item.message_id),
             Self::AssistantMessage(item) => Some(&item.message_id),
             _ => None,
+        }
+    }
+
+    /// The text that grows while the item streams: a reply's or reasoning's
+    /// text, a proposed plan's markdown, a command's output once it has some.
+    /// `None` for an item that does not stream.
+    pub fn growing_text(&self) -> Option<&str> {
+        match self {
+            Self::AssistantMessage(item) => Some(&item.text),
+            Self::Reasoning(item) => Some(&item.text),
+            Self::ProposedPlan(item) => Some(&item.markdown),
+            Self::CommandExecution(item) => item.output.as_deref(),
+            _ => None,
+        }
+    }
+
+    fn growing_text_mut(&mut self) -> Option<&mut String> {
+        match self {
+            Self::AssistantMessage(item) => Some(&mut item.text),
+            Self::Reasoning(item) => Some(&mut item.text),
+            Self::ProposedPlan(item) => Some(&mut item.markdown),
+            Self::CommandExecution(item) => item.output.as_mut(),
+            _ => None,
+        }
+    }
+
+    /// If this item is `earlier` with more of its growing text and a later
+    /// `updatedAt`, and nothing else differs: how long the text was. Then
+    /// the item can be sent as the text added ([`TurnItem::append`]).
+    pub fn grew_from(&mut self, earlier: Self) -> Option<usize> {
+        use super::record::Record;
+        let was = earlier.growing_text()?.len();
+        if !self.growing_text()?.starts_with(earlier.growing_text()?) {
+            return None;
+        }
+        Self::only_text_grew(&mut Arc::new(earlier), self).then_some(was)
+    }
+
+    /// Adds `text` to the item's growing text, which must be `at` bytes long
+    /// now, and moves its `updatedAt`. What it says of the text held:
+    pub fn append(&mut self, at: usize, text: &str, updated_at: &Timestamp) -> Appended {
+        let Some(held) = self.growing_text_mut() else { return Appended::Gap };
+        if held.len() == at {
+            held.push_str(text);
+            self.set_updated_at(updated_at.clone());
+            Appended::Added
+        } else if held.get(at..).is_some_and(|after| after.starts_with(text)) {
+            Appended::AlreadyThere
+        } else {
+            Appended::Gap
         }
     }
 

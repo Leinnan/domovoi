@@ -319,7 +319,12 @@ def spread(values):
 
 
 # A change smaller than this is not reported as one, whatever the runs' spread.
-FLOOR = 0.05
+# Times: the same build measured against itself on the development machine
+# (`compare --self`) differs by up to a fifth with three runs each. Bytes and
+# counts are exact, so any change in them is one.
+TIME_FLOOR = 0.20
+EXACT_FLOOR = 0.005
+TIMES = ("us", "ms", "s")
 
 
 def compare(before_runs, after_runs, before_name, after_name, match=None, changed_only=False):
@@ -335,7 +340,7 @@ def compare(before_runs, after_runs, before_name, after_name, match=None, change
             rows.append((name, shown(statistics.median(b[0]), b[1]) if b else "—", shown(statistics.median(a[0]), a[1]) if a else "—", "", "", "only in " + (before_name if b else after_name), only[1]))
             continue
         mb, ma = statistics.median(b[0]), statistics.median(a[0])
-        noise = max(spread(b[0]), spread(a[0]), FLOOR)
+        noise = max(spread(b[0]), spread(a[0]), TIME_FLOOR if b[1] in TIMES else EXACT_FLOOR)
         if mb == 0:
             change, verdict = (0.0, "same") if ma == 0 else (float("inf"), "worse")
         else:
@@ -345,7 +350,7 @@ def compare(before_runs, after_runs, before_name, after_name, match=None, change
             continue
         rows.append((name, shown(mb, b[1]), shown(ma, a[1]), f"{change * 100:+.1f}%" if change != float("inf") else "new", f"±{noise * 100:.0f}%", verdict, b[1]))
     load = lambda runs: statistics.median(r["load_average_before"] for r in runs)
-    print(f"`{before_name}`: {len(before_runs)} run(s), load {load(before_runs):.1f}; `{after_name}`: {len(after_runs)} run(s), load {load(after_runs):.1f}. Medians; a change within the runs' spread (at least ±{FLOOR * 100:.0f}%) reads as the same.\n")
+    print(f"`{before_name}`: {len(before_runs)} run(s), load {load(before_runs):.1f}; `{after_name}`: {len(after_runs)} run(s), load {load(after_runs):.1f}. Medians; a change within the runs' spread (at least ±{TIME_FLOOR * 100:.0f}% for a time, any change for bytes and counts) reads as the same.\n")
     print(f"| Measure | {before_name} | {after_name} | Change | Spread | |")
     print("|---|---|---|---|---|---|")
     for name, b, a, change, noise, verdict, _ in rows:

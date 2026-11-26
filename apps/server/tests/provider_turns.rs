@@ -1748,7 +1748,7 @@ fn record(frame: &Value) {
 
 /// Every event of the thread so far (a replay from sequence 0).
 async fn events(ws: &mut Ws, id: &str, thread: &str) -> Vec<Value> {
-    let request = json!({ "_tag": "Request", "id": id, "tag": "orchestration.subscribeThread", "payload": { "threadId": thread, "afterSequence": 0, "requestCompletionMarker": true }, "headers": [] });
+    let request = json!({ "_tag": "Request", "id": id, "tag": "orchestration.subscribeThread", "payload": { "threadId": thread, "afterSequence": 0, "requestCompletionMarker": true, "allRecords": true }, "headers": [] });
     record(&request);
     ws.send(Message::Text(request.to_string().into())).await.unwrap();
     let mut out = vec![];
@@ -2397,6 +2397,13 @@ async fn until_within(limit: Duration, ws: &mut Ws, thread: &str, what: &str, do
     }
 }
 
+/// Whether the event is a reply that says exactly `text` so far: its turn
+/// item while it streams (a reply's message is written when the reply is whole).
+fn says(event: &Value, text: &str) -> bool {
+    let reply = event["type"] == "message.updated" || (event["type"] == "turn-item.updated" && event["payload"]["type"] == "assistant_message");
+    reply && event["payload"]["text"] == text
+}
+
 fn last<'a>(all: &'a [Value], ty: &str) -> Option<&'a Value> {
     all.iter().filter(|e| e["type"] == ty).last().map(|e| &e["payload"])
 }
@@ -3024,10 +3031,10 @@ async fn fail_steer_stop_and_roll_back(ws: &mut Ws, steers: bool) {
     assert_eq!(error["payload"]["failure"]["message"], "The model is overloaded.");
 
     say(ws, 3, "WAIT for me", json!({ "type": "queue_after_active" })).await;
-    until(ws, "t1", "the reply to start", |all| all.iter().any(|e| e["type"] == "message.updated" && e["payload"]["text"] == "Working on it")).await;
+    until(ws, "t1", "the reply to start", |all| all.iter().any(|e| says(e, "Working on it"))).await;
     say(ws, 4, "use tabs", json!({ "type": "steer_active", "targetRunId": "run:thread:t1:ordinal:3" })).await;
     if steers {
-        until(ws, "t1", "the steer to land", |all| all.iter().any(|e| e["type"] == "message.updated" && e["payload"]["text"] == "Steered: use tabs")).await;
+        until(ws, "t1", "the steer to land", |all| all.iter().any(|e| says(e, "Steered: use tabs"))).await;
     } else {
         // A provider that takes no more input while it works: the message waits its turn.
         until(ws, "t1", "the message to queue", |all| all.iter().any(|e| e["type"] == "run.created" && e["payload"]["ordinal"] == 4)).await;
@@ -4400,7 +4407,7 @@ async fn an_acp_agent_runs_turns() {
     let r = call(&mut ws, "mode", "orchestration.dispatchCommand", json!({ "type": "thread.interaction-mode.set", "commandId": "mode-1", "threadId": "t1", "interactionMode": "default" })).await;
     assert_eq!(r["exit"]["_tag"], "Success", "{r}");
     say(&mut ws, 3, "WAIT for me", json!({ "type": "queue_after_active" })).await;
-    until(&mut ws, "t1", "the reply to start", |all| all.iter().any(|e| e["type"] == "message.updated" && e["payload"]["text"] == "Working")).await;
+    until(&mut ws, "t1", "the reply to start", |all| all.iter().any(|e| says(e, "Working"))).await;
     let r = call(&mut ws, "stop", "orchestration.dispatchCommand", json!({ "type": "thread.stop", "commandId": "stop-1", "threadId": "t1" })).await;
     assert_eq!(r["exit"]["_tag"], "Success", "{r}");
     until(&mut ws, "t1", "the stopped run", |all| run_status(all, 3).as_deref() == Some("interrupted")).await;
@@ -4468,7 +4475,7 @@ async fn launch_on(ws: &mut Ws, workspace: &std::path::Path, instance: &str, mod
 /// A message steered into run 2 (`WAIT`) is read by the agent in the same run.
 async fn steered(ws: &mut Ws, reply: &str) -> Vec<Value> {
     say(ws, 2, "WAIT for me", json!({ "type": "queue_after_active" })).await;
-    until(ws, "t1", "the reply to start", |all| all.iter().any(|e| e["type"] == "message.updated" && e["payload"]["text"] == "Working")).await;
+    until(ws, "t1", "the reply to start", |all| all.iter().any(|e| says(e, "Working"))).await;
     say(ws, 3, "use tabs", json!({ "type": "steer_active", "targetRunId": "run:thread:t1:ordinal:2" })).await;
     let all = until(ws, "t1", "the steered run", |all| run_status(all, 2).as_deref() == Some("completed")).await;
     // One reply: what the agent said before the steer, then after it.
@@ -4746,7 +4753,7 @@ async fn an_antigravity_agent_runs_turns() {
 
     // A stop the agent ignores: the process goes after the grace period.
     say(&mut ws, 3, "STUCK", json!({ "type": "queue_after_active" })).await;
-    until(&mut ws, "t1", "the reply to start", |all| all.iter().any(|e| e["type"] == "message.updated" && e["payload"]["text"] == "Working")).await;
+    until(&mut ws, "t1", "the reply to start", |all| all.iter().any(|e| says(e, "Working"))).await;
     let r = call(&mut ws, "stop", "orchestration.dispatchCommand", json!({ "type": "thread.stop", "commandId": "stop-1", "threadId": "t1" })).await;
     assert_eq!(r["exit"]["_tag"], "Success", "{r}");
     until(&mut ws, "t1", "the stopped run", |all| run_status(all, 3).as_deref() == Some("interrupted")).await;

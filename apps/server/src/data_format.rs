@@ -19,8 +19,9 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 /// The format this build reads and writes. Format 1 is the records as SQL
-/// migration 16 found them.
-pub const CURRENT: u32 = 1;
+/// migration 16 found them. Format 2 changes no record: it is the event log
+/// cut down to what a reconnecting client replays, and the file compacted.
+pub const CURRENT: u32 = 2;
 
 const KEY: &str = "data_format";
 
@@ -35,7 +36,20 @@ pub struct Step {
 }
 
 /// Every step, in order: `STEPS[n].to == n + 2`.
-const STEPS: &[Step] = &[];
+const STEPS: &[Step] = &[Step { to: 2, what: "the event log trimmed to what a reconnecting client replays", run: trim_event_log }];
+
+/// Until format 2 every event ever recorded was kept, most of the database's
+/// size, though only the newest are ever read (`Store::trim_event_log`). The
+/// server now trims the log as it goes; this drops what had piled up and
+/// gives the space back to the disk.
+fn trim_event_log(db: &Db) -> Result<(), StepError> {
+    let keep = crate::orchestration::events::EVENT_LOG_KEEPS as i64;
+    db.with(|c| {
+        c.execute("DELETE FROM events WHERE sequence <= (SELECT COALESCE(MAX(sequence), 0) FROM events) - ?1", rusqlite::params![keep])?;
+        c.execute_batch("VACUUM")
+    })?;
+    Ok(())
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -51,6 +65,13 @@ pub enum Error {
     Backup { path: PathBuf, source: StepError },
     #[error("rewriting the records for format {to} ({what}) failed: {source}. The copy made before it is {}", backup.display())]
     Step { to: u32, what: &'static str, backup: PathBuf, source: StepError },
+}
+
+/// Whether the database holds no event, thread or project yet.
+fn never_recorded_in(db: &Db) -> Result<bool, Error> {
+    Ok(db.read(|c| {
+        c.query_row("SELECT NOT EXISTS (SELECT 1 FROM events) AND NOT EXISTS (SELECT 1 FROM threads) AND NOT EXISTS (SELECT 1 FROM projects)", [], |r| r.get(0))
+    })?)
 }
 
 /// What an upgrade did.
@@ -100,6 +121,12 @@ pub fn upgrade(db: &Db, backups: &Path) -> Result<Option<Upgraded>, Error> {
 
 fn upgrade_with(db: &Db, backups: &Path, steps: &[Step], current: u32) -> Result<Option<Upgraded>, Error> {
     refuse_newer_than(db, current)?;
+    // A database nothing was recorded in holds no record in an older format:
+    // it is in this build's from the start, with nothing to copy or rewrite.
+    if db.meta_get(KEY)?.is_none() && never_recorded_in(db)? {
+        db.meta_set(KEY, &current.to_string())?;
+        return Ok(None);
+    }
     let from = found(db)?;
     if from == current {
         return Ok(None);
@@ -125,7 +152,14 @@ fn upgrade_with(db: &Db, backups: &Path, steps: &[Step], current: u32) -> Result
 mod tests {
     use super::*;
 
+    /// A home a server has recorded in, with no format written (format 1).
     fn home() -> (Db, PathBuf) {
+        let (db, backups) = new_home();
+        db.with(|c| c.execute("INSERT INTO projects (id, shell) VALUES ('p1', '{}')", [])).unwrap();
+        (db, backups)
+    }
+
+    fn new_home() -> (Db, PathBuf) {
         let dir = std::env::temp_dir().join(format!("domovoi-data-format-{}", crate::util::new_uuid()));
         std::fs::create_dir_all(&dir).unwrap();
         (Db::open(&dir.join("t.sqlite")).unwrap(), dir.join("backups"))
@@ -142,11 +176,41 @@ mod tests {
     ];
 
     #[test]
-    fn a_current_database_is_left_alone() {
-        let (db, backups) = home();
-        assert!(upgrade(&db, &backups).unwrap().is_none());
+    fn a_new_database_starts_in_this_builds_format() {
+        let (db, backups) = new_home();
+        assert!(upgrade_with(&db, &backups, TWO, 3).unwrap().is_none());
         assert!(!backups.exists(), "nothing was rewritten, so nothing was copied");
-        assert_eq!(found(&db).unwrap(), 1);
+        assert_eq!(found(&db).unwrap(), 3);
+        assert_eq!(db.meta_get("first").unwrap(), None, "no step ran");
+        // And one already current is left alone.
+        db.with(|c| c.execute("INSERT INTO projects (id, shell) VALUES ('p1', '{}')", [])).unwrap();
+        assert!(upgrade_with(&db, &backups, TWO, 3).unwrap().is_none());
+        assert!(!backups.exists());
+    }
+
+    /// Format 2: the events that had piled up go, the newest stay, and no
+    /// record in the projection tables is touched.
+    #[test]
+    fn the_event_log_is_trimmed_to_its_newest_events() {
+        let (db, backups) = home();
+        let keep = crate::orchestration::events::EVENT_LOG_KEEPS as i64;
+        db.with(|c| {
+            c.execute(
+                "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)
+                 INSERT INTO events (aggregate_kind, aggregate_id, type, payload, occurred_at) SELECT 'thread', 't1', 'run.updated', '{}', 'now' FROM n",
+                rusqlite::params![keep + 500],
+            )?;
+            c.execute("INSERT INTO threads (id, project_id, record, last_sequence) VALUES ('t1', 'p1', '{}', 1)", [])
+        })
+        .unwrap();
+        let done = upgrade(&db, &backups).unwrap().expect("the step ran");
+        assert_eq!((done.from, done.to), (1, CURRENT));
+        let (events, oldest, newest): (i64, i64, i64) = db.read(|c| c.query_row("SELECT COUNT(*), MIN(sequence), MAX(sequence) FROM events", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))).unwrap();
+        assert_eq!((events, oldest, newest), (keep, 501, keep + 500));
+        assert_eq!(db.read(|c| c.query_row("SELECT COUNT(*) FROM threads", [], |r| r.get::<_, i64>(0))).unwrap(), 1);
+        // The copy made first still holds every event.
+        let copy = Db::open(&done.backup).unwrap();
+        assert_eq!(copy.read(|c| c.query_row("SELECT COUNT(*) FROM events", [], |r| r.get::<_, i64>(0))).unwrap(), keep + 500);
     }
 
     #[test]

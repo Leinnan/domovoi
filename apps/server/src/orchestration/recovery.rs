@@ -84,7 +84,18 @@ fn interrupt(store: &Store, tid: &str, run: &Run, outline: &Outline, items: &[st
         item.set_completed_at(Some(ts.clone()));
         item.set_updated_at(ts.clone());
         item.stop_streaming();
+        // A reply cut off while it streamed has no message yet: it gets the
+        // one its turn would have written at its end, with what was said.
+        let unfinished_reply = match &item {
+            TurnItem::AssistantMessage(shown) if !messages.iter().any(|message| message.id == shown.message_id) => {
+                Some(crate::adapters::turn::message_of_reply(shown, &ts))
+            }
+            _ => None,
+        };
         emit(store, tid, &o, item);
+        if let Some(message) = unfinished_reply {
+            emit(store, tid, &o, message);
+        }
     }
     for message in messages.iter().filter(|message| message.run_id.as_ref() == Some(&run.id) && message.streaming) {
         let mut message = ConversationMessage::clone(message);
