@@ -266,8 +266,13 @@ impl Terminals {
             .openpty(PtySize { rows: DEFAULT_ROWS, cols: DEFAULT_COLS, pixel_width: 0, pixel_height: 0 })
             .map_err(|e| TerminalError(e.to_string()))?;
         let mut cmd = CommandBuilder::new(shell());
-        cmd.arg("-l");
-        cmd.cwd(cwd);
+        // A login shell; Windows shells have no such flag (Windows
+        // PowerShell refuses `-l`).
+        if !cfg!(windows) {
+            cmd.arg("-l");
+        }
+        // `cmd.exe` can't start in a `\\?\C:\…` folder.
+        cmd.cwd(crate::util::plain_path(std::path::Path::new(cwd)));
         cmd.env("TERM", "xterm-256color");
         cmd.env("T3CODE_THREAD_ID", thread_id);
         for (k, v) in env {

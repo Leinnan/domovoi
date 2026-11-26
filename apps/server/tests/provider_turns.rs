@@ -1149,7 +1149,7 @@ for line in sys.stdin:
             "options": [{"optionId": "yes", "name": "Yes", "kind": "allow_once"}, {"optionId": "no", "name": "No", "kind": "reject_once"}]}})
     elif mid == 711:
         pid, sid = pending["term"]
-        send({"id": 712, "method": "terminal/create", "params": {"sessionId": sid, "command": "echo hi-from-terminal; exit 2", "outputByteLimit": 1000}})
+        send({"id": 712, "method": "terminal/create", "params": {"sessionId": sid, "command": "echo hi-from-terminal& exit 2" if sys.platform == "win32" else "echo hi-from-terminal; exit 2", "outputByteLimit": 1000}})
     elif mid == 712:
         pid, sid = pending["term"]
         asked["terminal"] = m["result"]["terminalId"]
@@ -1578,8 +1578,20 @@ fn start_with_env(name: &str, scripted: bool, env: &[(&str, &str)]) -> Server {
 /// Stops the server as launchd or Ctrl-C would (SIGTERM, then waits), and
 /// starts it again on the same home and port.
 fn restart(mut server: Server) -> Server {
-    assert!(Command::new("kill").args(["-TERM", &server.child.id().to_string()]).status().unwrap().success());
-    let _ = server.child.wait();
+    // SIGTERM on Unix; Windows has none, so the server's own `stop`.
+    if cfg!(windows) {
+        let home = server.dir.join("home");
+        let stopped = Command::new(server_bin()).args(["--home-dir", home.to_str().unwrap(), "--port", &server.port.to_string(), "stop"]).status().unwrap();
+        assert!(stopped.success(), "`stop` failed");
+    } else {
+        assert!(Command::new("kill").args(["-TERM", &server.child.id().to_string()]).status().unwrap().success());
+    }
+    // A turn is open: the server still exits promptly, and doesn't wait on it.
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while server.child.try_wait().unwrap().is_none() {
+        assert!(std::time::Instant::now() < deadline, "the server did not exit within 10 s of being stopped");
+        std::thread::sleep(Duration::from_millis(100));
+    }
     let (dir, port, started_ms) = (server.dir.clone(), server.port, server.started_ms);
     // Keep the home: the next server reads it.
     std::mem::forget(server);
@@ -2099,7 +2111,9 @@ async fn a_new_worktree_runs_the_setup_script() {
     let token = signed_in(&server).await;
     let mut ws = socket(&server, &token).await;
     let repo = server.dir.join("w").canonicalize().unwrap();
-    std::fs::write(repo.join("t3.json"), r#"{ "scripts": [{ "name": "Setup", "command": "echo \"$T3CODE_PROJECT_ROOT\" > setup-ran.txt", "runOnWorktreeCreate": true }] }"#).unwrap();
+    // The terminal's shell: PowerShell on Windows, a POSIX shell elsewhere.
+    let command = if cfg!(windows) { r#"echo $env:T3CODE_PROJECT_ROOT > setup-ran.txt"# } else { r#"echo \"$T3CODE_PROJECT_ROOT\" > setup-ran.txt"# };
+    std::fs::write(repo.join("t3.json"), format!(r#"{{ "scripts": [{{ "name": "Setup", "command": "{command}", "runOnWorktreeCreate": true }}] }}"#)).unwrap();
     git(&repo, &["init", "-q", "-b", "main"]);
     git(&repo, &["add", "."]);
     git(&repo, &["commit", "-qm", "init"]);
@@ -2917,6 +2931,13 @@ async fn a_live_pi_turn_asks_before_running_a_command() {
 }
 
 /// A git repository in the server's workspace, so runs leave checkpoints.
+/// `p` as the server shows it: without the `\\?\` that `canonicalize`
+/// puts in front on Windows.
+fn shown(p: &std::path::Path) -> String {
+    let s = p.display().to_string();
+    s.strip_prefix(r"\\?\").map_or_else(|| s.clone(), str::to_owned)
+}
+
 fn workspace_repository(server: &Server) -> PathBuf {
     let workspace = server.dir.join("w").canonicalize().unwrap();
     git(&workspace, &["init", "-q", "-b", "main"]);
@@ -4325,9 +4346,9 @@ async fn a_registry_agent_uses_the_clients_terminals_and_asks_for_a_url_sign_in(
     let ran: Value = serde_json::from_str(&std::fs::read_to_string(server.dir.join("out").join("terminal.json")).unwrap()).unwrap();
     assert!(ran["early"]["message"].as_str().unwrap().contains("requires approval for terminal/create"), "{ran}");
     assert_eq!(ran["exit"], json!({ "exitCode": 2, "signal": null }));
-    assert_eq!((ran["output"]["output"].as_str(), ran["output"]["truncated"].as_bool(), &ran["output"]["exitStatus"]["exitCode"]), (Some("hi-from-terminal\n"), Some(false), &json!(2)));
+    assert_eq!((ran["output"]["output"].as_str().map(|o| o.replace("\r\n", "\n")).as_deref(), ran["output"]["truncated"].as_bool(), &ran["output"]["exitStatus"]["exitCode"]), (Some("hi-from-terminal\n"), Some(false), &json!(2)));
     let cmd = all.iter().filter(|e| e["type"] == "turn-item.updated" && e["payload"]["type"] == "command_execution").last().expect("the command");
-    assert_eq!((cmd["payload"]["input"].as_str(), cmd["payload"]["output"].as_str()), (Some("echo hi"), Some("hi-from-terminal\n")), "the terminal's output, embedded");
+    assert_eq!((cmd["payload"]["input"].as_str(), cmd["payload"]["output"].as_str().map(|o| o.replace("\r\n", "\n")).as_deref()), (Some("echo hi"), Some("hi-from-terminal\n")), "the terminal's output, embedded");
     let init = cli_log(&server, "devin").into_iter().filter(|m| m["method"] == "initialize").last().unwrap();
     assert_eq!((&init["params"]["clientCapabilities"]["terminal"], &init["params"]["clientCapabilities"]["elicitation"]), (&json!(true), &json!({ "url": {} })));
 
@@ -4369,6 +4390,7 @@ fn antigravity_entry(r: &Value) -> Value {
 /// agent's labels, a native question, a file it reads, a stop the agent
 /// ignores, a resumed session after a restart, and a sign-out.
 #[tokio::test(flavor = "multi_thread")]
+#[cfg_attr(windows, ignore = "the sign-in link is caught by `open`/`xdg-open` shims, Unix only (docs/windows.md, known limits)")]
 async fn an_antigravity_agent_runs_turns() {
     let server = start("antigravity");
     let token = signed_in(&server).await;
@@ -4522,6 +4544,7 @@ async fn antigravity_config(ws: &mut Ws, instance: &str) -> Value {
 /// alone; a cancelled sign-in; an added instance refused a Google sign-in;
 /// one connecting with an API key that settings never show.
 #[tokio::test(flavor = "multi_thread")]
+#[cfg_attr(windows, ignore = "the sign-in link is caught by `open`/`xdg-open` shims, Unix only (docs/windows.md, known limits)")]
 async fn an_antigravity_instance_signs_in_and_out() {
     let server = start("antigravity-auth");
     let token = signed_in(&server).await;
@@ -4639,7 +4662,7 @@ async fn antigravity_turns_show_edits_reads_and_limits() {
     assert_eq!(r["exit"]["_tag"], "Success", "{r}");
     let all = until(&mut ws, "t1", "the edit run", |all| run_status(all, 1).as_deref() == Some("completed")).await;
     let edit = all.iter().filter(|e| e["type"] == "turn-item.updated" && e["payload"]["type"] == "file_change").last().expect("the edit");
-    assert_eq!(edit["payload"]["diffStr"], format!("--- {p}\n+++ {p}\n@@ -2,1 +2,1 @@\n-two\n+TWO\n", p = workspace.join("notes.txt").display()), "placed at line 2: {edit}");
+    assert_eq!(edit["payload"]["diffStr"], format!("--- {p}\n+++ {p}\n@@ -2,1 +2,1 @@\n-two\n+TWO\n", p = shown(&workspace.join("notes.txt"))), "placed at line 2: {edit}");
     assert!(edit["payload"]["oldStr"].is_null(), "no bare snippet shown at line 1: {edit}");
     let view = all.iter().filter(|e| e["type"] == "turn-item.updated" && e["payload"]["nativeItemRef"]["nativeId"] == "view-1").last().expect("the read");
     assert_eq!(view["payload"]["status"], "completed", "{view}");

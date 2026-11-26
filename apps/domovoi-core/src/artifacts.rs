@@ -103,7 +103,7 @@ pub fn extract_title(kind: &str, source: &str, fallback_path: Option<&str>) -> S
         return title;
     }
     if let Some(path) = fallback_path.map(str::trim).filter(|p| !p.is_empty()) {
-        return path.rsplit('/').next().unwrap_or(path).to_owned();
+        return crate::tools::file_name(path).to_owned();
     }
     match kind {
         "html" => "HTML artifact",
@@ -175,9 +175,11 @@ fn normalize_workspace_path(root: &str, path: &str, allowed: fn(&str) -> bool) -
     let root = root.replace('\\', "/");
     let path = path.replace('\\', "/");
     let path = path.strip_prefix("file://").unwrap_or(&path);
+    // `file:///C:/…` names `C:/…`.
+    let path = path.strip_prefix('/').filter(|p| crate::tools::is_windows_path(p)).unwrap_or(path);
     let relative = if path.starts_with('/') || path.as_bytes().get(1) == Some(&b':') {
-        path.strip_prefix(root.trim_end_matches('/'))?
-            .strip_prefix('/')?
+        // A Windows root matches without regard to case.
+        crate::tools::strip_root(path, &root).filter(|rest| !rest.is_empty())?
     } else {
         path
     };
@@ -539,6 +541,21 @@ pub fn extract_claude_url(text: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A Windows server's worktree: backslashes, either case of the drive
+    /// and folders, `file:///C:/…` links.
+    #[test]
+    fn paths_in_a_windows_worktree() {
+        let root = r"C:\Users\Me\Work";
+        assert_eq!(workspace_html_path(root, r"C:\Users\Me\Work\docs\index.html").as_deref(), Some("docs/index.html"));
+        assert_eq!(workspace_html_path(root, "c:/users/me/work/docs/index.html").as_deref(), Some("docs/index.html"));
+        assert_eq!(workspace_html_path(root, "file:///C:/Users/Me/Work/index.html").as_deref(), Some("index.html"));
+        assert_eq!(workspace_artifact_path(root, r"charts\diagram.svg").as_deref(), Some("charts/diagram.svg"));
+        for path in [r"C:\Users\Me\Work2\index.html", r"D:\Users\Me\Work\index.html", r"..\escape.html"] {
+            assert!(workspace_html_path(root, path).is_none(), "{path}");
+        }
+        assert_eq!(extract_title("html", "", Some(r"C:\Users\Me\Work\docs\report.html")), "report.html");
+    }
 
     #[test]
     fn paths_must_be_in_the_worktree() {

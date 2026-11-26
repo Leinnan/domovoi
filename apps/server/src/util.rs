@@ -60,9 +60,55 @@ pub fn make_private(path: &std::path::Path) -> std::io::Result<()> {
     }
 }
 
+/// `path` without the `\\?\` Windows puts before a canonical path
+/// (`\\?\UNC\host\share` becomes `\\host\share`): `cmd.exe`, batch files and
+/// some CLIs refuse it, and it takes no `/`. Other paths are as given.
+pub fn plain_path(path: &std::path::Path) -> std::path::PathBuf {
+    #[cfg(windows)]
+    if let Some(rest) = path.to_str().and_then(|s| s.strip_prefix(r"\\?\")) {
+        return match rest.strip_prefix(r"UNC\") {
+            Some(share) => format!(r"\\{share}").into(),
+            None => rest.into(),
+        };
+    }
+    path.to_path_buf()
+}
+
+/// Opens `path` for writing, readable by this user only from its creation
+/// (mode `0600`, or on Windows an owner-only ACL). `new_only` refuses an
+/// existing file; otherwise one is truncated.
+pub fn create_private(path: &std::path::Path, new_only: bool) -> std::io::Result<std::fs::File> {
+    #[cfg(windows)]
+    {
+        crate::win::create_private(path, new_only)
+    }
+    #[cfg(not(windows))]
+    {
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true);
+        if new_only {
+            options.create_new(true);
+        } else {
+            options.create(true).truncate(true);
+        }
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+        options.open(path)
+    }
+}
+
+/// Writes `value` to `path` through a temp file beside it, both readable by
+/// this user only from the start, in `dir`, made private too.
+pub fn write_secret(dir: &std::path::Path, path: &std::path::Path, value: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    make_private(dir)?;
+    let tmp = path.with_extension("tmp");
+    create_private(&tmp, false)?.write_all(value)?;
+    std::fs::rename(&tmp, path)
+}
+
 /// Whether only this user can read `path` (what [`make_private`] leaves).
 /// `None` when that can't be told.
-#[cfg(any(windows, test))]
 pub fn is_private(path: &std::path::Path) -> Option<bool> {
     #[cfg(unix)]
     {

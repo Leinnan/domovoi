@@ -417,7 +417,9 @@ pub fn read_text_file(params: &Value, roots: &[PathBuf]) -> Result<Value, (i64, 
     let start = (line.unwrap_or(1).max(1) - 1) as usize;
     let start = start.min(lines.len());
     let end = limit.map_or(lines.len(), |l| (start + l as usize).min(lines.len()));
-    Ok(json!({ "content": lines[start..end].join("\n") }))
+    let part = lines[start..end].join("\n");
+    // A CRLF file's last line taken ends in the `\r` of its ending.
+    Ok(json!({ "content": part.strip_suffix('\r').unwrap_or(&part) }))
 }
 
 /// A Google sign-in link the agent printed: after its stdout prefix, or the
@@ -556,6 +558,11 @@ mod tests {
         };
         assert_eq!(read(work.join("a.txt"), json!({})).unwrap()["content"], "one\ntwo\nthree");
         assert_eq!(read(work.join("a.txt"), json!({ "line": 2, "limit": 1 })).unwrap()["content"], "two");
+        // A CRLF file (written on Windows): lines without their `\r`, the
+        // endings between them as they are.
+        std::fs::write(work.join("crlf.txt"), "one\r\ntwo\r\nthree\r\n").unwrap();
+        assert_eq!(read(work.join("crlf.txt"), json!({ "line": 3, "limit": 1 })).unwrap()["content"], "three");
+        assert_eq!(read(work.join("crlf.txt"), json!({ "line": 1, "limit": 2 })).unwrap()["content"], "one\r\ntwo");
         assert!(read(other.join("secret.txt"), json!({})).unwrap_err().1.contains("outside"));
         #[cfg(unix)]
         assert!(read(work.join("out/secret.txt"), json!({})).unwrap_err().1.contains("outside"), "a link leading out");

@@ -24,6 +24,24 @@ use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest};
 
 mod dump;
 
+/// System tools only, as a `PATH` (after `first`): no editor, `gh` or
+/// provider CLI is found, so no case can launch one. On Windows: its own
+/// folders and git's.
+fn system_path(first: Option<&Path>) -> std::ffi::OsString {
+    let mut dirs: Vec<PathBuf> = first.into_iter().map(Path::to_path_buf).collect();
+    if cfg!(windows) {
+        let root = PathBuf::from(std::env::var_os("SystemRoot").unwrap_or_else(|| r"C:\Windows".into()));
+        dirs.extend([root.join("System32"), root]);
+        // Git for Windows' launcher folder (`Git\cmd`), as a user's PATH has it:
+        // its `mingw64\bin\git.exe` crashes without the rest of Git on PATH.
+        let git = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()).find(|d| d.join("git.exe").is_file());
+        dirs.extend(git.map(|d| d.ancestors().map(|a| a.join("cmd")).find(|c| c.join("git.exe").is_file()).unwrap_or(d)));
+    } else {
+        dirs.extend(["/usr/bin", "/bin", "/usr/sbin", "/sbin"].map(PathBuf::from));
+    }
+    std::env::join_paths(dirs).expect("folders without the separator")
+}
+
 /// iroh (through domovoi-remote) turns on reqwest's rustls backend without a crypto
 /// provider, so every client needs one installed first.
 fn http_client() -> reqwest::Client {
@@ -105,7 +123,7 @@ fn start_env(dir: &Path, transport: Transport, env: &[(String, String)]) -> Serv
         .env("DOMOVOI_CLAUDE_BINARY", "/usr/bin/false")
         .env("DOMOVOI_CODEX_BINARY", "/usr/bin/false")
         // System tools only: no editor, `gh` or provider CLI is found, so no case can launch one.
-        .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+        .env("PATH", system_path(None))
         // Agent-session scans read this empty home, never the real ~/.claude or ~/.codex.
         .env("DOMOVOI_AGENT_SESSIONS_HOME", dir.join("agent-home"))
         // The ACP registry the cases search: a file, not the network.
@@ -784,7 +802,7 @@ async fn scratch_thread_promotion_and_attachment_upload() {
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
-    assert!(folder.contains("/scratch/") && folder.contains("plan-a-weekend-trip-to"), "thread folder: {folder}");
+    assert!(folder.replace('\\', "/").contains("/scratch/") && folder.contains("plan-a-weekend-trip-to"), "thread folder: {folder}");
     assert!(Path::new(&folder).is_dir());
     let promoted = ok(call(&mut ws, 200, "projects.createFromThread", &json!({ "threadId": "s1" })).await)["projectId"].as_str().unwrap().to_owned();
     assert_ne!(promoted, scratch);
@@ -808,14 +826,20 @@ async fn terminal_writes_keep_their_order() {
     let dir = std::env::temp_dir().join(format!("domovoi-term-order-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("w")).unwrap();
-    let server = start(&dir);
+    // A shell that works out 42 itself, so its echo of the typed text can't pass.
+    let (shell, line) = if cfg!(windows) {
+        (vec![("DOMOVOI_SHELL".to_owned(), "cmd.exe".to_owned())], r#"cmd /v:on /c "set /a x=40+2 >nul & echo ordered-!x!""#)
+    } else {
+        (vec![], "echo ordered-$((40+2))")
+    };
+    let server = start_env(&dir, Transport::Tcp, &shell);
     let mut ws = connect(&server).await;
     let cwd = dir.join("w").canonicalize().unwrap();
     let attach = json!({ "_tag": "Request", "id": "1", "tag": "terminal.attach", "headers": [],
         "payload": { "threadId": "t", "terminalId": "term-1", "cwd": cwd, "cols": 80, "rows": 24 } });
     ws.send(Message::Text(attach.to_string().into())).await.unwrap();
     tokio::time::sleep(Duration::from_millis(500)).await;
-    for (id, data) in [("2", "echo ordered-$((40+2))"), ("3", "\r")] {
+    for (id, data) in [("2", line), ("3", "\r")] {
         let w = json!({ "_tag": "Request", "id": id, "tag": "terminal.write", "headers": [], "payload": { "threadId": "t", "terminalId": "term-1", "data": data } });
         ws.send(Message::Text(w.to_string().into())).await.unwrap();
     }
@@ -998,7 +1022,7 @@ async fn group_cases(name: &str, group: Group, folder: &Path) -> (usize, usize, 
     }
     let dir_text = dir.to_string_lossy().into_owned();
     let mut env = vec![
-        ("PATH".to_owned(), format!("{}:/usr/bin:/bin:/usr/sbin:/sbin", dir.join("bin").display())),
+        ("PATH".to_owned(), system_path(Some(&dir.join("bin"))).to_string_lossy().into_owned()),
         ("HOME".to_owned(), dir.join("userhome").to_string_lossy().into_owned()),
         ("GIT_CONFIG_NOSYSTEM".to_owned(), "1".to_owned()),
     ];

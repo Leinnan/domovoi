@@ -462,10 +462,13 @@ pub fn launch_temp(profile: &Profile) -> Result<PathBuf, String> {
 /// `BROWSER` for the agent: this server's `antigravity-browser-url`, which
 /// writes the sign-in link to stderr for the server to read, so no browser
 /// opens on the server's machine. Quoted as a shell word; Python's
-/// `webbrowser` splits `BROWSER` on `:` first, so a path with one can't be used.
+/// `webbrowser` splits `BROWSER` on the path list separator first (`:`, or
+/// `;` on Windows, where every path has a `:` after its drive), so a path
+/// with one can't be used.
 pub fn browser_command() -> Result<String, String> {
     let exe = std::env::current_exe().map_err(|e| format!("The server's own path is unknown: {e}"))?.to_string_lossy().into_owned();
-    if exe.contains(':') || exe.contains(['\r', '\n', '\0']) || exe.contains("%s") {
+    let list_separator = if cfg!(windows) { ';' } else { ':' };
+    if exe.contains(list_separator) || exe.contains(['\r', '\n', '\0']) || exe.contains("%s") {
         return Err("The server's path cannot be used to keep Antigravity from opening a browser.".into());
     }
     let quote = |s: &str| format!("'{}'", s.replace('\'', "'\"'\"'"));

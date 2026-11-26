@@ -93,7 +93,7 @@ fn lang(name: &str) -> Option<Lang> {
 
 /// A file's language from its name, for previews.
 pub fn language_for_path(path: &str) -> String {
-    let name = path.rsplit('/').next().unwrap_or(path);
+    let name = crate::tools::file_name(path);
     match name {
         "Dockerfile" | "Makefile" | "justfile" => return "sh".into(),
         _ => {}
@@ -222,6 +222,13 @@ mod tests {
 
     fn kinds(code: &str, lang: &str) -> Vec<(String, String)> {
         highlight(code, lang).into_iter().filter(|s| s.kind != "plain").map(|s| (s.kind, s.text)).collect()
+    }
+
+    /// A Windows server's paths name their files after the last `\`.
+    #[test]
+    fn a_windows_path_gets_its_files_language() {
+        assert_eq!(language_for_path(r"C:\Work\src\main.rs"), language_for_path("src/main.rs"));
+        assert_eq!(language_for_path(r"C:\Work\justfile"), "sh");
     }
 
     #[test]

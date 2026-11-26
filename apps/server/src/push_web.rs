@@ -173,17 +173,7 @@ impl Vapid {
 
 fn write_owner_only(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    options.open(path)?.write_all(bytes)?;
-    #[cfg(windows)]
-    crate::util::make_private(path)?;
-    Ok(())
+    crate::util::create_private(path, true)?.write_all(bytes)
 }
 
 /// `scheme://host[:port]` of a URL (VAPID's audience).

@@ -69,6 +69,7 @@ async fn read() -> Option<Value> {
         .stderr(Stdio::null())
         .spawn()
         .ok()?;
+    let _tree = crate::process::Tree::of(child.id());
     let mut stdin = child.stdin.take()?;
     let stdout = child.stdout.take()?;
     let mut lines = String::new();

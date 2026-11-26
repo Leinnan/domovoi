@@ -196,14 +196,7 @@ fn is_path(s: &str) -> bool {
 /// The real file behind `p`. Windows answers `\\?\C:\…`, which batch files
 /// and some CLIs don't take, so that prefix is dropped where it can be.
 pub(crate) fn resolve(p: PathBuf) -> PathBuf {
-    let real = std::fs::canonicalize(&p).unwrap_or(p);
-    #[cfg(windows)]
-    if let Some(rest) = real.to_str().and_then(|s| s.strip_prefix(r"\\?\"))
-        && !rest.starts_with(r"UNC\")
-    {
-        return PathBuf::from(rest);
-    }
-    real
+    crate::util::plain_path(&std::fs::canonicalize(&p).unwrap_or(p))
 }
 
 /// Where a tool is: its env override, else the first match in the search

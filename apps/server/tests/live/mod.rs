@@ -43,9 +43,15 @@ pub fn binary(var: &str, name: &str) -> PathBuf {
     if let Some(p) = std::env::var_os(var).filter(|p| !p.is_empty()) {
         return PathBuf::from(p);
     }
-    let out = Command::new("/usr/bin/which").arg(name).output().unwrap();
-    let found = String::from_utf8_lossy(&out.stdout).trim().to_owned();
-    if found.is_empty() { PathBuf::from("/usr/bin/false") } else { PathBuf::from(found) }
+    // `where` on Windows (its first answer: it lists every match).
+    let finder = if cfg!(windows) { "where" } else { "/usr/bin/which" };
+    let out = Command::new(finder).arg(name).output().unwrap();
+    let found = String::from_utf8_lossy(&out.stdout).lines().next().unwrap_or_default().trim().to_owned();
+    match (found.is_empty(), cfg!(windows)) {
+        (false, _) => PathBuf::from(found),
+        (true, true) => std::env::temp_dir().join("domovoi-no-such-cli").join(format!("{name}.exe")),
+        (true, false) => PathBuf::from("/usr/bin/false"),
+    }
 }
 
 /// A server running the real CLIs.

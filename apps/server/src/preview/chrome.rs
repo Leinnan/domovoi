@@ -131,6 +131,8 @@ pub struct Process {
     pub port: u16,
     pub path: String,
     child: tokio::process::Child,
+    /// The browser's own processes (renderers, GPU) end with it (Windows).
+    _tree: crate::process::Tree,
     /// A user-data folder of its own, removed with it.
     scratch: Option<PathBuf>,
 }
@@ -181,12 +183,14 @@ pub async fn launch(exe: &Path, user_data: &Path, scratch: bool) -> Result<Proce
     cmd.arg("about:blank");
     cmd.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
     let mut child = cmd.spawn().map_err(|e| failed(&e))?;
+    let mut tree = Some(crate::process::Tree::of(child.id()));
     let deadline = tokio::time::Instant::now() + LAUNCH_TIMEOUT;
     loop {
         if let Ok(text) = std::fs::read_to_string(&port_file) {
             let mut lines = text.lines();
             if let (Some(port), Some(path)) = (lines.next().and_then(|p| p.trim().parse::<u16>().ok()), lines.next()) {
-                return Ok(Process { port, path: path.trim().to_owned(), child, scratch: scratch.then(|| user_data.to_owned()) });
+                let _tree = tree.take().unwrap_or_default();
+                return Ok(Process { port, path: path.trim().to_owned(), child, _tree, scratch: scratch.then(|| user_data.to_owned()) });
             }
         }
         if let Ok(Some(status)) = child.try_wait() {

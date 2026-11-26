@@ -34,7 +34,8 @@ fn browse_error(input: &BrowseInput, message: &str, missing: bool) -> Failure {
 /// Lists directories under the parent of `partialPath` (or `partialPath` itself
 /// when it ends in `/`), filtered by the typed prefix, hidden entries excluded.
 async fn browse(_ctx: Arc<ConnCtx>, input: BrowseInput) -> Result<FilesystemBrowseResult, Failure> {
-    let expanded = crate::util::expand_home(&input.partial_path.replacen('~', "/HOME", 1));
+    // A `\\?\C:\…` path takes no `/`, which the client may add.
+    let expanded = crate::util::plain_path(Path::new(&crate::util::expand_home(&input.partial_path.replacen('~', "/HOME", 1)))).to_string_lossy().into_owned();
     let raw = if Path::new(&expanded).is_absolute() {
         PathBuf::from(&expanded)
     } else {
@@ -51,7 +52,8 @@ async fn browse(_ctx: Arc<ConnCtx>, input: BrowseInput) -> Result<FilesystemBrow
             }
         }
     };
-    let (dir, prefix) = if input.partial_path.ends_with('/') || raw.as_os_str().is_empty() {
+    // A trailing separator (`\` too on Windows) lists the folder itself.
+    let (dir, prefix) = if input.partial_path.ends_with(std::path::is_separator) || raw.as_os_str().is_empty() {
         (raw, String::new())
     } else {
         (raw.parent().map(Path::to_path_buf).unwrap_or(raw.clone()),
@@ -72,7 +74,8 @@ async fn browse(_ctx: Arc<ConnCtx>, input: BrowseInput) -> Result<FilesystemBrow
         })
         .collect();
     entries.sort();
-    let parent = dir.to_string_lossy().trim_end_matches('/').to_owned();
+    // A root keeps its separator: `C:` alone is drive C's current folder.
+    let parent = if dir.parent().is_none() { dir.to_string_lossy().into_owned() } else { dir.to_string_lossy().trim_end_matches(std::path::is_separator).to_owned() };
     Ok(FilesystemBrowseResult {
         parent_path: if parent.is_empty() { "/".to_owned() } else { parent },
         entries: entries.into_iter().map(|(name, full_path)| FilesystemBrowseEntry { name, full_path }).collect(),

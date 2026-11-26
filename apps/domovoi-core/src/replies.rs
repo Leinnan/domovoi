@@ -648,11 +648,7 @@ fn exit_ok(model: &mut Model, route: Route, value: Value) -> Vec<Cmd> {
             if !folder.is_empty() {
                 b.path = folder;
             }
-            b.parent = match b.path.trim_end_matches('/').rsplit_once('/') {
-                Some(("", _)) if b.path != "/" => "/".to_owned(),
-                Some((up, _)) if !up.is_empty() => up.to_owned(),
-                _ => String::new(),
-            };
+            b.parent = crate::tools::parent_dir(&b.path);
             vec![]
         }
         Route::SearchThreads(rev) if rev == model.search.revision => {

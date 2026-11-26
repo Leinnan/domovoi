@@ -111,6 +111,7 @@ pub async fn run(cwd: Option<&str>, host: &str, args: &[&str], stdin: Option<&st
         std::io::ErrorKind::NotFound => GhError { reason: GhReason::MissingTool, detail: "The GitHub CLI (gh) is not installed.".into() },
         _ => GhError::failed(format!("The GitHub CLI could not be started: {e}")),
     })?;
+    let _tree = crate::process::Tree::of(child.id());
     if let (Some(input), Some(mut pipe)) = (stdin, child.stdin.take()) {
         let _ = pipe.write_all(input.as_bytes()).await;
         drop(pipe);

@@ -549,6 +549,9 @@ pub struct ChildSnapshot {
     pub steps: Vec<TranscriptStep>,
     pub status: ChildState,
     pub result: Option<String>,
+    /// Whether the child's `agent_message` to its parent is in the session DB
+    /// (the result, once it is there).
+    pub replied: bool,
 }
 
 fn cap(text: &str, limit: usize) -> String {
@@ -714,13 +717,14 @@ pub fn inspect_child(profile_home: &Path, root_session: &str, conversation_id: &
         .rev()
         .find(|s| s.kind == "PLANNER_RESPONSE" && s.text.as_deref().is_some_and(|t| !t.trim().is_empty()))
         .and_then(|s| s.text.clone());
+    let replied = parent_message.is_some();
     let result = match status {
         ChildState::Failed => last.and_then(|s| s.text.clone()).or(parent_message).or(planner_reply),
         ChildState::Completed => parent_message.or(planner_reply),
         ChildState::Cancelled => planner_reply.or(parent_message),
         ChildState::Running => None,
     };
-    Some(ChildSnapshot { steps, status, result })
+    Some(ChildSnapshot { steps, status, result, replied })
 }
 
 /// Highest `idx` currently recorded in the parent session's `steps` table.

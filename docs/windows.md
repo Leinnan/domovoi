@@ -59,6 +59,7 @@ just windows-package             # only the full one
 just windows-package-server      # only the server's
 just windows-install             # install the built full MSI for this user (log in target\)
 just windows-uninstall
+just windows-installer-cycle     # install, upgrade, downgrade, repair, remove: each step checked
 just windows-server-package      # the server and launcher as a zip, for no installer at all
 ```
 
@@ -105,12 +106,26 @@ the registry from outside it, for example through a scheduled task. That app
 is packaged, so what its child processes write under `HKCU\Software\Classes`
 goes to a private copy that only they see.
 
-Before installing, the MSI stops the Domovoi programs that are running. On
+Before installing, the MSI stops the Domovoi programs running from its
+folder. A server run from a checkout (`target\debug`) keeps running. On
 uninstall it removes:
 
 - what the server set up itself (`service uninstall`, `autostart off`);
 - what the apps registered (the scheme, their app ids);
 - its own files, shortcuts and PATH entry.
+
+It leaves your data: the apps' folders (`%APPDATA%\domovoi-windows`,
+`%APPDATA%\domovoi-desktop`), their keychain entries and the server's home
+(`~\.domovoi`). Delete them by hand for a clean slate.
+
+**Upgrades.** A newer MSI replaces the installed one and keeps its features,
+"Start at sign-in" included. An older one is refused. `msiexec /fa` repairs.
+Only one of the two products is installed at a time, since both put the same
+server on PATH: the full MSI takes the server-only one's place (keeping
+"Start at sign-in"), and the server-only MSI is refused beside the full one.
+`just windows-installer-cycle` checks all of this for this user. It builds
+the MSIs at the version and the one after, and refuses to run while Domovoi
+is installed.
 
 ## The server on Windows
 
@@ -118,7 +133,9 @@ uninstall it removes:
   subcommands print in the terminal you run them from.
   `domovoi-server-launcher.exe`, beside it, is a windowed program: it starts
   the server with the same arguments and no console window. The Run value, the
-  scheduled task and the Start-menu shortcut start the launcher.
+  scheduled task and the Start-menu shortcut start the launcher. It appends
+  the server's stderr (a panic before the server's own log starts, too), each
+  start and each exit code to `%LOCALAPPDATA%\Domovoi\logs\launcher.log`.
 - **Start at sign-in.** `domovoi-server autostart on|off` writes or removes
   `HKCU\…\CurrentVersion\Run\Domovoi Server`, which starts the server with
   its tray icon.
@@ -131,6 +148,9 @@ uninstall it removes:
   stopped. Ending the task ends the server with it.
   Starting before anyone signs in needs your password stored with the task.
   Set it in Task Scheduler: "Run whether user is logged on or not".
+  `service status` reads the task's state from what `schtasks` writes in
+  every language (its definition and last result code), not its translated
+  status column.
 - **Finding the CLIs.** The server finds agent CLIs by `PATHEXT`, so it finds
   npm's `claude.cmd` and `codex.cmd`. It adds your PATH as the registry holds
   it now, so a CLI installed since you signed in is found. It also looks in
@@ -139,13 +159,29 @@ uninstall it removes:
 - **Ending a child.** Each agent CLI runs in a job object. Stopping it, or
   the server exiting however it exits, ends the whole process tree (a
   `.cmd` shim's `node` too). Child processes open no console window.
+  Pi and OpenCode are asked first: they get Ctrl+Break (Node's `SIGBREAK`,
+  the counterpart of the SIGTERM they get on Unix), and their tree ends after
+  the same grace (1 s, 3 s). That needs the server to have a console, hidden
+  or not, for them to share; the launcher gives it one.
 - **Terminals** start PowerShell 7 (`pwsh`), then Windows PowerShell, then
   `%COMSPEC%`. `DOMOVOI_SHELL` picks another. ConPTY's first cursor query is
   answered by the server, since the clients' emulators don't answer it.
-- **Secrets.** Token files, the iroh key and the push keys get an ACL of their
-  own that grants only you. This is the Windows counterpart of `chmod 600`.
-  `domovoi-server doctor` warns when the iroh key can be read by other
-  accounts, and the server tightens a key made before this change.
+- **Paths.** A `\\?\C:\…` path a client sends (what `canonicalize` makes) is
+  made plain before it reaches `cmd.exe`, git or the folder browser, which
+  refuse it or read it as an ssh `host:path`. The client core compares a
+  Windows server's paths without regard to case or separator, and takes
+  names and parents at `\` as well as `/`. The server and its launcher
+  declare `longPathAware`, for paths over 260 characters where Windows has
+  long paths on.
+- **Secrets.** Token files, the iroh key and the push keys are created with
+  an ACL of their own that grants only you, from the start
+  (`CreateFileW` with that descriptor): the Windows counterpart of
+  `chmod 600`. `domovoi-server doctor` warns when the iroh key or any other
+  secret file can be read by other accounts, and the server tightens a key
+  made before this change.
+- **The apps' links pipe.** A second launch hands a `domovoi://` link to the
+  running app through a named pipe that only you can open (the Unix socket's
+  mode 0600); remote clients are refused.
 - **Managed policy.** The policy file is `policy.json` in `Program
   Files\Domovoi`, with the folder read from the registry. It is not in
   ProgramData, where any user could create the folder first.
@@ -171,6 +207,13 @@ fork pins one rev for every windows-rs crate.
   the modules and gives the reactor's rules.
 - It has its own data folder and keychain entries (`Identity::WINDOWS`), so it
   pairs on its own, apart from the Iced app.
+- **Logs.** Both desktop apps write a log a day to `logs` in their data
+  folder (`%APPDATA%\domovoi-windows\logs`, `%APPDATA%\domovoi-desktop\logs`),
+  a week kept, since a windowed program's stderr goes nowhere. A panic also
+  goes to `panic.log` there at once, with its backtrace: a panic inside a
+  WinUI callback ends the process before the log's writer runs.
+- **Registry.** The apps register their AppUserModelID and `domovoi://`
+  through the Registry API, not `reg.exe`.
 
 Milestones (`just parity --matrix` counts the `windows` column; `WIP_CLIENTS`
 in `tools/parity.py` keeps its gaps out of the check until M4):
@@ -190,11 +233,15 @@ left, in order.
 - **Antigravity sign-in.** On macOS and Linux the server intercepts the
   sign-in link through `open`/`xdg-open` shims. Windows opens it through the
   shell, which no PATH entry stands in front of, so the browser opens on the
-  server's machine.
-- **Server integration tests.** `provider_turns` (36 of 91 fail) and
-  `rpc_calls` (6 of 11 fail) don't pass on Windows yet. Their fake CLIs and
-  fixtures assume Unix paths and shells. `just windows-test-server` runs the
-  suites that do pass.
+  server's machine. The two `provider_turns` tests of that interception are
+  ignored on Windows for this reason.
+- **Firewall.** A server started with `--host 0.0.0.0` (or another address
+  than loopback) makes Windows ask whether to let it through the firewall.
+  The per-user MSI can't add a rule: allow it in that prompt, or add a rule
+  as an administrator. iroh (remote access) needs no inbound rule.
+- **Stopping a local dev server** ends its process tree at once. Ctrl+Break
+  only reaches processes on the server's own console, and a dev server runs
+  on its agent's or terminal's.
 - **Windows Registry policy.** Only the policy file is read, not
   `HKLM\Software\Policies`.
 - **arm64.** Only x64 is built: the Windows App SDK staging is untested on

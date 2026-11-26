@@ -36,22 +36,7 @@ fn write(userdata: &Path, instance: &str, field: &str, value: &str) -> std::io::
     let dir = dir_in(userdata, instance);
     std::fs::create_dir_all(&dir)?;
     let path = dir.join(field);
-    let tmp = path.with_extension("tmp");
-    #[cfg(unix)]
-    {
-        use std::io::Write;
-        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
-        let mut f = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&tmp)?;
-        f.write_all(value.as_bytes())?;
-    }
-    #[cfg(not(unix))]
-    {
-        crate::util::make_private(&dir)?;
-        std::fs::write(&tmp, value)?;
-        crate::util::make_private(&tmp)?;
-    }
-    std::fs::rename(&tmp, &path)
+    crate::util::write_secret(&dir, &path, value.as_bytes())
 }
 
 /// The credential a setting holds for `instance`: the saved secret for
@@ -187,19 +172,12 @@ pub mod requests {
     /// Writes `bytes` to a new owner-only file; an existing one is left as it is (`Ok(false)`).
     fn create_new(path: &Path, bytes: &[u8]) -> std::io::Result<bool> {
         use std::io::Write;
-        let mut options = std::fs::OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
-        }
         let partial = path.with_extension("partial");
         let _ = std::fs::remove_file(&partial);
         if path.exists() {
             return Ok(false);
         }
-        let mut file = options.open(&partial)?;
+        let mut file = crate::util::create_private(&partial, true)?;
         file.write_all(bytes)?;
         file.sync_all()?;
         drop(file);
@@ -425,22 +403,7 @@ pub fn set_server_secret(userdata: &Path, name: &str, value: &str) -> std::io::R
     let dir = server_secrets(userdata);
     std::fs::create_dir_all(&dir)?;
     let path = dir.join(name);
-    let tmp = path.with_extension("tmp");
-    #[cfg(unix)]
-    {
-        use std::io::Write;
-        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
-        let mut f = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&tmp)?;
-        f.write_all(value.as_bytes())?;
-    }
-    #[cfg(not(unix))]
-    {
-        crate::util::make_private(&dir)?;
-        std::fs::write(&tmp, value)?;
-        crate::util::make_private(&tmp)?;
-    }
-    std::fs::rename(&tmp, &path)
+    crate::util::write_secret(&dir, &path, value.as_bytes())
 }
 
 /// Forgets a server secret (`ServerSecretStore.remove`); none stored is no failure.
@@ -465,22 +428,7 @@ pub fn set_tracker_token(userdata: &Path, tracker: &str, token: &str) -> std::io
     let dir = server_secrets(userdata);
     std::fs::create_dir_all(&dir)?;
     let path = dir.join(tracker_secret(tracker));
-    let tmp = path.with_extension("tmp");
-    #[cfg(unix)]
-    {
-        use std::io::Write;
-        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
-        let mut f = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&tmp)?;
-        f.write_all(token.as_bytes())?;
-    }
-    #[cfg(not(unix))]
-    {
-        crate::util::make_private(&dir)?;
-        std::fs::write(&tmp, token)?;
-        crate::util::make_private(&tmp)?;
-    }
-    std::fs::rename(&tmp, &path)
+    crate::util::write_secret(&dir, &path, token.as_bytes())
 }
 
 /// Forgets a standalone issue tracker's credential; none stored is no failure.

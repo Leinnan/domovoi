@@ -346,12 +346,52 @@ pub(crate) mod windows {
     }
 
     #[cfg(windows)]
-    /// The task's status column ("Running", "Ready", "Disabled"; in the
-    /// system's language).
+    /// What the task is doing, from what `schtasks` writes the same in every
+    /// language (its status column is translated): whether the definition is
+    /// on (`/XML`), and the last result code (`/V`).
     fn status() -> Option<String> {
-        let csv = schtasks(&["/Query", "/TN", TASK, "/FO", "CSV", "/NH"]).ok()?;
+        let xml = schtasks(&["/Query", "/TN", TASK, "/XML"]).ok()?.replace('\0', "");
+        if xml.contains("<Enabled>false</Enabled>") {
+            return Some("disabled".into());
+        }
+        let csv = schtasks(&["/Query", "/TN", TASK, "/V", "/FO", "CSV", "/NH"]).ok()?;
         let line = csv.lines().find(|l| !l.trim().is_empty())?;
-        line.rsplit("\",\"").next().map(|s| s.trim_matches(['"', ' ']).to_owned())
+        Some(last_result(csv_fields(line).get(LAST_RESULT).map(String::as_str)))
+    }
+
+    /// The "Last Result" column of `schtasks /Query /V /FO CSV`.
+    const LAST_RESULT: usize = 6;
+
+    /// The fields of one CSV line as `schtasks` writes it (each in quotes).
+    pub(crate) fn csv_fields(line: &str) -> Vec<String> {
+        let (mut fields, mut field, mut quoted) = (vec![], String::new(), false);
+        let mut chars = line.trim_end_matches(['\r', '\n']).chars().peekable();
+        while let Some(c) = chars.next() {
+            match c {
+                '"' if quoted && chars.peek() == Some(&'"') => {
+                    field.push('"');
+                    chars.next();
+                }
+                '"' => quoted = !quoted,
+                ',' if !quoted => fields.push(std::mem::take(&mut field)),
+                c => field.push(c),
+            }
+        }
+        fields.push(field);
+        fields
+    }
+
+    /// A task's last result code, as words.
+    pub(crate) fn last_result(code: Option<&str>) -> String {
+        // SCHED_S_TASK_*: the codes Task Scheduler reports for itself.
+        match code.and_then(|c| c.trim().parse::<i64>().ok()) {
+            Some(0x41301) => "running".into(),
+            Some(0x41300 | 0x41303) => "ready, not run yet".into(),
+            Some(0x41306) => "ready, its last run was ended".into(),
+            Some(0) => "ready, its last run ended cleanly".into(),
+            Some(code) => format!("ready, its last run failed ({:#x})", code as u32),
+            None => "state unknown".into(),
+        }
     }
 
     #[cfg(windows)]
@@ -420,6 +460,22 @@ pub(crate) mod windows {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A task's state is read from what `schtasks` writes in every language:
+    /// the quoted CSV fields and the numeric last result.
+    #[test]
+    fn the_windows_task_state_reads_the_same_in_every_language() {
+        let line = r#""PC","\Domovoi Server","N/A","Gotowe","Interaktywne","25.11.2026 17:26:37","267009","me","""C:\a b\launcher.exe"" --supervise""#;
+        let fields = windows::csv_fields(line);
+        assert_eq!(fields.len(), 9);
+        assert_eq!(fields[3], "Gotowe", "translated, so not read");
+        assert_eq!(fields[8], r#""C:\a b\launcher.exe" --supervise"#);
+        assert_eq!(windows::last_result(Some(&fields[6])), "running");
+        assert_eq!(windows::last_result(Some("0")), "ready, its last run ended cleanly");
+        assert_eq!(windows::last_result(Some("267011")), "ready, not run yet");
+        assert_eq!(windows::last_result(Some("-2147024894")), "ready, its last run failed (0x80070002)");
+        assert_eq!(windows::last_result(Some("N/A")), "state unknown");
+    }
 
     #[test]
     fn the_windows_task_runs_the_launcher_supervising_the_headless_server() {

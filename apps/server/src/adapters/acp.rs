@@ -1644,7 +1644,15 @@ struct BgSubagent {
     started_tools: HashSet<String>,
     /// Child tool calls started and waiting on their `GENERIC` result step: `(id, name, input)`.
     open_tools: std::collections::VecDeque<(String, String, Value)>,
+    /// When its transcript first said it was done while its message to the
+    /// parent was not in the session DB yet (see [`REPLY_GRACE`]).
+    done_unreplied: Option<std::time::Instant>,
 }
+
+/// How long a child whose transcript is done is waited on for its message to
+/// the parent, its result: the two are written separately, and the
+/// transcript can come first.
+const REPLY_GRACE: std::time::Duration = std::time::Duration::from_secs(3);
 
 /// Short human-readable progress label for a tool a child subagent is running.
 fn tool_progress_label(name: &str, input: &Value) -> String {
@@ -1911,6 +1919,12 @@ impl TurnState {
             }
             let (Some(conv_id), Some(log_uri)) = (bg.conversation_id.clone(), bg.log_uri.clone()) else { continue };
             let Some(snapshot) = child_work::inspect_child(&ag.profile_home, session_id, &conv_id, &log_uri, &bg.prompt) else { continue };
+            if snapshot.status == ChildState::Completed && !snapshot.replied {
+                let since = *bg.done_unreplied.get_or_insert_with(std::time::Instant::now);
+                if since.elapsed() < REPLY_GRACE {
+                    continue;
+                }
+            }
 
             let terminal_result = snapshot.result.as_deref().map(str::trim);
             for step in &snapshot.steps {
@@ -2057,6 +2071,7 @@ impl TurnState {
                                     synced_steps: HashMap::new(),
                                     started_tools: HashSet::new(),
                                     open_tools: std::collections::VecDeque::new(),
+                                    done_unreplied: None,
                                 },
                             );
                         }
@@ -2085,6 +2100,7 @@ impl TurnState {
                                 synced_steps: HashMap::new(),
                                 started_tools: HashSet::new(),
                                 open_tools: std::collections::VecDeque::new(),
+                                done_unreplied: None,
                             },
                         );
                         self.publish_background_tasks(turn);

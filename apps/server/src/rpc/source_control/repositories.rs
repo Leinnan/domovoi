@@ -120,10 +120,11 @@ fn clamp(text: &str, max: usize) -> String {
 fn resolve_path(raw: &str) -> PathBuf {
     let expanded = if raw == "~" {
         crate::util::home_dir()
-    } else if let Some(rest) = raw.strip_prefix("~/") {
+    } else if let Some(rest) = raw.strip_prefix("~/").or_else(|| raw.strip_prefix(r"~\").filter(|_| cfg!(windows))) {
         crate::util::home_dir().join(rest)
     } else {
-        PathBuf::from(raw)
+        // In a `\\?\C:\…` path `/` and `..` are plain characters: not walked below.
+        crate::util::plain_path(Path::new(raw))
     };
     let absolute = if expanded.is_absolute() {
         expanded
@@ -254,6 +255,8 @@ async fn prepare_clone(input: &CloneInput) -> Result<PreparedClone, Failure> {
     let Some(clone_url) = remote_url.filter(|u| !u.is_empty()) else {
         return Err(Failure::repository(&provider, Operation::CloneRepository, "Enter a repository path or clone URL before cloning."));
     };
+    // git reads a local `\\?\C:\…` as an ssh `host:path`.
+    let clone_url = crate::util::plain_path(Path::new(&clone_url)).to_string_lossy().into_owned();
     Ok(PreparedClone { destination, remote_url: redact_remote_url(&clone_url), clone_url, repository })
 }
 

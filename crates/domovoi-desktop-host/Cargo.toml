@@ -16,6 +16,8 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 tokio-tungstenite = { version = "0.26", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
 serde_json = { workspace = true }
 tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tracing-appender = "0.2.4"
 dirs = "6"
 hostname = "0.4"
 iana-time-zone = "0.1"
@@ -23,8 +25,8 @@ notify-rust = "4"
 keyring = { version = "3", features = ["apple-native", "windows-native", "linux-native"] }
 
 [target.'cfg(windows)'.dependencies]
-# The process's AppUserModelID (taskbar grouping and toasts).
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_Shell"] }
+# The AppUserModelID (taskbar grouping, toasts), its registry entries and the links pipe's permissions.
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_System_Registry", "Win32_System_Threading", "Win32_UI_Shell"] }
 
 [dev-dependencies]
 tempfile = "3"

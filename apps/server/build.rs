@@ -5,6 +5,7 @@
 
 fn main() {
     println!("cargo:rerun-if-changed=icon/domovoi-server.ico");
+    println!("cargo:rerun-if-changed=windows.manifest");
     println!("cargo:rustc-env=DOMOVOI_BUILD_COMMIT={}", commit());
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
         return;
@@ -17,6 +18,7 @@ fn main() {
     }
     let mut resource = winresource::WindowsResource::new();
     resource.set_icon("icon/domovoi-server.ico").set("FileDescription", "Domovoi Server").set("ProductName", "Domovoi");
+    resource.set_manifest_file("windows.manifest");
     if let Err(e) = resource.compile() {
         println!("cargo:warning=domovoi-server.exe gets no icon: the resource compiler failed ({e})");
     }

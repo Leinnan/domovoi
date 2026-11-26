@@ -46,23 +46,89 @@ pub(crate) fn file_name(path: &str) -> &str {
     trimmed.rsplit(['/', '\\']).next().filter(|n| !n.is_empty()).unwrap_or(trimmed)
 }
 
+/// Between the parts of a server's paths: `/`, and on a Windows server `\` too.
+pub(crate) const SEPARATORS: [char; 2] = ['/', '\\'];
+
+/// Whether `path` is a Windows one (`C:\…`, `C:/…` or `\\server\…`), whose
+/// letters compare without case.
+pub(crate) fn is_windows_path(path: &str) -> bool {
+    let b = path.as_bytes();
+    b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':' || path.starts_with(r"\\")
+}
+
+/// `path` without its trailing separators, except a root's own (`/`, `C:\`).
+pub(crate) fn trim_separators(path: &str) -> &str {
+    let trimmed = path.trim_end_matches(SEPARATORS);
+    if trimmed.is_empty() && !path.is_empty() {
+        return &path[..1];
+    }
+    // `C:` alone is the current folder of drive C, not its root.
+    if trimmed.len() == 2 && is_windows_path(trimmed) && path.len() > 2 {
+        return &path[..3];
+    }
+    trimmed
+}
+
+/// The rest of `path` under `root` (no leading separator; empty for `root`
+/// itself), or `None` when `path` is not under it. A Windows root matches
+/// without regard to case or which separator is used.
+pub(crate) fn strip_root<'a>(path: &'a str, root: &str) -> Option<&'a str> {
+    let root = root.trim_end_matches(SEPARATORS);
+    if root.is_empty() {
+        return None;
+    }
+    let windows = is_windows_path(root) || is_windows_path(path);
+    let head = path.get(..root.len())?;
+    let same = if windows {
+        head.chars().zip(root.chars()).all(|(a, b)| a.eq_ignore_ascii_case(&b) || SEPARATORS.contains(&a) && SEPARATORS.contains(&b))
+    } else {
+        head == root
+    };
+    if !same {
+        return None;
+    }
+    let rest = &path[root.len()..];
+    if rest.is_empty() {
+        return Some("");
+    }
+    rest.strip_prefix(SEPARATORS)
+}
+
+/// Whether `a` and `b` name the same folder (a trailing separator, and on a
+/// Windows server case and separator style, aside).
+pub(crate) fn same_path(a: &str, b: &str) -> bool {
+    strip_root(a, b) == Some("")
+}
+
+/// The folder above `path`, as the server writes paths (`/`, `C:\`); empty
+/// for a root.
+pub(crate) fn parent_dir(path: &str) -> String {
+    let trimmed = trim_separators(path);
+    if trimmed == "/" || trimmed.len() == 3 && is_windows_path(trimmed) {
+        return String::new();
+    }
+    match trimmed.rfind(SEPARATORS) {
+        Some(0) => "/".to_owned(),
+        // `C:\Users` → `C:\`.
+        Some(2) if is_windows_path(trimmed) => trimmed[..3].to_owned(),
+        Some(at) => trimmed[..at].to_owned(),
+        None => String::new(),
+    }
+}
+
 /// `path` relative to `cwd` when inside it.
 fn relative<'a>(path: &'a str, cwd: &str) -> &'a str {
-    let cwd = cwd.trim_end_matches('/');
-    if cwd.is_empty() {
-        return path;
-    }
-    match path.strip_prefix(cwd) {
+    match strip_root(path, cwd) {
         Some("") => ".",
-        Some(rest) if rest.starts_with('/') => &rest[1..],
-        _ => path,
+        Some(rest) => rest,
+        None => path,
     }
 }
 
 /// The folder a file is in, relative to `cwd` (empty: `cwd` itself).
 fn folder(path: &str, cwd: &str) -> String {
     let rel = relative(path, cwd);
-    match rel.trim_end_matches('/').rsplit_once('/') {
+    match rel.trim_end_matches(SEPARATORS).rsplit_once(SEPARATORS) {
         Some((dir, _)) if !dir.is_empty() => dir.to_owned(),
         Some(_) => "/".to_owned(),
         None => String::new(),
@@ -1246,6 +1312,26 @@ mod tests {
         assert_eq!(file_name(r"C:\Users\me\work"), "work");
         assert_eq!(file_name(r"C:\Users\me\work\"), "work");
         assert_eq!(file_name("README.md"), "README.md");
+    }
+
+    #[test]
+    fn windows_paths_are_compared_and_walked_as_windows_does() {
+        assert_eq!(strip_root(r"C:\Users\Me\work\src\main.rs", r"c:\users\me\work"), Some(r"src\main.rs"));
+        assert_eq!(strip_root("C:/Users/me/work/a.txt", r"C:\Users\me\work\"), Some("a.txt"));
+        assert_eq!(strip_root(r"C:\Users\me\workshop", r"C:\Users\me\work"), None, "a sibling with a longer name");
+        assert_eq!(strip_root("/home/Me/work", "/home/me/work"), None, "Unix paths keep their case");
+        assert!(same_path(r"C:\Work\", r"c:\work"));
+        assert_eq!(relative(r"C:\work\src\a.rs", r"C:\Work"), r"src\a.rs");
+        assert_eq!(folder(r"C:\work\src\a.rs", r"C:\work"), "src");
+        assert_eq!(parent_dir(r"C:\Users\me"), r"C:\Users");
+        assert_eq!(parent_dir(r"C:\Users"), r"C:\");
+        assert_eq!(parent_dir(r"C:\"), "");
+        assert_eq!(parent_dir("/home/me/"), "/home");
+        assert_eq!(parent_dir("/home"), "/");
+        assert_eq!(parent_dir("/"), "");
+        assert_eq!(trim_separators(r"C:\"), r"C:\", "a drive's root keeps its separator");
+        assert_eq!(trim_separators("/"), "/");
+        assert_eq!(trim_separators(r"C:\work\"), r"C:\work");
     }
 
     fn item(body: Value) -> TurnItem {

@@ -72,9 +72,8 @@ fn main() -> iced::Result {
     if let Some((url, title)) = webview::window_args() {
         webview::run(url, title);
     }
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "warn,domovoi_iced=info".into()))
-        .init();
+    // A packaged app (a Windows release, a macOS bundle) has no stderr to read: the log is a file too.
+    let _log = domovoi_desktop_host::logging::init(host::IDENTITY, "warn,domovoi_iced=info,domovoi_desktop_host=info");
     // A link opened while the app runs goes to it, and this launch ends.
     if links::start(links::from_args().as_deref()) {
         return Ok(());

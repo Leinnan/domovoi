@@ -23,10 +23,8 @@ mod window;
 
 #[cfg(windows)]
 fn main() {
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "warn,domovoi_windows=info".into()))
-        .with_writer(std::io::stderr)
-        .init();
+    // A windowed program: its stderr goes nowhere, so the log is a file too.
+    let _log = domovoi_desktop_host::logging::init(core_link::IDENTITY, "warn,domovoi_windows=info,domovoi_desktop_host=info");
     let launch = launch::Launch::from_args(std::env::args().skip(1));
     // A link opened while the app runs goes to it, and this launch ends.
     if domovoi_desktop_host::links::start(core_link::IDENTITY, launch.link.as_deref()) {

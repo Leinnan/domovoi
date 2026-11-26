@@ -30,11 +30,18 @@ fn filter() -> EnvFilter {
     EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into())
 }
 
+/// stderr's filter: `DOMOVOI_STDERR_LOG` when set (the Windows launcher,
+/// which keeps stderr in its own log, asks for warnings only), else the
+/// log file's.
+fn stderr_filter() -> EnvFilter {
+    std::env::var("DOMOVOI_STDERR_LOG").ok().and_then(|f| EnvFilter::try_new(f).ok()).unwrap_or_else(filter)
+}
+
 /// `dir` is `None` for one-shot commands (`pair`, `remote …`), which only
 /// write to stderr.
 pub fn init(dir: Option<&Path>) -> Guard {
     // Colour only for a person at a terminal, not for a captured log.
-    let stderr = tracing_subscriber::fmt::layer().with_ansi(std::io::IsTerminal::is_terminal(&std::io::stderr())).with_writer(std::io::stderr).with_filter(filter());
+    let stderr = tracing_subscriber::fmt::layer().with_ansi(std::io::IsTerminal::is_terminal(&std::io::stderr())).with_writer(std::io::stderr).with_filter(stderr_filter());
     let file = dir.and_then(|dir| {
         let appender = tracing_appender::rolling::Builder::new()
             .rotation(tracing_appender::rolling::Rotation::DAILY)

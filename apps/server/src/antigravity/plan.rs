@@ -240,7 +240,8 @@ fn read_markdown_file(path: &Path) -> Option<String> {
     if bytes.len() as u64 > MAX_PLAN_BYTES {
         return None;
     }
-    let text = String::from_utf8(bytes).ok()?;
+    // A plan written on Windows has CRLF line endings: shown alike everywhere.
+    let text = String::from_utf8(bytes).ok()?.replace("\r\n", "\n");
     let trimmed = text.trim();
     (!trimmed.is_empty()).then(|| trimmed.to_owned())
 }

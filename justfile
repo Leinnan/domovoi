@@ -606,10 +606,10 @@ windows-test:
     {{windows_test_env}} cargo test -p domovoi-windows -p domovoi-desktop-host -p domovoi-server-launcher -p domovoi-iced
     {{windows_test_env}} cargo test -p domovoi-server --bins
 
-# The server's integration tests that pass on Windows (provider_turns and rpc_calls are not there yet: docs/windows.md)
+# The server's integration tests on Windows (all but the live ones, which need real agent CLIs)
 [windows]
 windows-test-server:
-    {{windows_test_env}} cargo test -p domovoi-server --test config_wire --test document_text --test golden_replay --test managed_policy --test ops --test pairing_permissions --test peer_links --test preview --test push --test remote_access --test webpush
+    {{windows_test_env}} cargo test -p domovoi-server --test config_wire --test document_text --test golden_replay --test managed_policy --test ops --test pairing_permissions --test peer_links --test preview --test provider_turns --test push --test remote_access --test rpc_calls --test webpush
 
 # Start the WinUI app against a running server with a fresh pairing code; fails unless it connects
 [windows]
@@ -650,6 +650,11 @@ windows-install flavor="full":
 [windows]
 windows-uninstall flavor="full":
     pwsh -NoProfile -File packaging/windows/install.ps1 -Action uninstall -Flavor {{flavor}}
+
+# Install, upgrade, downgrade, repair and remove the MSIs for this user, checking each step (refuses while Domovoi is installed)
+[windows]
+windows-installer-cycle *args: lfs-check
+    pwsh -NoProfile -File packaging/windows/cycle.ps1 {{args}}
 
 # Installers, ready to hand out
 [windows]

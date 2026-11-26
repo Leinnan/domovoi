@@ -93,6 +93,15 @@ impl Job {
         // SAFETY: the handle is open.
         unsafe { TerminateJobObject(self.0.0, 1) };
     }
+
+    /// Whether the process `pid` is in this job.
+    #[cfg(test)]
+    pub fn holds(&self, pid: u32) -> bool {
+        let Ok(process) = open_process(pid, PROCESS_QUERY_LIMITED_INFORMATION) else { return false };
+        let mut inside = 0;
+        // SAFETY: both handles are open and `inside` is a valid out pointer.
+        unsafe { windows_sys::Win32::System::JobObjects::IsProcessInJob(process.0, self.0.0, &mut inside) != 0 && inside != 0 }
+    }
 }
 
 /// Whether the process `pid` is still running.
@@ -206,6 +215,76 @@ pub fn restrict_to_current_user(path: &Path) -> io::Result<()> {
     // SAFETY: SetEntriesInAclW allocated it with LocalAlloc.
     unsafe { LocalFree(acl.cast()) };
     if err != ERROR_SUCCESS { Err(io::Error::from_raw_os_error(err as i32)) } else { Ok(()) }
+}
+
+/// A security descriptor that gives this user everything and nobody else
+/// anything (a protected DACL with one entry), for an object made with it.
+pub struct OwnerOnly(PSECURITY_DESCRIPTOR);
+
+impl OwnerOnly {
+    pub fn new() -> io::Result<OwnerOnly> {
+        use windows_sys::Win32::Security::Authorization::{ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1};
+        let sid = current_user_sid()?;
+        let mut text: windows_sys::core::PWSTR = std::ptr::null_mut();
+        // SAFETY: a valid SID and out pointer; the string is freed below.
+        if unsafe { ConvertSidToStringSidW(sid.as_ptr() as PSID, &mut text) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: the call wrote a NUL-terminated string at `text`.
+        let sid = String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(text, (0..).take_while(|&i| *text.add(i) != 0).count()) });
+        // SAFETY: allocated with LocalAlloc by the call above.
+        unsafe { LocalFree(text.cast()) };
+        let sddl = wide(format!("D:P(A;;GA;;;{sid})"));
+        let mut sd: PSECURITY_DESCRIPTOR = std::ptr::null_mut();
+        // SAFETY: a valid SDDL string and out pointer; `OwnerOnly` frees the descriptor.
+        if unsafe { ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl.as_ptr(), SDDL_REVISION_1, &mut sd, std::ptr::null_mut()) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(OwnerOnly(sd))
+    }
+
+    /// Attributes for a `Create…` call; valid while `self` lives.
+    pub fn attributes(&self) -> windows_sys::Win32::Security::SECURITY_ATTRIBUTES {
+        windows_sys::Win32::Security::SECURITY_ATTRIBUTES {
+            nLength: std::mem::size_of::<windows_sys::Win32::Security::SECURITY_ATTRIBUTES>() as u32,
+            lpSecurityDescriptor: self.0,
+            bInheritHandle: 0,
+        }
+    }
+}
+
+impl Drop for OwnerOnly {
+    fn drop(&mut self) {
+        // SAFETY: allocated with LocalAlloc for this caller, freed once.
+        unsafe { LocalFree(self.0) };
+    }
+}
+
+/// Opens `path` for writing, created readable by this user only from the
+/// start (no moment with the folder's inherited ACL). `new_only` refuses an
+/// existing file; otherwise one is truncated, and given that ACL too.
+pub fn create_private(path: &Path, new_only: bool) -> io::Result<std::fs::File> {
+    use std::os::windows::io::FromRawHandle;
+    use windows_sys::Win32::Foundation::{ERROR_ALREADY_EXISTS, GENERIC_WRITE, GetLastError, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::Storage::FileSystem::{CREATE_ALWAYS, CREATE_NEW, CreateFileW, FILE_ATTRIBUTE_NORMAL};
+    let owner_only = OwnerOnly::new()?;
+    let attributes = owner_only.attributes();
+    let name = wide(path);
+    let disposition = if new_only { CREATE_NEW } else { CREATE_ALWAYS };
+    // SAFETY: a valid name and attributes that outlive the call; the handle goes to a `File`.
+    let handle = unsafe { CreateFileW(name.as_ptr(), GENERIC_WRITE, 0, &attributes, disposition, FILE_ATTRIBUTE_NORMAL, std::ptr::null_mut()) };
+    if handle == INVALID_HANDLE_VALUE {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: plain call, right after the one whose result it qualifies.
+    let existed = unsafe { GetLastError() } == ERROR_ALREADY_EXISTS;
+    // SAFETY: a file handle this call opened and nothing else owns.
+    let file = unsafe { std::fs::File::from_raw_handle(handle) };
+    // An existing file keeps its descriptor: give it this one.
+    if existed {
+        restrict_to_current_user(path)?;
+    }
+    Ok(file)
 }
 
 /// Whether every entry of `path`'s ACL is for this user (what
@@ -376,6 +455,53 @@ pub fn is_reparse_point(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The pids of the processes `parent` started.
+    fn children_of(parent: u32) -> Vec<u32> {
+        let mut sys = sysinfo::System::new().expect("process list");
+        sys.refresh_processes_specifics(sysinfo::ProcessesToUpdate::All, true, sysinfo::ProcessRefreshKind::nothing());
+        sys.processes().values().filter(|p| p.parent().map(sysinfo::Pid::as_u32) == Some(parent)).map(|p| p.pid().as_u32()).collect()
+    }
+
+    /// A secret file is this user's alone from its creation, in a folder
+    /// whose ACL lets others in; one written again is truncated and keeps it.
+    #[test]
+    fn a_private_file_is_private_from_the_start() {
+        use std::io::Write;
+        let dir = std::env::temp_dir().join(format!("domovoi-private-{}", crate::util::new_uuid()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("secret");
+        create_private(&path, true).unwrap().write_all(b"first").unwrap();
+        assert_eq!(only_current_user_can_access(&path), Some(true));
+        assert_eq!(only_current_user_can_access(&dir), Some(false), "the folder itself lets others in");
+        assert_eq!(create_private(&path, true).unwrap_err().kind(), io::ErrorKind::AlreadyExists);
+        create_private(&path, false).unwrap().write_all(b"2").unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"2");
+        assert_eq!(only_current_user_can_access(&path), Some(true));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// What an agent's batch file starts (a `.cmd` shim's `node`) is in the
+    /// agent's job too, so it ends with it, wherever this server runs.
+    #[test]
+    fn a_job_holds_what_its_process_starts() {
+        let mut child = crate::process::blocking_command("cmd").args(["/C", "ping -n 30 127.0.0.1 >NUL"]).spawn().expect("cmd starts");
+        let job = Job::new(false).expect("a job");
+        job.assign(child.id()).expect("assigned");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let grandchild = loop {
+            if let Some(pid) = children_of(child.id()).into_iter().next() {
+                break pid;
+            }
+            assert!(std::time::Instant::now() < deadline, "cmd started no ping");
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        };
+        assert!(job.holds(grandchild), "ping, started by cmd inside the job, is in the job");
+        drop(job);
+        child.wait().expect("waited");
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert!(!process_alive(grandchild), "ping ended with the job");
+    }
 
     #[test]
     fn a_job_ends_its_process_when_closed() {

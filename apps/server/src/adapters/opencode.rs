@@ -80,6 +80,8 @@ pub struct OpenCodeServer {
     /// Windows: `opencode serve` (a `.cmd` shim's `node`) ends with this server
     /// however it ends, as the Unix watchdog makes sure.
     tree: crate::process::Tree,
+    /// Whether Ctrl+Break can ask it to stop (Windows: [`crate::process::interruptible`]).
+    interruptible: bool,
     /// The folder each thread's MCP server was added for, by thread.
     mcp: Mutex<HashMap<String, String>>,
     /// The instruction entry each session holds, by session.
@@ -406,10 +408,17 @@ impl OpenCodeServer {
         let exe = crate::providers::executable(OPENCODE_TOOL)?;
         let port = std::net::TcpListener::bind("127.0.0.1:0").and_then(|l| l.local_addr()).map_err(|e| e.to_string())?.port();
         let password = crate::util::new_uuid().replace('-', "");
-        let mut child = serve_command(&exe, port)
-            .env("OPENCODE_SERVER_PASSWORD", &password)
+        let mut command = serve_command(&exe, port);
+        command.env("OPENCODE_SERVER_PASSWORD", &password)
             .stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null())
-            .kill_on_drop(true).spawn().map_err(|e| format!("could not start opencode serve: {e}"))?;
+            .kill_on_drop(true);
+        #[cfg(windows)]
+        let interruptible = crate::process::interruptible(&mut command);
+        #[cfg(not(windows))]
+        let interruptible = false;
+        let mut child = command.spawn().map_err(|e| format!("could not start opencode serve: {e}"))?;
+        // At once: if it never comes up, what it started ends with it.
+        let tree = crate::process::Tree::of(child.id());
         let base = format!("http://127.0.0.1:{port}");
         let http = reqwest::Client::builder().build().map_err(|e| e.to_string())?;
         let auth = basic(&password);
@@ -427,8 +436,7 @@ impl OpenCodeServer {
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
         let routes: Arc<Mutex<HashMap<String, mpsc::UnboundedSender<Value>>>> = Arc::default();
-        let tree = crate::process::Tree::of(child.id());
-        let server = Arc::new(OpenCodeServer { base, auth, http, routes, child: Mutex::new(child), tree, mcp: Mutex::default(), instructed: Mutex::default() });
+        let server = Arc::new(OpenCodeServer { base, auth, http, routes, child: Mutex::new(child), tree, interruptible, mcp: Mutex::default(), instructed: Mutex::default() });
         let s = server.clone();
         tokio::spawn(async move { s.pump_events().await });
         Ok(server)
@@ -596,6 +604,16 @@ impl OpenCodeServer {
                 return;
             }
         }
+        #[cfg(windows)]
+        if self.interruptible
+            && let Some(pid) = child.id()
+            && crate::process::interrupt(pid)
+            && tokio::time::timeout(Duration::from_secs(3), child.wait()).await.is_ok()
+        {
+            self.tree.kill();
+            return;
+        }
+        let _ = self.interruptible;
         self.tree.kill();
         let _ = child.kill().await;
     }

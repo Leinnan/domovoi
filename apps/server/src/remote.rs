@@ -489,17 +489,7 @@ fn from_hex(s: &str) -> Option<[u8; 32]> {
 
 pub(crate) fn write_private(path: &Path, data: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
-    #[cfg(unix)]
-    use std::os::unix::fs::OpenOptionsExt;
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    options.mode(0o600);
-    options.open(path)?.write_all(data)?;
-    // Windows has no mode to create it with: its ACL is set after.
-    #[cfg(windows)]
-    crate::util::make_private(path)?;
-    Ok(())
+    crate::util::create_private(path, false)?.write_all(data)
 }
 
 #[cfg(test)]

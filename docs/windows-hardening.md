@@ -18,6 +18,25 @@ do, and how to tell it's done.
 - **Not run yet:** the Linux and macOS builds of these changes, and the CI
   workflows.
 
+## Progress (2026-11-25)
+
+| Item | State |
+|---|---|
+| 1. Unix builds, CI | Not done: needs a macOS machine and a pushed branch. |
+| 2. Real CLIs | Not done here (a live Codex turn ran in the first pass). |
+| 3. `provider_turns`, `rpc_calls` | Done. 89 pass and 3 are ignored (the 2 Antigravity sign-in-link tests, which are Unix only, and 1 ignored everywhere). `rpc_calls`: 10 pass, 1 ignored. Both are in `just windows-test-server`, so in CI. Product bugs found and fixed: programs named without an extension (ACP `commandPath`, `npx`) were not found by `PATHEXT`; CRLF in plans and in ranged file reads; Antigravity's `BROWSER` list separator; a subagent's result lost when its transcript finished before its reply reached the session DB (both platforms); `\\?\` paths given to `cmd.exe`, git (read as ssh) and the folder browser; `-l` given to Windows shells. |
+| 4. Exit and children | The tree is taken right after spawn, a failed job assignment is a warning, and the runtime's shutdown is bounded. Not done: a run with the server inside another job. |
+| 5. Paths | The core's path helpers (`tools::file_name`, `strip_root`, `same_path`, `parent_dir`, `trim_separators`) are used in artifacts, highlighting, the file tree's project match, the folder browser and project titles. The server's folder browser takes `\`. The server and launcher declare `longPathAware`. Not done: a `client_replay` test with a Windows snapshot, and the WinUI app's manifest (windows-reactor-setup makes it). |
+| 6. Signing | Not done: needs a certificate. |
+| 7. Pipe, secrets | Done. The links pipe grants only this user (a test reads its DACL back). Secret files are created with an owner-only descriptor (`util::create_private`, tested). `doctor` checks every secret file. Not run: the check as a second local user. |
+| 8. Graceful stop | Done for Pi and OpenCode: Ctrl+Break to their own process group, then the tree after the grace (tested with a child that handles `SIGBREAK`). Local dev servers can't get one: they are on another console (`docs/windows.md`). |
+| 9. Logs | Done. The launcher writes `%LOCALAPPDATA%\Domovoi\logs\launcher.log` (the server's stderr at `warn`, each start and exit, its own panics). Both apps log daily to `<data>\logs`, with panics in `panic.log` at once. |
+| 10. Registry, Task Scheduler | Done. The host uses `RegSetKeyValueW` and `RegGetValueW` (tested). `service status` reads the task's XML and its numeric last result, not the translated status column (tested). |
+| 11. Terminals | Partly. `cmd.exe` is tested by `rpc_calls`, and Windows shells no longer get `-l`. Not done: Windows PowerShell 5.1, Git Bash, WSL, resize. |
+| 12. Installer edges | `packaging/windows/cycle.ps1` (`just windows-installer-cycle`) covers upgrade, downgrade, repair, a feature added later, the two products' conflict (now exclusive: the full MSI replaces the server-only one and keeps its features) and uninstall. The MSI now stops only programs running from its own folder. Data left on uninstall and the firewall prompt are documented. Not done: running it in CI on a clean VM. |
+| 13–16 | Not started. |
+| 17 | The two `client_replay` failures are not about the clock: `limit_windows` orders windows by kind (session, weekly, monthly), and the tests expect the fullest first. Both came in `adf6350`; which one is meant needs a decision. Not done: registry policy, arm64, winget, Antigravity's browser. |
+
 ## P0: before anyone relies on it
 
 ### 1. Run the Unix builds and the CI workflows
@@ -311,11 +330,12 @@ do, and how to tell it's done.
   there, then add an arm64 MSI.
 - **Updates.** Domovoi has no self-update. Publish a winget manifest from
   the release workflow, then consider an in-app update check.
-- **Core tests that depend on the clock.** `client_replay`'s
+- **Two core tests that disagree with the code.** `client_replay`'s
   `a_thread_shows_its_context_limits_tasks_and_plans_in_detail` and
-  `the_header_meter_shows_the_thread_providers_limits` fail at some times of
-  day on every platform, not only Windows: their pace math reads the real
-  clock. Give them a fixed `now`.
+  `the_header_meter_shows_the_thread_providers_limits` fail on every
+  platform. They expect the fullest usage window first; `limit_windows`
+  orders them by kind. (An earlier note here blamed the clock: the tests fix
+  `now_ms`.) Decide which order is meant, and make the other match.
 
 ## Order
 

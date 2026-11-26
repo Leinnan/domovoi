@@ -212,6 +212,8 @@ async fn run(op: &str, mut cmd: tokio::process::Command, stdin: &str, timeout: D
     use tokio::io::AsyncWriteExt;
     cmd.stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).kill_on_drop(true);
     let mut child = cmd.spawn().map_err(|e| error(op, format!("Could not start the CLI: {e}")))?;
+    // A `.cmd` CLI's `node` ends with it too (a timeout, a dropped request).
+    let _tree = crate::process::Tree::of(child.id());
     if let Some(mut s) = child.stdin.take() {
         let _ = s.write_all(stdin.as_bytes()).await;
     }

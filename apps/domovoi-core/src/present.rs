@@ -3459,7 +3459,7 @@ fn folder_browser(model: &Model) -> FolderBrowserView {
         entries: b.entries.iter().map(|e| FolderEntryView { name: e.name.clone(), full_path: e.full_path.clone() }).collect(),
         loading: b.loading,
         error: b.error.clone(),
-        is_project: model.projects.iter().any(|p| p.workspace_root.trim_end_matches('/') == b.path.trim_end_matches('/')),
+        is_project: model.projects.iter().any(|p| crate::tools::same_path(&p.workspace_root, &b.path)),
     }
 }
 

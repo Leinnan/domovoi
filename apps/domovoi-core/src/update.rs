@@ -1962,15 +1962,20 @@ pub fn update(event: Event, model: &mut Model) -> Cmd {
             b.revision += 1;
             b.loading = true;
             b.error = None;
-            // A trailing slash lists the folder's children.
+            // A trailing separator lists the folder's children (`\` on a
+            // Windows server's paths).
             let path = match path.trim() {
                 "" => "~".to_owned(),
-                "/" => "/".to_owned(),
-                p => p.trim_end_matches('/').to_owned(),
+                p => crate::tools::trim_separators(p).to_owned(),
             };
             b.path = path.clone();
             let rev = b.revision;
-            let partial = if path == "/" { path } else { format!("{path}/") };
+            let partial = if path.ends_with(crate::tools::SEPARATORS) {
+                path
+            } else {
+                let sep = if crate::tools::is_windows_path(&path) { '\\' } else { '/' };
+                format!("{path}{sep}")
+            };
             call(model, requests::filesystem_browse(&partial), Route::Browse(rev))
         }
 

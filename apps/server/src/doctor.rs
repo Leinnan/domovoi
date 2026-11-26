@@ -21,7 +21,7 @@
 
 use crate::providers::Tool;
 use serde::Serialize;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 /// How long one probe (`--version`, `gh auth status`) may take.
@@ -140,6 +140,7 @@ async fn checks(home: &Path, host: &str, port: u16, relays: &[String]) -> Vec<Ch
     out.extend(providers);
     out.extend([git, lfs, gh]);
     out.push(check_remote(home, relays));
+    out.push(check_secrets(home));
     out.push(check_autostart(home, host, port, relays));
     if let Some(service) = crate::service::summary() {
         out.push(Check::new("service", Status::Ok, format!("systemd user service {service}")));
@@ -306,6 +307,44 @@ fn check_remote(home: &Path, relays: &[String]) -> Check {
         return Check::new(name, Status::Warn, format!("{} can be read by other accounts (its folder's permissions); run `{fix}`", key_path.display()));
     }
     Check::new(name, Status::Ok, format!("remote access {state} ({relays}), endpoint {}", key.public()))
+}
+
+/// The files that hold credentials (provider keys, the server's own
+/// secrets, secret requests, the push key) besides the iroh key, which
+/// `remote` checks: each must be readable by this user only.
+fn check_secrets(home: &Path) -> Check {
+    let name = "secrets";
+    let userdata = home.join("userdata");
+    let mut files = vec![home.join("webpush-vapid.p8")];
+    for dir in ["secrets", "server-secrets", "secret-requests"] {
+        files_under(&userdata.join(dir), &mut files);
+    }
+    files.retain(|f| f.is_file());
+    let open: Vec<&PathBuf> = files.iter().filter(|f| crate::util::is_private(f) == Some(false)).collect();
+    let Some(first) = open.first() else {
+        return Check::new(name, Status::Ok, format!("{} file(s), readable by you only", files.len()));
+    };
+    let fix = if cfg!(windows) {
+        format!("icacls \"{}\" /inheritance:r /grant:r \"%USERNAME%:F\"", first.display())
+    } else {
+        format!("chmod 600 {}", first.display())
+    };
+    let shown: Vec<String> = open.iter().take(3).map(|f| f.display().to_string()).collect();
+    let more = if open.len() > 3 { format!(" and {} more", open.len() - 3) } else { String::new() };
+    Check::new(name, Status::Warn, format!("readable by other users: {}{more}; run `{fix}` on each", shown.join(", ")))
+}
+
+/// Every file under `dir` (none when it is missing), links not followed.
+fn files_under(dir: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let Ok(kind) = entry.file_type() else { continue };
+        if kind.is_dir() {
+            files_under(&entry.path(), out);
+        } else if kind.is_file() {
+            out.push(entry.path());
+        }
+    }
 }
 
 fn check_autostart(home: &Path, host: &str, port: u16, relays: &[String]) -> Check {

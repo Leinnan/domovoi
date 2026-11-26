@@ -60,7 +60,7 @@ where
         Ok(p) => p,
         Err(e) => {
             tracing::warn!("No status bar icon: {e}");
-            return runtime.block_on(serve(None));
+            return crate::finish(runtime, serve(None));
         }
     };
     let handle = runtime.handle().clone();
@@ -91,7 +91,7 @@ where
                 })
             };
             let result = runtime.block_on(serve(Some(on_ready)));
-            runtime.shutdown_timeout(std::time::Duration::from_secs(2));
+            runtime.shutdown_timeout(crate::RUNTIME_GRACE);
             finished.store(true, Ordering::Release);
             notify(TrayMessage::ServerExited(result.as_ref().err().map(ToString::to_string)));
             result

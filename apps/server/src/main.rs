@@ -264,6 +264,20 @@ fn runtime() -> std::io::Result<tokio::runtime::Runtime> {
     tokio::runtime::Builder::new_multi_thread().enable_all().build()
 }
 
+/// How long tasks still running after the server stopped get before the
+/// process exits without them.
+pub const RUNTIME_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Runs `serve` to its end, then gives what is still running (a reader
+/// blocked on an agent's pipe, a turn mid-way) a moment and drops it. A
+/// runtime simply dropped would wait for its blocking tasks forever, and the
+/// process would never exit. Dropping the tasks ends their child processes.
+pub fn finish(runtime: tokio::runtime::Runtime, serve: impl std::future::Future<Output = Fallible>) -> Fallible {
+    let result = runtime.block_on(serve);
+    runtime.shutdown_timeout(RUNTIME_GRACE);
+    result
+}
+
 /// What `pair` and the server share: the home directory's database, keys and
 /// identity.
 struct Base {
@@ -429,7 +443,7 @@ fn run() -> Fallible {
                 let stop = shutdown.clone();
                 return tray::run(runtime()?, shutdown, move |on_ready| async move { serve(&args, paths, base, stop, on_ready).await });
             }
-            runtime()?.block_on(serve(&args, paths, base, shutdown, None))
+            finish(runtime()?, serve(&args, paths, base, shutdown, None))
         }
     }
 }

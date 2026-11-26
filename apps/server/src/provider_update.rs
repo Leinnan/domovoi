@@ -529,6 +529,8 @@ async fn run_command(action: &Action, on_progress: impl Fn(String)) -> CommandRe
         Ok(child) => child,
         Err(e) => return CommandResult { spawn_error: Some(format!("Failed to run update command {}: {e}", action.executable)), ..Default::default() },
     };
+    // npm and the native updaters start children of their own: they end with it.
+    let _tree = crate::process::Tree::of(child.id());
     let progress = Arc::new(Mutex::new(None::<String>));
     let (Some(stdout), Some(stderr)) = (child.stdout.take(), child.stderr.take()) else {
         return CommandResult { spawn_error: Some("Update command failed to run.".into()), ..Default::default() };

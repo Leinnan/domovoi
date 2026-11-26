@@ -26,6 +26,33 @@ pub const SLOW: Duration = Duration::from_secs(600);
 #[cfg(windows)]
 const NO_WINDOW: u32 = 0x0800_0000;
 
+/// Lets [`interrupt`] ask `cmd`'s child to stop, as SIGTERM does on Unix:
+/// it starts as a process group of its own, on this server's console
+/// (hidden when the server's is), where a Ctrl+Break can reach it. Without a
+/// console here there is nothing to share, so it stays as [`command`] made
+/// it (`false`): then only ending its tree stops it.
+#[cfg(windows)]
+pub fn interruptible(cmd: &mut tokio::process::Command) -> bool {
+    use windows_sys::Win32::System::Threading::CREATE_NEW_PROCESS_GROUP;
+    // SAFETY: plain call; 0 means this process has no console.
+    if unsafe { windows_sys::Win32::System::Console::GetConsoleCP() } == 0 {
+        return false;
+    }
+    // In place of `NO_WINDOW`: a child on this console opens no window either.
+    cmd.creation_flags(CREATE_NEW_PROCESS_GROUP);
+    true
+}
+
+/// Sends Ctrl+Break to the process group `pid` leads: only a child started
+/// [`interruptible`], since for any other id Windows sends it to every
+/// process on this console, this server too. Whether it was sent.
+#[cfg(windows)]
+pub fn interrupt(pid: u32) -> bool {
+    use windows_sys::Win32::System::Console::{CTRL_BREAK_EVENT, GenerateConsoleCtrlEvent};
+    // SAFETY: plain call, for a group this server made.
+    unsafe { GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, pid) != 0 }
+}
+
 /// A command whose child is killed when what waits for it is dropped.
 ///
 /// On Windows a batch-file shim (npm's `claude.cmd`, `codex.cmd`) is started
@@ -35,7 +62,9 @@ const NO_WINDOW: u32 = 0x0800_0000;
 #[expect(clippy::disallowed_methods, reason = "the one place commands are made")]
 pub fn command(program: impl AsRef<OsStr>) -> tokio::process::Command {
     #[cfg(windows)]
-    let mut cmd = match shim_target(Path::new(program.as_ref())) {
+    let program = windows_program(program.as_ref());
+    #[cfg(windows)]
+    let mut cmd = match shim_target(Path::new(&program)) {
         Some(Shim { program, script }) => {
             let mut cmd = tokio::process::Command::new(program);
             cmd.args(script);
@@ -49,6 +78,34 @@ pub fn command(program: impl AsRef<OsStr>) -> tokio::process::Command {
     #[cfg(windows)]
     cmd.creation_flags(NO_WINDOW);
     cmd
+}
+
+/// `program` as a shell would find it on Windows: one named without an
+/// extension (`npx`, an ACP agent's `commandPath`) gets the first of
+/// `PATHEXT`'s that exists. Windows itself only tries `.exe`, so `npx.cmd`
+/// would not be found. Names are looked up once and remembered.
+#[cfg(windows)]
+fn windows_program(program: &OsStr) -> std::ffi::OsString {
+    use std::collections::HashMap;
+    use std::sync::{LazyLock, Mutex};
+    static FOUND: LazyLock<Mutex<HashMap<std::ffi::OsString, std::path::PathBuf>>> = LazyLock::new(Mutex::default);
+    let path = Path::new(program);
+    if path.extension().is_some() {
+        return program.to_owned();
+    }
+    if path.components().count() > 1 || path.is_absolute() {
+        return crate::providers::runnable(path).map_or_else(|| program.to_owned(), std::path::PathBuf::into_os_string);
+    }
+    if let Some(found) = crate::util::locked(&FOUND).get(program) {
+        return found.clone().into_os_string();
+    }
+    match crate::providers::find_in(&crate::providers::search_dirs(), &program.to_string_lossy()) {
+        Some(found) => {
+            crate::util::locked(&FOUND).insert(program.to_owned(), found.clone());
+            found.into_os_string()
+        }
+        None => program.to_owned(),
+    }
 }
 
 /// What a batch-file shim runs: a program, and the script it is given first
@@ -137,7 +194,7 @@ impl Tree {
             let job = pid.and_then(|pid| match crate::win::Job::new(false).and_then(|job| job.assign(pid).map(|()| job)) {
                 Ok(job) => Some(job),
                 Err(e) => {
-                    tracing::debug!("child {pid} is not in a job of its own: {e}");
+                    tracing::warn!("child {pid} is not in a job of its own (what it starts may outlive it): {e}");
                     None
                 }
             });
@@ -246,6 +303,33 @@ fn gave_up(limit: Duration) -> std::io::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A child started interruptible gets Ctrl+Break and runs its handler
+    /// (it exits 7 from it); this test process, on the same console, does not.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn an_interruptible_child_is_asked_to_stop() {
+        // Short sleeps: Python runs a handler between them, and one long sleep
+        // on Windows wakes early only for Ctrl+C.
+        let script = "import signal, sys, time\nsignal.signal(signal.SIGBREAK, lambda *_: sys.exit(7))\nprint('ready', flush=True)\nfor _ in range(600): time.sleep(0.05)";
+        let mut cmd = command("python");
+        cmd.args(["-c", script]).stdout(Stdio::piped());
+        if !interruptible(&mut cmd) {
+            eprintln!("skipped: this test has no console to share");
+            return;
+        }
+        let Ok(mut child) = cmd.spawn() else {
+            eprintln!("skipped: python is not on PATH");
+            return;
+        };
+        let mut ready = String::new();
+        let mut out = tokio::io::BufReader::new(child.stdout.take().unwrap());
+        tokio::io::AsyncBufReadExt::read_line(&mut out, &mut ready).await.unwrap();
+        assert_eq!(ready.trim(), "ready");
+        assert!(interrupt(child.id().unwrap()), "Ctrl+Break sent");
+        let status = tokio::time::timeout(Duration::from_secs(5), child.wait()).await.expect("it stopped").unwrap();
+        assert_eq!(status.code(), Some(7), "its handler ran");
+    }
 
     #[test]
     fn batch_file_shims_are_run_as_what_they_start() {

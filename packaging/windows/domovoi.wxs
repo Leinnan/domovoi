@@ -16,12 +16,14 @@
      xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui"
      xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
 
+  <?define ServerUpgradeCode = "{5B7F6D1E-2C4A-4E8B-9F3D-7A1C0E6B4D21}" ?>
+  <?define FullUpgradeCode = "{C3A9E4F2-8D6B-4F1A-A7E5-1B2D3C4E5F60}" ?>
   <?if $(var.Flavor) = "server" ?>
     <?define ProductName = "Domovoi Server" ?>
-    <?define UpgradeCode = "{5B7F6D1E-2C4A-4E8B-9F3D-7A1C0E6B4D21}" ?>
+    <?define UpgradeCode = "$(var.ServerUpgradeCode)" ?>
   <?else?>
     <?define ProductName = "Domovoi" ?>
-    <?define UpgradeCode = "{C3A9E4F2-8D6B-4F1A-A7E5-1B2D3C4E5F60}" ?>
+    <?define UpgradeCode = "$(var.FullUpgradeCode)" ?>
   <?endif?>
 
   <Package Name="$(var.ProductName)" Manufacturer="Domovoi" Version="$(var.Version)"
@@ -42,6 +44,22 @@
     </Property>
     <Launch Condition="Installed OR DOMOVOI_OS_BUILD &gt;= 17763" Message="Domovoi requires Windows 10 version 1809 or later." />
 
+    <!-- The two products put the same server in the same folder and on PATH,
+         so only one is installed: the full one takes the server-only one's
+         place (removed with its major upgrade), and the server-only one is
+         refused beside the full one. -->
+    <?if $(var.Flavor) = "server" ?>
+    <Upgrade Id="$(var.FullUpgradeCode)">
+      <UpgradeVersion Minimum="0.0.0" IncludeMinimum="yes" OnlyDetect="yes" Property="DOMOVOI_FULL_FOUND" />
+    </Upgrade>
+    <Launch Condition="Installed OR NOT DOMOVOI_FULL_FOUND" Message="Domovoi is installed, and it includes the server. Change its features in Apps &amp; features, or uninstall it before installing Domovoi Server." />
+    <?else?>
+    <!-- Its features carry over by name: "Start at sign-in" stays as chosen. -->
+    <Upgrade Id="$(var.ServerUpgradeCode)">
+      <UpgradeVersion Minimum="0.0.0" IncludeMinimum="yes" MigrateFeatures="yes" Property="DOMOVOI_SERVER_ONLY_FOUND" />
+    </Upgrade>
+    <?endif?>
+
     <!-- The Icon table keeps the whole file: an .ico, not an executable. -->
     <Icon Id="DomovoiIcon.ico" SourceFile="$(var.IconFile)" />
     <Property Id="ARPPRODUCTICON" Value="DomovoiIcon.ico" />
@@ -56,10 +74,11 @@
     <StandardDirectory Id="ProgramMenuFolder" />
 
     <!-- The apps running now hold their files open: they are stopped first
-         (quietly; nothing that is not running is touched). An immediate
-         WixQuietExec64 takes its command from WixQuietExec64CmdLine. -->
+         (quietly; nothing that is not running is touched). Only those started
+         from this folder: a server run from a checkout keeps running. An
+         immediate WixQuietExec64 takes its command from WixQuietExec64CmdLine. -->
     <SetProperty Id="WixQuietExec64CmdLine" Sequence="execute" Before="StopRunningApps"
-                 Value="&quot;[System64Folder]taskkill.exe&quot; /F /T /IM Domovoi.exe /IM domovoi-desktop.exe /IM domovoi-server-launcher.exe /IM domovoi-server.exe" />
+                 Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -NonInteractive -Command &quot;Get-Process -Name Domovoi,domovoi-desktop,domovoi-server-launcher,domovoi-server -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path.StartsWith('[INSTALLFOLDER]', 'OrdinalIgnoreCase') } | Stop-Process -Force&quot;" />
     <CustomAction Id="StopRunningApps" BinaryRef="Wix4UtilCA_X64" DllEntry="WixQuietExec64" Execute="immediate" Return="ignore" />
 
     <?if $(var.Flavor) != "server" ?>

@@ -13,6 +13,7 @@
 
 mod engine;
 pub mod links;
+pub mod logging;
 mod store;
 #[cfg(windows)]
 pub mod windows;

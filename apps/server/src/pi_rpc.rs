@@ -33,7 +33,7 @@ pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(15);
 pub const LIFECYCLE_TIMEOUT: Duration = Duration::from_secs(60);
 /// `get_session_stats`, `abort`, probes that must not hold a turn up.
 pub const SHORT_TIMEOUT: Duration = Duration::from_secs(2);
-#[cfg(unix)]
+/// How long Pi gets to stop when asked (SIGTERM, or Ctrl+Break on Windows).
 const TERMINATION_GRACE: Duration = Duration::from_secs(1);
 /// A record longer than this is dropped. MCP image results are carried twice
 /// (model content and the tool result), so leave room for several images.
@@ -305,6 +305,8 @@ pub struct PiRpc {
     child: Mutex<Child>,
     /// Pi and what it starts (Windows; Unix signals the process group).
     tree: crate::process::Tree,
+    /// Whether Ctrl+Break can ask it to stop (Windows: [`crate::process::interruptible`]).
+    interruptible: bool,
     pending: Mutex<HashMap<String, oneshot::Sender<Value>>>,
     next: AtomicU64,
     exited: AtomicBool,
@@ -331,13 +333,17 @@ impl PiRpc {
         }
         #[cfg(unix)]
         cmd.process_group(0);
+        #[cfg(windows)]
+        let interruptible = crate::process::interruptible(&mut cmd);
+        #[cfg(not(windows))]
+        let interruptible = false;
         let mut child = cmd.spawn()?;
         let stdin = child.stdin.take().expect("piped stdin");
         let mut stdout = child.stdout.take().expect("piped stdout");
         #[expect(clippy::disallowed_methods, reason = "the reader also delivers the answers a turn waits for: made to wait for room here, it could never read the answer that frees the turn")]
         let (tx, rx) = mpsc::unbounded_channel();
         let tree = crate::process::Tree::of(child.id());
-        let rpc = Arc::new(PiRpc { stdin: Mutex::new(stdin), child: Mutex::new(child), tree, pending: Mutex::default(), next: AtomicU64::new(1), exited: AtomicBool::new(false) });
+        let rpc = Arc::new(PiRpc { stdin: Mutex::new(stdin), child: Mutex::new(child), tree, interruptible, pending: Mutex::default(), next: AtomicU64::new(1), exited: AtomicBool::new(false) });
         let weak: Weak<PiRpc> = Arc::downgrade(&rpc);
         let log: Box<Log> = Box::new(log);
         tokio::spawn(async move {
@@ -449,7 +455,17 @@ impl PiRpc {
                 unsafe { libc::killpg(pid as i32, libc::SIGKILL) };
             }
         }
-        // Windows has no signal to ask with: the tree ends at once.
+        // Ctrl+Break asks on Windows (Node's SIGBREAK); the tree ends after the grace.
+        #[cfg(windows)]
+        if self.interruptible
+            && let Some(pid) = child.id()
+            && crate::process::interrupt(pid)
+            && tokio::time::timeout(TERMINATION_GRACE, child.wait()).await.is_ok()
+        {
+            self.tree.kill();
+            return;
+        }
+        let _ = self.interruptible;
         self.tree.kill();
         let _ = child.kill().await;
     }

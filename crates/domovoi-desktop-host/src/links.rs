@@ -145,6 +145,66 @@ mod platform {
         std::fs::OpenOptions::new().write(true).open(name(identity)).ok()
     }
 
+    /// A security descriptor that lets only this user open the pipe: the
+    /// default one lets other local users connect and hand the app a link.
+    /// The Unix socket's mode 0600.
+    struct OwnerOnly(windows_sys::Win32::Security::PSECURITY_DESCRIPTOR);
+
+    impl OwnerOnly {
+        fn new() -> Option<OwnerOnly> {
+            use windows_sys::Win32::Security::Authorization::{ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1};
+            let sddl: Vec<u16> = format!("D:P(A;;GA;;;{})", user_sid()?).encode_utf16().chain([0]).collect();
+            let mut sd = std::ptr::null_mut();
+            // SAFETY: a NUL-terminated SDDL string and a valid out pointer; `Drop` frees the descriptor.
+            let ok = unsafe { ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl.as_ptr(), SDDL_REVISION_1, &mut sd, std::ptr::null_mut()) };
+            (ok != 0).then_some(OwnerOnly(sd))
+        }
+    }
+
+    impl Drop for OwnerOnly {
+        fn drop(&mut self) {
+            // SAFETY: allocated with LocalAlloc for this caller, freed once.
+            unsafe { windows_sys::Win32::Foundation::LocalFree(self.0) };
+        }
+    }
+
+    /// This process's user, as a SID string (`S-1-5-21-…`).
+    pub(super) fn user_sid() -> Option<String> {
+        use windows_sys::Win32::Foundation::{CloseHandle, LocalFree};
+        use windows_sys::Win32::Security::Authorization::ConvertSidToStringSidW;
+        use windows_sys::Win32::Security::{GetTokenInformation, TOKEN_QUERY, TOKEN_USER, TokenUser};
+        use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+        let mut token = std::ptr::null_mut();
+        // SAFETY: this process's pseudo-handle and a valid out pointer.
+        if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0 {
+            return None;
+        }
+        let mut len = 0u32;
+        // SAFETY: asking for the size only.
+        unsafe { GetTokenInformation(token, TokenUser, std::ptr::null_mut(), 0, &mut len) };
+        // u64s, so the TOKEN_USER at its start is aligned.
+        let mut buf = vec![0u64; (len as usize).div_ceil(8)];
+        // SAFETY: `buf` holds `len` bytes; the token is closed right after.
+        let ok = unsafe { GetTokenInformation(token, TokenUser, buf.as_mut_ptr().cast(), len, &mut len) };
+        // SAFETY: opened above, closed once.
+        unsafe { CloseHandle(token) };
+        if ok == 0 {
+            return None;
+        }
+        // SAFETY: the call wrote a TOKEN_USER at the start of `buf`.
+        let sid = unsafe { (*buf.as_ptr().cast::<TOKEN_USER>()).User.Sid };
+        let mut text: windows_sys::core::PWSTR = std::ptr::null_mut();
+        // SAFETY: a valid SID and out pointer; the string is freed below.
+        if unsafe { ConvertSidToStringSidW(sid, &mut text) } == 0 {
+            return None;
+        }
+        // SAFETY: the call wrote a NUL-terminated string at `text`.
+        let s = unsafe { String::from_utf16_lossy(std::slice::from_raw_parts(text, (0..).take_while(|&i| *text.add(i) != 0).count())) };
+        // SAFETY: allocated with LocalAlloc by the call above.
+        unsafe { LocalFree(text.cast()) };
+        Some(s)
+    }
+
     pub fn listen(identity: Identity) {
         let name = name(identity);
         let spawned = std::thread::Builder::new().name("domovoi-links".into()).spawn(move || {
@@ -152,9 +212,27 @@ mod platform {
             rt.block_on(async move {
                 use tokio::io::AsyncReadExt;
                 use tokio::net::windows::named_pipe::ServerOptions;
+                let owner_only = OwnerOnly::new();
+                if owner_only.is_none() {
+                    tracing::warn!("the links pipe keeps Windows' default permissions: this user's could not be read");
+                }
                 let mut first = true;
                 loop {
-                    let server = match ServerOptions::new().first_pipe_instance(first).reject_remote_clients(true).create(&name) {
+                    let mut options = ServerOptions::new();
+                    options.first_pipe_instance(first).reject_remote_clients(true);
+                    let created = match &owner_only {
+                        Some(owner_only) => {
+                            let mut attributes = windows_sys::Win32::Security::SECURITY_ATTRIBUTES {
+                                nLength: std::mem::size_of::<windows_sys::Win32::Security::SECURITY_ATTRIBUTES>() as u32,
+                                lpSecurityDescriptor: owner_only.0,
+                                bInheritHandle: 0,
+                            };
+                            // SAFETY: valid attributes whose descriptor outlives the call.
+                            unsafe { options.create_with_security_attributes_raw(&name, (&raw mut attributes).cast()) }
+                        }
+                        None => options.create(&name),
+                    };
+                    let server = match created {
                         Ok(s) => s,
                         Err(e) => {
                             tracing::warn!("links from later launches won't reach this one: {e}");
@@ -180,6 +258,50 @@ mod platform {
 
 #[cfg(test)]
 mod tests {
+    /// The single-instance pipe lets in this user and nobody else (no
+    /// inherited or default entries for other accounts).
+    #[cfg(windows)]
+    #[test]
+    fn only_this_user_can_open_the_pipe() {
+        use windows_sys::Win32::Foundation::LocalFree;
+        use windows_sys::Win32::Security::Authorization::{ConvertSecurityDescriptorToStringSecurityDescriptorW, GetNamedSecurityInfoW, SDDL_REVISION_1, SE_FILE_OBJECT};
+        use windows_sys::Win32::Security::DACL_SECURITY_INFORMATION;
+        const TEST: crate::Identity =
+            crate::Identity { dir_name: "domovoi-pipe-test", keyring_service: "domovoi-pipe-test", app_user_model_id: "Domovoi.PipeTest", display_name: "Pipe test" };
+        let dir = crate::default_data_dir(TEST);
+        let hash = dir.to_string_lossy().bytes().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3));
+        let name: Vec<u16> = format!(r"\\.\pipe\{}-{hash:016x}", TEST.dir_name).encode_utf16().chain([0]).collect();
+        super::platform::listen(TEST);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let sddl = loop {
+            let (mut dacl, mut sd) = (std::ptr::null_mut(), std::ptr::null_mut());
+            // SAFETY: a valid name and out pointers; the descriptor is freed below.
+            let err = unsafe {
+                GetNamedSecurityInfoW(name.as_ptr(), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION, std::ptr::null_mut(), std::ptr::null_mut(), &mut dacl, std::ptr::null_mut(), &mut sd)
+            };
+            if err == 0 {
+                let mut text = std::ptr::null_mut();
+                // SAFETY: the descriptor just read, and a valid out pointer.
+                let ok = unsafe { ConvertSecurityDescriptorToStringSecurityDescriptorW(sd, SDDL_REVISION_1, DACL_SECURITY_INFORMATION, &mut text, std::ptr::null_mut()) };
+                assert_ne!(ok, 0, "the descriptor as text");
+                // SAFETY: the call wrote a NUL-terminated string at `text`.
+                let s = unsafe { String::from_utf16_lossy(std::slice::from_raw_parts(text, (0..).take_while(|&i| *text.add(i) != 0).count())) };
+                // SAFETY: both allocated with LocalAlloc for this caller.
+                unsafe {
+                    LocalFree(text.cast());
+                    LocalFree(sd);
+                }
+                break s;
+            }
+            assert!(std::time::Instant::now() < deadline, "the pipe was never made (error {err})");
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        };
+        let sid = super::platform::user_sid().expect("this user's SID");
+        assert!(sddl.starts_with("D:P("), "protected, inheriting nothing: {sddl}");
+        assert_eq!(sddl.matches('(').count(), 1, "one entry: {sddl}");
+        assert!(sddl.ends_with(&format!(";;;{sid})")), "for this user: {sddl}");
+    }
+
     #[test]
     fn a_later_launch_sends_one_line() {
         super::read_link(&b"domovoi://connect?ticket=abc&code=1\nextra"[..]);

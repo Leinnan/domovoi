@@ -152,7 +152,8 @@ async fn plan_snapshot(directory: &Path, path: &Path) -> Option<(PathBuf, String
     if bytes.len() as u64 > MAX_PLAN_BYTES {
         return None;
     }
-    let markdown = String::from_utf8(bytes).ok()?;
+    // A plan written on Windows has CRLF line endings: shown alike everywhere.
+    let markdown = String::from_utf8(bytes).ok()?.replace("\r\n", "\n");
     let markdown = markdown.trim();
     (!markdown.is_empty()).then(|| (path, markdown.to_owned()))
 }
