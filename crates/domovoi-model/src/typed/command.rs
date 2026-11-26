@@ -662,6 +662,8 @@ command! {
         until?: PullRequestWatchUntil,
         checks_pending?: bool,
         link?: PullRequestToLink,
+        /// What the watch wakes the agent for; without one, for everything.
+        policy?: super::pull_request::PullRequestWatchPolicy,
     }
 }
 

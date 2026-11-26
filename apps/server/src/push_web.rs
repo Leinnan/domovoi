@@ -54,7 +54,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 use crate::time_fmt::{iso_from_millis, now_millis};
-use domovoi_model::typed::{RuntimeRequestKind, ShellStatus, notice, shell_status};
+use domovoi_model::typed::{PullRequestSeen, RuntimeRequestKind, ShellStatus, notice, pull_request_notices, pull_requests_seen, shell_status};
 use domovoi_remote::RemotePeer;
 
 /// As `push.rs`: statuses are looked at this long after a burst's first event.
@@ -432,7 +432,7 @@ pub fn spawn(state: SharedState) {
         };
         let sends = Arc::new(tokio::sync::Semaphore::new(SENDS_AT_ONCE));
         let mut events = state.store.subscribe();
-        let mut statuses: HashMap<String, ShellStatus> = {
+        let (mut statuses, mut pull_requests) = {
             let state = state.clone();
             tokio::task::spawn_blocking(move || seed(&state)).await.unwrap_or_default()
         };
@@ -463,6 +463,7 @@ pub fn spawn(state: SharedState) {
                 () = wait => {
                     due = None;
                     for thread_id in std::mem::take(&mut dirty) {
+                        check_pull_requests(&state, &sender, &sends, &mut pull_requests, &thread_id);
                         check(&state, &sender, &sends, &mut statuses, &thread_id);
                     }
                 }
@@ -471,24 +472,31 @@ pub fn spawn(state: SharedState) {
     });
 }
 
-fn seed(state: &SharedState) -> HashMap<String, ShellStatus> {
-    let mut out = HashMap::new();
+/// What every thread shows as the notifier starts: its status and its pull requests.
+fn seed(state: &SharedState) -> (HashMap<String, ShellStatus>, HashMap<String, Vec<PullRequestSeen>>) {
+    let (mut statuses, mut pull_requests) = (HashMap::new(), HashMap::new());
     for (id, _) in state.store.thread_ids().unwrap_or_default() {
         if let Ok(Some(shell)) = crate::orchestration::projection::thread_shell(&state.store, &id) {
-            out.insert(id, shell_status(&shell));
+            pull_requests.insert(id.clone(), pull_requests_seen(&shell));
+            statuses.insert(id, shell_status(&shell));
         }
     }
-    out
+    (statuses, pull_requests)
 }
 
-fn check(state: &SharedState, sender: &Arc<WebPush>, sends: &Arc<tokio::sync::Semaphore>, statuses: &mut HashMap<String, ShellStatus>, thread_id: &str) {
+/// As `push::check_pull_requests`: what happened to a thread's pull requests, to every endpoint whose app is closed.
+fn check_pull_requests(state: &SharedState, sender: &Arc<WebPush>, sends: &Arc<tokio::sync::Semaphore>, seen: &mut HashMap<String, Vec<PullRequestSeen>>, thread_id: &str) {
     let Ok(Some(shell)) = crate::orchestration::projection::thread_shell(&state.store, thread_id) else { return };
-    let status = shell_status(&shell);
-    let previous = statuses.insert(thread_id.to_owned(), status).unwrap_or(ShellStatus::Idle);
-    let Some(body) = notice(Some(previous), status) else { return };
-    let pending = shell.pending_runtime_request.as_ref().filter(|p| status == ShellStatus::Approval && p.kind != RuntimeRequestKind::UserInput);
-    let urgent = status == ShellStatus::Approval;
-    let message = Arc::new(message(&state.environment.environment_id, thread_id, &shell.title, body, pending.map(|p| p.id.as_str())));
+    let now = pull_requests_seen(&shell);
+    let before = seen.insert(thread_id.to_owned(), now.clone()).unwrap_or_default();
+    for body in pull_request_notices(&before, &now) {
+        let message = Arc::new(message(&state.environment.environment_id, thread_id, &shell.title, &body, None));
+        deliver(state, sender, sends, message, thread_id, false, body);
+    }
+}
+
+/// Sends a message to every endpoint whose app is closed, each on a task of its own.
+fn deliver(state: &SharedState, sender: &Arc<WebPush>, sends: &Arc<tokio::sync::Semaphore>, message: Arc<Value>, thread_id: &str, urgent: bool, body: String) {
     let topic = topic(thread_id);
     let db = state.store.db();
     for device in devices(&db).unwrap_or_default() {
@@ -496,7 +504,7 @@ fn check(state: &SharedState, sender: &Arc<WebPush>, sends: &Arc<tokio::sync::Se
         if device.sessions.iter().any(|s| state.connections.is_live(s)) {
             continue;
         }
-        let (sender, sends, message, db, topic, thread_id) = (sender.clone(), sends.clone(), message.clone(), db.clone(), topic.clone(), thread_id.to_owned());
+        let (sender, sends, message, db, topic, thread_id, body) = (sender.clone(), sends.clone(), message.clone(), db.clone(), topic.clone(), thread_id.to_owned(), body.clone());
         tokio::spawn(async move {
             let Ok(_permit) = sends.acquire().await else { return };
             match sender.deliver(&device, &message, &topic, urgent).await {
@@ -509,6 +517,17 @@ fn check(state: &SharedState, sender: &Arc<WebPush>, sends: &Arc<tokio::sync::Se
             }
         });
     }
+}
+
+fn check(state: &SharedState, sender: &Arc<WebPush>, sends: &Arc<tokio::sync::Semaphore>, statuses: &mut HashMap<String, ShellStatus>, thread_id: &str) {
+    let Ok(Some(shell)) = crate::orchestration::projection::thread_shell(&state.store, thread_id) else { return };
+    let status = shell_status(&shell);
+    let previous = statuses.insert(thread_id.to_owned(), status).unwrap_or(ShellStatus::Idle);
+    let Some(body) = notice(Some(previous), status) else { return };
+    let pending = shell.pending_runtime_request.as_ref().filter(|p| status == ShellStatus::Approval && p.kind != RuntimeRequestKind::UserInput);
+    let urgent = status == ShellStatus::Approval;
+    let message = Arc::new(message(&state.environment.environment_id, thread_id, &shell.title, body, pending.map(|p| p.id.as_str())));
+    deliver(state, sender, sends, message, thread_id, urgent, body.to_owned());
 }
 
 #[cfg(test)]

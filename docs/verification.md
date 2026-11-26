@@ -1125,9 +1125,44 @@ listed is not done.
   first (`featureBranch`), named for the issue when the thread has one.
   GitLab (gitlab.com, or a host named as one): a merge request through
   `glab api`, a draft by its title.
+- Following the pull request (`pr_watcher.rs`,
+  `orchestration/commands/pull_requests.rs`): a pull request made (or found
+  open) by a git action with a `threadId` is linked and watched until it
+  merges, with a policy (`PullRequestWatch.policy`): the agent is woken only
+  to fix checks that failed (`prWatchWakeOnFailedChecks`, on unless turned
+  off), at most `prWatchMaxFixAttempts` times in a row (3; `0` is no limit).
+  The count starts again when the checks pass and when the user has written
+  in the thread since the last such wake; past it nothing wakes the agent
+  and the failure still shows. Passing checks and a merge wake nobody. A
+  watch an agent started (`watch_pull_request`) has no policy and is woken
+  for everything, as before, but now once per transition: failed checks are
+  told once per set of failing names and passing checks once, per head (a
+  push re-arms both), where `until: merged` used to tell them every cycle.
+  What a read says is written back with `thread.pull-request-link.sync` (the
+  link's `snapshot`: state, checks, review decision, open review
+  conversations) and `thread.pull-request-watch.sync` (what the watch has
+  seen); neither moves the thread's `updatedAt`, neither is written when
+  nothing changed, and no client may send them. Links nobody watches are
+  read at most every ten minutes, twenty a cycle, while their pull request
+  is open and their thread was active in the last two weeks. A merge
+  settles the thread (`sidebarAutoSettleOnMerge`, which nothing read before)
+  unless it is settled, was told to stay active, has a run under way or
+  another open pull request.
+- Notifications (`typed/notify.rs` `pull_request_notices`, `push.rs`,
+  `push_web.rs`): from a link's snapshot changing: checks failed, changes
+  requested, approved, new review conversations, merged, closed. A pull
+  request first seen notifies of nothing.
+- Review comments for the agent: `pull_request_read` has a `reviews`
+  section (conversations on the diff not resolved and not outdated, thirty
+  at most, 2 KB of each comment, each in a `review-data` frame as untrusted
+  data).
 - Not done: comments past the first read of the tracker are not paged in;
   images in an issue stay URLs. A pull request from a fork to its upstream
-  (`--head` names no owner). The watch on the new pull request (stage 4).
+  (`--head` names no owner). A new watch reports on its first read (no
+  baseline is held back). A merge that wakes the agent (a watch an agent
+  started) does not settle the thread. The pushes for a pull request are
+  not run against the mock APNs (the rule they send by is unit-tested).
+  `storageCleanup.worktreeOnMerge` is still read by nothing.
 - Verified: RPC group `issues-launch` (resolve by number, URL, another
   repository, no tracker; a launch with no words, the same launch again with
   the tracker down, a launch refused with the tracker down and carried out
@@ -1150,6 +1185,18 @@ listed is not done.
   draft merge request with its closing line), `git_workflow` unit tests
   (`the_line_that_closes_an_issue_says_where_the_issue_is`,
   `closing_lines_end_a_body_once`, `a_gitlab_named_host_is_a_gitlab`).
+  Stage 4: RPC group `prs-watch`, paced by `DOMOVOI_PR_WATCHER_EVERY_MS`
+  and asserting values (`want`): the first read, a failed check waking the
+  agent once, a push failing the same way held at the bound, passing
+  checks, a review, a merge that ends the watch and settles the thread,
+  and a client's `thread.pull-request-link.sync` refused; `vcs-pr-create`
+  (the watch a made pull request starts, with its policy); `pr_watcher`
+  unit tests (`a_watch_an_agent_started_…`, `a_watch_that_follows_…`,
+  `a_snapshot_is_what_a_read_says`), `orchestration::commands`
+  (`pull_requests_link_once_…`: the two sync commands), `typed::notify`
+  (`a_pull_request_notifies_of_what_happened_to_it_once`) and
+  `mcp::pull_requests`
+  (`open_review_conversations_reach_the_agent_as_untrusted_data`).
 
 ## Managed policy
 

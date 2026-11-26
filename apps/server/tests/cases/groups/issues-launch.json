@@ -24,7 +24,13 @@
     "projectId": "$PROJECT",
     "reference": "#7"
    },
-   "note": "as a person writes it in the project"
+   "note": "as a person writes it in the project",
+   "want": {
+    "/issue/key": "7",
+    "/issue/scope": "acme/calc",
+    "/summary/displayKey": "#7",
+    "/writable": true
+   }
   },
   {
    "tag": "issues.resolve",
@@ -47,7 +53,11 @@
     "projectId": "$PROJECT",
     "reference": "https://github.com/other/lib/issues/3"
    },
-   "note": "another repository on the host: read-only"
+   "note": "another repository on the host: read-only",
+   "want": {
+    "/issue/scope": "other/lib",
+    "/writable": false
+   }
   },
   {
    "tag": "issues.resolve",
@@ -121,7 +131,16 @@
      }
     }
    },
-   "note": "a thread on issue 7 with no words: named for the issue, linked as its focus, the issue with the first message"
+   "note": "a thread on issue 7 with no words: named for the issue, linked as its focus, the issue with the first message",
+   "want": {
+    "/projection/thread/title": "#7 Adding negative numbers fails",
+    "/projection/thread/issues/0/role": "focus",
+    "/projection/thread/issues/0/key": "7",
+    "/projection/messages/0/text": "Work on this issue.",
+    "/projection/messages/0/issue/card/displayKey": "#7",
+    "/projection/turnItems/0/issue/title": "Adding negative numbers fails",
+    "/thread/baseBranch": null
+   }
   },
   {
    "sh": "gh-rule err 'graphql' 'HTTP 502: Bad Gateway'",
@@ -157,7 +176,16 @@
      }
     }
    },
-   "note": "sent again while the tracker is down: answered as it was, nothing read"
+   "note": "sent again while the tracker is down: answered as it was, nothing read",
+   "want": {
+    "/projection/thread/title": "#7 Adding negative numbers fails",
+    "/projection/thread/issues/0/role": "focus",
+    "/projection/thread/issues/0/key": "7",
+    "/projection/messages/0/text": "Work on this issue.",
+    "/projection/messages/0/issue/card/displayKey": "#7",
+    "/projection/turnItems/0/issue/title": "Adding negative numbers fails",
+    "/thread/baseBranch": null
+   }
   },
   {
    "tag": "orchestration.launchThread",
@@ -231,7 +259,11 @@
      "assignToMe": true
     }
    },
-   "note": "the same launch once the tracker answers; the issue is assigned afterwards"
+   "note": "the same launch once the tracker answers; the issue is assigned afterwards",
+   "want": {
+    "/projection/thread/title": "#8 Subtraction is slow",
+    "/projection/messages/0/text": "Only the parser."
+   }
   },
   {
    "tag": "orchestration.launchThread",
@@ -304,7 +336,11 @@
      }
     }
    },
-   "note": "in a worktree: the branch is named for the issue, and the remote that does not answer is only a warning"
+   "note": "in a worktree: the branch is named for the issue, and the remote that does not answer is only a warning",
+   "want": {
+    "/projection/thread/baseBranch": "main",
+    "/projection/thread/issues/0/role": "focus"
+   }
   },
   {
    "sh": "git -C \"$DIR/workspace\" for-each-ref --format='%(refname:short)' refs/heads | grep -Eq '(^|/)7-adding-negative-numbers-fails$' || { git -C \"$DIR/workspace\" branch -a; exit 1; }",
@@ -380,7 +416,10 @@
      }
     }
    },
-   "note": "a branch the launch names is used as given"
+   "note": "a branch the launch names is used as given",
+   "want": {
+    "/projection/thread/branch": "mine/seven"
+   }
   },
   {
    "sh": "git -C \"$DIR/workspace\" for-each-ref --format='%(refname:short)' refs/heads | grep -Eq '(^|/)mine/seven$' || { git -C \"$DIR/workspace\" branch -a; exit 1; }",

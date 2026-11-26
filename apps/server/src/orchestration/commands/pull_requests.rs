@@ -4,16 +4,24 @@
 //! `stack-dismissed` tombstone so no sync adds it back; a watch records what
 //! the agent was already told, so watching again repeats no news.
 //!
+//! What a link shows of its pull request (`snapshot`) and what its watch has
+//! seen are written back by the server's watcher (`crate::pr_watcher`) with
+//! `thread.pull-request-link.sync` and `thread.pull-request-watch.sync`;
+//! neither moves the thread's `updatedAt`, and no client may send them.
+//!
 //! Limits: keys are compared lowercased, without t3code's host alias table
 //! (`canonicalRepositoryKey`); an agent's watch is not refused for racing a
-//! stop of its run. Nothing reads a watch yet: no pull request watcher
-//! polls the host and wakes the thread.
+//! stop of its run. Of `thread.pull-request-watch.sync` only the watch
+//! itself is written: `others` and `wake` are not read (the watcher sends
+//! its message as a command of its own).
 
 use super::{DispatchResult, Orchestrator, Refusal, now};
-use domovoi_model::typed::command::{ThreadPullRequestLink, ThreadPullRequestUnlink, ThreadPullRequestWatch};
+use domovoi_model::typed::command::{
+    ThreadPullRequestLink, ThreadPullRequestLinkSync, ThreadPullRequestUnlink, ThreadPullRequestWatch, ThreadPullRequestWatchSync,
+};
 use domovoi_model::typed::{
-    AppThread, LinkedPullRequest, ParentRelationship, PullRequestChecksState, PullRequestLink, PullRequestLinkSource, PullRequestWatch,
-    PullRequestWatchUntil, SettledOverride, ThreadChange, Timestamp, WatchBaseline,
+    AppThread, LinkedPullRequest, ParentRelationship, PullRequestChecksState, PullRequestLink, PullRequestLinkSource, PullRequestSnapshot,
+    PullRequestWatch, PullRequestWatchUntil, SettledOverride, ThreadChange, Timestamp, WatchBaseline,
 };
 
 /// What names one pull request: lowercased host and repository, and its number.
@@ -129,7 +137,17 @@ fn fresh_watch(link: &PullRequestLink, checks_pending: Option<bool>, at: &Timest
         checks_awaited_since: ended.and_then(|e| e.checks_awaited_since.clone()),
         checks_pending: pending.then_some(true),
         until: None,
+        policy: None,
+        fix_attempts: None,
+        last_fix_wake_at: None,
     }
+}
+
+/// Whether two snapshots say the same of a pull request, whenever each was read.
+pub fn same_snapshot(held: &PullRequestSnapshot, read: &PullRequestSnapshot) -> bool {
+    let mut held = held.clone();
+    held.synced_at = read.synced_at.clone();
+    held == *read
 }
 
 /// The thread's single older-style link stays only while a visible link names it.
@@ -140,12 +158,63 @@ fn keep_linked(thread: &AppThread, links: &[PullRequestLink]) -> Option<Option<L
 }
 
 impl Orchestrator {
-    fn write_links(&self, command_id: &domovoi_model::typed::CommandId, mut thread: AppThread, links: Vec<PullRequestLink>) -> Result<DispatchResult, Refusal> {
+    fn write_links(&self, command_id: &domovoi_model::typed::CommandId, thread: AppThread, links: Vec<PullRequestLink>) -> Result<DispatchResult, Refusal> {
+        self.write_links_as(command_id, thread, links, true)
+    }
+
+    /// `touch` is whether the write is something happening on the thread:
+    /// what the watcher read of a pull request is not.
+    fn write_links_as(&self, command_id: &domovoi_model::typed::CommandId, mut thread: AppThread, links: Vec<PullRequestLink>, touch: bool) -> Result<DispatchResult, Refusal> {
         if thread.linked_pull_request.is_some() {
             thread.linked_pull_request = keep_linked(&thread, &links).or(Some(None));
         }
         thread.pull_requests = Some(links);
-        self.write_thread(command_id, ThreadChange::PullRequestSynced, thread, true)
+        self.write_thread(command_id, ThreadChange::PullRequestSynced, thread, touch)
+    }
+
+    /// `thread.pull-request-link.sync`: what a link shows of its pull
+    /// request, as just read from its host. Nothing is written when it says
+    /// what the link says already, or when the thread no longer links it.
+    pub(super) fn pull_request_link_sync(&self, c: &ThreadPullRequestLinkSync) -> Result<DispatchResult, Refusal> {
+        let thread = self.thread(&c.thread_id)?;
+        let key = PullRequestKey::new(&c.host, &c.repository, c.number);
+        let mut links = links_of(&thread);
+        let Some(index) = links.iter().position(|link| key.names(link)) else { return self.answer(None) };
+        let unchanged = links[index].snapshot.as_ref().is_some_and(|held| same_snapshot(held, &c.snapshot));
+        if unchanged && (c.stack.is_none() || links[index].stack == c.stack) {
+            return self.answer(None);
+        }
+        links[index].snapshot = Some(c.snapshot.clone());
+        if c.stack.is_some() {
+            links[index].stack = c.stack.clone();
+        }
+        self.write_links_as(&c.command_id, thread, links, false)
+    }
+
+    /// `thread.pull-request-watch.sync`: what the watch that started at
+    /// `startedAt` has now seen, or (with no `watch`) that it ended. A watch
+    /// stopped or started again since it was read is left as it is.
+    pub(super) fn pull_request_watch_sync(&self, c: &ThreadPullRequestWatchSync) -> Result<DispatchResult, Refusal> {
+        let thread = self.thread(&c.thread_id)?;
+        let key = PullRequestKey::new(&c.host, &c.repository, c.number);
+        let mut links = links_of(&thread);
+        let Some(index) = links.iter().position(|link| is_visible(link) && key.names(link)) else { return self.answer(None) };
+        if links[index].watch.as_ref().is_none_or(|held| held.started_at != c.started_at) {
+            return self.answer(None);
+        }
+        let next = match &c.watch {
+            Some(watch) if links[index].watch.as_ref() == Some(watch) => return self.answer(None),
+            Some(watch) => with_watch(links[index].clone(), Some(watch.clone())),
+            None => {
+                let mut ended = with_watch(links[index].clone(), None);
+                if c.ended_watch.is_some() {
+                    ended.ended_watch = c.ended_watch.clone();
+                }
+                ended
+            }
+        };
+        links[index] = next;
+        self.write_links_as(&c.command_id, thread, links, false)
     }
 
     /// `thread.pull-request.link`: links the pull request, unless it is
@@ -241,7 +310,13 @@ impl Orchestrator {
         }
         let Some(index) = links.iter().position(visible) else { return self.answer(None) };
         let existing = &links[index];
-        let watch = c.watching.then(|| with_until(existing.watch.clone().unwrap_or_else(|| fresh_watch(existing, c.checks_pending, &at)), c.until.as_ref()));
+        let watch = c.watching.then(|| {
+            let mut watch = with_until(existing.watch.clone().unwrap_or_else(|| fresh_watch(existing, c.checks_pending, &at)), c.until.as_ref());
+            if c.policy.is_some() {
+                watch.policy = c.policy.clone();
+            }
+            watch
+        });
         if watch == existing.watch && links == linked {
             return self.answer(None);
         }

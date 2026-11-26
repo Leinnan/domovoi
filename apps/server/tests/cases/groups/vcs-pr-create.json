@@ -47,21 +47,31 @@
    "payload": {
     "cwd": "$DIR/repos/notrepo"
    },
-   "note": "not a repository"
+   "note": "not a repository",
+   "want": {
+    "/unavailable/reason": "not-a-repository"
+   }
   },
   {
    "tag": "git.preparePullRequest",
    "payload": {
     "cwd": "$DIR/repos/plain"
    },
-   "note": "no remote to push to"
+   "note": "no remote to push to",
+   "want": {
+    "/unavailable/reason": "no-remote"
+   }
   },
   {
    "tag": "git.preparePullRequest",
    "payload": {
     "cwd": "$DIR/repos/work"
    },
-   "note": "the default branch with nothing changed: nothing to open one for"
+   "note": "the default branch with nothing changed: nothing to open one for",
+   "want": {
+    "/unavailable/reason": "no-changes",
+    "/onDefaultBranch": true
+   }
   },
   {
    "tag": "orchestration.launchThread",
@@ -106,7 +116,17 @@
     "cwd": "$DIR/repos/topic",
     "threadId": "tt"
    },
-   "note": "what the sheet opens with: the branch, what is not pushed, the changed files, the base, the line that closes the issue"
+   "note": "what the sheet opens with: the branch, what is not pushed, the changed files, the base, the line that closes the issue",
+   "want": {
+    "/branch": "feature/topic",
+    "/unpushed": 1,
+    "/dirtyFiles/0/path": "topic.txt",
+    "/dirtyFiles/1/path": "topic2.txt",
+    "/baseBranch": "main",
+    "/closing/0/reference": "Closes #7",
+    "/title": null,
+    "/unavailable": null
+   }
   },
   {
    "tag": "git.preparePullRequest",
@@ -115,7 +135,11 @@
     "threadId": "tt",
     "generate": true
    },
-   "note": "and its title and body, the closing line after the generated text"
+   "note": "and its title and body, the closing line after the generated text",
+   "want": {
+    "/body": "## Summary\n- generated\n\nCloses #7",
+    "/generationError": null
+   }
   },
   {
    "sh": "echo fail > textgen/mode",
@@ -125,7 +149,11 @@
     "threadId": "tt",
     "generate": true
    },
-   "note": "the text is not written: the issue's title, the closing line, and why"
+   "note": "the text is not written: the issue's title, the closing line, and why",
+   "want": {
+    "/title": "Adding negative numbers fails",
+    "/body": "Closes #7"
+   }
   },
   {
    "sh": "echo ok > textgen/mode",
@@ -164,12 +192,34 @@
    "note": "made as written, the file not chosen left as it was, and the pull request linked to the thread"
   },
   {
+   "tag": "orchestration.subscribeThread",
+   "payload": {
+    "threadId": "tt"
+   },
+   "expect": "chunk",
+   "note": "and the thread follows it until it merges, its agent woken only to fix checks, three times at most",
+   "want": {
+    "/projection/thread/pullRequests/0/source": "created",
+    "/projection/thread/pullRequests/0/number": 12,
+    "/projection/thread/pullRequests/0/watch/until": "merged",
+    "/projection/thread/pullRequests/0/watch/policy/wakeOnFailedChecks": true,
+    "/projection/thread/pullRequests/0/watch/policy/wakeOnPassed": false,
+    "/projection/thread/pullRequests/0/watch/policy/maxFixAttempts": 3
+   }
+  },
+  {
    "tag": "git.preparePullRequest",
    "payload": {
     "cwd": "$DIR/repos/topic",
     "threadId": "tt"
    },
-   "note": "it is open now, and the thread links it"
+   "note": "it is open now, and the thread links it",
+   "want": {
+    "/existing/number": 12,
+    "/existing/linked": true,
+    "/dirtyFiles/0/path": "topic.txt",
+    "/dirtyFiles/1": null
+   }
   },
   {
    "tag": "git.runStackedAction",
@@ -252,7 +302,14 @@
     "threadId": "tm",
     "generate": true
    },
-   "note": "on the default branch with a change: the work goes onto a branch named for the issue"
+   "note": "on the default branch with a change: the work goes onto a branch named for the issue",
+   "want": {
+    "/onDefaultBranch": true,
+    "/baseBranch": "main",
+    "/baseBranches/0": "main",
+    "/closing/0/reference": "Closes #9",
+    "/unavailable": null
+   }
   },
   {
    "tag": "git.runStackedAction",
@@ -327,7 +384,11 @@
     "cwd": "$WT",
     "threadId": "tw"
    },
-   "note": "a worktree cut from main (fetched from its remote): main is the base it offers first, and there is nothing to open one for yet"
+   "note": "a worktree cut from main (fetched from its remote): main is the base it offers first, and there is nothing to open one for yet",
+   "want": {
+    "/baseBranch": "main",
+    "/unavailable/reason": "no-changes"
+   }
   },
   {
    "sh": "echo 'To get started with GitHub CLI, please run:  gh auth login' > gh/fail",
@@ -335,7 +396,11 @@
    "payload": {
     "cwd": "$DIR/repos/loggedout"
    },
-   "note": "gh is signed out: said before the sheet is filled in"
+   "note": "gh is signed out: said before the sheet is filled in",
+   "want": {
+    "/unavailable/reason": "unauthenticated",
+    "/provider": "github"
+   }
   },
   {
    "tag": "orchestration.launchThread",
@@ -382,7 +447,12 @@
     "threadId": "tl",
     "generate": true
    },
-   "note": "GitLab: a merge request"
+   "note": "GitLab: a merge request",
+   "want": {
+    "/provider": "gitlab",
+    "/closing/0/reference": "Closes #3",
+    "/supportsDraft": true
+   }
   },
   {
    "tag": "git.runStackedAction",
@@ -421,7 +491,10 @@
     "cwd": "$DIR/repos/lab",
     "threadId": "tl"
    },
-   "note": "glab is signed out"
+   "note": "glab is signed out",
+   "want": {
+    "/unavailable/reason": "unauthenticated"
+   }
   }
  ]
 }

@@ -113,6 +113,9 @@ pub struct PullRequestSnapshot {
     pub mergeability: Option<PullRequestMergeability>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rebase_required: Option<bool>,
+    /// Conversations on the diff nobody resolved yet; absent when not read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unresolved_review_threads: Option<u64>,
 }
 
 /// The account that opened a pull request.
@@ -187,6 +190,37 @@ pub struct PullRequestWatch {
     /// How long the watch holds its thread: `merged`, or (absent) until every check finished.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub until: Option<PullRequestWatchUntil>,
+    /// What the watch wakes its thread's agent for. Absent on a watch an
+    /// agent started: it is woken for everything the watch sees.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy: Option<PullRequestWatchPolicy>,
+    /// How many times in a row the agent was woken to fix failed checks,
+    /// since they last passed or the user last wrote.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fix_attempts: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_fix_wake_at: Option<Timestamp>,
+}
+
+/// What a watch wakes its thread's agent for; everything else it sees only
+/// changes what the thread shows (and what the user is notified of).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PullRequestWatchPolicy {
+    /// Wake the agent to fix checks that failed.
+    pub wake_on_failed_checks: bool,
+    pub wake_on_passed: bool,
+    pub wake_on_merged: bool,
+    /// The most wakes in a row for failed checks; `0` is no limit.
+    pub max_fix_attempts: u64,
+}
+
+impl PullRequestWatchPolicy {
+    /// The watch of a pull request a person made from a thread: the agent is
+    /// woken only to fix what failed, at most `max_fix_attempts` times.
+    pub fn following(wake_on_failed_checks: bool, max_fix_attempts: u64) -> Self {
+        PullRequestWatchPolicy { wake_on_failed_checks, wake_on_passed: false, wake_on_merged: false, max_fix_attempts }
+    }
 }
 
 string_enum! {

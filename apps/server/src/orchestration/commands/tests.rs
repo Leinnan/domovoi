@@ -884,6 +884,7 @@ async fn pull_requests_link_once_unlink_to_a_tombstone_in_a_stack_and_watch() {
             until,
             checks_pending: Some(false),
             link: Some(PullRequestToLink { url: format!("https://github.com/acme/app/pull/{number}"), source: PullRequestLinkSource::Agent, repository_web_url: None }),
+            policy: None,
         }))
     };
     let links = |o: &Orchestrator| o.store.app_thread("t1").unwrap().unwrap().pull_requests.unwrap_or_default();
@@ -902,6 +903,83 @@ async fn pull_requests_link_once_unlink_to_a_tombstone_in_a_stack_and_watch() {
     assert_eq!((w.until, w.checks_pending), (Some(PullRequestWatchUntil::Merged), None));
     o.dispatch(watch("w2", 7, false, None)).await.unwrap();
     assert!(links(&o)[0].watch.is_none() && links(&o)[0].ended_watch.is_some());
+
+    // What the watcher read is written back without counting as activity on the thread.
+    use domovoi_model::typed::command::{ThreadPullRequestLinkSync, ThreadPullRequestWatchSync};
+    use domovoi_model::typed::{PullRequestSnapshot, PullRequestWatch, PullRequestWatchPolicy};
+    let snapshot = |title: &str, synced_at: &str| PullRequestSnapshot {
+        state: PullRequestState::Open,
+        title: title.into(),
+        head_branch: "feature".into(),
+        base_branch: "main".into(),
+        is_draft: false,
+        updated_at: None,
+        synced_at: synced_at.into(),
+        closed_at: None,
+        merged_at: None,
+        author: None,
+        additions: None,
+        deletions: None,
+        changed_files: None,
+        review_decision: None,
+        checks_state: None,
+        mergeability: None,
+        rebase_required: None,
+        unresolved_review_threads: Some(1),
+    };
+    let link_sync = |command: &str, number: u64, snapshot: PullRequestSnapshot| -> Command {
+        ThreadPullRequestLinkSync { command_id: command.into(), thread_id: "t1".into(), host: "GitHub.com".into(), repository: "acme/app".into(), number, snapshot, stack: None }.into()
+    };
+    let touched = o.store.app_thread("t1").unwrap().unwrap().updated_at;
+    o.dispatch(link_sync("s1", 7, snapshot("Add search", "2026-01-01T00:00:00.000Z"))).await.unwrap();
+    assert_eq!(links(&o)[0].snapshot.as_ref().map(|s| (s.title.as_str(), s.unresolved_review_threads)), Some(("Add search", Some(1))));
+    assert_eq!(o.store.app_thread("t1").unwrap().unwrap().updated_at, touched, "a read of the pull request is not activity on the thread");
+    let written = o.store.latest_sequence().unwrap();
+    o.dispatch(link_sync("s2", 7, snapshot("Add search", "2026-01-01T00:05:00.000Z"))).await.unwrap();
+    o.dispatch(link_sync("s3", 99, snapshot("Not linked", "2026-01-01T00:05:00.000Z"))).await.unwrap();
+    assert_eq!(o.store.latest_sequence().unwrap(), written, "the same read again, and a read of a pull request the thread does not link, write nothing");
+    o.dispatch(link_sync("s4", 7, snapshot("Add search, really", "2026-01-01T00:06:00.000Z"))).await.unwrap();
+    assert_eq!(links(&o)[0].snapshot.as_ref().map(|s| s.title.as_str()), Some("Add search, really"));
+
+    // A watch with a policy keeps it, and takes what the watcher saw only while it is the watch that was read.
+    let mut following = match watch("wf1", 7, true, Some(PullRequestWatchUntil::Merged)) {
+        Command::ThreadPullRequestWatch(c) => *c,
+        other => panic!("{other:?}"),
+    };
+    following.policy = Some(PullRequestWatchPolicy::following(true, 3));
+    o.dispatch(Command::ThreadPullRequestWatch(Box::new(following))).await.unwrap();
+    let held = links(&o)[0].watch.clone().unwrap();
+    assert_eq!(held.policy, Some(PullRequestWatchPolicy::following(true, 3)));
+    let touched = o.store.app_thread("t1").unwrap().unwrap().updated_at;
+    let watch_sync = |command: &str, started_at: &domovoi_model::typed::Timestamp, watch: Option<PullRequestWatch>, ended: Option<PullRequestWatch>| -> Command {
+        ThreadPullRequestWatchSync {
+            command_id: command.into(),
+            thread_id: "t1".into(),
+            host: "github.com".into(),
+            repository: "acme/app".into(),
+            number: 7,
+            started_at: started_at.clone(),
+            watch,
+            checks_pending_before: None,
+            ended_watch: ended,
+            others: None,
+            wake: None,
+        }
+        .into()
+    };
+    let mut seen = held.clone();
+    seen.failed_checks = vec!["lint".into()];
+    seen.fix_attempts = Some(1);
+    o.dispatch(watch_sync("ws1", &"1999-01-01T00:00:00.000Z".into(), Some(seen.clone()), None)).await.unwrap();
+    assert_eq!(links(&o)[0].watch, Some(held.clone()), "a watch started since the read is left as it is");
+    o.dispatch(watch_sync("ws2", &held.started_at, Some(seen.clone()), None)).await.unwrap();
+    assert_eq!(links(&o)[0].watch, Some(seen.clone()));
+    assert_eq!(o.store.app_thread("t1").unwrap().unwrap().updated_at, touched, "nor is what the watch saw");
+    // The watch ends as the watcher last saw it.
+    let mut last = seen.clone();
+    last.passed = true;
+    o.dispatch(watch_sync("ws3", &held.started_at, None, Some(last.clone()))).await.unwrap();
+    assert_eq!((links(&o)[0].watch.clone(), links(&o)[0].ended_watch.clone()), (None, Some(last)));
 
     // A watch links a pull request not linked yet.
     o.dispatch(watch("w3", 9, true, None)).await.unwrap();

@@ -341,6 +341,14 @@ pub struct ServerSettings {
     /// PR watcher poll interval in seconds (default 60, minimum 15).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pr_watcher_interval_secs: Option<u64>,
+    /// Wake a thread's agent to fix the failed checks of a pull request made
+    /// from the thread. Defaults to `true`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pr_watch_wake_on_failed_checks: Option<bool>,
+    /// The most such wakes in a row for one pull request; `0` is no limit.
+    /// Defaults to `3`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pr_watch_max_fix_attempts: Option<serde_json::Number>,
 }
 
 /// A value read the way `ForwardCompatibleOptional` reads one: a value that

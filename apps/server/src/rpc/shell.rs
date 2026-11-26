@@ -594,8 +594,10 @@ async fn mutate(ctx: Arc<ConnCtx>, m: ProjectMutation) -> Result<ProjectRecord, 
 }
 
 /// Commands only the server dispatches
-/// that Domovoi carries out, so a client must not reach them.
-const SERVER_ONLY_COMMANDS: [&str; 2] = ["secret_request.record", "link_request.record"];
+/// that Domovoi carries out, so a client must not reach them: the cards of a
+/// secret or a link request, and what the pull request watcher read from a
+/// host (a client could otherwise write any state onto a thread's links).
+const SERVER_ONLY_COMMANDS: [&str; 4] = ["secret_request.record", "link_request.record", "thread.pull-request-link.sync", "thread.pull-request-watch.sync"];
 
 /// The command a client sent, decoded: the one place its JSON is read. One
 /// that is not a command (no id, no type, or a field its type does not

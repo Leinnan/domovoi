@@ -44,9 +44,9 @@ use domovoi_model::typed::{
     GitCommitStep, GitCommitStepStatus, GitPrStep, GitPrStepStatus, GitPreparePullRequestThreadResult, GitPullRequestState, GitPushStep,
     GitPushStepStatus, GitResolvePullRequestResult, GitResolvedPullRequest, GitRunStackedActionResult, GitStackedAction,
     PullRequestClosingRef, PullRequestDirtyFile, PullRequestExisting, PullRequestLinkSource, PullRequestPrepareInput, PullRequestPrepareResult,
-    PullRequestUnavailable, StackedPullRequest, ThreadIssueLink,
+    PullRequestUnavailable, PullRequestWatchPolicy, PullRequestWatchUntil, StackedPullRequest, ThreadIssueLink,
 };
-use domovoi_model::typed::command::ThreadPullRequestLink;
+use domovoi_model::typed::command::{PullRequestToLink, ThreadPullRequestLink, ThreadPullRequestWatch};
 
 // ---------------------------------------------------------------------------
 // failures
@@ -815,23 +815,56 @@ fn with_closing(body: &str, closing: &[PullRequestClosingRef]) -> String {
     }
 }
 
-/// Links a pull request a git action made, or found open, to its thread.
+/// Links a pull request a git action made, or found open, to its thread,
+/// and has the thread follow it until it merges: what it shows stays
+/// current, and the agent is woken to fix checks that fail when the settings
+/// say so (`prWatchWakeOnFailedChecks`, at most `prWatchMaxFixAttempts`
+/// times in a row). A thread that cannot watch (it is settled, or a
+/// subagent's) is only linked.
 async fn link_to_thread(orchestrator: &Orchestrator, thread_id: &str, ctx: &ProviderContext, step: &GitPrStep) {
     let (Some(number), Some(url)) = (step.number, step.url.as_deref()) else { return };
-    let link = ThreadPullRequestLink {
-        command_id: format!("git-action-pr:{}", crate::util::new_uuid()).into(),
+    let source = if step.status == GitPrStepStatus::Created { PullRequestLinkSource::Created } else { PullRequestLinkSource::Manual };
+    let repository_web_url = Some(format!("https://{}/{}", ctx.host, ctx.repository));
+    let settings = writer_settings().await;
+    let policy = PullRequestWatchPolicy::following(
+        settings.pr_watch_wake_on_failed_checks != Some(false),
+        settings.pr_watch_max_fix_attempts.as_ref().and_then(serde_json::Number::as_u64).unwrap_or(DEFAULT_FIX_ATTEMPTS),
+    );
+    let watch = ThreadPullRequestWatch {
+        command_id: format!("git-action-pr-watch:{}", crate::util::new_uuid()).into(),
         thread_id: thread_id.into(),
         host: ctx.host.clone(),
         repository: ctx.repository.clone(),
         number,
-        url: url.to_owned(),
-        source: if step.status == GitPrStepStatus::Created { PullRequestLinkSource::Created } else { PullRequestLinkSource::Manual },
-        repository_web_url: Some(format!("https://{}/{}", ctx.host, ctx.repository)),
+        watching: true,
+        until: Some(PullRequestWatchUntil::Merged),
+        checks_pending: Some(true),
+        link: Some(PullRequestToLink { url: url.to_owned(), source: source.clone(), repository_web_url: repository_web_url.clone() }),
+        policy: Some(policy),
     };
-    if let Err(e) = orchestrator.dispatch(link.into()).await {
-        tracing::warn!(%thread_id, number, "the pull request was not linked to its thread: {e}");
+    match orchestrator.dispatch(watch.into()).await {
+        Ok(_) => crate::pr_watcher::wake_now(),
+        Err(refused) => {
+            tracing::info!(%thread_id, number, "the pull request is linked without a watch: {refused}");
+            let link = ThreadPullRequestLink {
+                command_id: format!("git-action-pr:{}", crate::util::new_uuid()).into(),
+                thread_id: thread_id.into(),
+                host: ctx.host.clone(),
+                repository: ctx.repository.clone(),
+                number,
+                url: url.to_owned(),
+                source,
+                repository_web_url,
+            };
+            if let Err(e) = orchestrator.dispatch(link.into()).await {
+                tracing::warn!(%thread_id, number, "the pull request was not linked to its thread: {e}");
+            }
+        }
     }
 }
+
+/// How many times in a row an agent is woken to fix a pull request's failed checks, unless the settings say.
+const DEFAULT_FIX_ATTEMPTS: u64 = 3;
 
 // ---------------------------------------------------------------------------
 // preparePullRequest

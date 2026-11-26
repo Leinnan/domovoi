@@ -339,6 +339,20 @@ pub(crate) async fn read_for_agent(
     Ok((summary, checks))
 }
 
+/// For the agent's pull request tools and the watcher: the conversations on
+/// a pull request's diff that are still open (not resolved, not outdated).
+pub(crate) async fn read_reviews_for_agent(state: &AppState, project_id: &str, host: &str, repository: &str, number: u64) -> Result<Vec<super::pull_request_records::ReviewThread>, Failure> {
+    let r = PrRef { project_id: project_id.to_owned(), host: Some(host.to_owned()), expected_account_id: None, repository: repository.to_owned(), number };
+    let p = require_project(state, &r).await?;
+    let found = match p.provider {
+        Provider::GitHub => github::activity(&p, number).await,
+        Provider::GitLab => gitlab::activity(&p, number).await,
+    }
+    .map_err(failed(&p, "activity"))?;
+    let activity = found.ok_or_else(|| Failure::not_found("activity", "The pull request was not found."))?;
+    Ok(activity.review_threads.into_iter().filter(|thread| !thread.is_resolved && !thread.is_outdated).collect())
+}
+
 /// The web address of a pull request on `host`:
 /// GitLab's `/-/merge_requests/N` on a host whose name says it is GitLab, else GitHub's `/pull/N`.
 pub(crate) fn change_request_url(host: &str, repository: &str, number: u64) -> String {

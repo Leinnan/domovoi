@@ -25,7 +25,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use crate::time_fmt::{iso_from_millis, now_millis};
 use domovoi_model::typed::{
-    LiveProgress, RuntimeRequestKind, SUMMARY_CHARS, ShellStatus, ThreadShell, TurnItem, UserInputQuestion, first_line_clipped, live_progress, notice, shell_status,
+    LiveProgress, RuntimeRequestKind, SUMMARY_CHARS, ShellStatus, ThreadShell, TurnItem, UserInputQuestion, first_line_clipped, live_progress, notice, shell_status, PullRequestSeen, pull_request_notices, pull_requests_seen,
 };
 
 const PRODUCTION: &str = "https://api.push.apple.com";
@@ -575,7 +575,7 @@ pub fn spawn(state: SharedState, apns: Apns) {
         let apns = Arc::new(apns);
         let sends = Arc::new(tokio::sync::Semaphore::new(SENDS_AT_ONCE));
         let mut events = state.store.subscribe();
-        let mut statuses = {
+        let (mut statuses, mut pull_requests) = {
             let state = state.clone();
             tokio::task::spawn_blocking(move || seed(&state)).await.unwrap_or_default()
         };
@@ -624,6 +624,7 @@ pub fn spawn(state: SharedState, apns: Apns) {
                         !ready
                     });
                     for thread_id in look {
+                        check_pull_requests(&state, &apns, &sends, &mut pull_requests, &statuses, &thread_id);
                         if let Some(later) = check(&state, &apns, &sends, &mut statuses, &thread_id) {
                             held.insert(thread_id, now + later);
                         }
@@ -778,14 +779,65 @@ fn thread_ids(state: &SharedState) -> Vec<String> {
     state.store.thread_ids().unwrap_or_default().into_iter().map(|(id, _)| id).collect()
 }
 
-fn seed(state: &SharedState) -> HashMap<String, ShellStatus> {
-    let mut out = HashMap::new();
+/// What every thread shows as the notifier starts: its status and its pull requests.
+fn seed(state: &SharedState) -> (HashMap<String, ShellStatus>, HashMap<String, Vec<PullRequestSeen>>) {
+    let (mut statuses, mut pull_requests) = (HashMap::new(), HashMap::new());
     for id in thread_ids(state) {
         if let Ok(Some(shell)) = crate::orchestration::projection::thread_shell(&state.store, &id) {
-            out.insert(id, shell_status(&shell));
+            pull_requests.insert(id.clone(), pull_requests_seen(&shell));
+            statuses.insert(id, shell_status(&shell));
         }
     }
-    out
+    (statuses, pull_requests)
+}
+
+/// Compares what a thread's pull requests show with what they last showed
+/// and pushes what happened to them (checks failed, a review arrived, a
+/// merge) to every device whose app is closed.
+fn check_pull_requests(
+    state: &SharedState,
+    apns: &Arc<Apns>,
+    sends: &Arc<tokio::sync::Semaphore>,
+    seen: &mut HashMap<String, Vec<PullRequestSeen>>,
+    statuses: &HashMap<String, ShellStatus>,
+    thread_id: &str,
+) {
+    let Ok(Some(shell)) = crate::orchestration::projection::thread_shell(&state.store, thread_id) else { return };
+    let now = pull_requests_seen(&shell);
+    let before = seen.insert(thread_id.to_owned(), now.clone()).unwrap_or_default();
+    let title = if apns.private_alerts { state.environment.label.clone() } else { shell.title.clone() };
+    let waiting = statuses.values().filter(|s| **s == ShellStatus::Approval).count();
+    for body in pull_request_notices(&before, &now) {
+        let alert = Arc::new(payload(&state.environment.environment_id, thread_id, &title, &body, waiting));
+        deliver(state, apns, sends, alert, thread_id, body);
+    }
+}
+
+/// Sends an alert to every device whose app is closed, each on a task of its own.
+fn deliver(state: &SharedState, apns: &Arc<Apns>, sends: &Arc<tokio::sync::Semaphore>, payload: Arc<Value>, thread_id: &str, body: String) {
+    let db = state.store.db();
+    for device in devices(&db).unwrap_or_default() {
+        // An open app (any of the device's sessions has a socket) notifies itself.
+        if device.sessions.iter().any(|s| state.connections.is_live(s)) {
+            continue;
+        }
+        let (apns, sends, payload, db, thread_id, body) = (apns.clone(), sends.clone(), payload.clone(), db.clone(), thread_id.to_owned(), body.clone());
+        tokio::spawn(async move {
+            let Ok(_permit) = sends.acquire().await else { return };
+            match apns.deliver(&device.token, device.sandbox, &payload, &thread_id).await {
+                Delivery::Sent => tracing::info!(thread = %thread_id, "push sent: {body}"),
+                Delivery::SentOnOtherHost => {
+                    tracing::info!(thread = %thread_id, "push sent: {body} (the device was registered for the other APNs host)");
+                    let _ = set_environment(&db, &device.token, !device.sandbox);
+                }
+                Delivery::Gone(reason) => {
+                    tracing::info!("push token dropped ({reason})");
+                    let _ = forget_token(&db, &device.token);
+                }
+                Delivery::Failed(e) => tracing::warn!("push failed: {e}"),
+            }
+        });
+    }
 }
 
 /// Compares a thread's status with the last one seen and pushes the change,
@@ -817,30 +869,7 @@ fn check(state: &SharedState, apns: &Arc<Apns>, sends: &Arc<tokio::sync::Semapho
         let shown = (!apns.private_alerts).then_some(question.as_str());
         alert = question_payload(alert, pending.id.as_str(), &question_id, shown);
     }
-    let payload = Arc::new(alert);
-    let db = state.store.db();
-    for device in devices(&db).unwrap_or_default() {
-        // An open app (any of the device's sessions has a socket) notifies itself.
-        if device.sessions.iter().any(|s| state.connections.is_live(s)) {
-            continue;
-        }
-        let (apns, sends, payload, db, thread_id) = (apns.clone(), sends.clone(), payload.clone(), db.clone(), thread_id.to_owned());
-        tokio::spawn(async move {
-            let Ok(_permit) = sends.acquire().await else { return };
-            match apns.deliver(&device.token, device.sandbox, &payload, &thread_id).await {
-                Delivery::Sent => tracing::info!(thread = %thread_id, "push sent: {body}"),
-                Delivery::SentOnOtherHost => {
-                    tracing::info!(thread = %thread_id, "push sent: {body} (the device was registered for the other APNs host)");
-                    let _ = set_environment(&db, &device.token, !device.sandbox);
-                }
-                Delivery::Gone(reason) => {
-                    tracing::info!("push token dropped ({reason})");
-                    let _ = forget_token(&db, &device.token);
-                }
-                Delivery::Failed(e) => tracing::warn!("push failed: {e}"),
-            }
-        });
-    }
+    deliver(state, apns, sends, Arc::new(alert), thread_id, body.to_owned());
     later
 }
 

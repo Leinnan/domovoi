@@ -1,0 +1,176 @@
+{
+ "fixture": true,
+ "env": {
+  "GIT_ALLOW_PROTOCOL": "file",
+  "GIT_TERMINAL_PROMPT": "0",
+  "DOMOVOI_PR_WATCHER_EVERY_MS": "300"
+ },
+ "normalize": [],
+ "cases": [
+  {
+   "tag": "orchestration.launchThread",
+   "payload": {
+    "commandId": "launch-pw",
+    "creationSource": "web",
+    "threadId": "pw",
+    "projectId": "$PROJECT",
+    "title": "Follows a pull request",
+    "modelSelection": {
+     "instanceId": "claudeAgent",
+     "model": "claude-haiku-5-5"
+    },
+    "runtimeMode": "approval-required",
+    "interactionMode": "default",
+    "workspaceStrategy": {
+     "type": "root"
+    }
+   }
+  },
+  {
+   "tag": "orchestration.dispatchCommand",
+   "payload": {
+    "type": "thread.pull-request.watch",
+    "commandId": "watch-11",
+    "threadId": "pw",
+    "host": "github.com",
+    "repository": "acme/calc",
+    "number": 11,
+    "watching": true,
+    "until": "merged",
+    "checksPending": true,
+    "link": {
+     "url": "https://github.com/acme/calc/pull/11",
+     "source": "created"
+    },
+    "policy": {
+     "wakeOnFailedChecks": true,
+     "wakeOnPassed": false,
+     "wakeOnMerged": false,
+     "maxFixAttempts": 1
+    }
+   },
+   "note": "as a pull request made from the thread is followed"
+  },
+  {
+   "tag": "orchestration.dispatchCommand",
+   "payload": {
+    "type": "thread.pull-request-link.sync",
+    "commandId": "forged",
+    "threadId": "pw",
+    "host": "github.com",
+    "repository": "acme/calc",
+    "number": 11,
+    "snapshot": {
+     "state": "merged",
+     "title": "x",
+     "headBranch": "a",
+     "baseBranch": "b",
+     "isDraft": false,
+     "updatedAt": null,
+     "syncedAt": "2026-01-01T00:00:00.000Z"
+    },
+    "stack": null
+   },
+   "expect": "failure",
+   "error": "OrchestrationV2DispatchCommandError",
+   "note": "what a pull request shows is the server's to write, not a client's"
+  },
+  {
+   "sleep_ms": 1500,
+   "tag": "orchestration.subscribeThread",
+   "payload": {
+    "threadId": "pw"
+   },
+   "expect": "chunk",
+   "note": "the first cycle: what the link shows, checks still running, nobody woken",
+   "want": {
+    "/projection/thread/pullRequests/0/snapshot/state": "open",
+    "/projection/thread/pullRequests/0/snapshot/checksState": "pending",
+    "/projection/thread/pullRequests/0/snapshot/title": "Add modulo",
+    "/projection/thread/pullRequests/0/watch/until": "merged",
+    "/projection/messages/0": null
+   }
+  },
+  {
+   "sh": "pr-set '.statusCheckRollup[0].status=\"COMPLETED\" | .statusCheckRollup[0].conclusion=\"FAILURE\"'",
+   "sleep_ms": 1500,
+   "tag": "orchestration.subscribeThread",
+   "payload": {
+    "threadId": "pw"
+   },
+   "expect": "chunk",
+   "note": "a check fails: shown, and the agent is woken to fix it, once",
+   "want": {
+    "/projection/thread/pullRequests/0/snapshot/checksState": "failing",
+    "/projection/thread/pullRequests/0/watch/failedChecks/0": "build",
+    "/projection/thread/pullRequests/0/watch/fixAttempts": 1,
+    "/projection/messages/0/createdBy": "system",
+    "/projection/messages/1": null
+   }
+  },
+  {
+   "sh": "pr-set '.headRefOid=\"3333333333333333333333333333333333333333\"'",
+   "sleep_ms": 1500,
+   "tag": "orchestration.subscribeThread",
+   "payload": {
+    "threadId": "pw"
+   },
+   "expect": "chunk",
+   "note": "a push that fails the same way: recorded for the new head, and the bound of one attempt holds",
+   "want": {
+    "/projection/thread/pullRequests/0/watch/headSha": "3333333333333333333333333333333333333333",
+    "/projection/thread/pullRequests/0/watch/failedChecks/0": "build",
+    "/projection/thread/pullRequests/0/watch/fixAttempts": 1,
+    "/projection/messages/1": null
+   }
+  },
+  {
+   "sh": "pr-set '.statusCheckRollup[0].conclusion=\"SUCCESS\"'",
+   "sleep_ms": 1500,
+   "tag": "orchestration.subscribeThread",
+   "payload": {
+    "threadId": "pw"
+   },
+   "expect": "chunk",
+   "note": "the checks pass: shown, the count starts again, nobody woken",
+   "want": {
+    "/projection/thread/pullRequests/0/snapshot/checksState": "passing",
+    "/projection/thread/pullRequests/0/watch/passed": true,
+    "/projection/thread/pullRequests/0/watch/fixAttempts": null,
+    "/projection/thread/pullRequests/0/watch/failedChecks/0": null,
+    "/projection/messages/1": null
+   }
+  },
+  {
+   "sh": "pr-set '.latestReviews += [{\"id\":\"PRR_9\",\"author\":{\"login\":\"carol\"},\"state\":\"CHANGES_REQUESTED\"}] | .reviewDecision=\"CHANGES_REQUESTED\"'",
+   "sleep_ms": 1500,
+   "tag": "orchestration.subscribeThread",
+   "payload": {
+    "threadId": "pw"
+   },
+   "expect": "chunk",
+   "note": "a review asks for changes: shown",
+   "want": {
+    "/projection/thread/pullRequests/0/snapshot/reviewDecision": "changes-requested",
+    "/projection/messages/1": null
+   }
+  },
+  {
+   "sh": "pr-set '.state=\"MERGED\" | .mergedAt=\"2025-03-13T00:00:00Z\" | .closedAt=\"2025-03-13T00:00:00Z\"'",
+   "sleep_ms": 1500,
+   "tag": "orchestration.subscribeThread",
+   "payload": {
+    "threadId": "pw"
+   },
+   "expect": "chunk",
+   "note": "merged: shown, the watch over, the thread settled, and the agent left alone",
+   "want": {
+    "/projection/thread/pullRequests/0/snapshot/state": "merged",
+    "/projection/thread/pullRequests/0/watch": null,
+    "/projection/thread/pullRequests/0/endedWatch/passed": true,
+    "/projection/thread/settledOverride": "settled",
+    "/projection/messages/1": null
+   }
+  }
+ ]
+}

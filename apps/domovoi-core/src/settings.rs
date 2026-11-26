@@ -39,6 +39,7 @@ macro_rules! plain_settings {
                     Some(Some(days)) => Held::Number(days),
                     _ => Held::Unset,
                 },
+                "prWatchMaxFixAttempts" => settings.pr_watch_max_fix_attempts.as_ref().map_or(Held::Unset, Held::Number),
                 _ => Held::Unset,
             }
         }
@@ -52,6 +53,7 @@ macro_rules! plain_settings {
                 ("defaultRuntimeMode", Typed::Text(mode)) => settings.default_runtime_mode = named(mode),
                 ("branchNamingMode", Typed::Text(mode)) => settings.branch_naming_mode = named(mode),
                 ("sidebarAutoSettleAfterDays", Typed::Number(days)) => settings.sidebar_auto_settle_after_days = Some(Some(Number::from(*days))),
+                ("prWatchMaxFixAttempts", Typed::Number(attempts)) => settings.pr_watch_max_fix_attempts = Some(Number::from((*attempts).max(0))),
                 _ => return false,
             }
             true
@@ -78,6 +80,7 @@ plain_settings! {
         "aiReviewLensEnabled" => ai_review_lens_enabled,
         "failoverLimitedThreads" => failover_limited_threads,
         "prWatcherEnabled" => pr_watcher_enabled,
+        "prWatchWakeOnFailedChecks" => pr_watch_wake_on_failed_checks,
         "autoResumeLimitedThreads" => auto_resume_limited_threads,
         "snoozeLimitedThreads" => snooze_limited_threads,
     }

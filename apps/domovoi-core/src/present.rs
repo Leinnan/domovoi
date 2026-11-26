@@ -2536,6 +2536,8 @@ fn setting_groups(model: &Model) -> Vec<SettingGroupView> {
                 ),
                 field_bool(model, "aiReviewLensEnabled", "Second-pass Lens review", "Run a focused adversarial second pass over primary findings."),
                 field_bool(model, "prWatcherEnabled", "Background PR watcher", "Poll watched pull requests and wake threads when checks settle or PRs merge."),
+                field_bool(model, "prWatchWakeOnFailedChecks", "Agents fix failed checks", "When checks fail on a pull request made from a thread, wake its agent to fix them. On unless turned off."),
+                field_text(model, "prWatchMaxFixAttempts", "Fix attempts in a row", "How many times in a row an agent is woken for one pull request's failed checks (3 unless set; 0 is no limit). Writing in the thread starts the count again."),
                 field_bool(model, "failoverLimitedThreads", "Fail over rate-limited threads", "Hand off interactive threads to a healthy fallback provider instance when a usage limit hits."),
             ],
         },

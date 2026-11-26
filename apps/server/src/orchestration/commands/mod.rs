@@ -332,6 +332,8 @@ impl Orchestrator {
             Command::ThreadPullRequestLink(c) => self.pull_request_link(c),
             Command::ThreadPullRequestUnlink(c) => self.pull_request_unlink(c),
             Command::ThreadPullRequestWatch(c) => self.pull_request_watch(c),
+            Command::ThreadPullRequestLinkSync(c) => self.pull_request_link_sync(c),
+            Command::ThreadPullRequestWatchSync(c) => self.pull_request_watch_sync(c),
             Command::SecretRequestRecord(c) => self.secret_request_record(c),
             Command::ThreadPinReorder(c) => {
                 self.edit_thread(&c.thread_id, &c.command_id, Change::PinReordered, true, |t| t.pin_order_key = Some(Some(c.order_key.clone())))

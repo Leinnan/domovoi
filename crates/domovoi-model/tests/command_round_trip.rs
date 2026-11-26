@@ -202,6 +202,10 @@ fn examples() -> Vec<Value> {
         key("thread.pull-request-link.sync", json!({ "snapshot": snapshot, "stack": stack })),
         key("thread.pull-request.watch", json!({ "watching": true,
             "link": { "url": "https://github.com/a/b/pull/7", "source": "agent", "repositoryWebUrl": "https://github.com/a/b" } })),
+        // The watch of a pull request made from the thread: what it wakes the agent for.
+        key("thread.pull-request.watch", json!({ "watching": true, "until": "merged", "checksPending": true,
+            "link": { "url": "https://github.com/a/b/pull/7", "source": "created" },
+            "policy": { "wakeOnFailedChecks": true, "wakeOnPassed": false, "wakeOnMerged": false, "maxFixAttempts": 3 } })),
         on("thread.pull-request.sync", json!({ "projectId": "p1", "snapshotSequence": 12,
             "expected": { "workspaceRoot": "/work", "branch": "main", "worktreePath": null, "linkedPullRequest": null, "branchPullRequest": linked_pull_request() },
             "branchPullRequest": null, "linkedPullRequest": linked_pull_request() })),

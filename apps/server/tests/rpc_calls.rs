@@ -9,7 +9,8 @@
 //!
 //! `apps/server/tests/cases/groups/<name>.json` holds, group by group, the calls that
 //! reach every answer and every failure of a group's methods; see
-//! [`every_rpc_group_answers_as_recorded`].
+//! [`every_rpc_group_answers_as_recorded`]. A group's case may also say what
+//! its answer must hold (`want`: JSON pointers and the value at each).
 
 use futures::{SinkExt, StreamExt};
 use serde_json::{Value, json};
@@ -854,6 +855,8 @@ struct GroupCase {
     sleep_ms: u64,
     /// Variables for later payloads: each a JSON pointer into the answer's value (the first value of a chunk).
     save: std::collections::BTreeMap<String, String>,
+    /// What the answer's value must hold: JSON pointers into it and the value at each (`null` also for nothing there).
+    want: std::collections::BTreeMap<String, Value>,
     /// An HTTP request instead of a call: `GET /path` or `POST /path`, with `payload` as its JSON body.
     http: Option<String>,
     /// For `http`: present no session.
@@ -1099,6 +1102,14 @@ async fn group_cases(name: &str, group: Group, folder: &Path) -> (usize, usize, 
         };
         if let Some(fields) = answer.as_object_mut() {
             fields.remove("requestId");
+        }
+        for (pointer, expected) in &case.want {
+            let mut expected = expected.clone();
+            substitute(&mut expected, &by_length);
+            let found = value.pointer(pointer).cloned().unwrap_or(Value::Null);
+            if found != expected {
+                problems.push(format!("{tag}: {pointer} is {found}, not {expected}{}", case.note.as_deref().map(|note| format!(" ({note})")).unwrap_or_default()));
+            }
         }
         for (var, pointer) in &case.save {
             match value.pointer(pointer) {
