@@ -2013,6 +2013,7 @@ fn write_thread(store: &Store, project_id: &str, cwd: &str, thread: &ParsedThrea
         interaction_mode: InteractionMode::Default,
         branch: None,
         worktree_path: None,
+        base_branch: None,
         linked_pull_request: None,
         pull_requests: Some(vec![]),
         issues: None,

@@ -1091,6 +1091,18 @@ listed is not done.
 - `issues.resolve`: an issue as a person names it (`#7`, `7`, `ENG-4`, a URL)
   through a project; a number goes to the git host, a key with letters to the
   bound standalone tracker.
+- Worktree (`launch.rs` `provision_worktree`, `vcs_ops::origin_base`,
+  `naming::issue_branch`): a thread started on an issue in a new worktree
+  works on a branch named for the issue (`<prefix>/12-login-crashes`,
+  Linear's `eng-4-…`; a name taken here or on a remote gets `-2`), and no
+  name is generated. Every new worktree now honours "Worktrees start from
+  origin" (`newWorktreesStartFromOrigin`, on by default, or the launch's
+  `startFromOrigin`): the base branch's remote is fetched (90 s at most) and
+  the worktree starts from the remote's commit when that holds everything
+  the local branch does. A local branch with commits never pushed keeps
+  them; a remote that does not answer is a warning on the Fetch stage and
+  the worktree starts from what is here. The branch the worktree was cut
+  from is kept as `AppThread.baseBranch`, for the pull request's base.
 - Not done: comments past the first read of the tracker are not paged in;
   images in an issue stay URLs.
 - Verified: RPC group `issues-launch` (resolve by number, URL, another
@@ -1101,7 +1113,12 @@ listed is not done.
   `orchestration::commands` (`a_thread_started_on_an_issue_…`,
   `a_launch_on_an_issue_…`) and `adapters`
   (`the_issue_a_thread_was_started_on_stands_before_the_users_words`);
-  `command_round_trip.rs` examples.
+  `command_round_trip.rs` examples. Stage 2: the group's worktree cases
+  (the branch named for the issue, `-2` for a second thread, a named branch
+  kept and refused when taken), `vcs_ops`
+  (`a_new_worktree_starts_from_the_remote_unless_the_local_branch_is_ahead`,
+  `a_branch_name_that_is_taken_here_or_on_a_remote_gets_a_number`) and
+  `naming` (`an_issues_branch_is_its_key_and_title`).
 
 ## Managed policy
 

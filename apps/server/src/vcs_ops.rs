@@ -733,10 +733,173 @@ pub async fn usable_branch_name(cwd: &str, branch: &str) -> String {
     branch.to_owned()
 }
 
+/// `wanted`, or `wanted-2`, … when a branch of that name exists here or on a
+/// remote this checkout has seen.
+pub async fn free_branch_name(cwd: &str, wanted: &str) -> String {
+    let base = usable_branch_name(cwd, wanted).await;
+    let mut name = base.clone();
+    for n in 2..50 {
+        let local = succeeds(cwd, &["show-ref", "--verify", "--quiet", &format!("refs/heads/{name}")]).await;
+        let remote = run(cwd, &["for-each-ref", "--count=1", "--format=%(refname)", &format!("refs/remotes/*/{name}")], &[]).await.is_ok_and(|o| !o.stdout.trim().is_empty());
+        if !local && !remote {
+            break;
+        }
+        name = format!("{base}-{n}");
+    }
+    name
+}
+
+// ---- where a new worktree starts ----
+
+/// How long a new worktree waits for its remote before starting from what is here.
+const ORIGIN_FETCH_LIMIT: std::time::Duration = std::time::Duration::from_secs(90);
+
+/// Where a new worktree starts when it is to start from origin.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OriginBase {
+    /// The remote's branch as just fetched: the commit to start from.
+    Fetched { commit: String },
+    /// Nothing to fetch: the base is not a local branch, or there is no remote.
+    NotOnARemote,
+    /// The local branch has commits its remote does not: the worktree keeps them.
+    LocalAhead,
+    /// The remote did not answer; the text is git's.
+    Unreachable(String),
+}
+
+/// The local branch `base` names: `HEAD` is the branch checked out.
+async fn local_base_branch(cwd: &str, base: &str) -> Option<String> {
+    if base == "HEAD" {
+        return crate::vcs::checked_out_branch(cwd).await;
+    }
+    succeeds(cwd, &["show-ref", "--verify", "--quiet", &format!("refs/heads/{base}")]).await.then(|| base.to_owned())
+}
+
+/// The branch a worktree cut from `base` is a change to: the local branch
+/// `base` names, or the branch of a remote ref (`origin/main` is `main`).
+pub async fn base_branch_name(cwd: &str, base: &str) -> Option<String> {
+    if let Some(local) = local_base_branch(cwd, base).await {
+        return Some(local);
+    }
+    let (remote, branch) = base.split_once('/')?;
+    let remotes = run(cwd, &["remote"], &[]).await.ok()?;
+    (remotes.stdout.lines().any(|name| name == remote) && succeeds(cwd, &["show-ref", "--verify", "--quiet", &format!("refs/remotes/{base}")]).await).then(|| branch.to_owned())
+}
+
+/// Fetches the remote's version of the branch `base` names and says where a
+/// new worktree is to start. The remote's commit is taken only when it holds
+/// everything the local branch does: a stale local branch starts fresh, and
+/// one with commits of its own that were never pushed keeps them.
+pub async fn origin_base(cwd: &str, base: &str) -> OriginBase {
+    let Some(branch) = local_base_branch(cwd, base).await else { return OriginBase::NotOnARemote };
+    let configured = |key: String| async move { run(cwd, &["config", "--get", &key], &[]).await.ok().filter(|o| o.code == 0).map(|o| o.stdout.trim().to_owned()).filter(|v| !v.is_empty()) };
+    let remote = match configured(format!("branch.{branch}.remote")).await.filter(|remote| remote != ".") {
+        Some(remote) => remote,
+        None => {
+            let Ok(remotes) = run(cwd, &["remote"], &[]).await else { return OriginBase::NotOnARemote };
+            match remotes.stdout.lines().find(|name| *name == "origin").or_else(|| remotes.stdout.lines().next()) {
+                Some(name) => name.to_owned(),
+                None => return OriginBase::NotOnARemote,
+            }
+        }
+    };
+    let theirs = configured(format!("branch.{branch}.merge")).await.and_then(|merge| merge.strip_prefix("refs/heads/").map(str::to_owned)).unwrap_or_else(|| branch.clone());
+    if remote.starts_with('-') || theirs.starts_with('-') {
+        return OriginBase::NotOnARemote;
+    }
+    let mut fetch = crate::process::git(cwd);
+    fetch.args(["fetch", "--no-tags", "--quiet", &remote, &theirs]);
+    match crate::process::output(fetch, ORIGIN_FETCH_LIMIT).await {
+        Ok(out) if out.status.success() => {}
+        Ok(out) => return OriginBase::Unreachable(String::from_utf8_lossy(&out.stderr).trim().to_owned()),
+        Err(e) => return OriginBase::Unreachable(e.to_string()),
+    }
+    let Ok(fetched) = run(cwd, &["rev-parse", "--verify", "--quiet", "FETCH_HEAD^{commit}"], &[]).await else { return OriginBase::NotOnARemote };
+    let commit = fetched.stdout.trim().to_owned();
+    if fetched.code != 0 || commit.is_empty() {
+        return OriginBase::NotOnARemote;
+    }
+    if succeeds(cwd, &["merge-base", "--is-ancestor", &format!("refs/heads/{branch}"), &commit]).await {
+        OriginBase::Fetched { commit }
+    } else {
+        OriginBase::LocalAhead
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// A folder of a test's own, and `git` run in a folder of it.
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("domovoi-{name}-{}", crate::util::new_uuid()));
+        std::fs::create_dir_all(&dir).expect("a folder");
+        dir
+    }
+
+    fn git_in(dir: &std::path::Path, args: &[&str]) -> String {
+        let out = std::process::Command::new("git").args(args).current_dir(dir).env("GIT_AUTHOR_NAME", "t").env("GIT_AUTHOR_EMAIL", "t@t")
+            .env("GIT_COMMITTER_NAME", "t").env("GIT_COMMITTER_EMAIL", "t@t").env("GIT_CONFIG_NOSYSTEM", "1").output().expect("git");
+        assert!(out.status.success(), "{args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        String::from_utf8_lossy(&out.stdout).trim().to_owned()
+    }
+
+    #[tokio::test]
+    async fn a_new_worktree_starts_from_the_remote_unless_the_local_branch_is_ahead() {
+        let root = scratch("origin-base");
+        let (remote, theirs, ours) = (root.join("remote.git"), root.join("theirs"), root.join("ours"));
+        git_in(&root, &["init", "-q", "--bare", "-b", "main", "remote.git"]);
+        git_in(&root, &["clone", "-q", remote.to_str().unwrap(), "theirs"]);
+        git_in(&theirs, &["commit", "-q", "--allow-empty", "-m", "one"]);
+        git_in(&theirs, &["push", "-q", "origin", "HEAD:main"]);
+        git_in(&root, &["clone", "-q", remote.to_str().unwrap(), "ours"]);
+        let cwd = ours.to_str().unwrap();
+        // Up to date: the remote's commit is the local one.
+        let here = git_in(&ours, &["rev-parse", "HEAD"]);
+        assert_eq!(origin_base(cwd, "HEAD").await, OriginBase::Fetched { commit: here.clone() });
+        // Someone pushed: the worktree starts from their commit, which this checkout had not seen.
+        git_in(&theirs, &["commit", "-q", "--allow-empty", "-m", "two"]);
+        git_in(&theirs, &["push", "-q", "origin", "HEAD:main"]);
+        let pushed = git_in(&theirs, &["rev-parse", "HEAD"]);
+        assert_eq!(origin_base(cwd, "main").await, OriginBase::Fetched { commit: pushed.clone() });
+        assert_eq!(git_in(&ours, &["rev-parse", "main"]), here, "the local branch is left where it was");
+        // A local commit that was never pushed stays in what the worktree starts from.
+        git_in(&ours, &["commit", "-q", "--allow-empty", "-m", "mine"]);
+        assert_eq!(origin_base(cwd, "HEAD").await, OriginBase::LocalAhead);
+        // Not a local branch, or no remote that answers.
+        assert_eq!(origin_base(cwd, "origin/main").await, OriginBase::NotOnARemote);
+        assert_eq!(origin_base(cwd, &pushed).await, OriginBase::NotOnARemote);
+        git_in(&ours, &["remote", "set-url", "origin", root.join("gone.git").to_str().unwrap()]);
+        assert!(matches!(origin_base(cwd, "main").await, OriginBase::Unreachable(_)));
+        // What a pull request from such a worktree targets.
+        assert_eq!(base_branch_name(cwd, "HEAD").await.as_deref(), Some("main"));
+        assert_eq!(base_branch_name(cwd, "origin/main").await.as_deref(), Some("main"));
+        assert_eq!(base_branch_name(cwd, &pushed).await, None);
+        let alone = scratch("origin-base-alone");
+        git_in(&alone, &["init", "-q", "-b", "main"]);
+        git_in(&alone, &["commit", "-q", "--allow-empty", "-m", "one"]);
+        assert_eq!(origin_base(alone.to_str().unwrap(), "HEAD").await, OriginBase::NotOnARemote);
+        let _ = (std::fs::remove_dir_all(&root), std::fs::remove_dir_all(&alone));
+    }
+
+    #[tokio::test]
+    async fn a_branch_name_that_is_taken_here_or_on_a_remote_gets_a_number() {
+        let root = scratch("free-branch");
+        git_in(&root, &["init", "-q", "-b", "main"]);
+        git_in(&root, &["commit", "-q", "--allow-empty", "-m", "one"]);
+        let cwd = root.to_str().unwrap();
+        assert_eq!(free_branch_name(cwd, "domovoi/12-login").await, "domovoi/12-login");
+        git_in(&root, &["branch", "domovoi/12-login"]);
+        assert_eq!(free_branch_name(cwd, "domovoi/12-login").await, "domovoi/12-login-2");
+        git_in(&root, &["update-ref", "refs/remotes/origin/domovoi/12-login-2", "HEAD"]);
+        assert_eq!(free_branch_name(cwd, "domovoi/12-login").await, "domovoi/12-login-3");
+        // A branch `domovoi` leaves no room for `domovoi/x`.
+        git_in(&root, &["branch", "-D", "domovoi/12-login"]);
+        git_in(&root, &["branch", "domovoi"]);
+        assert_eq!(free_branch_name(cwd, "domovoi/9-x").await, "domovoi-9-x");
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     fn preview_input(sent: Value) -> DiffPreviewInput {
         serde_json::from_value(sent).unwrap()

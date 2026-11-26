@@ -27,6 +27,11 @@ pub struct AppThread {
     pub interaction_mode: InteractionMode,
     pub branch: Option<String>,
     pub worktree_path: Option<String>,
+    /// The branch the thread's worktree was cut from: what its pull request
+    /// targets unless told otherwise. Absent for a thread in its project's
+    /// folder or in a worktree made elsewhere.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_branch: Option<String>,
     #[serde(default, deserialize_with = "double_option", skip_serializing_if = "Option::is_none")]
     pub linked_pull_request: Option<Option<LinkedPullRequest>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

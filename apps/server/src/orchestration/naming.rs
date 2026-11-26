@@ -73,6 +73,23 @@ pub fn branch_for(fragment: &str, mode: &str, prefix: &str) -> String {
     if mode != "static" || prefix.is_empty() { fragment.to_owned() } else { format!("{prefix}/{fragment}") }
 }
 
+/// The branch a thread started on an issue works on: the issue's key and
+/// title (`12-login-crashes`, `eng-4-login-crashes`, which is also how
+/// Linear finds an issue's branch), under the prefix as `branch_for` puts it.
+pub fn issue_branch(display_key: &str, title: &str, mode: &str, prefix: &str) -> String {
+    const LONGEST: usize = 50;
+    let fragment = crate::rpc::source_control::git_workflow::sanitize_branch_fragment(&format!("{}-{title}", display_key.trim_start_matches('#')));
+    let fragment = match fragment.char_indices().nth(LONGEST) {
+        // Cut after a whole word where there is one.
+        Some((end, _)) => {
+            let cut = &fragment[..end];
+            cut.rfind('-').filter(|at| *at > LONGEST / 2).map_or(cut, |at| &cut[..at]).trim_end_matches(['-', '/', '_', '.'])
+        }
+        None => fragment.as_str(),
+    };
+    branch_for(fragment, mode, prefix)
+}
+
 pub async fn branch(orch: &Orchestrator, thread_id: &str) {
     let store = orch.store();
     let (Ok(Some(thread)), Ok(messages)) = (store.app_thread(thread_id), store.records::<ConversationMessage>(thread_id)) else { return };
@@ -150,6 +167,16 @@ mod tests {
         assert_eq!(branch_for("add-search", "static", ""), "add-search");
         assert_eq!(branch_for("feat/add-search", "semantic", "t3"), "feat/add-search");
         assert_eq!(branch_for("jira-12-x", "custom", "t3"), "jira-12-x");
+    }
+
+    #[test]
+    fn an_issues_branch_is_its_key_and_title() {
+        assert_eq!(issue_branch("#12", "Login crashes on submit", "static", "domovoi"), "domovoi/12-login-crashes-on-submit");
+        assert_eq!(issue_branch("ENG-4", "Żółć: can't “save”", "static", "domovoi"), "domovoi/eng-4-cant-save");
+        assert_eq!(issue_branch("#7", "", "semantic", "domovoi"), "7");
+        let long = issue_branch("#1234", "The quick brown fox jumps over the lazy dog and keeps on running for a very long time", "static", "");
+        assert_eq!(long, "1234-the-quick-brown-fox-jumps-over-the-lazy-dog");
+        assert!(issue_branch("#1", &"x".repeat(200), "static", "").len() <= 50);
     }
 
     #[tokio::test]

@@ -271,6 +271,158 @@
    "note": "no such issue"
   },
   {
+   "tag": "orchestration.launchThread",
+   "payload": {
+    "commandId": "launch-7w",
+    "creationSource": "web",
+    "threadId": "it7w",
+    "projectId": "$PROJECT",
+    "title": "",
+    "generateTitle": true,
+    "modelSelection": {
+     "instanceId": "claudeAgent",
+     "model": "claude-haiku-5-5"
+    },
+    "runtimeMode": "approval-required",
+    "interactionMode": "default",
+    "workspaceStrategy": {
+     "type": "worktree",
+     "baseRef": "HEAD"
+    },
+    "initialMessage": {
+     "messageId": "m-it7w",
+     "text": "",
+     "attachments": []
+    },
+    "issue": {
+     "issue": {
+      "projectId": "$PROJECT",
+      "tracker": "github",
+      "host": "github.com",
+      "scope": "acme/calc",
+      "key": "7"
+     }
+    }
+   },
+   "note": "in a worktree: the branch is named for the issue, and the remote that does not answer is only a warning"
+  },
+  {
+   "sh": "git -C \"$DIR/workspace\" for-each-ref --format='%(refname:short)' refs/heads | grep -Eq '(^|/)7-adding-negative-numbers-fails$' || { git -C \"$DIR/workspace\" branch -a; exit 1; }",
+   "tag": "orchestration.launchThread",
+   "payload": {
+    "commandId": "launch-7w2",
+    "creationSource": "web",
+    "threadId": "it7w2",
+    "projectId": "$PROJECT",
+    "title": "",
+    "generateTitle": true,
+    "modelSelection": {
+     "instanceId": "claudeAgent",
+     "model": "claude-haiku-5-5"
+    },
+    "runtimeMode": "approval-required",
+    "interactionMode": "default",
+    "workspaceStrategy": {
+     "type": "worktree",
+     "baseRef": "HEAD"
+    },
+    "initialMessage": {
+     "messageId": "m-it7w2",
+     "text": "Again.",
+     "attachments": []
+    },
+    "issue": {
+     "issue": {
+      "projectId": "$PROJECT",
+      "tracker": "github",
+      "host": "github.com",
+      "scope": "acme/calc",
+      "key": "7"
+     }
+    }
+   },
+   "note": "a second thread on the issue: the name is taken, so it gets a number"
+  },
+  {
+   "sh": "git -C \"$DIR/workspace\" for-each-ref --format='%(refname:short)' refs/heads | grep -Eq '(^|/)7-adding-negative-numbers-fails-2$' || { git -C \"$DIR/workspace\" branch -a; exit 1; }",
+   "tag": "orchestration.launchThread",
+   "payload": {
+    "commandId": "launch-7n",
+    "creationSource": "web",
+    "threadId": "it7n",
+    "projectId": "$PROJECT",
+    "title": "",
+    "generateTitle": true,
+    "modelSelection": {
+     "instanceId": "claudeAgent",
+     "model": "claude-haiku-5-5"
+    },
+    "runtimeMode": "approval-required",
+    "interactionMode": "default",
+    "workspaceStrategy": {
+     "type": "worktree",
+     "baseRef": "HEAD",
+     "branch": "mine/seven",
+     "startFromOrigin": false
+    },
+    "initialMessage": {
+     "messageId": "m-it7n",
+     "text": "Named.",
+     "attachments": []
+    },
+    "issue": {
+     "issue": {
+      "projectId": "$PROJECT",
+      "tracker": "github",
+      "host": "github.com",
+      "scope": "acme/calc",
+      "key": "7"
+     }
+    }
+   },
+   "note": "a branch the launch names is used as given"
+  },
+  {
+   "sh": "git -C \"$DIR/workspace\" for-each-ref --format='%(refname:short)' refs/heads | grep -Eq '(^|/)mine/seven$' || { git -C \"$DIR/workspace\" branch -a; exit 1; }",
+   "tag": "orchestration.launchThread",
+   "payload": {
+    "commandId": "launch-7n2",
+    "creationSource": "web",
+    "threadId": "it7n2",
+    "projectId": "$PROJECT",
+    "title": "",
+    "generateTitle": true,
+    "modelSelection": {
+     "instanceId": "claudeAgent",
+     "model": "claude-haiku-5-5"
+    },
+    "runtimeMode": "approval-required",
+    "interactionMode": "default",
+    "workspaceStrategy": {
+     "type": "worktree",
+     "baseRef": "HEAD",
+     "branch": "mine/seven"
+    },
+    "initialMessage": {
+     "messageId": "m-it7n2",
+     "text": "Named.",
+     "attachments": []
+    },
+    "issue": {
+     "issue": {
+      "projectId": "$PROJECT",
+      "tracker": "github",
+      "host": "github.com",
+      "scope": "acme/calc",
+      "key": "7"
+     }
+    }
+   },
+   "expect": "failure",
+   "error": "OrchestrationV2ThreadLaunchError",
+   "note": "and one that is taken fails the launch"
+  },
+  {
    "sleep_ms": 500,
    "tag": "issues.linkedThreads",
    "payload": {

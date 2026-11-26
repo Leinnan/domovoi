@@ -61,6 +61,7 @@ impl Orchestrator {
             None if input.title.trim().is_empty() => "New thread",
             None => input.title.as_str(),
         };
+        let mut base_branch = None;
         let (worktree_path, branch): (Option<String>, Option<String>) = match &input.workspace_strategy {
             WorkspaceStrategy::ExistingWorktree { worktree_path, branch } => {
                 if !std::path::Path::new(worktree_path).is_dir() {
@@ -72,16 +73,32 @@ impl Orchestrator {
                 };
                 (Some(worktree_path.clone()), branch)
             }
-            WorkspaceStrategy::Worktree { base_ref, branch, .. } => {
+            WorkspaceStrategy::Worktree { base_ref, branch, start_from_origin } => {
                 let settings = match crate::state::STATE.get() {
                     Some(s) => s.settings.read().await.clone(),
                     None => Default::default(),
                 };
                 let scripts = crate::project_scripts::resolve(&settings, &project.id, &project.scripts, &project.workspace_root);
                 let setup = crate::project_scripts::setup_script(&scripts).cloned();
-                let (path, branch) = provision_worktree(&project.workspace_root, thread_id.as_str(), base_ref, branch.as_deref(), setup.as_ref())
-                    .await
-                    .map_err(LaunchRefusal::Worktree)?;
+                let named = branch.as_deref().filter(|branch| !branch.trim().is_empty());
+                let request = match (named, &issue) {
+                    (Some(branch), _) => BranchRequest::Named(branch),
+                    // A thread started on an issue works on a branch named for it: nothing is generated.
+                    (None, Some((_, read))) => {
+                        let mode = settings.branch_naming_mode.as_ref().map_or("static", |mode| mode.as_str());
+                        let prefix = settings.branch_name_prefix.as_deref().unwrap_or("domovoi");
+                        BranchRequest::Derived(crate::orchestration::naming::issue_branch(&read.card.display_key, &read.card.title, mode, prefix))
+                    }
+                    (None, None) => BranchRequest::Temporary,
+                };
+                let worktree = NewWorktree {
+                    base: base_ref,
+                    request,
+                    from_origin: start_from_origin.unwrap_or(settings.new_worktrees_start_from_origin != Some(false)),
+                    setup: setup.as_ref(),
+                };
+                base_branch = crate::vcs_ops::base_branch_name(&project.workspace_root, base_ref).await;
+                let (path, branch) = provision_worktree(&project.workspace_root, thread_id.as_str(), worktree).await.map_err(LaunchRefusal::Worktree)?;
                 (Some(path), Some(branch))
             }
             WorkspaceStrategy::Root { branch } => {
@@ -108,6 +125,7 @@ impl Orchestrator {
             interaction_mode: input.interaction_mode.clone(),
             branch,
             worktree_path,
+            base_branch,
             linked_pull_request: None,
             pull_requests: Some(vec![]),
             issues: issue.as_ref().map(|(project_id, read)| {
@@ -184,8 +202,9 @@ impl Orchestrator {
             sequence = Some(self.message_dispatch(&first).map_err(LaunchRefusal::InitialMessage)?.sequence);
         }
         // A worktree made on a branch nobody named gets its name from the first message.
+        // One started on an issue was named for the issue already.
         let unnamed_branch = matches!(&input.workspace_strategy, WorkspaceStrategy::Worktree { branch, .. } if branch.as_deref().is_none_or(|b| b.trim().is_empty()));
-        if unnamed_branch && input.initial_message.is_some() {
+        if unnamed_branch && input.initial_message.is_some() && input.issue.is_none() {
             self.send_effect(Effect::NameBranch { thread_id: thread_id.as_str().to_owned() });
         }
         // As the client that launched it is sent the thread.
@@ -201,31 +220,77 @@ async fn checked_out_branch(cwd: &str) -> Option<String> {
     crate::vcs::checked_out_branch(cwd).await
 }
 
-/// Creates a thread's worktree on a new branch from `base`, reporting
-/// progress to the worktree setup tracker.
-/// `requested` is the branch to make; without one a temporary name is used.
-/// Returns the worktree's path and its branch.
-async fn provision_worktree(cwd: &str, thread_id: &str, base: &str, requested: Option<&str>, setup: Option<&crate::project_scripts::Script>) -> Result<(String, String), String> {
+/// The branch a new worktree is made on.
+enum BranchRequest<'a> {
+    /// A temporary name, until the thread's first message names it.
+    Temporary,
+    /// The name the launch gave: one that is taken fails the launch.
+    Named(&'a str),
+    /// A name the server worked out (from an issue): one that is taken gets a number.
+    Derived(String),
+}
+
+/// What a launch asks of its new worktree.
+struct NewWorktree<'a> {
+    /// What to cut it from: a branch, `HEAD`, or any ref.
+    base: &'a str,
+    request: BranchRequest<'a>,
+    /// Start from the remote's version of `base` (`vcs_ops::origin_base`).
+    from_origin: bool,
+    setup: Option<&'a crate::project_scripts::Script>,
+}
+
+/// Creates a thread's worktree on a new branch, reporting progress to the
+/// worktree setup tracker. Returns the worktree's path and its branch.
+///
+/// With `from_origin` the remote's branch is fetched first and the worktree
+/// starts from it, so a base branch nobody pulled lately does not put other
+/// people's merged work into this thread's diff. A remote that does not
+/// answer is a warning and the worktree starts from what is here.
+async fn provision_worktree(cwd: &str, thread_id: &str, new: NewWorktree<'_>) -> Result<(String, String), String> {
     use crate::vcs_ops;
     use crate::worktree_setup::{Phase, StageId, StageStatus};
     let tracker = crate::worktree_setup::tracker();
-    let generated = requested.is_none();
-    let mut branch = requested.map_or_else(vcs_ops::temporary_branch_name, str::to_owned);
+    let NewWorktree { base, request, from_origin, setup } = new;
+    let mut branch = match &request {
+        BranchRequest::Temporary => vcs_ops::temporary_branch_name(),
+        BranchRequest::Named(name) => (*name).to_owned(),
+        BranchRequest::Derived(name) => name.clone(),
+    };
     tracker.start(thread_id, Some(&branch), Some(base));
     let fail = |m: String| {
         tracker.finish(thread_id, Phase::Failed, Some(&m));
         m
     };
-    tracker.stage(thread_id, StageId::Fetch, StageStatus::Skipped);
-    if generated {
-        branch = vcs_ops::usable_branch_name(cwd, &branch).await;
+    let mut start = base.to_owned();
+    if from_origin {
+        tracker.stage(thread_id, StageId::Fetch, StageStatus::Running);
+        let status = match vcs_ops::origin_base(cwd, base).await {
+            vcs_ops::OriginBase::Fetched { commit } => {
+                start = commit;
+                StageStatus::Done
+            }
+            vcs_ops::OriginBase::NotOnARemote | vcs_ops::OriginBase::LocalAhead => StageStatus::Skipped,
+            vcs_ops::OriginBase::Unreachable(why) => {
+                tracing::info!(%thread_id, "the worktree starts from the local {base}: its remote did not answer: {why}");
+                StageStatus::Warning
+            }
+        };
+        tracker.stage(thread_id, StageId::Fetch, status);
+    } else {
+        tracker.stage(thread_id, StageId::Fetch, StageStatus::Skipped);
+    }
+    match &request {
+        BranchRequest::Temporary => branch = vcs_ops::usable_branch_name(cwd, &branch).await,
+        BranchRequest::Derived(_) => branch = vcs_ops::free_branch_name(cwd, &branch).await,
+        BranchRequest::Named(_) => {}
     }
     if tracker.is_cancelled(thread_id) {
         tracker.finish(thread_id, Phase::Cancelled, None);
         return Err("Worktree setup was cancelled.".into());
     }
     tracker.stage(thread_id, StageId::Checkout, StageStatus::Running);
-    let created = vcs_ops::create_worktree(cwd, base, Some(&branch), None)
+    let created = vcs_ops::create_worktree(cwd, &start, Some(&branch), None)
         .await
         .map_err(|e| fail(e.detail))?;
     let path = created.worktree.path;

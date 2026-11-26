@@ -4,7 +4,7 @@
 //! `pull_request_records` and the failures of `pull_request_failure`; review
 //! guides in `review_guides`) and the pull request side of git (`git_workflow`).
 
-mod git_workflow;
+pub(crate) mod git_workflow;
 pub(crate) mod github;
 pub(crate) mod gitlab;
 pub(crate) mod pull_request_failure;
