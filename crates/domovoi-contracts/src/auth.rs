@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use domovoi_model::typed::ServerAuthDescriptor;
 
-/// Scopes granted to a one-time-token browser session (the default pairing grant).
+/// Scopes granted to a session by default (the default pairing grant).
 pub const DEFAULT_SCOPES: &[&str] = &[
     "orchestration:read", "orchestration:operate", "terminal:operate", "relay:read",
     "access:read", "access:write", "relay:write",
@@ -22,17 +22,21 @@ pub struct AuthDescriptor {
     pub policy: String,
     pub bootstrap_methods: Vec<String>,
     pub session_methods: Vec<String>,
+    /// Always empty: there are no cookies. An app from before protocol 4
+    /// does not read the descriptor without the key, and it must read it to
+    /// get as far as being told to update.
     pub session_cookie_name: String,
     pub server_update_scope: String,
 }
 
 impl AuthDescriptor {
-    pub fn loopback_browser(cookie_name: &str) -> Self {
+    /// A pairing code is exchanged for a bearer token.
+    pub fn pairing_code() -> Self {
         AuthDescriptor {
             policy: "loopback-browser".into(),
             bootstrap_methods: vec!["one-time-token".into()],
-            session_methods: vec!["browser-session-cookie".into()],
-            session_cookie_name: cookie_name.into(),
+            session_methods: vec!["bearer-access-token".into()],
+            session_cookie_name: String::new(),
             server_update_scope: "environment:maintain".into(),
         }
     }
@@ -68,23 +72,6 @@ pub struct AuthSessionState {
     pub expires_at: Option<String>,
 }
 
-/// `POST /api/auth/browser-session` request.
-#[derive(Debug, Clone, Deserialize)]
-pub struct BrowserSessionRequest {
-    pub credential: String,
-}
-
-/// `POST /api/auth/browser-session` response.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct BrowserSessionResponse {
-    pub authenticated: bool,
-    pub scopes: Vec<String>,
-    pub permissions: Vec<String>,
-    pub session_method: String,
-    pub expires_at: String,
-}
-
 /// `EnvironmentAuthInvalidError` body (HTTP 401).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthInvalidError {
@@ -117,8 +104,7 @@ mod tests {
 
     #[test]
     fn the_descriptor_and_the_record_clients_read_are_the_same_json() {
-        let mut auth = AuthDescriptor::loopback_browser("t3_session_1");
-        auth.session_methods.push("bearer-access-token".into());
+        let auth = AuthDescriptor::pairing_code();
         assert_eq!(serde_json::json!(ServerAuthDescriptor::from(&auth)), serde_json::json!(auth));
     }
 }

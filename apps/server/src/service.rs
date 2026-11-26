@@ -46,7 +46,7 @@ pub struct Exec {
 impl Exec {
     /// This executable serving `home` on `host:port`, headless. `carried`
     /// are further flags of this run that the service's must have too
-    /// (`--allowed-host`, `--web-url`: `main.rs` `carried_flags`).
+    /// (`--allowed-host`: `main.rs` `carried_flags`).
     pub fn current(home: &Path, host: &str, port: u16, relays: &[String], carried: &[String]) -> std::io::Result<Exec> {
         let home = std::fs::canonicalize(home).unwrap_or_else(|_| home.to_path_buf());
         let mut args = vec!["--no-startup-code".to_owned(), "--home-dir".to_owned(), home.to_string_lossy().into_owned(), "--port".to_owned(), port.to_string()];

@@ -34,7 +34,7 @@ use domovoi_model::typed::{
     IssueTrackerSummary, IssueUpdateInput, IssueViewerPermissions, RepositoryIdentity, SettledOverride, ThreadIssueKey, IssueComment, IssueEvent,
     IssueLinkedPullRequest, IssueReaction,
 };
-use effect_rpc::Router;
+use domovoi_rpc::Router;
 use futures::StreamExt;
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap, HashSet};

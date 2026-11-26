@@ -3,7 +3,7 @@
 use super::Never;
 use crate::state::ConnCtx;
 use crate::terminal::{Attachment, Failure, Grid, InteractiveViewer, Terminals};
-use effect_rpc::Router;
+use domovoi_rpc::Router;
 use futures::StreamExt;
 use futures::stream::BoxStream;
 use serde::{Deserialize, Serialize};

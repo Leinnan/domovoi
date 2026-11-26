@@ -89,14 +89,14 @@ account or port forwarding.
 | Path | What it is |
 | --- | --- |
 | `apps/server` | `domovoi-server`, the Rust execution server |
-| `apps/domovoi-core` | Shared Crux client core (connection, Effect RPC, projects, threads, approvals) |
+| `apps/domovoi-core` | Shared Crux client core (connection, RPC, projects, threads, approvals) |
 | `apps/domovoi-apple` | macOS and iOS apps, share extension, widgets and Live Activities |
 | `apps/domovoi-android` | Android app (Kotlin) |
 | `apps/domovoi-iced` | `domovoi-desktop`, the cross-platform desktop app for Linux, Windows and macOS (Iced) |
 | `apps/domovoi-windows` | `Domovoi.exe`, the native Windows app (WinUI 3 on `windows-reactor`, in progress) |
 | `apps/server-launcher` | `domovoi-server-launcher.exe`: starts the Windows server with no console window, and restarts it after a failure |
 | `packaging/windows` | The Windows installers (WiX MSIs) |
-| `crates/effect-rpc` | Server side of Effect's RPC wire protocol |
+| `crates/domovoi-rpc` | The RPC socket between the server and its clients: messages, the connection loop, packed frames |
 | `crates/domovoi-api` | Every call the server answers, defined once: its name, kind, permission and who calls it |
 | `crates/domovoi-contracts` | The server's own wire types (sign-in, environment) and its default settings |
 | `crates/domovoi-model` | Typed records and the thread read model, shared by the server and the client core |

@@ -13,7 +13,7 @@
 //!   `.2`, ..., the 10th dropped), as t3code's rotating sink does. A record
 //!   larger than the cap is dropped.
 //! - Spans are recorded at `info` and above from Domovoi's crates
-//!   (`domovoi_server`, `effect_rpc`), with the events logged inside them
+//!   (`domovoi_server`, `domovoi_rpc`), with the events logged inside them
 //!   (`effect.logLevel` `Info`/`Warn`/`Error`/..., at most 32 per span). A
 //!   span names itself with `otel.name`; `otel.status_code = "ERROR"` with
 //!   `otel.status_message` makes its exit a `Failure`, `otel.interrupted` an
@@ -856,10 +856,10 @@ mod bench {
     use super::*;
     use tracing_subscriber::layer::SubscriberExt;
 
-    /// One RPC call's span as `effect_rpc` makes it: created, entered, a failure recorded, closed.
+    /// One RPC call's span as `domovoi_rpc` makes it: created, entered, a failure recorded, closed.
     fn call(tag: &str, fail: bool) {
         let span = tracing::info_span!(parent: None, "ws.rpc", "otel.name" = %format!("ws.rpc.{tag}"), "rpc.method" = %tag, "rpc.transport" = "websocket",
-            "rpc.system" = "effect-rpc", "otel.status_code" = tracing::field::Empty, "otel.status_message" = tracing::field::Empty);
+            "rpc.system" = "domovoi-rpc", "otel.status_code" = tracing::field::Empty, "otel.status_message" = tracing::field::Empty);
         span.in_scope(|| std::hint::black_box(tag.len()));
         if fail {
             span.record("otel.status_code", "ERROR");

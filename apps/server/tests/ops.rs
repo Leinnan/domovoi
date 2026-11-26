@@ -157,6 +157,46 @@ async fn a_client_of_another_protocol_version_is_told_to_update() {
     }
 }
 
+/// A client that asks for packed frames (`pack` on the socket URL) is sent
+/// its large frames deflated, and its small ones as they are; one that does
+/// not ask is sent every frame as it is.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_client_that_asks_is_sent_large_frames_packed() {
+    use futures::StreamExt;
+    let (server, mut plain) = start_signed_in("packed", &[]).await;
+    let token = bearer_token(&server).await;
+    let mut req = format!("ws://127.0.0.1:{}/ws?protocol={PROTOCOL}&pack=1", server.port).into_client_request().unwrap();
+    req.headers_mut().insert("authorization", format!("Bearer {token}").parse().unwrap());
+    let mut packing = tokio_tungstenite::connect_async(req).await.unwrap().0;
+
+    // The configuration is tens of kilobytes.
+    for ws in [&mut plain, &mut packing] {
+        send(ws, "1", "subscribeServerConfig", serde_json::json!({})).await;
+    }
+    let text = |message: tokio_tungstenite::tungstenite::Message| message.into_text().unwrap().to_string();
+    let sent_plain = text(plain.next().await.unwrap().unwrap());
+    let sent_packed = text(packing.next().await.unwrap().unwrap());
+    assert!(sent_plain.starts_with('{'), "not asked for: {}", &sent_plain[..40]);
+    assert!(sent_packed.starts_with(domovoi_rpc::packed::PACKED), "{}", &sent_packed[..40]);
+    assert!(sent_packed.len() * 2 < sent_plain.len(), "{} -> {}", sent_plain.len(), sent_packed.len());
+    let unpacked: Value = serde_json::from_str(&domovoi_rpc::packed::unpack(&sent_packed).unwrap()).unwrap();
+    let plain: Value = serde_json::from_str(&sent_plain).unwrap();
+    assert_eq!((unpacked["_tag"].as_str(), unpacked["requestId"].as_str()), (Some("Chunk"), Some("1")));
+    assert_eq!(unpacked["values"][0]["type"], plain["values"][0]["type"]);
+
+    // A small frame is sent as it is: here the refusal of a method there is none of.
+    send(&mut packing, "2", "no.such.method", serde_json::json!({})).await;
+    loop {
+        let sent = text(tokio::time::timeout(Duration::from_secs(10), packing.next()).await.expect("a frame").unwrap().unwrap());
+        let frame = domovoi_rpc::packed::unpack(&sent).unwrap();
+        assert_eq!(sent.starts_with(domovoi_rpc::packed::PACKED), frame.len() >= domovoi_rpc::packed::PACK_FROM, "{} bytes", frame.len());
+        if serde_json::from_str::<Value>(&frame).unwrap()["requestId"] == "2" {
+            assert!(frame.len() < domovoi_rpc::packed::PACK_FROM, "{} bytes", frame.len());
+            break;
+        }
+    }
+}
+
 /// The next text frame, parsed.
 async fn next_frame(ws: &mut Ws) -> Value {
     use futures::StreamExt;
@@ -324,15 +364,9 @@ async fn start_signed_in(tag: &str, env: &[(&str, String)]) -> (Server, Ws) {
         }
     }
     let server = Server { child, port, home };
-    let res = http_client()
-        .post(format!("http://127.0.0.1:{port}/api/auth/browser-session"))
-        .json(&serde_json::json!({ "credential": code }))
-        .send()
-        .await
-        .unwrap();
-    let cookie = res.headers().get("set-cookie").unwrap().to_str().unwrap().split(';').next().unwrap().to_owned();
+    let session = sign_in(&format!("http://127.0.0.1:{port}"), &code).await;
     let mut req = format!("ws://127.0.0.1:{port}/ws?protocol={PROTOCOL}").into_client_request().unwrap();
-    req.headers_mut().insert("cookie", cookie.parse().unwrap());
+    req.headers_mut().insert("authorization", session.parse().unwrap());
     (server, tokio_tungstenite::connect_async(req).await.unwrap().0)
 }
 
@@ -479,4 +513,20 @@ async fn update_provider_runs_npm_and_streams_its_progress() {
     }
     drop(server);
     let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Exchanges a pairing code for a session; the `Authorization` header that presents it.
+async fn sign_in(base: &str, code: &str) -> String {
+    let res = try_sign_in(base, code).await;
+    assert_eq!(res.status(), 200);
+    let token: Value = res.json().await.unwrap();
+    format!("Bearer {}", token["access_token"].as_str().expect("an access token"))
+}
+
+/// The answer to a pairing code offered for a session.
+async fn try_sign_in(base: &str, code: &str) -> reqwest::Response {
+    let body = format!(
+        "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Atoken-exchange&subject_token={code}&subject_token_type=urn%3At3%3Aparams%3Aoauth%3Atoken-type%3Aenvironment-bootstrap&requested_token_type=urn%3Aietf%3Aparams%3Aoauth%3Atoken-type%3Aaccess_token"
+    );
+    http_client().post(format!("{base}/oauth/token")).header("content-type", "application/x-www-form-urlencoded").body(body).send().await.unwrap()
 }

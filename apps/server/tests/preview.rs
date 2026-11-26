@@ -107,18 +107,16 @@ fn start_with(tag: &str, browser: Option<&str>, args: &[&str]) -> Server {
     Server { child, port, pairing, home }
 }
 
-/// A session cookie for `code`.
-async fn cookie_for(server: &impl Base, code: &str) -> String {
-    let res = http().post(format!("http://127.0.0.1:{}/api/auth/browser-session", server.port())).json(&json!({ "credential": code })).send().await.unwrap();
-    assert_eq!(res.status(), 200);
-    res.headers().get("set-cookie").unwrap().to_str().unwrap().split(';').next().unwrap().to_owned()
+/// A session for `code`: the `Authorization` header that presents it.
+async fn session_for(server: &impl Base, code: &str) -> String {
+    sign_in(&format!("http://127.0.0.1:{}", server.port()), code).await
 }
 
-/// A cookie of a device granted only `permissions`.
-async fn limited_cookie(server: &Server, owner: &str, permissions: &[&str]) -> String {
+/// A session of a device granted only `permissions`.
+async fn limited_session(server: &Server, owner: &str, permissions: &[&str]) -> String {
     let res: Value = http()
         .post(format!("http://127.0.0.1:{}/api/domovoi/remote/pairing", server.port))
-        .header("cookie", owner)
+        .header("authorization", owner)
         .json(&json!({ "permissions": permissions }))
         .send()
         .await
@@ -126,20 +124,20 @@ async fn limited_cookie(server: &Server, owner: &str, permissions: &[&str]) -> S
         .json()
         .await
         .unwrap();
-    cookie_for(server, res["code"].as_str().expect("a pairing code")).await
+    session_for(server, res["code"].as_str().expect("a pairing code")).await
 }
 
-async fn ws(server: &impl Base, path: &str, cookie: Option<&str>) -> Result<Ws, tokio_tungstenite::tungstenite::Error> {
+async fn ws(server: &impl Base, path: &str, session: Option<&str>) -> Result<Ws, tokio_tungstenite::tungstenite::Error> {
     let mut req = format!("ws://127.0.0.1:{}{path}", server.port()).into_client_request().unwrap();
-    if let Some(c) = cookie {
-        req.headers_mut().insert("cookie", c.parse().unwrap());
+    if let Some(session) = session {
+        req.headers_mut().insert("authorization", session.parse().unwrap());
     }
     tokio_tungstenite::connect_async(req).await.map(|(s, _)| s)
 }
 
 /// The refusal a WebSocket upgrade got: status, the tunnel's marker headers, body.
-async fn refused(server: &impl Base, path: &str, cookie: Option<&str>) -> (u16, Vec<String>, String) {
-    match ws(server, path, cookie).await {
+async fn refused(server: &impl Base, path: &str, session: Option<&str>) -> (u16, Vec<String>, String) {
+    match ws(server, path, session).await {
         Err(tokio_tungstenite::tungstenite::Error::Http(res)) => {
             let markers = ["x-t3-tunnel-port-refused", "x-t3-tunnel-disabled"].iter().filter(|h| res.headers().get(**h).is_some_and(|v| v == "1")).map(|h| (*h).to_owned()).collect();
             (res.status().as_u16(), markers, String::from_utf8_lossy(res.body().as_deref().unwrap_or_default()).into_owned())
@@ -149,8 +147,8 @@ async fn refused(server: &impl Base, path: &str, cookie: Option<&str>) -> (u16, 
     }
 }
 
-async fn rpc(server: &Server, cookie: &str) -> Ws {
-    ws(server, &format!("/ws?protocol={PROTOCOL}"), Some(cookie)).await.unwrap()
+async fn rpc(server: &Server, session: &str) -> Ws {
+    ws(server, &format!("/ws?protocol={PROTOCOL}"), Some(session)).await.unwrap()
 }
 
 /// One request's Exit frame.
@@ -202,7 +200,7 @@ async fn next_binary(ws: &mut Ws) -> Option<Vec<u8>> {
 #[tokio::test(flavor = "multi_thread")]
 async fn the_tunnel_reaches_loopback_ports_only_while_it_is_on() {
     let server = start("tunnel", None);
-    let owner = cookie_for(&server, &server.pairing).await;
+    let owner = session_for(&server, &server.pairing).await;
     let echo = echo_server().await;
 
     // Bytes go to the loopback port and back, both ways.
@@ -215,8 +213,8 @@ async fn the_tunnel_reaches_loopback_ports_only_while_it_is_on() {
     assert_eq!(next_binary(&mut elsewhere).await.as_deref(), Some(&b"still loopback"[..]));
     drop(elsewhere);
 
-    // A WebSocket ticket stands in for the cookie.
-    let ticket: Value = http().post(format!("http://127.0.0.1:{}/api/auth/websocket-ticket/media", server.port)).header("cookie", &owner).send().await.unwrap().json().await.unwrap();
+    // A WebSocket ticket stands in for the session's token.
+    let ticket: Value = http().post(format!("http://127.0.0.1:{}/api/auth/websocket-ticket/media", server.port)).header("authorization", &owner).send().await.unwrap().json().await.unwrap();
     let mut by_ticket = ws(&server, &format!("/api/preview/tunnel?port={echo}&wsTicket={}", ticket["ticket"].as_str().unwrap()), None).await.unwrap();
     by_ticket.send(Message::Binary(b"ticket".to_vec().into())).await.unwrap();
     assert_eq!(next_binary(&mut by_ticket).await.as_deref(), Some(&b"ticket"[..]));
@@ -226,10 +224,10 @@ async fn the_tunnel_reaches_loopback_ports_only_while_it_is_on() {
     for bad in ["", "?port=0", "?port=65536", "?port=http", "?port=1.5"] {
         assert_eq!(refused(&server, &format!("/api/preview/tunnel{bad}"), Some(&owner)).await.0, 400, "{bad:?}");
     }
-    let plain = http().get(format!("http://127.0.0.1:{}/api/preview/tunnel?port={echo}", server.port)).header("cookie", &owner).send().await.unwrap();
+    let plain = http().get(format!("http://127.0.0.1:{}/api/preview/tunnel?port={echo}", server.port)).header("authorization", &owner).send().await.unwrap();
     assert_eq!(plain.status(), 400, "not an upgrade");
     assert_eq!(refused(&server, &format!("/api/preview/tunnel?port={echo}"), None).await.0, 401);
-    let reader = limited_cookie(&server, &owner, &["orchestration:read"]).await;
+    let reader = limited_session(&server, &owner, &["orchestration:read"]).await;
     let (status, _, body) = refused(&server, &format!("/api/preview/tunnel?port={echo}"), Some(&reader)).await;
     assert_eq!(status, 403);
     assert_eq!(serde_json::from_str::<Value>(&body).unwrap()["requiredPermission"], "terminal:operate", "{body}");
@@ -262,7 +260,7 @@ async fn the_tunnel_reaches_loopback_ports_only_while_it_is_on() {
     assert_eq!(next_binary(&mut again).await.as_deref(), Some(&b"on again"[..]));
 
     // Signing the session out closes its tunnels.
-    let out = http().post(format!("http://127.0.0.1:{}/api/domovoi/session/end", server.port)).header("cookie", &owner).send().await.unwrap();
+    let out = http().post(format!("http://127.0.0.1:{}/api/domovoi/session/end", server.port)).header("authorization", &owner).send().await.unwrap();
     assert_eq!(out.status(), 200);
     let ended = tokio::time::timeout(Duration::from_secs(10), async {
         loop {
@@ -350,7 +348,7 @@ async fn the_server_browser_runs_streams_and_closes_a_server_tab() {
         }
     };
     let server = start("browser", Some(&browser));
-    let owner = cookie_for(&server, &server.pairing).await;
+    let owner = session_for(&server, &server.pairing).await;
     let site = web_page().await;
     let mut socket = rpc(&server, &owner).await;
     // What subscribers are told, decoded with t3code's schemas at the end.
@@ -393,7 +391,7 @@ async fn the_server_browser_runs_streams_and_closes_a_server_tab() {
     assert_eq!(probe["editable"], false, "{probe}");
 
     // A viewer without `preview:operate` watches only.
-    let reader = limited_cookie(&server, &owner, &["orchestration:read"]).await;
+    let reader = limited_session(&server, &owner, &["orchestration:read"]).await;
     let mut watcher = ws(&server, &stream, Some(&reader)).await.unwrap();
     let control = viewer_message(&mut watcher, "control").await;
     assert_eq!((control["canOperate"].clone(), control["controller"].clone()), (json!(false), json!("another-viewer")), "{control}");
@@ -435,7 +433,7 @@ async fn the_server_browser_runs_streams_and_closes_a_server_tab() {
 #[tokio::test(flavor = "multi_thread")]
 async fn without_a_browser_server_tabs_stay_announced_and_streams_are_unavailable() {
     let server = start("nobrowser", None);
-    let owner = cookie_for(&server, &server.pairing).await;
+    let owner = session_for(&server, &server.pairing).await;
     let mut socket = rpc(&server, &owner).await;
     let opened = call(&mut socket, "open", "preview.open", json!({ "threadId": "t-none", "url": "localhost:5173", "runtime": "server" })).await;
     let tab_id = opened["exit"]["value"]["tabId"].as_str().expect("a tab").to_owned();
@@ -444,7 +442,7 @@ async fn without_a_browser_server_tabs_stay_announced_and_streams_are_unavailabl
     let list = call(&mut socket, "list", "preview.list", json!({ "threadId": "t-none" })).await;
     let tab = &list["exit"]["value"]["sessions"][0];
     assert_eq!((tab["navStatus"]["_tag"].clone(), tab.get("headless").cloned()), (json!("Loading"), None), "{tab}");
-    let upload = http().post(format!("http://127.0.0.1:{}/api/preview-stream/upload?threadId=t-none&tabId={tab_id}&chooser=x", server.port)).header("cookie", &owner).send().await.unwrap();
+    let upload = http().post(format!("http://127.0.0.1:{}/api/preview-stream/upload?threadId=t-none&tabId={tab_id}&chooser=x", server.port)).header("authorization", &owner).send().await.unwrap();
     assert_eq!(upload.status(), 409);
 }
 
@@ -476,11 +474,27 @@ async fn the_tunnel_works_over_iroh() {
         .await
         .unwrap();
     let remote = bridge.port();
-    let cookie = cookie_for(&remote, &code).await;
+    let session = session_for(&remote, &code).await;
     let echo = echo_server().await;
-    let mut tunnel = ws(&remote, &format!("/api/preview/tunnel?port={echo}"), Some(&cookie)).await.unwrap();
+    let mut tunnel = ws(&remote, &format!("/api/preview/tunnel?port={echo}"), Some(&session)).await.unwrap();
     tunnel.send(Message::Binary(b"over iroh".to_vec().into())).await.unwrap();
     assert_eq!(next_binary(&mut tunnel).await.as_deref(), Some(&b"over iroh"[..]));
     // A peer without a session reaches no tunnel.
     assert_eq!(refused(&remote, &format!("/api/preview/tunnel?port={echo}"), None).await.0, 401);
+}
+
+/// Exchanges a pairing code for a session; the `Authorization` header that presents it.
+async fn sign_in(base: &str, code: &str) -> String {
+    let res = try_sign_in(base, code).await;
+    assert_eq!(res.status(), 200);
+    let token: Value = res.json().await.unwrap();
+    format!("Bearer {}", token["access_token"].as_str().expect("an access token"))
+}
+
+/// The answer to a pairing code offered for a session.
+async fn try_sign_in(base: &str, code: &str) -> reqwest::Response {
+    let body = format!(
+        "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Atoken-exchange&subject_token={code}&subject_token_type=urn%3At3%3Aparams%3Aoauth%3Atoken-type%3Aenvironment-bootstrap&requested_token_type=urn%3Aietf%3Aparams%3Aoauth%3Atoken-type%3Aaccess_token"
+    );
+    http().post(format!("{base}/oauth/token")).header("content-type", "application/x-www-form-urlencoded").body(body).send().await.unwrap()
 }

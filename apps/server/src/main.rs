@@ -108,8 +108,9 @@ struct Args {
     host: String,
     #[arg(long, global = true, default_value_t = 13773)]
     port: u16,
-    /// Origin of the web client, used to print the pairing URL.
-    #[arg(long, global = true)]
+    /// Does nothing: it named the web client's origin, and there is no web
+    /// client. Still read, so that a service installed with it starts.
+    #[arg(long, global = true, hide = true)]
     web_url: Option<String>,
     /// Another name this server answers to over plain HTTP (repeatable): a
     /// reverse proxy's or a DNS name of your own. `.example.com` allows every
@@ -259,9 +260,6 @@ fn carried_flags(args: &Args) -> Vec<String> {
     for host in &args.allowed_hosts {
         flags.extend(["--allowed-host".to_owned(), host.clone()]);
     }
-    if let Some(url) = &args.web_url {
-        flags.extend(["--web-url".to_owned(), url.clone()]);
-    }
     if args.no_local_sign_in {
         flags.push("--no-local-sign-in".to_owned());
     }
@@ -314,7 +312,8 @@ struct Base {
     db: db::Db,
     environment: EnvironmentDescriptor,
     auth: auth::Auth,
-    /// Origin the pairing URL points at.
+    /// This server as a pairing link names it: the link is pasted into an
+    /// app on this machine.
     web: String,
 }
 
@@ -343,8 +342,8 @@ fn base(args: &Args, paths: &state::Paths) -> Fallible<Base> {
         database_migration: DATABASE_MIGRATION,
         capabilities: domovoi_contracts::defaults::capabilities(),
     };
-    let auth = auth::Auth::new(db.clone(), args.port, &paths.home.to_string_lossy());
-    let web = args.web_url.clone().unwrap_or_else(|| format!("http://localhost:{}", args.port));
+    let auth = auth::Auth::new(db.clone());
+    let web = format!("http://localhost:{}", args.port);
     Ok(Base { remote, db, environment, auth, web })
 }
 
@@ -627,8 +626,8 @@ async fn serve(args: &Args, paths: state::Paths, base: Base, shutdown: tokio_uti
     let pulse = Arc::new(tokio::sync::Notify::new());
     let hosts = {
         let machine = http::machine_names();
-        let names = [Some(args.host.as_str()), args.web_url.as_deref(), args.hooks_url.as_deref()].into_iter().flatten().chain(machine.iter().map(String::as_str));
-        http::HostRules::new(names, &args.allowed_hosts, args.web_url.as_deref())
+        let names = [Some(args.host.as_str()), args.hooks_url.as_deref()].into_iter().flatten().chain(machine.iter().map(String::as_str));
+        http::HostRules::new(names, &args.allowed_hosts)
     };
     let home = paths.home.clone();
     let state = Arc::new(state::AppState {

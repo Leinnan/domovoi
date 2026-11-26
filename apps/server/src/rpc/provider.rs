@@ -14,7 +14,7 @@ use super::Never;
 use crate::config_failure::Failure;
 use crate::providers::{CLAUDE, CODEX};
 use crate::state::ConnCtx;
-use effect_rpc::Router;
+use domovoi_rpc::Router;
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

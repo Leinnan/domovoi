@@ -78,11 +78,9 @@ fn pair_code(server: &Server, permissions: &[&str]) -> String {
 
 async fn connect(server: &Server, code: &str) -> tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>> {
     let base = format!("http://127.0.0.1:{}", server.port);
-    let res = http_client().post(format!("{base}/api/auth/browser-session")).json(&json!({ "credential": code })).send().await.unwrap();
-    assert_eq!(res.status(), 200);
-    let cookie = res.headers().get("set-cookie").unwrap().to_str().unwrap().split(';').next().unwrap().to_owned();
+    let session = sign_in(&base, code).await;
     let mut req = format!("ws://127.0.0.1:{}/ws?protocol={PROTOCOL}", server.port).into_client_request().unwrap();
-    req.headers_mut().insert("cookie", cookie.parse().unwrap());
+    req.headers_mut().insert("authorization", session.parse().unwrap());
     tokio_tungstenite::connect_async(req).await.unwrap().0
 }
 
@@ -146,13 +144,8 @@ async fn pair_command_and_permission_enforcement() {
     let closed = call(&mut ws, "3", "terminal.close", reference).await;
     assert_eq!(closed["exit"]["_tag"], "Success");
 
-    let again = http_client()
-        .post(format!("http://127.0.0.1:{}/api/auth/browser-session", server.port))
-        .json(&json!({ "credential": full }))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(again.status(), 401);
+    let again = try_sign_in(&format!("http://127.0.0.1:{}", server.port), &full).await;
+    assert_eq!(again.status(), 401, "a code works once");
 }
 
 /// What other accounts on the machine can do with `path` (its group and other mode bits).
@@ -233,4 +226,20 @@ fn cli_pair_remote(server: &Server) -> String {
         .unwrap();
     assert!(out.status.success(), "pair --remote failed: {}", String::from_utf8_lossy(&out.stderr));
     String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+/// Exchanges a pairing code for a session; the `Authorization` header that presents it.
+async fn sign_in(base: &str, code: &str) -> String {
+    let res = try_sign_in(base, code).await;
+    assert_eq!(res.status(), 200);
+    let token: Value = res.json().await.unwrap();
+    format!("Bearer {}", token["access_token"].as_str().expect("an access token"))
+}
+
+/// The answer to a pairing code offered for a session.
+async fn try_sign_in(base: &str, code: &str) -> reqwest::Response {
+    let body = format!(
+        "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Atoken-exchange&subject_token={code}&subject_token_type=urn%3At3%3Aparams%3Aoauth%3Atoken-type%3Aenvironment-bootstrap&requested_token_type=urn%3Aietf%3Aparams%3Aoauth%3Atoken-type%3Aaccess_token"
+    );
+    http_client().post(format!("{base}/oauth/token")).header("content-type", "application/x-www-form-urlencoded").body(body).send().await.unwrap()
 }

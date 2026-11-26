@@ -16,7 +16,7 @@ use crate::orchestration::failure::Failure;
 use crate::state::{AppState, ConnCtx};
 use crate::store::StoreError;
 use crate::vcs;
-use effect_rpc::Router;
+use domovoi_rpc::Router;
 use futures::StreamExt;
 use futures::stream::BoxStream;
 use serde::de::IgnoredAny;
@@ -645,7 +645,7 @@ pub fn register(r: Router<ConnCtx>) -> Router<ConnCtx> {
             crate::orchestration::checkpoints::turn_diff(&ctx.state.store, &input.thread_id, 0, input.to_turn_count, DiffCall::FullThreadDiff).await
         })
         .stream("orchestration.subscribeThread", |ctx, input: crate::orchestration::stream::ThreadSubscription| {
-            crate::orchestration::stream::thread_stream(ctx.state.store.clone(), input)
+            crate::orchestration::stream::thread_stream_sent(ctx.state.store.clone(), input)
         })
 }
 

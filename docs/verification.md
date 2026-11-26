@@ -945,7 +945,7 @@ What the live runs found:
   threads (link once per tracker-level key, unlink by key, as t3code's orchestrator), and
   the issue methods registered (see "Issues").
 - Verified: with Node 26 (`DOMOVOI_NODE`; Node 22 skips the schema checks without failing),
-  `cargo test -p domovoi-server -p domovoi-model -p domovoi-contracts -p effect-rpc` passes,
+  `cargo test -p domovoi-server -p domovoi-model -p domovoi-contracts -p domovoi-rpc` passes,
   `every_listed_rpc_answers_with_its_expected_kind` decodes 644 messages of 226 methods with
   v0.1.11's schemas, all 46 RPC groups (`just rpc-groups`) pass with their schema checks, and
   both golden sessions still decode (`wire-check.ts`). Not done: a new recording of the
@@ -1278,7 +1278,7 @@ What the live runs found:
   deleted transcripts keeps counting for `usageHistoryRetentionDays`.
   `DOMOVOI_USAGE_RATES_URL` replaces the source (tests use
   `conformance/usage-rates.json`, never the network).
-- Every RPC call is a `ws.rpc.<method>` span (`effect-rpc`), written by
+- Every RPC call is a `ws.rpc.<method>` span (`domovoi-rpc`), written by
   `trace_writer.rs` to `<userdata>/logs/server.trace.ndjson` in t3code's
   `EffectTraceRecord` format (bounded queue, batched off the request path,
   10 MiB per file, 10 files kept); with `observability.otlpTracesUrl` set the

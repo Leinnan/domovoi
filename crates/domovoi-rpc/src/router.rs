@@ -1,7 +1,7 @@
-//! Typed handler registration for an RPC group (the Rust analogue of
-//! `RpcGroup.toLayer({...handlers})`).
+//! The methods a connection can call, each registered with its own input,
+//! output and error types.
 
-use crate::message::RequestEncoded;
+use crate::message::Request;
 use futures::stream::{BoxStream, StreamExt};
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
@@ -12,8 +12,8 @@ use std::sync::Arc;
 
 pub type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send + 'static>>;
 
-/// How a request failed: an expected, schema-encoded error (`Cause.fail`) or a
-/// defect (`Cause.die`).
+/// How a request failed: with an error the method declares (`Fail`), or
+/// with one it does not (`Die`: a bug, or a request it could not read).
 #[derive(Debug, Clone, PartialEq)]
 pub enum Failure {
     Fail(Value),
@@ -32,16 +32,25 @@ impl Failure {
     }
 }
 
-pub enum Reply {
-    Unary(BoxFuture<Result<Value, Failure>>),
-    Stream(BoxStream<'static, Result<Value, Failure>>),
+/// An answer as it is sent: its JSON text. It is written from the handler's
+/// own type once, and shared, so that what goes to every subscriber (a live
+/// event) is written for all of them at once.
+pub type Encoded = Arc<serde_json::value::RawValue>;
+
+/// `value` as it is sent.
+pub fn encoded<O: Serialize + ?Sized>(value: &O) -> Result<Encoded, serde_json::Error> {
+    serde_json::value::to_raw_value(value).map(Arc::from)
 }
 
-/// Request metadata available to handlers besides the decoded payload.
+pub enum Reply {
+    Unary(BoxFuture<Result<Encoded, Failure>>),
+    Stream(BoxStream<'static, Result<Encoded, Failure>>),
+}
+
+/// What a guard and a raw handler are told of a request besides its payload.
 #[derive(Debug, Clone)]
 pub struct RequestMeta {
     pub tag: String,
-    pub headers: Vec<(String, String)>,
 }
 
 type HandlerFn<C> = Arc<dyn Fn(Arc<C>, RequestMeta, Value) -> Result<Reply, Failure> + Send + Sync>;
@@ -73,16 +82,13 @@ fn decode<I: DeserializeOwned>(tag: &str, payload: Value) -> Result<I, Failure> 
         .map_err(|e| Failure::die(format!("Invalid payload for {tag}: {e}")))
 }
 
-fn encode<O: Serialize + 'static>(value: O) -> Result<Value, Failure> {
-    // Most handlers already answer with a `Value`: pass it on instead of
-    // serializing it into a copy of itself.
-    match (Box::new(value) as Box<dyn std::any::Any>).downcast::<Value>() {
-        Ok(v) => Ok(*v),
-        Err(other) => {
-            let value = other.downcast::<O>().expect("the value is an O");
-            serde_json::to_value(*value).map_err(|e| Failure::die(format!("failed to encode success: {e}")))
-        }
+fn encode<O: Serialize + 'static>(value: O) -> Result<Encoded, Failure> {
+    // A handler that answers with text already written (one event for every
+    // subscriber) has it passed on.
+    if let Some(written) = (&value as &dyn std::any::Any).downcast_ref::<Encoded>() {
+        return Ok(written.clone());
     }
+    encoded(&value).map_err(|e| Failure::die(format!("failed to encode success: {e}")))
 }
 
 impl<C: Send + Sync + 'static> Router<C> {
@@ -90,7 +96,7 @@ impl<C: Send + Sync + 'static> Router<C> {
         Self::default()
     }
 
-    /// Runs before every handler (e.g. t3code's `RpcScopeAuthorization` middleware).
+    /// Runs before every handler: whether the caller may call the method.
     pub fn guard(
         mut self,
         f: impl Fn(&C, &RequestMeta, &Value) -> Result<(), Failure> + Send + Sync + 'static,
@@ -159,7 +165,7 @@ impl<C: Send + Sync + 'static> Router<C> {
         std::mem::take(self)
     }
 
-    /// Calls of these tags get no span (t3code's `RPC_METHODS_WITH_TRACING_DISABLED`).
+    /// Calls of these tags get no span.
     pub fn untraced(mut self, tags: &[&str]) -> Self {
         self.untraced.extend(tags.iter().map(|t| (*t).to_owned()));
         self
@@ -185,11 +191,8 @@ impl<C: Send + Sync + 'static> Router<C> {
 
     /// Starts the request's handler. Its payload is moved to the handler
     /// (left `null` in `request`).
-    pub fn dispatch(&self, ctx: Arc<C>, request: &mut RequestEncoded) -> Result<Reply, Failure> {
-        let meta = RequestMeta {
-            tag: request.tag.clone(),
-            headers: request.headers.clone(),
-        };
+    pub fn dispatch(&self, ctx: Arc<C>, request: &mut Request) -> Result<Reply, Failure> {
+        let meta = RequestMeta { tag: request.tag.clone() };
         let Some(handler) = self.handlers.get(&request.tag) else {
             return Err(Failure::die(format!("Unknown request tag: {}", request.tag)));
         };

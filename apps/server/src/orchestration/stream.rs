@@ -84,6 +84,31 @@ impl Serialize for Sent {
     }
 }
 
+impl Sent {
+    /// The item as it is sent. A live event is written by the first
+    /// subscriber that sends it, and every other sends that text.
+    fn encoded(&self) -> Result<domovoi_rpc::Encoded, serde_json::Error> {
+        match self {
+            Sent::Item(_) => domovoi_rpc::encoded(self),
+            Sent::Live(stored) => match stored.sent.get() {
+                Some(written) => Ok(written.clone()),
+                None => {
+                    let written = domovoi_rpc::encoded(self)?;
+                    Ok(stored.sent.get_or_init(|| written).clone())
+                }
+            },
+        }
+    }
+}
+
+/// [`thread_stream`] as the socket sends it.
+pub fn thread_stream_sent(store: Store, input: ThreadSubscription) -> BoxStream<'static, Result<domovoi_rpc::Encoded, Failure>> {
+    let thread_id = input.thread_id.clone();
+    thread_stream(store, input)
+        .map(move |item| item.and_then(|sent| sent.encoded().map_err(|e| projection_error(&thread_id, e.to_string()))))
+        .boxed()
+}
+
 fn projection_error(thread_id: &str, message: String) -> Failure {
     Failure::ThreadProjection { thread_id: thread_id.to_owned(), message }
 }
@@ -200,9 +225,14 @@ mod tests {
             event_type: event.event_type().to_owned(),
             thread_event: Some(event.clone()),
             grew_from: None,
+            sent: Default::default(),
         });
-        let owned = ThreadStreamItem::Event { sequence: 7, event: Box::new(event) };
-        assert_eq!(serde_json::to_string(&Sent::Live(stored)).unwrap(), serde_json::to_string(&owned).unwrap());
+        let owned = serde_json::to_string(&ThreadStreamItem::Event { sequence: 7, event: Box::new(event) }).unwrap();
+        assert_eq!(serde_json::to_string(&Sent::Live(stored.clone())).unwrap(), owned);
+        // Written once: every subscriber sends the same text.
+        let (first, second) = (Sent::Live(stored.clone()).encoded().unwrap(), Sent::Live(stored).encoded().unwrap());
+        assert_eq!(first.get(), owned);
+        assert!(Arc::ptr_eq(&first, &second));
     }
 
     /// A reply written through `Turn` as it streams: the first flush is sent

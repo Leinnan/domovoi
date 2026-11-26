@@ -237,6 +237,9 @@ const MIGRATIONS: &[&str] = &[
         cwd TEXT NOT NULL, reported_cwd TEXT, shell TEXT NOT NULL, label TEXT NOT NULL, cols INTEGER NOT NULL, rows INTEGER NOT NULL,
         exit_code INTEGER, updated_at TEXT NOT NULL, screen TEXT,
         PRIMARY KEY (thread_id, terminal_id));",
+    // 17: the sessions of the web client, which signed in with a cookie. No
+    // request can present one any more.
+    "DELETE FROM auth_sessions WHERE method = 'browser-session-cookie';",
 ];
 
 impl Db {

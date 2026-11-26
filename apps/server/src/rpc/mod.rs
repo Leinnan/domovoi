@@ -23,13 +23,13 @@ mod terminal;
 mod vcs;
 
 use crate::state::ConnCtx;
-use effect_rpc::Router;
+use domovoi_rpc::Router;
 use futures::stream::{BoxStream, StreamExt};
 
 /// Registers every implemented method.
 pub fn router() -> Router<ConnCtx> {
     let r = Router::new().guard(|ctx: &ConnCtx, meta, payload| {
-        crate::permissions::check(&meta.tag, payload, &ctx.session.permissions).map_err(|refused| effect_rpc::Failure::fail(&refused))
+        crate::permissions::check(&meta.tag, payload, &ctx.session.permissions).map_err(|refused| domovoi_rpc::Failure::fail(&refused))
     });
     // Reading the diagnostics would otherwise trace itself (t3code's `RPC_METHODS_WITH_TRACING_DISABLED`).
     let r = r.untraced(&["server.getTraceDiagnostics", "server.getProcessDiagnostics", "server.getProcessResourceHistory", "server.signalProcess"]);

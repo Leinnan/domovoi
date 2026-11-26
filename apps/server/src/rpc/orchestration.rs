@@ -12,7 +12,7 @@ use super::shell::text_or_empty;
 use crate::orchestration::failure::{Failure, ForceStopReason, StopWorkflowReason, WorkflowScriptReason};
 use crate::orchestration::projection;
 use crate::state::{AppState, ConnCtx};
-use effect_rpc::Router;
+use domovoi_rpc::Router;
 use futures::StreamExt;
 use futures::stream::BoxStream;
 use serde::{Deserialize, Serialize};

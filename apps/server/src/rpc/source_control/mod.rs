@@ -14,7 +14,7 @@ mod repositories;
 mod review_guides;
 
 use crate::state::ConnCtx;
-use effect_rpc::Router;
+use domovoi_rpc::Router;
 
 pub fn register(r: Router<ConnCtx>) -> Router<ConnCtx> {
     let r = repositories::register(r);

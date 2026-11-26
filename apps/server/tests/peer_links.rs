@@ -80,15 +80,13 @@ fn pairing(server: &Server) -> (String, String) {
 
 type Ws = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
-/// The server's socket over TCP with a browser session, and its cookie.
+/// The server's socket over TCP, and the `Authorization` header of its session.
 async fn connect(server: &Server) -> (Ws, String) {
     let base = format!("http://127.0.0.1:{}", server.port);
-    let res = http_client().post(format!("{base}/api/auth/browser-session")).json(&json!({ "credential": server.startup_code })).send().await.unwrap();
-    assert_eq!(res.status(), 200);
-    let cookie = res.headers().get("set-cookie").unwrap().to_str().unwrap().split(';').next().unwrap().to_owned();
+    let session = sign_in(&base, &server.startup_code).await;
     let mut req = format!("ws://127.0.0.1:{}/ws?protocol={PROTOCOL}", server.port).into_client_request().unwrap();
-    req.headers_mut().insert("cookie", cookie.parse().unwrap());
-    (tokio_tungstenite::connect_async(req).await.unwrap().0, cookie)
+    req.headers_mut().insert("authorization", session.parse().unwrap());
+    (tokio_tungstenite::connect_async(req).await.unwrap().0, session)
 }
 
 /// Calls `tag`; the first Chunk or the Exit.
@@ -156,7 +154,7 @@ async fn linked_sessions(peer: &mut Rpc) -> Vec<Value> {
 async fn a_server_links_another_over_iroh_and_either_side_ends_it() {
     let (a, b) = (start("a"), start("b"));
     let mut here = Rpc { ws: connect(&a).await.0, id: 0 };
-    let (peer_ws, peer_cookie) = connect(&b).await;
+    let (peer_ws, peer_session) = connect(&b).await;
     let mut there = Rpc { ws: peer_ws, id: 0 };
     let b_env = here_env(&b).await;
     let (link, code) = pairing(&b);
@@ -200,7 +198,7 @@ async fn a_server_links_another_over_iroh_and_either_side_ends_it() {
 
     // The peer revokes it: the link lists as expired, with why.
     let base_b = format!("http://127.0.0.1:{}", b.port);
-    let revoked = http_client().post(format!("{base_b}/api/auth/clients/revoke")).header("cookie", &peer_cookie).json(&json!({ "sessionId": sessions[0]["sessionId"] })).send().await.unwrap();
+    let revoked = http_client().post(format!("{base_b}/api/auth/clients/revoke")).header("authorization", &peer_session).json(&json!({ "sessionId": sessions[0]["sessionId"] })).send().await.unwrap();
     assert_eq!(revoked.status(), 200);
     let listed = here.ok("peerLinks.list", json!({})).await;
     assert_eq!(listed["links"][0]["status"], "expired", "{listed}");
@@ -230,4 +228,20 @@ async fn a_server_links_another_over_iroh_and_either_side_ends_it() {
 async fn here_env(server: &Server) -> Value {
     let d: Value = http_client().get(format!("http://127.0.0.1:{}/.well-known/t3/environment", server.port)).send().await.unwrap().json().await.unwrap();
     d["environmentId"].clone()
+}
+
+/// Exchanges a pairing code for a session; the `Authorization` header that presents it.
+async fn sign_in(base: &str, code: &str) -> String {
+    let res = try_sign_in(base, code).await;
+    assert_eq!(res.status(), 200);
+    let token: Value = res.json().await.unwrap();
+    format!("Bearer {}", token["access_token"].as_str().expect("an access token"))
+}
+
+/// The answer to a pairing code offered for a session.
+async fn try_sign_in(base: &str, code: &str) -> reqwest::Response {
+    let body = format!(
+        "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Atoken-exchange&subject_token={code}&subject_token_type=urn%3At3%3Aparams%3Aoauth%3Atoken-type%3Aenvironment-bootstrap&requested_token_type=urn%3Aietf%3Aparams%3Aoauth%3Atoken-type%3Aaccess_token"
+    );
+    http_client().post(format!("{base}/oauth/token")).header("content-type", "application/x-www-form-urlencoded").body(body).send().await.unwrap()
 }

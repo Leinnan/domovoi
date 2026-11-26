@@ -24,6 +24,9 @@ pub struct StoredEvent {
     /// more text and nothing else changed. A subscriber that has the last
     /// version is then sent the text added, not the item again.
     pub grew_from: Option<usize>,
+    /// The event as a thread's subscribers are sent it, written when the
+    /// first of them sends it (`orchestration::stream`).
+    pub sent: std::sync::OnceLock<domovoi_rpc::Encoded>,
 }
 
 /// Where an event is in the log and what it changed, without what it says.
@@ -123,6 +126,7 @@ impl Store {
                 event_type: event_type.into(),
                 thread_event: None,
                 grew_from: None,
+                sent: Default::default(),
             });
             self.publish(&stored);
             Ok(stored)

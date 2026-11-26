@@ -2,9 +2,9 @@
 //! in `fixtures/native/session1/wire.ndjson` (a thread's snapshots of some
 //! hundred kilobytes are the worst case).
 //!
-//! `cargo bench -p effect-rpc`
+//! `cargo bench -p domovoi-rpc`
 
-use effect_rpc::message::{FromServer, decode_client_frame, encode_server_message};
+use domovoi_rpc::message::{FromServer, decode_client_frame, encode_server_message};
 use serde_json::Value;
 use std::sync::LazyLock;
 
@@ -91,6 +91,7 @@ fn main() {
     let binary = || f.server_msgpack.iter().map(Vec::as_slice);
     eprintln!("PERF frames.session_bytes.json {} bytes", whole(&mut json(), false));
     eprintln!("PERF frames.session_bytes.json_zstd {} bytes", whole(&mut json(), true));
+    eprintln!("PERF frames.session_bytes.packed {} bytes", f.server_text.iter().map(|frame| domovoi_rpc::packed::pack(frame.clone()).len()).sum::<usize>());
     eprintln!("PERF frames.session_bytes.msgpack {} bytes", whole(&mut binary(), false));
     eprintln!("PERF frames.session_bytes.msgpack_zstd {} bytes", whole(&mut binary(), true));
     assert!(f.server_msgpack.iter().zip(&f.server).all(|(bytes, message)| from_msgpack(bytes).as_ref() == Some(message)), "every message reads back from MessagePack as it was");
@@ -121,6 +122,20 @@ fn largest_server_message() -> usize {
 #[divan::bench]
 fn decode_server_session() -> usize {
     FRAMES.server_text.iter().filter(|t| serde_json::from_str::<FromServer>(divan::black_box(t)).is_ok()).count()
+}
+
+/// Every server frame of the session as a client that asked for packed
+/// frames is sent it: the large ones deflated.
+#[divan::bench]
+fn pack_server_session(bencher: divan::Bencher) {
+    bencher.with_inputs(|| FRAMES.server_text.clone()).bench_values(|frames| frames.into_iter().map(|frame| domovoi_rpc::packed::pack(frame).len()).sum::<usize>());
+}
+
+/// And read back by that client.
+#[divan::bench]
+fn unpack_server_session(bencher: divan::Bencher) {
+    let packed: Vec<String> = FRAMES.server_text.iter().map(|frame| domovoi_rpc::packed::pack(frame.clone())).collect();
+    bencher.bench(|| packed.iter().map(|frame| domovoi_rpc::packed::unpack(divan::black_box(frame)).map_or(0, |text| text.len())).sum::<usize>());
 }
 
 /// Every server message of the session, encoded as MessagePack.

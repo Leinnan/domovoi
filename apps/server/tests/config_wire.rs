@@ -77,24 +77,31 @@ fn start() -> Server {
     Server { child, port, pairing, dir }
 }
 
-/// One client: its cookie and its socket, with the frames read but not yet asked for.
+/// One client: its session's `Authorization` header and its socket, with the frames read but not yet asked for.
 struct Client {
     ws: Ws,
-    cookie: String,
+    session: String,
     seen: Vec<Value>,
     next_id: u64,
 }
 
-async fn session_cookie(base: &str, code: &str) -> (String, Value) {
-    let res = http_client().post(format!("{base}/api/auth/browser-session")).json(&json!({ "credential": code })).send().await.unwrap();
+/// Exchanges a pairing code for a session: the `Authorization` header that
+/// presents it, and the answer without the token.
+async fn sign_in(base: &str, code: &str) -> (String, Value) {
+    let body = format!(
+        "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Atoken-exchange&subject_token={code}&subject_token_type=urn%3At3%3Aparams%3Aoauth%3Atoken-type%3Aenvironment-bootstrap&requested_token_type=urn%3Aietf%3Aparams%3Aoauth%3Atoken-type%3Aaccess_token"
+    );
+    let res = http_client().post(format!("{base}/oauth/token")).header("content-type", "application/x-www-form-urlencoded").body(body).send().await.unwrap();
     assert_eq!(res.status(), 200);
-    let cookie = res.headers().get("set-cookie").unwrap().to_str().unwrap().split(';').next().unwrap().to_owned();
-    (cookie, res.json().await.unwrap())
+    let mut answer: Value = res.json().await.unwrap();
+    let token = answer["access_token"].as_str().expect("an access token").to_owned();
+    answer["access_token"] = json!("<token>");
+    (format!("Bearer {token}"), answer)
 }
 
-async fn open_socket(port: u16, cookie: &str) -> Ws {
+async fn open_socket(port: u16, session: &str) -> Ws {
     let mut req = format!("ws://127.0.0.1:{port}/ws?protocol={PROTOCOL}").into_client_request().unwrap();
-    req.headers_mut().insert("cookie", cookie.parse().unwrap());
+    req.headers_mut().insert("authorization", session.parse().unwrap());
     tokio_tungstenite::connect_async(req).await.unwrap().0
 }
 
@@ -207,10 +214,9 @@ async fn config_and_access_streams_permissions_and_pairing() {
         steps.push(json!({ "step": name, "value": settled(value) }));
     };
 
-    let (cookie, session) = session_cookie(&base, &server.pairing).await;
-    step("browser-session", session);
-    let owner_cookie = cookie.clone();
-    let mut owner = Client { ws: open_socket(server.port, &cookie).await, cookie, seen: vec![], next_id: 0 };
+    let (owner_session, session) = sign_in(&base, &server.pairing).await;
+    step("token exchange", session);
+    let mut owner = Client { ws: open_socket(server.port, &owner_session).await, session: owner_session.clone(), seen: vec![], next_id: 0 };
 
     // The config stream after its snapshot.
     let config = owner.send("subscribeServerConfig", json!({})).await;
@@ -239,18 +245,18 @@ async fn config_and_access_streams_permissions_and_pairing() {
     // The access stream: a link is minted and used, a client connects and is signed out.
     let access = owner.send("subscribeAuthAccess", json!({})).await;
     step("access snapshot", owner.event(&access, "snapshot").await);
-    let post = |path: &str, cookie: &str, body: Value| http.post(format!("{base}{path}")).header("cookie", cookie).json(&body).send();
-    let minted = answered(post("/api/domovoi/remote/pairing", &owner_cookie, json!({ "ttlMinutes": 5, "permissions": ["orchestration:read"] })).await.unwrap()).await;
+    let post = |path: &str, session: &str, body: Value| http.post(format!("{base}{path}")).header("authorization", session).json(&body).send();
+    let minted = answered(post("/api/domovoi/remote/pairing", &owner_session, json!({ "ttlMinutes": 5, "permissions": ["orchestration:read"] })).await.unwrap()).await;
     let code = minted["body"]["code"].as_str().expect("a pairing code").to_owned();
     step("pairing link with permissions", minted);
     step("pairingLinkUpserted", owner.event(&access, "pairingLinkUpserted").await);
-    let (limited_cookie, session) = session_cookie(&base, &code).await;
-    step("browser-session of a limited code", session);
+    let (limited_session, session) = sign_in(&base, &code).await;
+    step("token exchange of a limited code", session);
     step("pairingLinkRemoved", owner.event(&access, "pairingLinkRemoved").await);
     let joined = owner.event(&access, "clientUpserted").await;
     let limited_id = joined["payload"]["sessionId"].as_str().unwrap().to_owned();
     step("clientUpserted", joined);
-    let mut limited = Client { ws: open_socket(server.port, &limited_cookie).await, cookie: limited_cookie, seen: vec![], next_id: 0 };
+    let mut limited = Client { ws: open_socket(server.port, &limited_session).await, session: limited_session, seen: vec![], next_id: 0 };
     step("clientUpserted on connecting", owner.event(&access, "clientUpserted").await);
 
     // What a session that may only read is refused.
@@ -271,14 +277,14 @@ async fn config_and_access_streams_permissions_and_pairing() {
         step(&format!("limited session: {tag} {payload}"), json!({ "_tag": frame["_tag"], "exit": frame["exit"], "defect": frame["defect"] }));
     }
     assert_eq!(limited.call("server.getConfig", json!({})).await["_tag"], "Success", "reading the config is allowed");
-    step("limited session: mint a pairing link", answered(post("/api/domovoi/remote/pairing", &limited.cookie, json!({})).await.unwrap()).await);
-    step("limited session: remote status", answered(http.get(format!("{base}/api/domovoi/remote")).header("cookie", &limited.cookie).send().await.unwrap()).await);
-    step("limited session: auth session", answered(http.get(format!("{base}/api/auth/session")).header("cookie", &limited.cookie).send().await.unwrap()).await);
+    step("limited session: mint a pairing link", answered(post("/api/domovoi/remote/pairing", &limited.session, json!({})).await.unwrap()).await);
+    step("limited session: remote status", answered(http.get(format!("{base}/api/domovoi/remote")).header("authorization", &limited.session).send().await.unwrap()).await);
+    step("limited session: auth session", answered(http.get(format!("{base}/api/auth/session")).header("authorization", &limited.session).send().await.unwrap()).await);
 
     // Answers that carry a fresh secret.
-    step("websocket ticket", answered(http.post(format!("{base}/api/auth/websocket-ticket")).header("cookie", &owner_cookie).send().await.unwrap()).await);
-    step("pairing link", answered(http.post(format!("{base}/api/domovoi/remote/pairing")).header("cookie", &owner_cookie).send().await.unwrap()).await);
-    let mint = |body: Value| async { answered(post("/api/domovoi/remote/pairing", &owner_cookie, body).await.unwrap()).await["body"]["code"].as_str().expect("a pairing code").to_owned() };
+    step("websocket ticket", answered(http.post(format!("{base}/api/auth/websocket-ticket")).header("authorization", &owner_session).send().await.unwrap()).await);
+    step("pairing link", answered(http.post(format!("{base}/api/domovoi/remote/pairing")).header("authorization", &owner_session).send().await.unwrap()).await);
+    let mint = |body: Value| async { answered(post("/api/domovoi/remote/pairing", &owner_session, body).await.unwrap()).await["body"]["code"].as_str().expect("a pairing code").to_owned() };
     let code = mint(json!({})).await;
     let exchange = [("grant_type", GRANT), ("subject_token_type", BOOTSTRAP), ("requested_token_type", ACCESS)];
     let with = |more: &[(&'static str, &str)]| -> Vec<(&'static str, String)> { exchange.iter().chain(more).map(|(k, v)| (*k, (*v).to_owned())).collect() };
@@ -296,19 +302,19 @@ async fn config_and_access_streams_permissions_and_pairing() {
     step("token exchange: a narrower scope", run(with(&[("subject_token", &code), ("scope", "orchestration:read")])).await);
     step("clientUpserted for the second token", owner.event(&access, "clientUpserted").await);
     step("token exchange: another grant type", token_exchange(&base, &[("grant_type", "password"), ("subject_token", "x"), ("subject_token_type", BOOTSTRAP), ("requested_token_type", ACCESS)]).await);
-    step("remote status with devices", answered(http.get(format!("{base}/api/domovoi/remote")).header("cookie", &owner_cookie).send().await.unwrap()).await);
+    step("remote status with devices", answered(http.get(format!("{base}/api/domovoi/remote")).header("authorization", &owner_session).send().await.unwrap()).await);
 
     // Remote access turned on (the local network only: no relay is asked) and off again.
-    step("remote access on", answered(post("/api/domovoi/remote/configure", &owner_cookie, json!({ "enabled": true, "relays": ["disabled"] })).await.unwrap()).await);
-    step("remote status while on", answered(http.get(format!("{base}/api/domovoi/remote")).header("cookie", &owner_cookie).send().await.unwrap()).await);
-    step("pairing link while on", answered(post("/api/domovoi/remote/pairing", &owner_cookie, json!({})).await.unwrap()).await);
-    step("remote access off", answered(post("/api/domovoi/remote/configure", &owner_cookie, json!({ "enabled": false })).await.unwrap()).await);
+    step("remote access on", answered(post("/api/domovoi/remote/configure", &owner_session, json!({ "enabled": true, "relays": ["disabled"] })).await.unwrap()).await);
+    step("remote status while on", answered(http.get(format!("{base}/api/domovoi/remote")).header("authorization", &owner_session).send().await.unwrap()).await);
+    step("pairing link while on", answered(post("/api/domovoi/remote/pairing", &owner_session, json!({})).await.unwrap()).await);
+    step("remote access off", answered(post("/api/domovoi/remote/configure", &owner_session, json!({ "enabled": false })).await.unwrap()).await);
 
     // Signing clients out.
-    step("revoke", answered(post("/api/auth/clients/revoke", &owner_cookie, json!({ "sessionId": limited_id })).await.unwrap()).await);
+    step("revoke", answered(post("/api/auth/clients/revoke", &owner_session, json!({ "sessionId": limited_id })).await.unwrap()).await);
     step("clientRemoved", owner.event(&access, "clientRemoved").await);
-    step("revoke of a session that is not there", answered(post("/api/auth/clients/revoke", &owner_cookie, json!({ "sessionId": limited_id })).await.unwrap()).await);
-    step("revoke-others", answered(http.post(format!("{base}/api/auth/clients/revoke-others")).header("cookie", &owner_cookie).send().await.unwrap()).await);
+    step("revoke of a session that is not there", answered(post("/api/auth/clients/revoke", &owner_session, json!({ "sessionId": limited_id })).await.unwrap()).await);
+    step("revoke-others", answered(http.post(format!("{base}/api/auth/clients/revoke-others")).header("authorization", &owner_session).send().await.unwrap()).await);
     step("clientRemoved, first token", owner.event(&access, "clientRemoved").await);
     step("clientRemoved, second token", owner.event(&access, "clientRemoved").await);
     step("access snapshot at the end", {

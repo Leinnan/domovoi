@@ -4,7 +4,7 @@ use super::Never;
 use crate::state::ConnCtx;
 use crate::vcs;
 use crate::vcs_ops::sent;
-use effect_rpc::Router;
+use domovoi_rpc::Router;
 use futures::StreamExt;
 use futures::stream::BoxStream;
 use serde::Deserialize;

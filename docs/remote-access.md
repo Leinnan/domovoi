@@ -137,7 +137,7 @@ are not checked this way: there is no browser and no DNS there.
 **The `Host` it is addressed by.** Answered: IP addresses, `localhost` and
 `*.localhost`, this machine's own names (its host name, short and full, and
 `<name>.local`), names under `.ts.net`, `.lan`, `.internal` and `.home.arpa`,
-and the hosts of `--host`, `--web-url` and `--hooks-url`. Any other name gets
+and the hosts of `--host` and `--hooks-url`. Any other name gets
 403 (`HostNotAllowedError`), with the flag to use in its message:
 
 ```sh
@@ -151,13 +151,14 @@ domovoi-server --allowed-host '*'                    # any name (no check)
 > **Upgrading.** A server reached through a reverse proxy or a DNS name of
 > your own answers 403 until it is started with `--allowed-host <name>`. The
 > apps show the server's message. `autostart on` and `service install` carry
-> `--allowed-host`, `--web-url` and `--no-local-sign-in` into the login item,
+> `--allowed-host` and `--no-local-sign-in` into the login item,
 > the unit and the scheduled task: run them again with the new flags.
 
 **The `Origin` of a request that changes something.** A request other than
 GET or HEAD with an `Origin` header is answered only when the origin is the
-server's own (the `Host` it was sent to) or `--web-url`'s. Programs send no
-`Origin`; a page of another site gets 403.
+server's own (the `Host` it was sent to). Programs send no `Origin`; a page
+of another site gets 403. A session is presented only as a bearer token:
+there are no cookies, so a page has nothing of a signed-in app's to send.
 
 **Wrong pairing codes.** Over plain TCP an address gets ten failed pairing
 attempts a minute (a hundred for all addresses together); after that a wrong
@@ -250,7 +251,7 @@ Items; switch Domovoi Server on there. A LaunchAgent left by an older version is
 turned into the login item at start.
 
 Anywhere else it starts this executable with `--tray --no-startup-code` and the
-current home directory, port, `--allowed-host`, `--web-url` and
+current home directory, port, `--allowed-host` and
 `--no-local-sign-in` when you sign in: a LaunchAgent on macOS
 (`~/Library/LaunchAgents/com.crayen.domovoi.server.plist`), a `Run` value on Windows, an
 XDG autostart entry on Linux. An entry left by an older copy of the executable

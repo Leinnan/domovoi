@@ -616,8 +616,8 @@ async fn perf_bytes_allocated_by_streamed_deltas() {
 
 /// One item of a thread subscription as the socket carries it: the frame's bytes.
 fn thread_frame(item: &impl serde::Serialize) -> String {
-    let value = serde_json::to_value(item).expect("an item is plain data");
-    effect_rpc::message::encode_server_message(&effect_rpc::message::FromServer::Chunk { request_id: effect_rpc::message::RequestId::Str("1".into()), values: vec![value] })
+    let value = domovoi_rpc::encoded(item).expect("an item is plain data");
+    domovoi_rpc::connection::Outgoing::Chunk { request_id: "1".into(), values: vec![value] }.frame()
 }
 
 /// Opening a thread: what its snapshot costs to read from the database and
@@ -629,19 +629,28 @@ fn perf_thread_snapshot_by_thread_size() {
         let (store, dir) = temp_store("thread-snapshot");
         seed(&store, "t1", n);
         let reps = 5u32;
-        let (mut build, mut encode, mut bytes) = (Duration::ZERO, Duration::ZERO, 0);
+        let (mut build, mut encode, mut pack, mut bytes, mut packed) = (Duration::ZERO, Duration::ZERO, Duration::ZERO, 0, 0);
         for _ in 0..reps {
             let started = Instant::now();
             let (_, item) = crate::orchestration::stream::snapshot_item(&store, "t1", false).expect("snapshot");
             build += started.elapsed();
             let started = Instant::now();
-            bytes = thread_frame(&item).len();
+            let frame = thread_frame(&item);
             encode += started.elapsed();
+            bytes = frame.len();
+            let started = Instant::now();
+            packed = domovoi_rpc::packed::pack(frame).len();
+            pack += started.elapsed();
         }
-        println!("perf n={n:>5}: thread snapshot build {}   encode {}   {:.2} MB", per_call(build, reps), per_call(encode, reps), bytes as f64 / 1e6);
+        println!(
+            "perf n={n:>5}: thread snapshot build {}   encode {}   {:.2} MB   pack {}   {:.2} MB",
+            per_call(build, reps), per_call(encode, reps), bytes as f64 / 1e6, per_call(pack, reps), packed as f64 / 1e6,
+        );
         report(&format!("thread.snapshot.build.{n}"), micros(build, reps), "us");
         report(&format!("thread.snapshot.encode.{n}"), micros(encode, reps), "us");
         report(&format!("thread.snapshot.bytes.{n}"), bytes as f64, "bytes");
+        report(&format!("thread.snapshot.pack.{n}"), micros(pack, reps), "us");
+        report(&format!("thread.snapshot.packed_bytes.{n}"), packed as f64, "bytes");
         let _ = std::fs::remove_dir_all(dir);
     }
 }
@@ -754,8 +763,15 @@ fn perf_real_home() {
     let (_, item) = crate::orchestration::stream::snapshot_item(&store, &largest, false).expect("thread snapshot");
     let build = started.elapsed();
     let started = Instant::now();
-    let thread_bytes = thread_frame(&item).len();
+    let thread_frame_text = thread_frame(&item);
     let encode = started.elapsed();
+    let thread_bytes = thread_frame_text.len();
+    let started = Instant::now();
+    let thread_packed = domovoi_rpc::packed::pack(thread_frame_text);
+    let pack = started.elapsed();
+    let started = Instant::now();
+    assert_eq!(domovoi_rpc::packed::unpack(&thread_packed).expect("unpacks").len(), thread_bytes);
+    let unpack = started.elapsed();
     drop(item);
     let started = Instant::now();
     let again = crate::orchestration::stream::snapshot_item(&store, &largest, false).expect("thread snapshot");
@@ -768,8 +784,10 @@ fn perf_real_home() {
     let threads = snapshot.threads.len() + snapshot.archived_threads.len();
     let started = Instant::now();
     let items = crate::rpc::shell::initial_items(crate::rpc::shell::snapshot_of(&store).expect("shell snapshot"));
-    let shell_bytes: usize = items.iter().map(|i| thread_frame(i).len()).sum();
+    let shell_frames: Vec<String> = items.iter().map(|i| thread_frame(i)).collect();
+    let shell_bytes: usize = shell_frames.iter().map(String::len).sum();
     let shell_warm = started.elapsed();
+    let shell_packed: usize = shell_frames.into_iter().map(|frame| domovoi_rpc::packed::pack(frame).len()).sum();
 
     let ids: Vec<String> = store.thread_ids().expect("thread ids").into_iter().map(|(id, _)| id).collect();
     let started = Instant::now();
@@ -778,6 +796,19 @@ fn perf_real_home() {
         loaded += usize::from(store.load_thread(id).expect("thread").is_some());
     }
     let every = started.elapsed();
+    // Every thread opened once: what the clients are sent, and what packing saves of it.
+    let (mut every_bytes, mut every_packed, mut pack_every) = (0usize, 0usize, Duration::ZERO);
+    for id in &ids {
+        let Ok((_, item)) = crate::orchestration::stream::snapshot_item(&store, id, false) else { continue };
+        let frame = thread_frame(&item);
+        every_bytes += frame.len();
+        let started = Instant::now();
+        every_packed += domovoi_rpc::packed::pack(frame).len();
+        pack_every += started.elapsed();
+    }
+    report("real.every_thread.snapshot.bytes", every_bytes as f64, "bytes");
+    report("real.every_thread.snapshot.packed_bytes", every_packed as f64, "bytes");
+    report("real.every_thread.snapshot.pack", pack_every.as_secs_f64() * 1e6, "us");
 
     println!(
         "perf real home ({:.0} MB, {threads} threads): open {:.1} ms; shell snapshot cold {:.1} ms, then with its frames {:.1} ms and {:.2} MB; largest thread snapshot build {:.1} ms (again {:.1} ms), encode {:.1} ms, {:.2} MB; reading all {loaded} threads {:.0} ms",
@@ -793,6 +824,10 @@ fn perf_real_home() {
     report("real.largest_thread.snapshot.build", build.as_secs_f64() * 1e6, "us");
     report("real.largest_thread.snapshot.encode", encode.as_secs_f64() * 1e6, "us");
     report("real.largest_thread.snapshot.bytes", thread_bytes as f64, "bytes");
+    report("real.largest_thread.snapshot.packed_bytes", thread_packed.len() as f64, "bytes");
+    report("real.largest_thread.snapshot.pack", pack.as_secs_f64() * 1e6, "us");
+    report("real.largest_thread.snapshot.unpack", unpack.as_secs_f64() * 1e6, "us");
+    report("real.shell_snapshot.packed_bytes", shell_packed as f64, "bytes");
     report("real.read_every_thread", every.as_secs_f64() * 1e6, "us");
     drop(store);
     // `DOMOVOI_PERF_KEEP` keeps the upgraded copy, to look at (`doctor --records --home-dir <it>`).

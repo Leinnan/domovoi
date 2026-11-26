@@ -28,7 +28,7 @@ const SIZES: [usize; 3] = [100, 1000, 5000];
 
 /// What `grown` makes at each of `SIZES`: turn items, messages, and records of
 /// every kind. The numbers the benches' history was measured on.
-const GROWN: [(usize, usize, usize); 3] = [(100, 100, 241), (1000, 1000, 2041), (5000, 5000, 10041)];
+const GROWN: [(usize, usize, usize); 3] = [(100, 100, 213), (1000, 1000, 2013), (5000, 5000, 10013)];
 
 /// The recorded session. `DOMOVOI_FIXTURES` names another `fixtures` folder: a
 /// build kept by `tools/perf.py` reads the recording it was saved with.

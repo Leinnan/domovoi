@@ -24,7 +24,7 @@ mod cdp;
 #[cfg(feature = "preview-browser")]
 mod page;
 
-use crate::auth::{Session, origin_matches_host};
+use crate::auth::Session;
 use crate::state::SharedState;
 use axum::Extension;
 use axum::http::{HeaderMap, StatusCode};
@@ -61,9 +61,9 @@ fn internal(e: impl std::fmt::Display) -> Response {
     (StatusCode::INTERNAL_SERVER_ERROR, axum::Json(rejection)).into_response()
 }
 
-/// t3code `authenticateMediaRequest`: a WebSocket ticket in the query
-/// (`wsTicket`), else the request's bearer token or cookie (then from this
-/// server's own origin, as `/ws` requires), holding `permission`.
+/// Who a media request is from: a WebSocket ticket in the query
+/// (`wsTicket`), else the request's bearer token; either way a session
+/// holding `permission`.
 pub fn authenticate_media(state: &SharedState, headers: &HeaderMap, peer: &Peer, ticket: Option<&str>, permission: &str) -> Result<Session, Response> {
     let peer = peer.as_ref().map(|Extension(RemotePeer(id))| id.to_string());
     let session = match ticket.filter(|t| !t.trim().is_empty()) {
@@ -72,20 +72,11 @@ pub fn authenticate_media(state: &SharedState, headers: &HeaderMap, peer: &Peer,
             Ok(None) => return Err(unauthorized("invalid_credential")),
             Err(e) => return Err(internal(e)),
         },
-        None => {
-            let session = match state.auth.authenticate(headers, peer.as_deref()) {
-                Ok(Some(s)) => s,
-                Ok(None) => {
-                    let presented = crate::auth::bearer_token(headers).is_some() || crate::auth::cookie_value(headers, state.auth.cookie_name()).is_some();
-                    return Err(unauthorized(if presented { "invalid_credential" } else { "missing_credential" }));
-                }
-                Err(e) => return Err(internal(e)),
-            };
-            if !origin_matches_host(headers) {
-                return Err(unauthorized("origin_mismatch"));
-            }
-            session
-        }
+        None => match state.auth.authenticate(headers, peer.as_deref()) {
+            Ok(Some(s)) => s,
+            Ok(None) => return Err(unauthorized(if crate::auth::bearer_token(headers).is_some() { "invalid_credential" } else { "missing_credential" })),
+            Err(e) => return Err(internal(e)),
+        },
     };
     if session.permissions.iter().any(|p| p == permission) { Ok(session) } else { Err(scope_required(permission)) }
 }

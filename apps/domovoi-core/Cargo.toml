@@ -23,7 +23,7 @@ codegen = ["dep:anyhow", "dep:clap", "facet_typegen"]
 boltffi = "=0.32.1"
 crux_core = "=0.20.0"
 crux_http = "=0.20.0"
-effect-rpc = { path = "../../crates/effect-rpc", default-features = false }
+domovoi-rpc = { path = "../../crates/domovoi-rpc", default-features = false }
 facet = "=0.46.5"
 serde.workspace = true
 serde_json.workspace = true

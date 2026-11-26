@@ -6,7 +6,7 @@
 //! A request is checked as it arrived, before any handler decodes it, so the
 //! payload rules read the few fields they need from its JSON.
 
-#![expect(clippy::disallowed_types, reason = "any RPC's raw payload, as effect-rpc hands it to the guard before the handler's own type reads it")]
+#![expect(clippy::disallowed_types, reason = "any RPC's raw payload, as domovoi-rpc hands it to the guard before the handler's own type reads it")]
 
 use crate::config_failure::Failure;
 use serde_json::Value;

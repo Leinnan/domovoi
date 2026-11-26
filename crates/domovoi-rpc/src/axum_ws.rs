@@ -10,8 +10,8 @@ use std::time::Duration;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
-/// Drives an upgraded socket. Text frames carry JSON messages; control frames
-/// are handled by axum; binary frames are ignored (JSON serialization only).
+/// Drives an upgraded socket. Text frames carry the messages; control frames
+/// are handled by axum; binary frames are ignored.
 pub async fn serve_websocket<C: Send + Sync + 'static>(
     socket: WebSocket,
     router: Arc<Router<C>>,

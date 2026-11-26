@@ -4,7 +4,7 @@
 use super::{Never, then_pending};
 use crate::settings::Settings;
 use crate::state::ConnCtx;
-use effect_rpc::Router;
+use domovoi_rpc::Router;
 use futures::StreamExt;
 use futures::stream::BoxStream;
 use serde::de::IgnoredAny;

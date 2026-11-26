@@ -619,6 +619,17 @@ fn a_server_of_another_protocol_version_is_named_not_connected_to() {
     }
 }
 
+/// A server on this machine is not asked to pack its frames: nothing is
+/// between the two but memory.
+#[test]
+fn a_server_on_this_machine_is_not_asked_for_packed_frames() {
+    let mut shell = Shell::paired();
+    let mut model = Model::default();
+    let _ = shell.drive(&mut model, Event::Launch { surface: "desktop".into(), device_label: "Test Mac".into(), device_os: "macOS".into() });
+    let effects = shell.drive(&mut model, Event::Connect { server_url: "http://127.0.0.1:13773/".into(), pairing_code: "CODE".into() });
+    assert!(socket_url(&effects).unwrap().starts_with(&format!("ws://127.0.0.1:13773/ws?protocol={}&wsTicket=tick-1", domovoi_model::PROTOCOL_VERSION)));
+}
+
 #[test]
 fn pairing_exchanges_the_code_for_a_saved_token() {
     let mut shell = Shell::paired();
@@ -634,7 +645,8 @@ fn pairing_exchanges_the_code_for_a_saved_token() {
     // The ticket request carries the token; the socket URL the ticket.
     let ticket = &shell.requests[1];
     assert!(ticket.headers.iter().any(|h| h.name.eq_ignore_ascii_case("authorization") && h.value == "Bearer tok-1"));
-    assert!(socket_url(&effects).unwrap().starts_with(&format!("ws://h:1/ws?protocol={}&wsTicket=tick-1", domovoi_model::PROTOCOL_VERSION)));
+    // A server across a network is asked for packed frames.
+    assert!(socket_url(&effects).unwrap().starts_with(&format!("ws://h:1/ws?protocol={}&pack=1&wsTicket=tick-1", domovoi_model::PROTOCOL_VERSION)));
     // Saved: the environment, which one is active, and its token.
     let env_id = model.active_env.clone().unwrap();
     assert_eq!(shell.store.get(&format!("token:{env_id}")).map(String::as_str), Some("tok-1"));
@@ -4492,7 +4504,7 @@ impl Sends {
                                 self.commands.push(id.clone());
                             }
                             self.open.insert(method, id);
-                            assert_eq!(frame["headers"], json!([]), "a request carries no headers");
+                            assert_eq!(frame.as_object().map(|fields| fields.len()), Some(4), "a request is its id, its method and its payload: {frame}");
                             sent.push(json!({ "rpc": frame["tag"], "payload": frame["payload"] }));
                         }
                         Some("Ack") => {}

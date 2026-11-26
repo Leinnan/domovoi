@@ -203,16 +203,22 @@ pub fn requests_lost(model: &mut Model) {
     model.socket_lost_flags();
 }
 
-fn ws_url(server_url: &str, ticket: &str) -> String {
+/// The socket's URL. `pack` asks for large frames deflated
+/// (`domovoi_rpc::packed`).
+fn ws_url(server_url: &str, ticket: &str, pack: bool) -> String {
     let base = server_url.trim_end_matches('/');
     let ws = base.replacen("https://", "wss://", 1).replacen("http://", "ws://", 1);
-    format!("{ws}/ws?protocol={}&wsTicket={ticket}", domovoi_model::PROTOCOL_VERSION)
+    let pack = if pack { "&pack=1" } else { "" };
+    format!("{ws}/ws?protocol={}{pack}&wsTicket={ticket}", domovoi_model::PROTOCOL_VERSION)
 }
 
 /// Opens the RPC socket with a one-time ticket.
 pub fn open_socket(model: &mut Model, ticket: &str) -> Cmd {
     model.rpc.reset();
-    let url = ws_url(&model.server_url, ticket);
+    // A server on this machine is read from memory: packing would cost both
+    // ends time and save nothing. Every other is across a network.
+    let across_a_network = model.active_environment().is_some_and(crate::model::Environment::is_remote) || crate::environments::loopback_port(&model.server_url).is_none();
+    let url = ws_url(&model.server_url, ticket, across_a_network);
     let attempt = model.attempt;
     Command::stream_from_shell(SocketOperation::Open { url }).then_send(move |event| Event::Socket { attempt, event })
 }

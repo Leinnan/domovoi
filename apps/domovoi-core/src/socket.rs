@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Facet, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[repr(C)]
 pub enum SocketOperation {
-    /// Open a WebSocket to `url` (the shell attaches the session cookie) and
+    /// Open a WebSocket to `url` (which carries a one-time ticket) and
     /// resolve with events until it closes.
     Open { url: String },
     /// Send one text frame on the open socket.

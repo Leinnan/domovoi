@@ -6,7 +6,7 @@ use super::Never;
 use crate::state::ConnCtx;
 use crate::vcs_ops::{self, DiffFileContentsInput, DiffPreviewInput, sent};
 use crate::worktree_setup::Snapshot;
-use effect_rpc::Router;
+use domovoi_rpc::Router;
 use futures::StreamExt;
 use futures::stream::BoxStream;
 use serde::{Deserialize, Serialize};

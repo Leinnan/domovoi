@@ -3,7 +3,7 @@
 
 use crate::agent_sessions::{self as sessions, Failure, ScanEnv};
 use crate::state::ConnCtx;
-use effect_rpc::Router;
+use domovoi_rpc::Router;
 use serde::Deserialize;
 use serde::de::IgnoredAny;
 use std::sync::Arc;

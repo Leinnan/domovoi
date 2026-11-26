@@ -4,7 +4,7 @@
 
 use crate::artifacts::{ArtifactDetail, ArtifactSummary, list_for_thread, read_version};
 use crate::state::ConnCtx;
-use effect_rpc::Router;
+use domovoi_rpc::Router;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 

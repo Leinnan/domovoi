@@ -28,14 +28,15 @@ no longer depends on the checkout: it can be run after the code has changed.
 
 `run` records one JSON file of measures per run. `compare` prints, for each
 measure, the two medians, the change, and the larger of the two builds'
-spread (half the range over the median, at least 5%). A change inside the
-spread reads as "same". Every measure is a cost: lower is better.
+spread (half the range over the median; at least 20% for a time, the noise
+floor below; nothing for bytes and counts, which are exact). A change inside
+the spread reads as "same". Every measure is a cost: lower is better.
 
 ### What is measured
 
 | Group | Measures | Where |
 |---|---|---|
-| `frames.*` | A recorded session's frames: decoding the client's, encoding and decoding the server's, as JSON and as MessagePack, and what zstd adds; the session's bytes in each encoding | `crates/effect-rpc/benches/frames.rs` |
+| `frames.*` | A recorded session's frames: decoding the client's, encoding and decoding the server's, as JSON and as MessagePack, and what zstd adds; the session's bytes in each encoding | `crates/domovoi-rpc/benches/frames.rs` |
 | `thread.typed_*` | The thread read model at 100/1000/5000 items: its shell, applying one event, one streamed token, decoding an event | `crates/domovoi-model/benches/thread.rs` |
 | `view.*` | The client core at 100/500/2000 items: a cold render, a warm `view()`, one streamed token, a socket frame through `update`, opening a thread from its snapshot frame | `apps/domovoi-core/benches/view.rs` |
 | `store.*`, `turn.*`, `command.*`, `launch.*`, `shell.*` | The server's store and turn code on a file-backed database: appending, flushing a streamed reply through `Turn`, command latency by thread size, resuming behind other threads' events, shell snapshots, bytes allocated by streamed deltas | `apps/server/src/perf_tests.rs` |
@@ -59,7 +60,117 @@ tried on a fresh copy of `.reference/perf-home`, never on the home itself, with
 
 ## Ledger
 
-LEDGER_GOES_HERE
+Each entry compares two kept builds run in alternation, three runs each,
+on the development machine (an Apple M-series laptop, busy with other work:
+load 4 to 6). All builds are release builds. The copy of a real home the
+`real.*` rows use holds 1,027 threads and 153,723 records.
+
+### M0: the baseline, and the noise (`9ee91e3`)
+
+The baseline against itself (`perf-compare --self m0`, two runs against two)
+puts every time within 20% but these, which jump between two values from
+one run to the next:
+
+| Measure | Spread |
+|---|---|
+| `command.thread_visit.1000.p50` | ±26% |
+| `load.10.latency_p99`, `load.50.latency_p99` | ±21%, ±23% |
+| `real.largest_thread.snapshot.build` | ±24% |
+| `thread.typed_apply_while_read.5000`, `thread.typed_clone_state.1000`, `.5000` | ±41%, ±56%, ±40% |
+
+So a time that moves by less than 20% is no change, and the measures above
+are not evidence of anything by themselves. Bytes and counts do not vary.
+
+| Measure | M0 |
+|---|---|
+| The largest real thread's snapshot | 16.66 MB, 9.1 ms to encode |
+| The real home's database | 1,125 MB |
+| A thread's snapshot at 100 / 1000 / 5000 items | 0.21 / 2.10 / 10.50 MB |
+| A 20,000-character reply to one subscriber | 1.47 MB in 224 events |
+| What that reply leaves in the event log | 104 kB (1.41 MB at its peak) |
+| Bytes allocated by its 5000 deltas | 50 MB |
+| One flush of a streamed reply | 0.51 ms, 3 events, 1 commit |
+| A recorded session's server frames | 3.79 MB as JSON, 3.48 MB as MessagePack, 1.00 MB with zstd |
+| Server CPU while 1 / 10 / 50 clients watch a reply | 0.7 / 0.8 / 1.2 s |
+| Server peak memory for the same | 53 / 59 / 71 MB |
+| One small call there and back | 83 µs |
+| Server binary | 61.6 MB |
+| Lines of Rust; lines mentioning t3code | 193,504; 1,303 |
+
+### M1: the tether to t3code cut (`9ee91e3` → `ffe88f7`)
+
+Expected: smaller, and no change of speed. That is what was measured.
+
+| Measure | M0 | M1 | |
+|---|---|---|---|
+| Lines of Rust | 193,504 | 191,210 | -1.2% |
+| Lines mentioning t3code | 1,303 | 1,113 | -14.6% |
+| Server binary | 61.61 MB | 61.40 MB | -0.3% |
+| Registered RPC methods | 243 | 198 | 45 removed |
+| Every `store.*`, `turn.*`, `command.*`, `connect.*`, `call.*`, `view.*`, `real.*` time | | | within the noise |
+| `load.1.latency_p99` | 2.8 ms | 5.1 ms | one of the measures that jump (±60% in these runs) |
+
+The recorded session changed with this milestone (from t3code's own server
+to `fixtures/native/session1`), so the `frames.*` rows and the thread and
+view benches that replay the recording do not compare across it. The bridge:
+the M1 frames bench run once on the M0 recording gives M0's numbers
+(decoding the client's frames 429 µs against 445 µs, decoding the server's
+10.0 ms against 10.0 ms, encoding them 2.90 ms against 2.92 ms).
+
+### M2: a thread sent once, a streaming reply sent as the text added (`ffe88f7` → `09713dc`)
+
+Expected: snapshots about half the size, a streamed reply's bytes linear in
+its length, cheaper flushes, less server CPU under load, a much smaller
+database. All of it held.
+
+| Measure | M1 | M2 | |
+|---|---|---|---|
+| The largest real thread's snapshot | 16.66 MB | 8.32 MB | -50% |
+| … encoding it | 9.32 ms | 4.44 ms | -52% |
+| … building it a second time (now from the thread cache) | 2.81 ms | 0.02 ms | -99% |
+| A thread's snapshot at 100 / 1000 / 5000 items | 0.21 / 2.10 / 10.50 MB | 0.14 / 1.35 / 6.73 MB | -36% |
+| … building it | 0.23 / 1.51 / 10.9 ms | 0.13 / 0.50 / 2.4 ms | -43% to -79% |
+| … encoding it | 0.31 / 2.91 / 16.2 ms | 0.19 / 1.77 / 9.6 ms | -38% to -41% |
+| A 20,000-character reply to one subscriber | 1.39 MB in 213 events | 76 kB in 70 events | -94.5% |
+| What it leaves in the event log | 101 kB (1.33 MB at its peak) | 43 kB (0.62 MB) | -57% |
+| Bytes allocated by its 5000 deltas | 50.06 MB | 66 kB | -99.9% |
+| … and their time | 1.25 ms | 0.22 ms | -82% |
+| One flush of a streamed reply | 0.47 ms, 3 events | 0.33 ms, 1.05 events | -29% |
+| Server CPU while 1 / 10 / 50 clients watch a reply | 0.7 / 0.8 / 1.0 s | 0.5 / 0.6 / 0.8 s | -22% |
+| Server peak memory for the same | 51 / 56 / 69 MB | 45 / 49 / 59 MB | -12% to -14% |
+| The client core taking one streamed token off the socket | 19.0 µs | 8.9 µs | -53% |
+| … one flush frame | 11.5 µs | 1.3 µs | -88% |
+| The client core opening a 2000-item thread from its frame | 96.4 ms, 4.06 MB | 83.0 ms, 2.17 MB | bytes -46%; the time is within the noise |
+| The real home's database | 1,125 MB | 418 MB | -63% |
+| Command latency, connecting, the shell snapshot, a cold render | | | within the noise |
+
+The data migration (format 1 to 2) on the copy of the real home: the backup
+copy 1.97 s, trimming the event log and compacting the file 2.65 s, 4.69 s
+in all; all 153,723 records decode before and after
+(`domovoi-server doctor --records`).
+
+Worse, and why it is kept:
+
+- `real.open` 0.50 ms → 0.85 ms: opening the database now reads its data
+  format too. A third of a millisecond, once per start.
+- `command.thread_visit.1000.p50` 52 µs → 80 µs and
+  `command.message_dispatch.1000.p50` 178 µs → 219 µs: the first is one of
+  the measures that jump between these two values (M0 measured 83 µs, M1
+  79 µs and then 52 µs); the same commands at 100 and 5000 items did not
+  move. Counted as noise.
+- `frames.largest_server_message` 49 µs → 65 µs: the recording changed again
+  (it now holds what a client is sent), and with it which message is the
+  largest. The other `frames.*` rows are smaller for the same reason and
+  are not a speed-up of the codec.
+
+Not measured: the thread bench (`thread.typed_*`) of the M2 build. Its
+start-up check counted the records of the old recording and stopped the
+bench; the check was corrected with M4, whose entry has those rows.
+
+What the codec measurements say, which decided M4: the recorded session is
+457 kB as JSON and 401 kB as MessagePack (12% less), 132 kB against 130 kB
+once compressed; MessagePack encodes faster (0.25 ms against 0.39 ms for the
+session) and decodes no faster (1.85 ms against 1.69 ms).
 
 ## History
 
@@ -75,7 +186,7 @@ are the reference numbers for the performance work; rerun the same commands
 after a change and compare.
 
 ```sh
-cargo bench -p effect-rpc --bench frames        # wire codec over a recorded session
+cargo bench -p domovoi-rpc --bench frames        # wire codec over a recorded session
 cargo bench -p domovoi-model --bench thread          # thread read model
 cargo bench -p domovoi_core --bench view             # view() + bincode, per render
 cargo test --release -p domovoi-server perf_ -- --ignored --nocapture --test-threads=1
@@ -708,7 +819,7 @@ writing a foreign format.
   `#![expect(..., reason = "...")]` whose format it reads: 31 modules of the
   server, 5 of the core (`rpc.rs`, `replies.rs`, `requests.rs`,
   `offline.rs`, and `present.rs` for fields the schema leaves open),
-  `domovoi-contracts`' bundled defaults, and three crates whole (`effect-rpc`,
+  `domovoi-contracts`' bundled defaults, and three crates whole (`domovoi-rpc`,
   the framing; `domovoi-model`, where JSON becomes records; `ws-tap`, a
   recorder). A reason that no longer holds fails the gate too
   (`unfulfilled_lint_expectations`). A `Value` added to

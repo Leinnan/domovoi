@@ -192,23 +192,16 @@ fn bridge_to(home: &Path) -> domovoi_remote::Bridge {
 }
 
 async fn connect(server: &Server) -> Ws {
-    connect_with_cookie(server).await.0
+    connect_with_session(server).await.0
 }
 
-/// The socket, and the session cookie it was opened with.
-async fn connect_with_cookie(server: &Server) -> (Ws, String) {
+/// The socket, and the `Authorization` header of the session it was opened with.
+async fn connect_with_session(server: &Server) -> (Ws, String) {
     let base = format!("http://127.0.0.1:{}", server.port);
-    let res = http_client()
-        .post(format!("{base}/api/auth/browser-session"))
-        .json(&json!({ "credential": server.pairing }))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(res.status(), 200);
-    let cookie = res.headers().get("set-cookie").unwrap().to_str().unwrap().split(';').next().unwrap().to_owned();
+    let session = sign_in(&base, &server.pairing).await;
     let mut req = format!("ws://127.0.0.1:{}/ws?protocol={PROTOCOL}", server.port).into_client_request().unwrap();
-    req.headers_mut().insert("cookie", cookie.parse().unwrap());
-    (tokio_tungstenite::connect_async(req).await.unwrap().0, cookie)
+    req.headers_mut().insert("authorization", session.parse().unwrap());
+    (tokio_tungstenite::connect_async(req).await.unwrap().0, session)
 }
 
 /// Sends a request; returns its first Chunk / Exit / Defect frame (streams are interrupted after one chunk).
@@ -863,7 +856,7 @@ struct GroupCase {
     save: std::collections::BTreeMap<String, String>,
     /// An HTTP request instead of a call: `GET /path` or `POST /path`, with `payload` as its JSON body.
     http: Option<String>,
-    /// For `http`: send no session cookie.
+    /// For `http`: present no session.
     anonymous: bool,
     /// The expected HTTP status.
     status: Option<u16>,
@@ -996,7 +989,7 @@ async fn group_cases(name: &str, group: Group, folder: &Path) -> (usize, usize, 
     ];
     env.extend(group.env.iter().map(|(key, value)| (key.clone(), value.replace("$DIR", &dir_text))));
     let server = start_env(&dir, Transport::Tcp, &env);
-    let (mut ws, cookie) = connect_with_cookie(&server).await;
+    let (mut ws, session) = connect_with_session(&server).await;
     let mut id = 0u64;
     let mut vars: Vec<(String, String)> = vec![
         ("$WORKSPACE".to_owned(), workspace.to_string_lossy().into_owned()),
@@ -1064,7 +1057,7 @@ async fn group_cases(name: &str, group: Group, folder: &Path) -> (usize, usize, 
             let url = format!("http://127.0.0.1:{}{}", server.port, path.as_str().unwrap());
             let mut req = http.request(method.parse().expect("an HTTP method"), &url);
             if !case.anonymous {
-                req = req.header("cookie", &cookie);
+                req = req.header("authorization", &session);
             }
             if !payload.is_null() {
                 req = req.json(&payload);
@@ -1142,4 +1135,20 @@ async fn group_cases(name: &str, group: Group, folder: &Path) -> (usize, usize, 
     assert!(problems.is_empty(), "{name}: {} of {} calls wrong:\n{}", problems.len(), group.cases.len(), problems.join("\n"));
     eprintln!("group {name}: {} answers ({failures} failures) of {} methods", answers.len(), methods.len());
     (answers.len(), failures, methods.len())
+}
+
+/// Exchanges a pairing code for a session; the `Authorization` header that presents it.
+async fn sign_in(base: &str, code: &str) -> String {
+    let res = try_sign_in(base, code).await;
+    assert_eq!(res.status(), 200);
+    let token: Value = res.json().await.unwrap();
+    format!("Bearer {}", token["access_token"].as_str().expect("an access token"))
+}
+
+/// The answer to a pairing code offered for a session.
+async fn try_sign_in(base: &str, code: &str) -> reqwest::Response {
+    let body = format!(
+        "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Atoken-exchange&subject_token={code}&subject_token_type=urn%3At3%3Aparams%3Aoauth%3Atoken-type%3Aenvironment-bootstrap&requested_token_type=urn%3Aietf%3Aparams%3Aoauth%3Atoken-type%3Aaccess_token"
+    );
+    http_client().post(format!("{base}/oauth/token")).header("content-type", "application/x-www-form-urlencoded").body(body).send().await.unwrap()
 }

@@ -216,10 +216,9 @@ async fn remote_devices_pair_and_stay_bound_to_their_key() {
         let text = String::from_utf8_lossy(&out.stdout).into_owned();
         text.lines().find_map(|l| l.split("#token=").nth(1)).unwrap().trim().to_owned()
     };
-    let res = http_client().post(format!("{local}/api/auth/browser-session")).json(&json!({ "credential": local_code })).send().await.unwrap();
-    let cookie = res.headers().get("set-cookie").unwrap().to_str().unwrap().split(';').next().unwrap().to_owned();
+    let session = sign_in(&local, &local_code).await;
     let mut req = format!("ws://127.0.0.1:{}/ws?protocol={PROTOCOL}", server.port).into_client_request().unwrap();
-    req.headers_mut().insert("cookie", cookie.parse().unwrap());
+    req.headers_mut().insert("authorization", session.parse().unwrap());
     let mut owner = tokio_tungstenite::connect_async(req).await.unwrap().0;
     let snapshot = loop {
         let v = rpc(&mut owner, "a", "subscribeAuthAccess").await.expect("access snapshot");
@@ -231,7 +230,7 @@ async fn remote_devices_pair_and_stay_bound_to_their_key() {
         .as_array()
         .unwrap()
         .iter()
-        .find(|c| c["method"] == "bearer-access-token" && c["connected"] == true)
+        .find(|c| c["client"]["label"] == "Test Phone" && c["connected"] == true)
         .expect("the phone is listed as connected")
         .clone();
     assert_eq!(phone_entry["client"]["label"], "Test Phone");
@@ -240,7 +239,7 @@ async fn remote_devices_pair_and_stay_bound_to_their_key() {
 
     let revoked: Value = http_client()
         .post(format!("{local}/api/auth/clients/revoke"))
-        .header("cookie", &cookie)
+        .header("authorization", &session)
         .json(&json!({ "sessionId": phone_entry["sessionId"] }))
         .send()
         .await
@@ -281,18 +280,11 @@ fn cli(server: &Server, args: &[&str]) -> String {
     String::from_utf8_lossy(&out.stdout).into_owned()
 }
 
-/// A local browser session (the machine's owner): its cookie.
-async fn owner_cookie(server: &Server) -> String {
+/// A session made on the machine itself (its owner's): the `Authorization` header that presents it.
+async fn owner_session(server: &Server) -> String {
     let text = cli(server, &["pair"]);
     let code = text.lines().find_map(|l| l.split("#token=").nth(1)).unwrap().trim().to_owned();
-    let res = http_client()
-        .post(format!("http://127.0.0.1:{}/api/auth/browser-session", server.port))
-        .json(&json!({ "credential": code }))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(res.status(), 200);
-    res.headers().get("set-cookie").unwrap().to_str().unwrap().split(';').next().unwrap().to_owned()
+    sign_in(&format!("http://127.0.0.1:{}", server.port), &code).await
 }
 
 async fn paired(ticket: &str, code: &str) -> (Bridge, String, String) {
@@ -308,7 +300,7 @@ async fn paired(ticket: &str, code: &str) -> (Bridge, String, String) {
 async fn a_remote_device_cannot_cut_remote_access_or_gain_permissions() {
     let server = start_as("guard");
     let local = format!("http://127.0.0.1:{}", server.port);
-    let cookie = owner_cookie(&server).await;
+    let owner_auth = owner_session(&server).await;
     // A phone that may manage access and read threads, nothing more.
     let granted = ["access:read", "access:write", "orchestration:read"];
     let (ticket, code) = parse_link(&pair_link_with(&server.home, server.port, &granted));
@@ -339,18 +331,18 @@ async fn a_remote_device_cannot_cut_remote_access_or_gain_permissions() {
     assert_eq!(post("/api/domovoi/remote/pairing", json!({ "permissions": ["orchestration:read"] })).await.unwrap().status(), 200);
 
     // A remote device signs out other remote devices, never the machine's own sessions.
-    let status: Value = http_client().get(format!("{local}/api/domovoi/remote")).header("cookie", &cookie).send().await.unwrap().json().await.unwrap();
+    let status: Value = http_client().get(format!("{local}/api/domovoi/remote")).header("authorization", &owner_auth).send().await.unwrap().json().await.unwrap();
     let devices = status["devices"].as_array().unwrap();
     let owner_id = devices.iter().find(|d| d["remote"] == false).expect("the owner's session")["id"].clone();
     assert_eq!(post("/api/auth/clients/revoke", json!({ "sessionId": owner_id })).await.unwrap().status(), 403);
     let others: Value = post("/api/auth/clients/revoke-others", json!({})).await.unwrap().json().await.unwrap();
     assert_eq!(others["revokedCount"], 1, "only the tablet");
     assert_eq!(http_client().get(format!("{tablet_base}/api/orchestration/shell")).bearer_auth(&tablet_token).send().await.unwrap().status(), 401);
-    let owner: Value = http_client().get(format!("{local}/api/auth/session")).header("cookie", &cookie).send().await.unwrap().json().await.unwrap();
+    let owner: Value = http_client().get(format!("{local}/api/auth/session")).header("authorization", &owner_auth).send().await.unwrap().json().await.unwrap();
     assert_eq!(owner["authenticated"], true, "the owner stays signed in");
 
     // The owner changes it locally; a failed start does not leak why.
-    let res = http_client().post(format!("{local}/api/domovoi/remote/configure")).header("cookie", &cookie).json(&json!({ "enabled": true, "relays": ["not a url"] })).send().await.unwrap();
+    let res = http_client().post(format!("{local}/api/domovoi/remote/configure")).header("authorization", &owner_auth).json(&json!({ "enabled": true, "relays": ["not a url"] })).send().await.unwrap();
     assert_eq!(res.status(), 400);
     assert!(res.json::<Value>().await.unwrap()["message"].as_str().unwrap().contains("relay not a url"));
 
@@ -686,7 +678,9 @@ async fn requests_under_a_name_that_is_not_the_servers_are_refused() {
     assert_eq!(exchange(&base, &server.startup_code).await.status(), 200);
     drop(server);
 
-    // A proxy's name, and a web client served from elsewhere, are named at start.
+    // A proxy's name is named at start. `--web-url` named the web client's
+    // origin: it is still read (a service installed with it must start) and
+    // allows nothing.
     let server = start_with("host-allowed", &["--allowed-host", "domovoi.example.com", "--allowed-host", ".corp.example", "--web-url", "https://app.example.com"]);
     let base = format!("http://127.0.0.1:{}", server.port);
     let get = |host: &'static str| {
@@ -695,9 +689,10 @@ async fn requests_under_a_name_that_is_not_the_servers_are_refused() {
     };
     assert_eq!(get("domovoi.example.com").await, 200);
     assert_eq!(get("a.corp.example:8443").await, 200);
-    assert_eq!(get("app.example.com").await, 200, "the web client's host");
+    assert_eq!(get("app.example.com").await, 403, "what `--web-url` names");
     assert_eq!(get("evil.example").await, 403);
-    assert_eq!(exchange_as(&base, "WRONGCODE000", Some("domovoi.example.com"), Some("https://app.example.com")).await.status(), 401);
+    assert_eq!(exchange_as(&base, "WRONGCODE000", Some("domovoi.example.com"), Some("https://domovoi.example.com")).await.status(), 401, "the server's own origin");
+    assert_eq!(exchange_as(&base, "WRONGCODE000", Some("domovoi.example.com"), Some("https://app.example.com")).await.status(), 403);
     assert_eq!(exchange_as(&base, "WRONGCODE000", Some("domovoi.example.com"), Some("https://evil.example")).await.status(), 403);
 }
 
@@ -736,19 +731,32 @@ async fn wrong_codes_over_tcp_are_limited_and_the_owner_still_pairs() {
     let res = exchange(&base, "WRONGCODE999").await;
     assert_eq!(res.status(), 429);
     assert_eq!(res.headers()["retry-after"], "60");
-    // The browser's route shares the budget.
-    let res = http_client().post(format!("{base}/api/auth/browser-session")).json(&json!({ "credential": "WRONGCODE998" })).send().await.unwrap();
-    assert_eq!(res.status(), 429);
 
     // Whoever holds a real code is not locked out by the guessing: the
     // command line, a new code from `pair`, and the code printed at start.
     let status = cli(&server, &["remote", "status"]);
     assert!(status.contains("Server: running"), "{status}");
-    let cookie = owner_cookie(&server).await;
-    assert_eq!(http_client().get(format!("{base}/api/domovoi/remote")).header("cookie", cookie).send().await.unwrap().status(), 200);
+    let session = owner_session(&server).await;
+    assert_eq!(http_client().get(format!("{base}/api/domovoi/remote")).header("authorization", session).send().await.unwrap().status(), 200);
     assert_eq!(exchange(&base, &server.startup_code).await.status(), 200);
     assert_eq!(exchange(&base, &server.startup_code).await.status(), 429, "used: one more wrong code");
     // Signed-in clients never notice.
     let (id, _) = local_request(&server.home, "a");
     assert_eq!(local_sign_in(&base, &id).await.status(), 200);
+}
+
+/// Exchanges a pairing code for a session; the `Authorization` header that presents it.
+async fn sign_in(base: &str, code: &str) -> String {
+    let res = try_sign_in(base, code).await;
+    assert_eq!(res.status(), 200);
+    let token: Value = res.json().await.unwrap();
+    format!("Bearer {}", token["access_token"].as_str().expect("an access token"))
+}
+
+/// The answer to a pairing code offered for a session.
+async fn try_sign_in(base: &str, code: &str) -> reqwest::Response {
+    let body = format!(
+        "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Atoken-exchange&subject_token={code}&subject_token_type=urn%3At3%3Aparams%3Aoauth%3Atoken-type%3Aenvironment-bootstrap&requested_token_type=urn%3Aietf%3Aparams%3Aoauth%3Atoken-type%3Aaccess_token"
+    );
+    http_client().post(format!("{base}/oauth/token")).header("content-type", "application/x-www-form-urlencoded").body(body).send().await.unwrap()
 }

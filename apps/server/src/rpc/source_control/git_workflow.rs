@@ -22,7 +22,7 @@ use crate::gh;
 use crate::state::{AppState, ConnCtx};
 use crate::text_gen::TextGenerationError;
 use crate::vcs_ops::GitCommandError;
-use effect_rpc::Router;
+use domovoi_rpc::Router;
 use futures::StreamExt;
 use futures::stream::BoxStream;
 use serde::{Deserialize, Serialize};

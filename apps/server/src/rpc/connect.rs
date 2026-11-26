@@ -7,7 +7,7 @@
 
 use super::admin_failure::{Cause, Failure, SecretRequestReason};
 use crate::state::{AppState, ConnCtx};
-use effect_rpc::Router;
+use domovoi_rpc::Router;
 use serde::de::IgnoredAny;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;

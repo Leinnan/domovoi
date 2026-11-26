@@ -2366,6 +2366,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "domovoi-rpc"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "base64 0.23.1",
+ "divan",
+ "flate2",
+ "futures",
+ "rmp-serde",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "zstd",
+]
+
+[[package]]
 name = "domovoi-server"
 version = "0.1.0"
 dependencies = [
@@ -2381,7 +2399,7 @@ dependencies = [
  "domovoi-local",
  "domovoi-model",
  "domovoi-remote",
- "effect-rpc",
+ "domovoi-rpc",
  "flate2",
  "futures",
  "getrandom 0.4.3",
@@ -2484,7 +2502,7 @@ dependencies = [
  "domovoi-local",
  "domovoi-model",
  "domovoi-remote",
- "effect-rpc",
+ "domovoi-rpc",
  "facet",
  "percent-encoding",
  "pulldown-cmark",
@@ -2596,22 +2614,6 @@ dependencies = [
  "signature",
  "subtle",
  "zeroize",
-]
-
-[[package]]
-name = "effect-rpc"
-version = "0.1.0"
-dependencies = [
- "axum",
- "divan",
- "futures",
- "rmp-serde",
- "serde",
- "serde_json",
- "tokio",
- "tokio-util",
- "tracing",
- "zstd",
 ]
 
 [[package]]

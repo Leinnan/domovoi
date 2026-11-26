@@ -15,14 +15,6 @@
    "anonymous": true
   },
   {
-   "http": "POST /api/auth/browser-session",
-   "payload": {
-    "credential": "not-a-code"
-   },
-   "status": 401,
-   "anonymous": true
-  },
-  {
    "http": "POST /api/auth/websocket-ticket",
    "status": 401,
    "anonymous": true

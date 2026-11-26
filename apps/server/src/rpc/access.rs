@@ -17,7 +17,7 @@
 use crate::auth::ClientMeta;
 use crate::config_failure::Failure;
 use crate::state::{AppState, ConnCtx};
-use effect_rpc::Router;
+use domovoi_rpc::Router;
 use futures::StreamExt;
 use futures::stream::BoxStream;
 use rusqlite::params;
@@ -216,7 +216,7 @@ mod tests {
             subject: "one-time-token".into(),
             scopes: scopes(r#"["orchestration:read"]"#),
             permissions: Some(scopes(r#"["orchestration:read", "terminal:read"]"#).into()),
-            method: "browser-session-cookie".into(),
+            method: "bearer-access-token".into(),
             client: AuthClientMetadata { label: None, ip_address: None, user_agent: None, device_type: AuthClientDeviceType::Unknown, os: None, browser: None },
             issued_at: "1".into(),
             expires_at: "9".into(),
@@ -251,7 +251,7 @@ mod tests {
             events[2],
             json!({ "version": 1, "revision": 4, "type": "clientUpserted", "payload": {
                 "sessionId": "s2", "subject": "one-time-token", "scopes": ["orchestration:read"], "permissions": ["orchestration:read", "terminal:read"],
-                "method": "browser-session-cookie", "client": { "deviceType": "unknown" }, "issuedAt": "1", "expiresAt": "9",
+                "method": "bearer-access-token", "client": { "deviceType": "unknown" }, "issuedAt": "1", "expiresAt": "9",
                 "lastConnectedAt": null, "connected": false, "current": false } })
         );
         assert_eq!(json!(Change::ClientRemoved("s1".into()).event(5)), json!({ "version": 1, "revision": 5, "type": "clientRemoved", "payload": { "sessionId": "s1" } }));

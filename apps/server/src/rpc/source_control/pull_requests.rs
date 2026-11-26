@@ -45,7 +45,7 @@ use crate::gh::lenient::{Fields, Loose, Rows, Scalar, rows};
 use crate::gh::{self, GhError, Var};
 use crate::rpc::Never;
 use crate::state::{AppState, ConnCtx};
-use effect_rpc::Router;
+use domovoi_rpc::Router;
 use futures::StreamExt;
 use futures::stream::BoxStream;
 use serde::de::{DeserializeOwned, IgnoredAny};

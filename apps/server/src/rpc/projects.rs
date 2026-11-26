@@ -8,7 +8,7 @@ use super::shell::{RecordOrNot, text_or_empty, those_that_fit};
 use crate::attachments::{self, PersistRequest, UploadRequest};
 use crate::state::ConnCtx;
 use crate::workspace::{self, ContentQuery, EntriesError, EntryMetadata, FileFailure};
-use effect_rpc::Router;
+use domovoi_rpc::Router;
 use serde::de::IgnoredAny;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;

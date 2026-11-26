@@ -19,7 +19,7 @@
 use super::Never;
 use super::admin_failure::{Failure, InvalidUrlReason, UrlCause};
 use crate::state::ConnCtx;
-use effect_rpc::Router;
+use domovoi_rpc::Router;
 use futures::StreamExt;
 use futures::stream::BoxStream;
 use serde::de::IgnoredAny;

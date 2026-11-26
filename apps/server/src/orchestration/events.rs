@@ -157,7 +157,7 @@ impl Written {
         let sequence =
             crate::store::insert_event(tx, "thread", thread_id, &event_type, &self.text, self.event.occurred_at.as_str(), self.command_id.as_deref())?;
         project(tx, thread_id, &self.event, self.record(), sequence as i64)?;
-        Ok(StoredEvent { sequence, aggregate_kind: "thread".into(), aggregate_id: thread_id.to_owned(), event_type, thread_event: Some(self.event), grew_from: self.grew_from })
+        Ok(StoredEvent { sequence, aggregate_kind: "thread".into(), aggregate_id: thread_id.to_owned(), event_type, thread_event: Some(self.event), grew_from: self.grew_from, sent: Default::default() })
     }
 }
 
@@ -252,6 +252,7 @@ fn thread_events_on(c: &rusqlite::Connection, thread_id: &str, after: i64, throu
             event_type,
             thread_event: Some(event),
             grew_from: None,
+            sent: Default::default(),
         });
     }
     Ok(events)

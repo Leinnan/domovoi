@@ -19,7 +19,7 @@ use domovoi_model::typed::{
     IssueTrackerBindProjectInput, IssueTrackerConnectInput, IssueTrackerConnection, IssueTrackerConnectionList, IssueTrackerProjectBinding,
     StandaloneIssueTrackerDescriptor,
 };
-use effect_rpc::Router;
+use domovoi_rpc::Router;
 use rusqlite::params;
 use serde::Serialize;
 use serde::de::IgnoredAny;

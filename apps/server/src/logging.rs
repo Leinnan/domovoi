@@ -23,7 +23,7 @@ impl Drop for Guard {
 /// above of Domovoi's own crates, whatever `RUST_LOG` says (t3code's
 /// `T3CODE_TRACE_MIN_LEVEL` defaults to `Info`).
 fn trace_filter() -> tracing_subscriber::filter::Targets {
-    tracing_subscriber::filter::Targets::new().with_target("domovoi_server", tracing::Level::INFO).with_target("effect_rpc", tracing::Level::INFO)
+    tracing_subscriber::filter::Targets::new().with_target("domovoi_server", tracing::Level::INFO).with_target("domovoi_rpc", tracing::Level::INFO)
 }
 
 fn filter() -> EnvFilter {

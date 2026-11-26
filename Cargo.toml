@@ -11,13 +11,13 @@ license = "MIT"
 axum = { version = "0.8.9", features = ["ws"] }
 futures = "0.3.34"
 serde = { version = "1.0.229", features = ["derive", "rc"] }
-serde_json = { version = "1.0.154", features = ["preserve_order"] }
+serde_json = { version = "1.0.154", features = ["preserve_order", "raw_value"] }
 thiserror = "2.0.21"
 tokio = { version = "1.54.1", features = ["full"] }
 tokio-util = { version = "0.7.20", features = ["rt"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
-effect-rpc = { path = "crates/effect-rpc" }
+domovoi-rpc = { path = "crates/domovoi-rpc" }
 # Benchmarks (`cargo bench`), driven by the recorded sessions in fixtures/golden.
 divan = "0.1.21"
 # The WinUI 3 shell (`apps/domovoi-windows`): the fork lwa_fm builds on, one

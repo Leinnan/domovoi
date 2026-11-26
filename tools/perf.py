@@ -51,7 +51,7 @@ BUILD = ROOT / ".reference" / "perf-build"
 BENCH_ARGS = ["--bench"]
 PERF_TEST_ARGS = ["perf_", "--ignored", "--nocapture", "--test-threads=1"]
 BUILDS = [
-    ("bench", "bench-frames", ["bench", "--no-run", "-p", "effect-rpc", "--bench", "frames"], ("frames", "bench"), BENCH_ARGS),
+    ("bench", "bench-frames", ["bench", "--no-run", "-p", "domovoi-rpc", "--bench", "frames"], ("frames", "bench"), BENCH_ARGS),
     ("bench", "bench-thread", ["bench", "--no-run", "-p", "domovoi-model", "--bench", "thread"], ("thread", "bench"), BENCH_ARGS),
     ("bench", "bench-view", ["bench", "--no-run", "-p", "domovoi_core", "--bench", "view"], ("view", "bench"), BENCH_ARGS),
     ("store", "server-unit", ["test", "--release", "--no-run", "-p", "domovoi-server", "--bin", "domovoi-server"], ("domovoi-server", "bin-test"), PERF_TEST_ARGS),

@@ -11,7 +11,7 @@
 
 #![expect(clippy::disallowed_types, clippy::disallowed_macros, reason = "the MCP route: a JSON-RPC body and its parse-error answer")]
 
-use crate::auth::{AuthError, ClientMeta, METHOD_BEARER, NewSession, Session, TcpAttempt, origin_matches_host};
+use crate::auth::{AuthError, ClientMeta, NewSession, Session, TcpAttempt};
 use crate::control;
 use crate::rpc;
 use crate::state::{ConnCtx, SharedState};
@@ -21,12 +21,12 @@ use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use effect_rpc::{ConnectionOptions, Router as RpcRouter, axum_ws::serve_websocket_until};
+use domovoi_rpc::{ConnectionOptions, Router as RpcRouter, axum_ws::serve_websocket_until};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
-use domovoi_contracts::auth::{AuthInvalidError, BrowserSessionRequest, BrowserSessionResponse};
+use domovoi_contracts::auth::AuthInvalidError;
 use domovoi_model::typed::{
     AuthAccessTokenResult, AuthTokenType, AuthWebSocketTicketResult, HostNotAllowedRejection, InternalRejection, LocalSessionRequest, LocalSessionResult,
     OperationForbiddenRejection, RateLimitedRejection, RemoteAccessRejection, RequestInvalidRejection, RequestRejection, ScopeRequiredRejection,
@@ -53,7 +53,7 @@ fn tcp_address(tcp: &Tcp) -> Option<IpAddr> {
 }
 
 /// Routes an iroh peer without a session may use: discovery and pairing.
-const PAIRING_ROUTES: &[&str] = &["/.well-known/t3/environment", "/api/auth/session", "/api/auth/browser-session", "/oauth/token"];
+const PAIRING_ROUTES: &[&str] = &["/.well-known/t3/environment", "/api/auth/session", "/oauth/token"];
 
 fn rpc_router() -> Arc<RpcRouter<ConnCtx>> {
     static ROUTER: OnceLock<Arc<RpcRouter<ConnCtx>>> = OnceLock::new();
@@ -66,7 +66,6 @@ pub fn router(state: SharedState) -> Router {
         .route("/ready", get(ready))
         .route("/.well-known/t3/environment", get(environment))
         .route("/api/auth/session", get(auth_session))
-        .route("/api/auth/browser-session", post(browser_session))
         .route("/oauth/token", post(token_exchange))
         .route("/api/auth/websocket-ticket", post(ws_ticket))
         .route("/api/auth/websocket-ticket/{use}", post(ws_ticket))
@@ -115,8 +114,7 @@ pub fn router(state: SharedState) -> Router {
 /// only this machine's own name counts).
 const LOCAL_SUFFIXES: &[&str] = &[".localhost", ".ts.net", ".lan", ".internal", ".home.arpa"];
 
-/// The names this server answers to over plain TCP, and the web origins that
-/// may send it requests.
+/// The names this server answers to over plain TCP.
 ///
 /// A web page can reach a loopback server through a DNS name of its own that
 /// it points at 127.0.0.1 (DNS rebinding); the browser then treats the server
@@ -127,15 +125,13 @@ pub struct HostRules {
     exact: std::collections::HashSet<String>,
     suffixes: Vec<String>,
     any: bool,
-    /// `--web-url`'s origin: the web client's, when it is not served under the server's own name.
-    origins: Vec<String>,
 }
 
 impl HostRules {
     /// `names` are hosts or URLs the server is known by (`--host`, this
-    /// machine's names, `--web-url`, `--hooks-url`); `allowed` is
+    /// machine's names, `--hooks-url`); `allowed` is
     /// `--allowed-host`: a name, `.suffix` for every name under one, or `*`.
-    pub fn new<'a>(names: impl IntoIterator<Item = &'a str>, allowed: &[String], web_url: Option<&str>) -> Self {
+    pub fn new<'a>(names: impl IntoIterator<Item = &'a str>, allowed: &[String]) -> Self {
         let mut rules = HostRules::default();
         for name in names {
             let host = match url::Url::parse(name) {
@@ -151,7 +147,6 @@ impl HostRules {
                 name => rules.add(name),
             }
         }
-        rules.origins.extend(web_url.and_then(origin_of));
         rules
     }
 
@@ -173,14 +168,14 @@ impl HostRules {
         LOCAL_SUFFIXES.iter().any(|suffix| host.ends_with(suffix)) || self.exact.contains(&host) || self.suffixes.iter().any(|suffix| host.ends_with(suffix.as_str()))
     }
 
-    /// Whether a page of `origin` may send a request that changes something
-    /// to the server addressed as `host`: the server's own pages, and the
-    /// web client's.
-    fn allows_origin(&self, origin: &str, host: &str) -> bool {
-        let origin = origin.trim().trim_end_matches('/').to_ascii_lowercase();
-        let own = origin.split_once("://").is_some_and(|(scheme, rest)| matches!(scheme, "http" | "https") && rest == host.trim().to_ascii_lowercase());
-        own || self.origins.contains(&origin)
-    }
+}
+
+/// Whether a page of `origin` may send a request that changes something to
+/// the server addressed as `host`: only the server's own pages (a preview
+/// it serves) may.
+fn own_origin(origin: &str, host: &str) -> bool {
+    let origin = origin.trim().trim_end_matches('/').to_ascii_lowercase();
+    origin.split_once("://").is_some_and(|(scheme, rest)| matches!(scheme, "http" | "https") && rest == host.trim().to_ascii_lowercase())
 }
 
 /// A `Host` value without its port and trailing dot, in lower case; an IPv6
@@ -195,12 +190,6 @@ fn host_name(host: &str) -> String {
         },
     };
     name.trim_end_matches('.').to_ascii_lowercase()
-}
-
-/// `scheme://host[:port]` of a URL, in lower case.
-fn origin_of(url: &str) -> Option<String> {
-    let origin = url::Url::parse(url.trim()).ok()?.origin();
-    origin.is_tuple().then(|| origin.ascii_serialization().to_ascii_lowercase())
 }
 
 /// The names this machine goes by: its host name as the system gives it,
@@ -252,18 +241,15 @@ async fn guard_host(State(state): State<SharedState>, request: Request, next: Ne
             format!("This server does not answer to the name \"{name}\". If you reach it by that name (a reverse proxy, a DNS name of your own), start it with --allowed-host {name}."),
         );
     }
-    // `/mcp` is the agents' own route: it takes no cookie, only a token the
-    // server handed its child process, so a page has nothing to ride on, and
-    // an agent CLI that names an origin of its own must not lose its tools.
+    // `/mcp` is the agents' own route: it takes only a token the server
+    // handed its child process, and an agent CLI that names an origin of its
+    // own must not lose its tools.
     let safe = matches!(*request.method(), axum::http::Method::GET | axum::http::Method::HEAD) || path == "/mcp";
     if !safe && let Some(origin) = request.headers().get(header::ORIGIN) {
         let origin = shown(origin);
-        if !state.hosts.allows_origin(&origin, &host) {
+        if !own_origin(&origin, &host) {
             tracing::warn!(%origin, "refused a request from a page of another origin");
-            return host_not_allowed(
-                &origin,
-                format!("A page of {origin} may not send requests to this server. If that is its web client, start the server with --web-url {origin}."),
-            );
+            return host_not_allowed(&origin, format!("A page of {origin} may not send requests to this server."));
         }
     }
     next.run(request).await
@@ -451,11 +437,7 @@ fn require_permission(state: &SharedState, headers: &HeaderMap, peer: &Peer, per
 fn require_session(state: &SharedState, headers: &HeaderMap, peer: &Peer) -> Result<Session, Response> {
     match state.auth.authenticate(headers, peer_id(peer).as_deref()) {
         Ok(Some(s)) => Ok(s),
-        Ok(None) => Err(unauthorized(if crate::auth::bearer_token(headers).is_some() || crate::auth::cookie_value(headers, state.auth.cookie_name()).is_some() {
-            "invalid_credential"
-        } else {
-            "missing_credential"
-        })),
+        Ok(None) => Err(unauthorized(if crate::auth::bearer_token(headers).is_some() { "invalid_credential" } else { "missing_credential" })),
         Err(e) => Err(internal(e)),
     }
 }
@@ -630,18 +612,7 @@ async fn environment(State(state): State<SharedState>) -> impl IntoResponse {
 
 async fn auth_session(State(state): State<SharedState>, headers: HeaderMap, peer: Peer) -> Response {
     match state.auth.authenticate(&headers, peer_id(&peer).as_deref()) {
-        Ok(session) => {
-            let mut res = Json(state.auth.session_state(session.as_ref())).into_response();
-            // Sessions renew while in use; a browser's cookie follows along.
-            if let Some(session) = &session
-                && crate::auth::bearer_token(&headers).is_none()
-                && let Some(token) = crate::auth::cookie_value(&headers, state.auth.cookie_name())
-                && let Ok(cookie) = HeaderValue::from_str(&state.auth.session_cookie(&token, session))
-            {
-                res.headers_mut().insert(header::SET_COOKIE, cookie);
-            }
-            res
-        }
+        Ok(session) => Json(state.auth.session_state(session.as_ref())).into_response(),
         Err(e) => internal(e),
     }
 }
@@ -666,32 +637,6 @@ fn paired(state: &SharedState, tcp: &Tcp, attempt: Option<TcpAttempt>) {
         state.auth.tcp_pairing_succeeded(tcp_address(tcp));
     }
     state.pulse.notify_one();
-}
-
-async fn browser_session(State(state): State<SharedState>, peer: Peer, tcp: Tcp, Json(body): Json<BrowserSessionRequest>) -> Response {
-    let attempt = match begin_pairing(&state, &peer, &tcp, &body.credential) {
-        Ok(attempt) => attempt,
-        Err(refused) => return refused,
-    };
-    match state.auth.create_session(&body.credential, NewSession::cookie(peer_id(&peer))) {
-        Ok((token, session)) => {
-            paired(&state, &tcp, attempt);
-            let cookie = state.auth.session_cookie(&token, &session);
-            let mut res = Json(BrowserSessionResponse {
-                authenticated: true,
-                scopes: session.scopes,
-                permissions: session.permissions,
-                session_method: "browser-session-cookie".into(),
-                expires_at: session.expires_at,
-            })
-            .into_response();
-            res.headers_mut().insert(header::SET_COOKIE, HeaderValue::from_str(&cookie).expect("the cookie is a token and ASCII attributes"));
-            res.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-            res
-        }
-        Err(AuthError::InvalidCredential | AuthError::InvalidScope) => unauthorized("invalid_credential"),
-        Err(e) => internal(e),
-    }
 }
 
 const GRANT_TOKEN_EXCHANGE: &str = "urn:ietf:params:oauth:grant-type:token-exchange";
@@ -724,7 +669,6 @@ async fn token_exchange(State(state): State<SharedState>, peer: Peer, tcp: Tcp, 
     };
     let trimmed = |v: Option<String>| v.map(|s| s.trim().to_owned()).filter(|s| !s.is_empty());
     let new = NewSession {
-        method: METHOD_BEARER,
         client: ClientMeta { label: trimmed(body.client_label), device_type: trimmed(body.client_device_type), os: trimmed(body.client_os) },
         peer: peer_id(&peer),
         scope,
@@ -779,7 +723,6 @@ async fn local_session(State(state): State<SharedState>, headers: HeaderMap, pee
     };
     let trimmed = |v: Option<String>| v.map(|s| s.trim().to_owned()).filter(|s| !s.is_empty());
     let new = NewSession {
-        method: METHOD_BEARER,
         client: ClientMeta { label: trimmed(body.client_label), device_type: trimmed(body.client_device_type), os: trimmed(body.client_os) },
         peer: None,
         scope: None,
@@ -1136,23 +1079,17 @@ async fn ws(
         Err(rejection) => return rejection.into_response(),
     };
     let session = match q.get("wsTicket") {
-        // A ticket was minted over authenticated HTTP; no cookie is involved,
-        // so there is no cross-site risk to guard against.
+        // A ticket was minted over authenticated HTTP.
         Some(ticket) => match state.auth.redeem_ws_ticket(ticket, peer_id(&peer).as_deref()) {
             Ok(Some(s)) => s,
             Ok(None) => return unauthorized("invalid_credential"),
             Err(e) => return internal(e),
         },
-        None => {
-            let session = match require_session(&state, &headers, &peer) {
-                Ok(s) => s,
-                Err(r) => return r,
-            };
-            if !origin_matches_host(&headers) {
-                return unauthorized("origin_mismatch");
-            }
-            session
-        }
+        // Or the session's token is on the upgrade itself, which no web page can put there.
+        None => match require_session(&state, &headers, &peer) {
+            Ok(s) => s,
+            Err(r) => return r,
+        },
     };
     // A signed-in client of another protocol version gets a socket that only
     // says which side to update: an app from before the versions were
@@ -1164,6 +1101,8 @@ async fn ws(
         // A client that vanished (no Close frame) is closed within about 40 s,
         // so it stops counting as an open app (pushes go to it again).
         heartbeat: Some(heartbeat_interval()),
+        // A client that reads packed frames says so.
+        pack: q.contains_key("pack"),
         ..Default::default()
     };
     let live = state.connections.open(&session.token_hash);
@@ -1212,7 +1151,7 @@ fn update_advice(query: &HashMap<String, String>) -> Option<&'static str> {
 /// socket stays open so the app does not keep reconnecting to be told again.
 async fn tell_to_update(mut socket: axum::extract::ws::WebSocket, advice: &'static str) {
     use axum::extract::ws::Message;
-    let frame = effect_rpc::message::encode_server_message(&effect_rpc::message::FromServer::Defect { defect: advice.into() });
+    let frame = domovoi_rpc::message::encode_server_message(&domovoi_rpc::message::FromServer::Defect { defect: advice.into() });
     if socket.send(Message::Text(frame.clone().into())).await.is_err() {
         return;
     }
@@ -1233,13 +1172,13 @@ async fn tell_to_update(mut socket: axum::extract::ws::WebSocket, advice: &'stat
 mod tests {
     use super::*;
 
-    fn rules(names: &[&str], allowed: &[&str], web_url: Option<&str>) -> HostRules {
-        HostRules::new(names.iter().copied(), &allowed.iter().map(|s| s.to_string()).collect::<Vec<_>>(), web_url)
+    fn rules(names: &[&str], allowed: &[&str]) -> HostRules {
+        HostRules::new(names.iter().copied(), &allowed.iter().map(|s| s.to_string()).collect::<Vec<_>>())
     }
 
     #[test]
     fn the_server_answers_to_its_own_names_and_no_page_s() {
-        let plain = rules(&["127.0.0.1", "studio", "studio.local", "https://hooks.example.com/x"], &[], None);
+        let plain = rules(&["127.0.0.1", "studio", "studio.local", "https://hooks.example.com/x"], &[]);
         for ok in [
             "", "localhost", "localhost:13773", "LOCALHOST:13773", "localhost.", "app.localhost:1", "127.0.0.1:13773", "192.168.1.5", "[::1]:13773", "[fd00::5]",
             "box.tail1234.ts.net:13773", "nas.lan", "db.internal:80", "pi.home.arpa", "studio:13773", "Studio.local:13773", "hooks.example.com",
@@ -1250,25 +1189,23 @@ mod tests {
             assert!(!plain.allows(bad), "{bad}");
         }
 
-        let listed = rules(&["0.0.0.0"], &["domovoi.example.com", ".corp.example", " Other.Example "], None);
+        let listed = rules(&["0.0.0.0"], &["domovoi.example.com", ".corp.example", " Other.Example "]);
         for ok in ["domovoi.example.com", "domovoi.example.com:443", "a.corp.example", "a.b.corp.example:8443", "other.example"] {
             assert!(listed.allows(ok), "{ok}");
         }
         for bad in ["example.com", "x.domovoi.example.com", "corp.example", "evilcorp.example", "notother.example"] {
             assert!(!listed.allows(bad), "{bad}");
         }
-        assert!(rules(&[], &["*"], None).allows("anything.example"));
+        assert!(rules(&[], &["*"]).allows("anything.example"));
     }
 
     #[test]
     fn a_page_of_another_origin_may_not_post() {
-        let rules = rules(&["127.0.0.1"], &[], Some("https://App.Example.com/pair"));
-        assert!(rules.allows_origin("http://localhost:13773", "localhost:13773"));
-        assert!(rules.allows_origin("http://LOCALHOST:13773/", "localhost:13773"));
-        assert!(rules.allows_origin("https://domovoi.lan", "domovoi.lan"), "behind TLS the scheme differs");
-        assert!(rules.allows_origin("https://app.example.com", "localhost:13773"), "the web client");
-        for bad in ["http://evil.example", "http://localhost:5733", "null", "", "https://app.example.com.evil.example", "http://app.example.com", "file://localhost:13773"] {
-            assert!(!rules.allows_origin(bad, "localhost:13773"), "{bad}");
+        assert!(own_origin("http://localhost:13773", "localhost:13773"));
+        assert!(own_origin("http://LOCALHOST:13773/", "localhost:13773"));
+        assert!(own_origin("https://domovoi.lan", "domovoi.lan"), "behind TLS the scheme differs");
+        for bad in ["http://evil.example", "http://localhost:5733", "null", "", "https://app.example.com", "http://localhost:13773.evil.example", "file://localhost:13773"] {
+            assert!(!own_origin(bad, "localhost:13773"), "{bad}");
         }
     }
 
@@ -1279,8 +1216,5 @@ mod tests {
         assert_eq!(host_name("[::1]"), "::1");
         assert_eq!(host_name(" localhost "), "localhost");
         assert_eq!(host_name("name:notaport"), "name:notaport");
-        assert_eq!(origin_of("http://localhost:5733/pair#token=x").as_deref(), Some("http://localhost:5733"));
-        assert_eq!(origin_of("https://Example.com:443/").as_deref(), Some("https://example.com"));
-        assert_eq!(origin_of("not a url"), None);
     }
 }

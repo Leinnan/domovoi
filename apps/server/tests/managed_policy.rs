@@ -88,11 +88,9 @@ struct Rpc {
 impl Rpc {
     async fn open(server: &Server) -> Rpc {
         let base = format!("http://127.0.0.1:{}", server.port);
-        let res = http_client().post(format!("{base}/api/auth/browser-session")).json(&json!({ "credential": server.startup_code })).send().await.unwrap();
-        assert_eq!(res.status(), 200);
-        let cookie = res.headers().get("set-cookie").unwrap().to_str().unwrap().split(';').next().unwrap().to_owned();
+        let session = sign_in(&base, &server.startup_code).await;
         let mut req = format!("ws://127.0.0.1:{}/ws?protocol={PROTOCOL}", server.port).into_client_request().unwrap();
-        req.headers_mut().insert("cookie", cookie.parse().unwrap());
+        req.headers_mut().insert("authorization", session.parse().unwrap());
         Rpc { ws: tokio_tungstenite::connect_async(req).await.unwrap().0, id: 0 }
     }
 
@@ -249,4 +247,20 @@ fn a_policy_without_remote_clients_refuses_to_listen_beyond_this_machine() {
     let (code, err) = run_to_exit("remote", &fixture("acme.json"), &["--remote", "--relay", "disabled"]);
     assert_eq!(code, Some(1), "{err}");
     assert!(err.contains("so remote access over iroh cannot be turned on"), "{err}");
+}
+
+/// Exchanges a pairing code for a session; the `Authorization` header that presents it.
+async fn sign_in(base: &str, code: &str) -> String {
+    let res = try_sign_in(base, code).await;
+    assert_eq!(res.status(), 200);
+    let token: Value = res.json().await.unwrap();
+    format!("Bearer {}", token["access_token"].as_str().expect("an access token"))
+}
+
+/// The answer to a pairing code offered for a session.
+async fn try_sign_in(base: &str, code: &str) -> reqwest::Response {
+    let body = format!(
+        "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Atoken-exchange&subject_token={code}&subject_token_type=urn%3At3%3Aparams%3Aoauth%3Atoken-type%3Aenvironment-bootstrap&requested_token_type=urn%3Aietf%3Aparams%3Aoauth%3Atoken-type%3Aaccess_token"
+    );
+    http_client().post(format!("{base}/oauth/token")).header("content-type", "application/x-www-form-urlencoded").body(body).send().await.unwrap()
 }

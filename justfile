@@ -168,7 +168,7 @@ check-windows:
     tools/cross/windows.sh
 
 # Build and test the server on Linux in Docker (the repo is mounted read-only)
-check-linux *args="test --no-fail-fast -p domovoi-server -p domovoi-remote -p domovoi-model -p effect-rpc":
+check-linux *args="test --no-fail-fast -p domovoi-server -p domovoi-remote -p domovoi-model -p domovoi-rpc":
     docker build -q -t domovoi-linux -f tools/cross/linux.Dockerfile tools/cross >/dev/null
     # No debug info: the build cache stays a few GB instead of filling Docker's disk.
     docker run --rm -e CARGO_PROFILE_DEV_DEBUG=0 -e CARGO_PROFILE_TEST_DEBUG=0 -v "$PWD":/src:ro -v domovoi-linux-target:/target -v domovoi-linux-cargo:/usr/local/cargo/registry domovoi-linux cargo {{args}}

@@ -1,14 +1,14 @@
 [package]
-name = "effect-rpc"
-description = "Server side of Effect's RPC wire protocol (JSON serialization), compatible with effect/rpc RpcServer"
+name = "domovoi-rpc"
+description = "The RPC socket between domovoi-server and its clients"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [features]
 default = ["server", "axum"]
-# The connection loop and router (tokio). Without it only the wire types
-# (`message`, `frame_parts`) remain, for clients such as the Crux core.
+# The connection loop and router (tokio). Without it only the messages and
+# packed frames remain (`message`, `packed`), for the client core.
 server = ["dep:futures", "dep:tokio", "dep:tokio-util", "dep:tracing"]
 axum = ["server", "dep:axum"]
 
@@ -26,6 +26,9 @@ harness = false
 
 [dependencies]
 axum = { workspace = true, optional = true }
+# Large frames are sent deflated, in base64 (`packed`). Both are pure Rust.
+base64 = "0.23.1"
+flate2 = "1.1.11"
 futures = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true

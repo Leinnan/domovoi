@@ -63,16 +63,16 @@ pub fn devices(state: &AppState) -> Vec<Device> {
 /// (by token hash) has a socket open and when it was last seen.
 pub fn devices_in(db: &crate::db::Db, live: impl Fn(&str) -> (bool, Option<i64>)) -> Vec<Device> {
     let now = now_millis();
-    type Row = (String, String, Option<String>, String);
+    type Row = (String, Option<String>, String);
     let rows: Vec<Row> = db
         .with(|c| {
-            let mut st = c.prepare("SELECT token_hash, method, bound_endpoint, client FROM auth_sessions WHERE expires_at_ms > ?1 ORDER BY created_at")?;
-            let rows = st.query_map(params![now], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
+            let mut st = c.prepare("SELECT token_hash, bound_endpoint, client FROM auth_sessions WHERE expires_at_ms > ?1 ORDER BY created_at")?;
+            let rows = st.query_map(params![now], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
             rows.collect()
         })
         .unwrap_or_default();
     rows.into_iter()
-        .filter_map(|(hash, method, bound, client)| {
+        .filter_map(|(hash, bound, client)| {
             // What the client said of itself when it paired.
             let meta: crate::auth::ClientMeta = serde_json::from_str(&client).unwrap_or_default();
             let label = meta.label;
@@ -82,7 +82,7 @@ pub fn devices_in(db: &crate::db::Db, live: impl Fn(&str) -> (bool, Option<i64>)
             let (connected, last_seen) = live(&hash);
             Some(Device {
                 id: session_id(&hash),
-                label: label.unwrap_or_else(|| if method == crate::auth::METHOD_COOKIE { "Browser".into() } else { "Device".into() }),
+                label: label.unwrap_or_else(|| "Device".into()),
                 kind: meta.device_type.as_deref().unwrap_or("unknown").into(),
                 remote: bound.is_some(),
                 connected,

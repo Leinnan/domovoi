@@ -984,7 +984,7 @@ pub fn network_changed(model: &mut Model) -> Cmd {
 // ---- the server on this machine ----
 
 /// The port of a URL on this machine (`http://localhost:13773`).
-fn loopback_port(url: &str) -> Option<u16> {
+pub(crate) fn loopback_port(url: &str) -> Option<u16> {
     let authority = url.strip_prefix("http://")?.split(['/', '?', '#']).next()?;
     let (host, port) = authority.rsplit_once(':')?;
     let host = host.trim_start_matches('[').trim_end_matches(']');

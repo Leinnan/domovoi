@@ -1,9 +1,9 @@
-//! Client side of the RPC socket (Effect RPC's JSON serialization):
-//! numbered requests, chunk acknowledgements and interrupts.
+//! Client side of the RPC socket (`domovoi_rpc::message`): numbered requests,
+//! chunk acknowledgements and interrupts.
 
 #![expect(clippy::disallowed_types, clippy::disallowed_macros, reason = "the RPC framing: a frame is read as JSON and taken apart, and a failure's cause is kept for its message")]
 
-use effect_rpc::message::{FromServer, RequestId};
+use domovoi_rpc::message::FromServer;
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -112,10 +112,6 @@ pub enum Reply {
     Defect(Value),
 }
 
-fn id_string(id: &RequestId) -> String {
-    id.to_string()
-}
-
 /// A `Request` frame: the payload is written straight into it.
 #[derive(Serialize)]
 struct RequestFrame<'a, P: ?Sized> {
@@ -124,7 +120,6 @@ struct RequestFrame<'a, P: ?Sized> {
     id: &'a str,
     tag: &'a str,
     payload: &'a P,
-    headers: [(); 0],
 }
 
 impl RpcClient {
@@ -134,7 +129,7 @@ impl RpcClient {
         self.next_id += 1;
         let id = self.next_id.to_string();
         self.pending.insert(id.clone(), route);
-        let frame = RequestFrame { frame: "Request", id: &id, tag, payload, headers: [] };
+        let frame = RequestFrame { frame: "Request", id: &id, tag, payload };
         let text = serde_json::to_string(&frame).expect("a request is plain data");
         (id, text)
     }
@@ -173,8 +168,12 @@ impl RpcClient {
         self.pending.clear();
     }
 
-    /// Decodes one WebSocket text frame.
+    /// Decodes one WebSocket text frame, which may be a packed one
+    /// (`domovoi_rpc::packed`). A frame that cannot be read is left out, like
+    /// one that is not JSON.
     pub fn receive(&mut self, text: &str) -> Vec<Reply> {
+        let Ok(text) = domovoi_rpc::packed::unpack(text) else { return vec![] };
+        let text = &*text;
         let Ok(value) = serde_json::from_str::<Value>(text) else { return vec![] };
         let messages: Vec<Value> = match value {
             Value::Array(a) => a,
@@ -184,24 +183,23 @@ impl RpcClient {
             .into_iter()
             .filter_map(from_server)
             .filter_map(|m| match m {
-                FromServer::Chunk { request_id, values } => {
-                    let id = id_string(&request_id);
+                FromServer::Chunk { request_id: id, values } => {
                     let route = self.pending.get(&id)?.clone();
                     Some(Reply::Chunk { id, route, values })
                 }
                 FromServer::Exit { request_id, exit } => {
-                    let route = self.pending.remove(&id_string(&request_id))?;
+                    let route = self.pending.remove(&request_id)?;
                     // Interrupted by the server because the connection is
                     // closing (signed out, server stopping): nothing to report.
-                    if let effect_rpc::ExitEncoded::Failure { cause } = &exit
+                    if let domovoi_rpc::ExitEncoded::Failure { cause } = &exit
                         && let Ok(cause) = serde_json::to_value(cause)
                         && cause.as_array().is_some_and(|c| !c.is_empty() && c.iter().all(|e| e["_tag"] == "Interrupt"))
                     {
                         return None;
                     }
                     let (ok, value) = match exit {
-                        effect_rpc::ExitEncoded::Success { value } => (true, value),
-                        effect_rpc::ExitEncoded::Failure { cause } => (false, serde_json::to_value(cause).unwrap_or(Value::Null)),
+                        domovoi_rpc::ExitEncoded::Success { value } => (true, value),
+                        domovoi_rpc::ExitEncoded::Failure { cause } => (false, serde_json::to_value(cause).unwrap_or(Value::Null)),
                     };
                     Some(Reply::Exit { route, ok, value })
                 }
@@ -245,7 +243,7 @@ mod tests {
     fn routes_chunks_and_exits() {
         let mut c = RpcClient::default();
         let (id, frame) = c.request("orchestration.subscribeShell", &json!({}), Route::Shell);
-        assert_eq!(serde_json::from_str::<Value>(&frame).unwrap(), json!({ "_tag": "Request", "id": id, "tag": "orchestration.subscribeShell", "payload": {}, "headers": [] }));
+        assert_eq!(serde_json::from_str::<Value>(&frame).unwrap(), json!({ "_tag": "Request", "id": id, "tag": "orchestration.subscribeShell", "payload": {} }));
         let chunk = json!({ "_tag": "Chunk", "requestId": id, "values": [{ "kind": "synchronized" }] }).to_string();
         match &c.receive(&chunk)[..] {
             [Reply::Chunk { route: Route::Shell, values, .. }] => assert_eq!(values[0]["kind"], "synchronized"),
@@ -262,6 +260,22 @@ mod tests {
         let (iid, _) = c.request("orchestration.subscribeShell", &json!({}), Route::Shell);
         let interrupted = json!({ "_tag": "Exit", "requestId": iid, "exit": { "_tag": "Failure", "cause": [{ "_tag": "Interrupt", "fiberId": 1 }] } });
         assert!(c.receive(&interrupted.to_string()).is_empty(), "no error for an interruption");
+    }
+
+    /// A frame the server packed is read as the frame it packs.
+    #[test]
+    fn a_packed_frame_is_read_as_the_frame_it_packs() {
+        let mut c = RpcClient::default();
+        let (id, _) = c.request("orchestration.subscribeThread", &json!({}), Route::Thread("t1".into()));
+        let text = "words ".repeat(2000);
+        let chunk = json!({ "_tag": "Chunk", "requestId": id, "values": [{ "kind": "append", "text": text }] }).to_string();
+        let packed = domovoi_rpc::packed::pack(chunk.clone());
+        assert!(packed.len() * 10 < chunk.len());
+        match &c.receive(&packed)[..] {
+            [Reply::Chunk { route: Route::Thread(thread), values, .. }] => assert_eq!((thread.as_str(), values[0]["text"].as_str()), ("t1", Some(text.as_str()))),
+            other => panic!("{other:?}"),
+        }
+        assert!(c.receive("\u{1f}not a packed frame").is_empty());
     }
 
     /// A chunk taken apart by hand is the chunk `FromServer` decodes, and what

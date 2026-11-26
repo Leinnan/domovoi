@@ -16,7 +16,7 @@
 use super::super::Never;
 use crate::gh;
 use crate::state::{AppState, ConnCtx};
-use effect_rpc::Router;
+use domovoi_rpc::Router;
 use futures::StreamExt;
 use futures::stream::BoxStream;
 use serde::de::IgnoredAny;

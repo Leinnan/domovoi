@@ -1,8 +1,8 @@
-//! Environment authentication, following t3code's `loopback-browser` policy:
-//! a one-time pairing code is exchanged for a session. Browsers get a cookie
-//! (`/api/auth/browser-session`); native clients get a bearer token through
-//! RFC 8693 token exchange (`/oauth/token`) and open the RPC WebSocket with a
-//! short-lived ticket. DPoP is not offered.
+//! Signing in: a one-time pairing code is exchanged for a session, whose
+//! bearer token the client keeps (RFC 8693 token exchange, `/oauth/token`).
+//! It opens the RPC WebSocket with the token, or with a short-lived ticket
+//! where it cannot attach a header to the upgrade. There are no cookies: a
+//! web page has nothing of a signed-in client's to ride on.
 //!
 //! A session created by an iroh peer is bound to that peer's endpoint id: it
 //! works only on connections from the same key, never from plain TCP, and
@@ -29,7 +29,9 @@ const SESSION_RENEW_BELOW_MS: i64 = 20 * 24 * 60 * 60 * 1000;
 /// A WebSocket ticket is redeemed right after it is minted.
 const WS_TICKET_TTL_MS: i64 = 60 * 1000;
 
-pub const METHOD_COOKIE: &str = "browser-session-cookie";
+/// How every session is presented. (A home from before holds sessions of
+/// the web client, `browser-session-cookie`, until they expire: no request
+/// can present one.)
 pub const METHOD_BEARER: &str = "bearer-access-token";
 /// The startup pairing code stays valid for a working day; ad-hoc codes for minutes.
 pub const STARTUP_PAIRING_TTL: Duration = Duration::from_secs(24 * 60 * 60);
@@ -44,7 +46,7 @@ pub struct Session {
     pub expires_at: String,
     /// Hash of the session token (the `auth_sessions` key).
     pub token_hash: String,
-    /// `browser-session-cookie` or `bearer-access-token`.
+    /// [`METHOD_BEARER`].
     pub method: String,
     /// The iroh endpoint id the session is bound to, if created over iroh.
     pub bound_endpoint: Option<String>,
@@ -64,9 +66,8 @@ pub struct ClientMeta {
 }
 
 /// How a pairing code becomes a session.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct NewSession {
-    pub method: &'static str,
     pub client: ClientMeta,
     /// The iroh peer exchanging the code, if any.
     pub peer: Option<String>,
@@ -74,15 +75,8 @@ pub struct NewSession {
     pub scope: Option<Vec<String>>,
 }
 
-impl NewSession {
-    pub fn cookie(peer: Option<String>) -> Self {
-        NewSession { method: METHOD_COOKIE, client: ClientMeta::default(), peer, scope: None }
-    }
-}
-
 pub struct Auth {
     db: Db,
-    cookie_name: String,
     /// WebSocket tickets: hash -> (session token hash, expiry ms). Single use.
     tickets: Mutex<HashMap<String, (String, i64)>>,
     /// Pairing attempts over plain TCP, by address.
@@ -207,11 +201,8 @@ pub enum AuthError {
 }
 
 impl Auth {
-    /// `instance_key` distinguishes servers sharing a hostname (t3code hashes the
-    /// instance key into the cookie name for the same reason).
-    pub fn new(db: Db, port: u16, instance_key: &str) -> Self {
-        let cookie_name = format!("t3_session_{port}_{}", &sha256_hex(instance_key.as_bytes())[..12]);
-        Auth { db, cookie_name, tickets: Mutex::new(HashMap::new()), tcp_pairing: Mutex::default() }
+    pub fn new(db: Db) -> Self {
+        Auth { db, tickets: Mutex::new(HashMap::new()), tcp_pairing: Mutex::default() }
     }
 
     /// Whether `code` is a pairing code that would still be accepted.
@@ -261,14 +252,8 @@ impl Auth {
         crate::util::locked(&self.tcp_pairing).failures.uncount(address);
     }
 
-    pub fn cookie_name(&self) -> &str {
-        &self.cookie_name
-    }
-
     pub fn descriptor(&self) -> AuthDescriptor {
-        let mut d = AuthDescriptor::loopback_browser(&self.cookie_name);
-        d.session_methods.push(METHOD_BEARER.into());
-        d
+        AuthDescriptor::pairing_code()
     }
 
     #[cfg(test)]
@@ -308,11 +293,11 @@ impl Auth {
         Ok(code)
     }
 
-    /// Consumes a pairing code and creates a browser session with its grant.
-    /// Returns the raw session token (for the cookie) and the session.
+    /// Consumes a pairing code and creates a session over plain TCP with its
+    /// grant. Returns the raw session token and the session.
     #[cfg(test)]
-    pub fn create_browser_session(&self, credential: &str) -> Result<(String, Session), AuthError> {
-        self.create_session(credential, NewSession::cookie(None))
+    pub fn create_local_session(&self, credential: &str) -> Result<(String, Session), AuthError> {
+        self.create_session(credential, NewSession::default())
     }
 
     /// Consumes a pairing code and creates a session with its grant (narrowed
@@ -363,7 +348,7 @@ impl Auth {
             permissions,
             expires_at: iso_from_millis(now + SESSION_TTL_MS),
             token_hash: sha256_hex(token.as_bytes()),
-            method: new.method.into(),
+            method: METHOD_BEARER.into(),
             bound_endpoint: new.peer,
         };
         self.db.with(|c| {
@@ -452,11 +437,10 @@ impl Auth {
         Ok(self.session_hashes()?.into_iter().map(|(_, hash, _)| hash).collect())
     }
 
-    /// Authenticates a request by its bearer token or session cookie, on a
-    /// connection from `peer` (`None` for plain TCP).
+    /// Authenticates a request by its bearer token, on a connection from
+    /// `peer` (`None` for plain TCP).
     pub fn authenticate(&self, headers: &HeaderMap, peer: Option<&str>) -> Result<Option<Session>, AuthError> {
-        let token = bearer_token(headers).or_else(|| cookie_value(headers, &self.cookie_name));
-        match token {
+        match bearer_token(headers) {
             Some(token) => Ok(self.session_for_token(&token)?.filter(|s| bound_to(s, peer))),
             None => Ok(None),
         }
@@ -553,11 +537,6 @@ impl Auth {
             expires_at: session.map(|s| s.expires_at.clone()),
         }
     }
-
-    pub fn session_cookie(&self, token: &str, session: &Session) -> String {
-        let expires = httpdate(&session.expires_at);
-        format!("{}={token}; Path=/; Expires={expires}; HttpOnly; SameSite=Lax", self.cookie_name)
-    }
 }
 
 /// A stable public id for a session; its token hash is never exposed.
@@ -578,70 +557,37 @@ pub fn bearer_token(headers: &HeaderMap) -> Option<String> {
     (scheme.eq_ignore_ascii_case("bearer") && !token.trim().is_empty()).then(|| token.trim().to_owned())
 }
 
-pub fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
-    headers
-        .get_all(axum::http::header::COOKIE)
-        .iter()
-        .filter_map(|v| v.to_str().ok())
-        .flat_map(|v| v.split(';'))
-        .filter_map(|pair| pair.trim().split_once('='))
-        .find(|(k, _)| *k == name)
-        .map(|(_, v)| v.to_owned())
-}
-
-/// Cookie `Expires` from an ISO timestamp, e.g. `Sun, 13 Dec 2026 15:26:45 GMT`.
-fn httpdate(iso: &str) -> String {
-    use time::format_description::well_known::Rfc3339;
-    let dt = time::OffsetDateTime::parse(iso, &Rfc3339).unwrap_or_else(|_| time::OffsetDateTime::now_utc());
-    let fmt = time::macros::format_description!(
-        "[weekday repr:short], [day] [month repr:short] [year] [hour]:[minute]:[second] GMT"
-    );
-    dt.format(&fmt).expect("a cookie date formats")
-}
-
-/// Cross-site WebSocket hijacking guard for cookie-authenticated upgrades: a
-/// browser `Origin` must name the host the request was sent to.
-pub fn origin_matches_host(headers: &HeaderMap) -> bool {
-    let Some(origin) = headers.get("origin").and_then(|v| v.to_str().ok()) else {
-        return true; // non-browser clients send no Origin
-    };
-    let Some(host) = headers.get("host").and_then(|v| v.to_str().ok()) else {
-        return false;
-    };
-    origin.split_once("://").map(|(_, rest)| rest.trim_end_matches('/')) == Some(host)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn auth() -> Auth {
-        Auth::new(Db::open_in_memory().unwrap(), 13773, "test")
+        Auth::new(Db::open_in_memory().unwrap())
     }
 
     #[test]
     fn pairing_code_is_single_use() {
         let a = auth();
         let code = a.issue_pairing_code(Duration::from_secs(60)).unwrap();
-        let (token, session) = a.create_browser_session(&code).unwrap();
+        let (token, session) = a.create_local_session(&code).unwrap();
         assert_eq!(session.scopes, strings(DEFAULT_SCOPES));
         assert!(a.session_for_token(&token).unwrap().is_some());
-        assert!(matches!(a.create_browser_session(&code), Err(AuthError::InvalidCredential)));
+        assert!(matches!(a.create_local_session(&code), Err(AuthError::InvalidCredential)));
     }
 
     #[test]
     fn unknown_and_expired_codes_are_rejected() {
         let a = auth();
-        assert!(matches!(a.create_browser_session("NOPE"), Err(AuthError::InvalidCredential)));
+        assert!(matches!(a.create_local_session("NOPE"), Err(AuthError::InvalidCredential)));
         let code = a.issue_pairing_code(Duration::from_secs(0)).unwrap();
-        assert!(matches!(a.create_browser_session(&code), Err(AuthError::InvalidCredential)));
+        assert!(matches!(a.create_local_session(&code), Err(AuthError::InvalidCredential)));
     }
 
     #[test]
     fn limited_grants_carry_their_permissions() {
         let a = auth();
         let code = a.issue_pairing_code_with(Duration::from_secs(60), &Grant::limited(vec!["orchestration:read".into()])).unwrap();
-        let (_, session) = a.create_browser_session(&code).unwrap();
+        let (_, session) = a.create_local_session(&code).unwrap();
         assert_eq!(session.permissions, vec!["orchestration:read".to_owned()]);
         assert_eq!(session.scopes, vec!["orchestration:read".to_owned()]);
     }
@@ -650,27 +596,24 @@ mod tests {
     fn codes_minted_by_another_handle_work() {
         // `domovoi-server pair` opens the same database while the server runs.
         let db = Db::open_in_memory().unwrap();
-        let server = Auth::new(db.clone(), 13773, "test");
-        let cli = Auth::new(db, 13773, "test");
+        let server = Auth::new(db.clone());
+        let cli = Auth::new(db);
         let code = cli.issue_pairing_code(Duration::from_secs(60)).unwrap();
-        assert!(server.create_browser_session(&code).is_ok());
+        assert!(server.create_local_session(&code).is_ok());
     }
 
+    /// A session is presented as a bearer token and in no other way: a
+    /// cookie that holds the token signs nobody in.
     #[test]
-    fn cookie_round_trip_and_origin_guard() {
+    fn a_session_is_presented_as_a_bearer_token_only() {
         let a = auth();
         let code = a.issue_pairing_code(Duration::from_secs(60)).unwrap();
-        let (token, session) = a.create_browser_session(&code).unwrap();
-        let set = a.session_cookie(&token, &session);
-        assert!(set.contains("HttpOnly") && set.contains("SameSite=Lax"));
+        let (token, session) = a.create_local_session(&code).unwrap();
+        assert_eq!(session.method, METHOD_BEARER);
+        assert!(a.authenticate(&bearer(&token), None).unwrap().is_some());
         let mut h = HeaderMap::new();
-        h.insert("cookie", format!("other=1; {}={token}", a.cookie_name()).parse().unwrap());
-        assert!(a.authenticate(&h, None).unwrap().is_some());
-        h.insert("host", "localhost:5733".parse().unwrap());
-        h.insert("origin", "http://localhost:5733".parse().unwrap());
-        assert!(origin_matches_host(&h));
-        h.insert("origin", "http://evil.example".parse().unwrap());
-        assert!(!origin_matches_host(&h));
+        h.insert("cookie", format!("t3_session={token}; session={token}").parse().unwrap());
+        assert!(a.authenticate(&h, None).unwrap().is_none());
     }
 
     fn bearer(token: &str) -> HeaderMap {
@@ -683,7 +626,7 @@ mod tests {
     fn bearer_sessions_are_bound_to_their_peer() {
         let a = auth();
         let code = a.issue_pairing_code(Duration::from_secs(60)).unwrap();
-        let new = NewSession { method: METHOD_BEARER, client: ClientMeta::default(), peer: Some("peer-a".into()), scope: None };
+        let new = NewSession { peer: Some("peer-a".into()), ..Default::default() };
         let (token, session) = a.create_session(&code, new).unwrap();
         assert_eq!(session.method, METHOD_BEARER);
         assert!(a.authenticate(&bearer(&token), Some("peer-a")).unwrap().is_some());
@@ -694,7 +637,7 @@ mod tests {
 
         // A session made over TCP does not work over iroh.
         let code = a.issue_pairing_code(Duration::from_secs(60)).unwrap();
-        let (local, _) = a.create_browser_session(&code).unwrap();
+        let (local, _) = a.create_local_session(&code).unwrap();
         assert!(a.authenticate(&bearer(&local), None).unwrap().is_some());
         assert!(a.authenticate(&bearer(&local), Some("peer-a")).unwrap().is_none());
     }
@@ -703,7 +646,7 @@ mod tests {
     fn scope_narrows_and_a_bad_scope_keeps_the_code() {
         let a = auth();
         let code = a.issue_pairing_code(Duration::from_secs(60)).unwrap();
-        let mut new = NewSession { method: METHOD_BEARER, client: ClientMeta::default(), peer: None, scope: Some(vec!["nope".into()]) };
+        let mut new = NewSession { scope: Some(vec!["nope".into()]), ..Default::default() };
         assert!(matches!(a.create_session(&code, new.clone()), Err(AuthError::InvalidScope)));
         new.scope = Some(vec!["orchestration:read".into(), "terminal:read".into()]);
         let (_, session) = a.create_session(&code, new).unwrap();
@@ -715,7 +658,7 @@ mod tests {
     fn ws_tickets_are_single_use_and_bound() {
         let a = auth();
         let code = a.issue_pairing_code(Duration::from_secs(60)).unwrap();
-        let new = NewSession { method: METHOD_BEARER, client: ClientMeta::default(), peer: Some("peer-a".into()), scope: None };
+        let new = NewSession { peer: Some("peer-a".into()), ..Default::default() };
         let (_, session) = a.create_session(&code, new).unwrap();
         let (ticket, _) = a.mint_ws_ticket(&session);
         assert!(a.redeem_ws_ticket(&ticket, Some("peer-b")).unwrap().is_none());
@@ -732,7 +675,7 @@ mod tests {
         let mut tokens = vec![];
         for _ in 0..3 {
             let code = a.issue_pairing_code(Duration::from_secs(60)).unwrap();
-            tokens.push(a.create_browser_session(&code).unwrap());
+            tokens.push(a.create_local_session(&code).unwrap());
         }
         let (t0, s0) = &tokens[0];
         assert!(matches!(a.revoke(&session_id(&s0.token_hash), false).unwrap(), Revoke::Done(h) if h == s0.token_hash));
@@ -758,7 +701,7 @@ mod tests {
         let a = auth();
         let day = 24 * 60 * 60 * 1000;
         let code = a.issue_pairing_code(Duration::from_secs(60)).unwrap();
-        let (token, session) = a.create_browser_session(&code).unwrap();
+        let (token, session) = a.create_local_session(&code).unwrap();
         // Fresh: using it changes nothing.
         let before = expiry(&a, &session.token_hash);
         a.session_for_token(&token).unwrap().unwrap();
@@ -781,9 +724,9 @@ mod tests {
     fn a_local_code_is_refused_over_iroh_and_stays_usable_locally() {
         let a = auth();
         let code = a.issue_local_pairing_code(Duration::from_secs(60)).unwrap();
-        let remote = NewSession { peer: Some("peer-key".into()), ..NewSession::cookie(None) };
+        let remote = NewSession { peer: Some("peer-key".into()), ..Default::default() };
         assert!(matches!(a.create_session(&code, remote), Err(AuthError::InvalidCredential)));
-        assert!(a.create_session(&code, NewSession::cookie(None)).is_ok(), "the refused attempt did not use the code up");
+        assert!(a.create_session(&code, NewSession::default()).is_ok(), "the refused attempt did not use the code up");
     }
 
     #[test]
@@ -808,7 +751,7 @@ mod tests {
         let code = a.issue_pairing_code(Duration::from_secs(60)).unwrap();
         assert!(a.code_is_live(&code).unwrap() && a.code_is_live(&format!(" {code}\n")).unwrap());
         assert_eq!(a.begin_tcp_pairing(here, &code).unwrap(), TcpAttempt::Live);
-        a.create_browser_session(&code).unwrap();
+        a.create_local_session(&code).unwrap();
         assert!(!a.code_is_live(&code).unwrap());
         assert_eq!(a.begin_tcp_pairing(here, &code).unwrap(), TcpAttempt::Refused, "used");
         let expired = a.issue_pairing_code(Duration::from_secs(0)).unwrap();
@@ -851,7 +794,7 @@ mod tests {
     fn expired_tickets_are_refused_and_tickets_work_once() {
         let a = auth();
         let code = a.issue_pairing_code(Duration::from_secs(60)).unwrap();
-        let (_, session) = a.create_browser_session(&code).unwrap();
+        let (_, session) = a.create_local_session(&code).unwrap();
         let (ticket, _) = a.mint_ws_ticket(&session);
         assert!(a.redeem_ws_ticket(&ticket, None).unwrap().is_some());
         assert!(a.redeem_ws_ticket(&ticket, None).unwrap().is_none(), "single use");

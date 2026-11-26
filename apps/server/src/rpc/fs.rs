@@ -4,7 +4,7 @@
 use super::shell::{RecordOrNot, text_or_empty};
 use crate::state::ConnCtx;
 use crate::workspace::{BrowseFailure, Failure, FileFailure};
-use effect_rpc::Router;
+use domovoi_rpc::Router;
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

@@ -1,4 +1,4 @@
-use effect_rpc::{ConnectionOptions, Router, serve_connection};
+use domovoi_rpc::{ConnectionOptions, Router, serve_connection};
 use futures::{SinkExt, StreamExt, channel::mpsc, stream};
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -58,7 +58,7 @@ impl Harness {
 }
 
 fn req(id: &str, tag: &str, payload: Value) -> Value {
-    json!({"_tag": "Request", "id": id, "tag": tag, "payload": payload, "headers": []})
+    json!({"_tag": "Request", "id": id, "tag": tag, "payload": payload})
 }
 
 #[tokio::test]
@@ -128,22 +128,7 @@ async fn interrupt_replies_with_interrupt_exit() {
     h.send(json!({"_tag": "Interrupt", "requestId": "5"}));
     let v = h.recv().await;
     assert_eq!(v["requestId"], "5");
-    assert_eq!(v["exit"]["cause"][0]["_tag"], "Interrupt");
-}
-
-#[tokio::test]
-async fn notifications_get_no_reply_and_discard_acks_immediately() {
-    let mut h = Harness::start(Default::default());
-    let mut n = req("1", "echo", json!(1));
-    n["isNotification"] = json!(true);
-    h.send(n);
-    let mut d = req("2", "sleep", json!(null));
-    d["discard"] = json!(true);
-    h.send(d);
-    assert_eq!(
-        h.recv().await,
-        json!({"_tag": "Exit", "requestId": "2", "exit": {"_tag": "Success", "value": null}})
-    );
+    assert_eq!(v["exit"]["cause"], json!([{"_tag": "Interrupt"}]));
 }
 
 #[tokio::test]

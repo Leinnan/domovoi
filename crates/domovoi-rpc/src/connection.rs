@@ -1,23 +1,21 @@
-//! Per-connection protocol loop, mirroring `RpcServer.make` + the socket
-//! protocol in `effect/rpc/RpcServer.ts`:
+//! The loop that serves one connection:
 //!
-//! - every `Request` runs concurrently and ends with exactly one `Exit`
-//!   (unless it is a notification);
-//! - streams send `Chunk` batches and, when acks are supported, wait for the
-//!   client's `Ack` before sending the next batch;
-//! - `Interrupt` cancels the request and replies with an interrupt `Exit`;
+//! - every `Request` runs concurrently and ends with exactly one `Exit`;
+//! - a stream sends `Chunk` batches and waits for the client's `Ack` before
+//!   it sends the next, so a client is never sent more than it has taken;
+//! - `Interrupt` cancels the request, which ends with an interrupted `Exit`;
 //! - `Ping` is answered with `Pong`;
 //! - a closed transport interrupts everything still running.
 //!
 //! Each call runs in a root `tracing` span `ws.rpc` named `ws.rpc.<tag>`
-//! (`otel.name`; t3code's `RpcInstrumentation`), with `rpc.method`,
-//! `rpc.transport` and `rpc.system`; a failed exit records `otel.status_code`
-//! `ERROR` and the cause, an interrupted one `otel.interrupted`.
+//! (`otel.name`), with `rpc.method`, `rpc.transport` and `rpc.system`; a
+//! failed exit records `otel.status_code` `ERROR` and the cause, an
+//! interrupted one `otel.interrupted`.
 
-use crate::message::{FromClient, FromServer, RequestEncoded, RequestId, decode_client_frame, encode_server_message};
-use crate::message::{CauseEncoded, ExitEncoded};
+use crate::message::{CauseEncoded, FromClient, Request, RequestId, decode_client_frame};
 use tracing::Instrument;
-use crate::router::{Failure, Reply, Router};
+use crate::router::{Encoded, Failure, Reply, Router};
+use serde::Serialize;
 use futures::{FutureExt, Sink, SinkExt, Stream, StreamExt};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -32,8 +30,10 @@ const OUTBOUND_QUEUE: usize = 256;
 
 #[derive(Debug, Clone)]
 pub struct ConnectionOptions {
-    /// Wait for client `Ack`s between stream chunks (Effect's default).
+    /// Wait for the client's `Ack` between a stream's chunks.
     pub supports_ack: bool,
+    /// Send large frames packed ([`crate::packed`]): the client asked for it.
+    pub pack: bool,
     /// Maximum values per `Chunk` message.
     pub max_chunk_values: usize,
     /// WebSocket transports: send a Ping control frame this often, and close
@@ -47,6 +47,7 @@ impl Default for ConnectionOptions {
     fn default() -> Self {
         Self {
             supports_ack: true,
+            pack: false,
             max_chunk_values: 256,
             heartbeat: None,
         }
@@ -60,11 +61,59 @@ struct Inflight {
 
 type InflightMap = Arc<Mutex<HashMap<RequestId, Inflight>>>;
 
-fn exit_for(result: Result<Value, Failure>) -> ExitEncoded {
+/// A message to the client as the server writes it: what
+/// [`crate::message::FromServer`] reads, with the answers in it as text
+/// that is already written ([`Encoded`]).
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "_tag")]
+pub enum Outgoing {
+    Chunk {
+        #[serde(rename = "requestId")]
+        request_id: RequestId,
+        values: Vec<Encoded>,
+    },
+    Exit {
+        #[serde(rename = "requestId")]
+        request_id: RequestId,
+        exit: Exit,
+    },
+    Defect {
+        defect: Value,
+    },
+    Pong,
+}
+
+/// How a request ended ([`crate::message::ExitEncoded`] as it is written).
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "_tag")]
+pub enum Exit {
+    Success { value: Encoded },
+    Failure { cause: Vec<CauseEncoded> },
+}
+
+impl Exit {
+    /// The end of a request that answers nothing, and of a stream.
+    pub fn void() -> Self {
+        static NULL: std::sync::LazyLock<Encoded> = std::sync::LazyLock::new(|| crate::router::encoded(&()).expect("null is JSON"));
+        Exit::Success { value: NULL.clone() }
+    }
+    fn interrupt() -> Self {
+        Exit::Failure { cause: vec![CauseEncoded::Interrupt] }
+    }
+}
+
+impl Outgoing {
+    /// The frame that carries the message.
+    pub fn frame(&self) -> String {
+        serde_json::to_string(self).expect("a message to the client is plain data")
+    }
+}
+
+fn exit_for(result: Result<Encoded, Failure>) -> Exit {
     match result {
-        Ok(v) => ExitEncoded::success(v),
-        Err(Failure::Fail(e)) => ExitEncoded::fail(e),
-        Err(Failure::Die(d)) => ExitEncoded::die(d),
+        Ok(value) => Exit::Success { value },
+        Err(Failure::Fail(error)) => Exit::Failure { cause: vec![CauseEncoded::Fail { error }] },
+        Err(Failure::Die(defect)) => Exit::Failure { cause: vec![CauseEncoded::Die { defect }] },
     }
 }
 
@@ -95,10 +144,20 @@ pub async fn serve_connection<C, R, W, RE>(
     // requests feeding it (a stream stops pulling, and a live stream that
     // falls behind its broadcast resyncs from the log) instead of queueing
     // without limit in this process.
-    let (tx, mut rx) = mpsc::channel::<FromServer>(OUTBOUND_QUEUE);
+    let (tx, mut rx) = mpsc::channel::<Outgoing>(OUTBOUND_QUEUE);
+    let pack = options.pack;
     let writer = tokio::spawn(async move {
         while let Some(message) = rx.recv().await {
-            if outgoing.send(encode_server_message(&message)).await.is_err() {
+            let frame = message.frame();
+            let frame = match pack {
+                false => frame,
+                true if frame.len() < crate::packed::PACK_APART_FROM => crate::packed::pack(frame),
+                true => match tokio::task::spawn_blocking(move || crate::packed::pack(frame)).await {
+                    Ok(packed) => packed,
+                    Err(_) => return,
+                },
+            };
+            if outgoing.send(frame).await.is_err() {
                 return;
             }
         }
@@ -120,18 +179,17 @@ pub async fn serve_connection<C, R, W, RE>(
             Ok(m) => m,
             Err(e) => {
                 let _ = tx
-                    .send(FromServer::Defect { defect: Value::String(format!("Failed to decode client message: {e}")) })
+                    .send(Outgoing::Defect { defect: Value::String(format!("Failed to decode client message: {e}")) })
                     .await;
                 continue;
             }
         };
-        let mut eof = false;
         for message in messages {
             match message {
                 FromClient::Ping => {
                     // Never waits: this loop must keep reading acks. With the
                     // queue full the client is not reading pongs anyway.
-                    let _ = tx.try_send(FromServer::Pong);
+                    let _ = tx.try_send(Outgoing::Pong);
                 }
                 FromClient::Ack { request_id } => {
                     if let Some(entry) = inflight.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(&request_id) {
@@ -143,17 +201,10 @@ pub async fn serve_connection<C, R, W, RE>(
                         entry.cancel.cancel();
                     }
                 }
-                FromClient::Eof => eof = true,
                 FromClient::Request(request) => {
                     start_request(&router, &ctx, request, &tx, &inflight, &tasks, &options);
                 }
             }
-        }
-        if eof {
-            // Let in-flight requests finish, then end the connection.
-            tasks.close();
-            tasks.wait().await;
-            break;
         }
     }
 
@@ -170,15 +221,13 @@ pub async fn serve_connection<C, R, W, RE>(
 fn start_request<C: Send + Sync + 'static>(
     router: &Arc<Router<C>>,
     ctx: &Arc<C>,
-    mut request: RequestEncoded,
-    tx: &mpsc::Sender<FromServer>,
+    mut request: Request,
+    tx: &mpsc::Sender<Outgoing>,
     inflight: &InflightMap,
     tasks: &TaskTracker,
     options: &ConnectionOptions,
 ) {
     let id = request.id.clone();
-    let silent = request.is_notification();
-    let discard = request.is_discard();
     let cancel = CancellationToken::new();
     let ack = Arc::new(Notify::new());
     {
@@ -197,7 +246,7 @@ fn start_request<C: Send + Sync + 'static>(
             "otel.name" = %format!("ws.rpc.{}", request.tag),
             "rpc.method" = %request.tag,
             "rpc.transport" = "websocket",
-            "rpc.system" = "effect-rpc",
+            "rpc.system" = "domovoi-rpc",
             "otel.status_code" = tracing::field::Empty,
             "otel.status_message" = tracing::field::Empty,
             "otel.interrupted" = tracing::field::Empty,
@@ -208,27 +257,16 @@ fn start_request<C: Send + Sync + 'static>(
     let reply = span.in_scope(|| router.dispatch(ctx.clone(), &mut request));
     let tx = tx.clone();
     let inflight = inflight.clone();
-    let supports_ack = options.supports_ack && !silent && !discard;
+    let supports_ack = options.supports_ack;
     let max_chunk = options.max_chunk_values.max(1);
 
     tasks.spawn(async move {
-        let send_exit = async |exit: ExitEncoded| {
-            if !silent {
-                let _ = tx.send(FromServer::Exit { request_id: id.clone(), exit }).await;
-            }
-        };
-        if discard {
-            // Acknowledged once the handler starts; nothing more is sent.
-            send_exit(ExitEncoded::void()).await;
-        }
         let exit = match reply {
-            Err(failure) => Some(exit_for(Err(failure))),
+            Err(failure) => exit_for(Err(failure)),
             Ok(Reply::Unary(fut)) => {
                 tokio::select! {
-                    _ = cancel.cancelled() => Some(ExitEncoded::interrupt()),
-                    result = AssertUnwindSafe(fut).catch_unwind() => {
-                        Some(exit_for(result.unwrap_or_else(|p| Err(panic_message(p)))))
-                    }
+                    _ = cancel.cancelled() => Exit::interrupt(),
+                    result = AssertUnwindSafe(fut).catch_unwind() => exit_for(result.unwrap_or_else(|p| Err(panic_message(p)))),
                 }
             }
             Ok(Reply::Stream(stream)) => {
@@ -246,8 +284,8 @@ fn start_request<C: Send + Sync + 'static>(
                                 }
                             }
                         }
-                        if !values.is_empty() && !silent && !discard {
-                            let _ = tx.send(FromServer::Chunk { request_id: id.clone(), values }).await;
+                        if !values.is_empty() {
+                            let _ = tx.send(Outgoing::Chunk { request_id: id.clone(), values }).await;
                             if supports_ack {
                                 ack.notified().await;
                             }
@@ -256,25 +294,19 @@ fn start_request<C: Send + Sync + 'static>(
                             return exit_for(Err(f));
                         }
                     }
-                    ExitEncoded::void()
+                    Exit::void()
                 };
                 tokio::select! {
-                    _ = cancel.cancelled() => Some(ExitEncoded::interrupt()),
-                    result = AssertUnwindSafe(run).catch_unwind() => {
-                        Some(result.unwrap_or_else(|p| exit_for(Err(panic_message(p)))))
-                    }
+                    _ = cancel.cancelled() => Exit::interrupt(),
+                    result = AssertUnwindSafe(run).catch_unwind() => result.unwrap_or_else(|p| exit_for(Err(panic_message(p)))),
                 }
             }
         };
         inflight.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(&id);
-        if let Some(ExitEncoded::Failure { cause }) = &exit {
+        if let Exit::Failure { cause } = &exit {
             record_failure(&tracing::Span::current(), cause);
         }
-        if let Some(exit) = exit
-            && !discard
-        {
-            send_exit(exit).await;
-        }
+        let _ = tx.send(Outgoing::Exit { request_id: id.clone(), exit }).await;
     }.instrument(span));
 }
 
@@ -283,7 +315,7 @@ fn record_failure(span: &tracing::Span, cause: &[CauseEncoded]) {
     if span.is_disabled() {
         return;
     }
-    if cause.iter().all(|c| matches!(c, CauseEncoded::Interrupt { .. })) {
+    if cause.iter().all(|c| matches!(c, CauseEncoded::Interrupt)) {
         span.record("otel.interrupted", true);
         span.record("otel.status_message", "Interrupted");
         return;
@@ -301,7 +333,7 @@ fn record_failure(span: &tracing::Span, cause: &[CauseEncoded]) {
                 })
             }
             CauseEncoded::Die { defect } => Some(text(defect).unwrap_or_else(|| defect.to_string())),
-            CauseEncoded::Interrupt { .. } => None,
+            CauseEncoded::Interrupt => None,
         })
         .collect();
     span.record("otel.status_code", "ERROR");
