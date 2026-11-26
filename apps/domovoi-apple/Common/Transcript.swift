@@ -1651,6 +1651,7 @@ struct ApprovalBar: View {
     @ObservedObject var core: Core
     let requests: [RequestView]
     @State private var showing: RequestView?
+    @State private var contentHeight: CGFloat?
     #if os(iOS)
     @Environment(\.verticalSizeClass) private var verticalSize
     #endif
@@ -1694,11 +1695,11 @@ struct ApprovalBar: View {
                 }
             }
             .padding(Space.l)
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
         }
-        // Several requests scroll instead of pushing the composer away.
+        // Fit the rows when they fit, and scroll longer stacks above the composer.
         .scrollBounceBehavior(.basedOnSize)
-        .frame(maxHeight: maxHeight)
-        .fixedSize(horizontal: false, vertical: requests.count < 2)
+        .frame(maxHeight: min(contentHeight ?? maxHeight, maxHeight))
         // The composer's shape and side inset: the two stack as one.
         .glassPanel(in: RoundedRectangle(cornerRadius: Radius.panel, style: .continuous), tint: Tint.caution.opacity(0.25))
         .padding(.horizontal, Space.s)
