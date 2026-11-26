@@ -72,6 +72,8 @@ pub struct ThreadSnapshot {
     /// The last event the projection includes; events after it follow on the stream.
     pub snapshot_sequence: u64,
     pub projection: ThreadProjection,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub history_before: Option<String>,
 }
 
 impl ThreadSnapshot {
@@ -80,8 +82,20 @@ impl ThreadSnapshot {
         Ok(Self {
             snapshot_sequence: required(&mut fields, "snapshotSequence")?,
             projection: required(&mut fields, "projection")?,
+            history_before: fields.remove("historyBefore").and_then(|value| value.as_str().map(str::to_owned)),
         })
     }
+}
+
+/// An older slice of the transcript, read at a single event watermark.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadHistory {
+    pub snapshot_sequence: u64,
+    pub history_before: Option<String>,
+    pub items: Vec<Arc<TurnItem>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub subagents: Vec<Arc<Subagent>>,
 }
 
 impl<'de> Deserialize<'de> for ThreadSnapshot {

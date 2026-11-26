@@ -197,7 +197,7 @@ macro_rules! page_header {
     ($m:ident) => {
         $m!(
             id, title, project_id, project_title, branch, worktree_path, cwd, model_label, provider_instance_id, model_instance_id, model,
-            runtime_mode, interaction_mode, status, working, loading, pinned, settled, archived, pending_requests,
+            runtime_mode, interaction_mode, status, working, loading, has_earlier, loading_earlier, pinned, settled, archived, pending_requests,
             pending_sends, working_since_ms, working_activity, checkpoints, find, parent, can_merge_back, can_fork, context, usage, queued,
             queue_held, background, background_tasks, limit_resets, limit_plan, plan, tasks, waiting_children, artifact_count, secret_requests, links
         )

@@ -117,6 +117,26 @@ pub fn orchestration_subscribe_thread(thread: &ThreadId, after_sequence: Option<
     built("orchestration.subscribeThread", payload)
 }
 
+pub fn orchestration_subscribe_thread_window(thread: &ThreadId, after_sequence: Option<u64>) -> Request {
+    let mut payload = json!({ "threadId": thread, "requestCompletionMarker": true });
+    if let Some(after) = after_sequence {
+        payload["afterSequence"] = json!(after);
+    }
+    built("orchestration.subscribeThreadWindow", payload)
+}
+
+pub fn orchestration_get_turn_item(thread_id: &str, item_id: &str) -> Request {
+    built("orchestration.getTurnItem", json!({ "threadId": thread_id, "itemId": item_id }))
+}
+
+pub fn orchestration_get_thread_history(thread: &ThreadId, before: &str) -> Request {
+    built("orchestration.getThreadHistory", json!({ "threadId": thread, "before": before }))
+}
+
+pub fn orchestration_get_thread_history_around(thread: &ThreadId, entry_id: &str) -> Request {
+    built("orchestration.getThreadHistory", json!({ "threadId": thread, "aroundEntry": entry_id }))
+}
+
 /// Domovoi's own: forgets what a thread's "Allow for Thread" answers allowed.
 pub fn orchestration_forget_thread_permissions(thread_id: &str) -> Request {
     built("orchestration.forgetThreadPermissions", json!({ "threadId": thread_id }))

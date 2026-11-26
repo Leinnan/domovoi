@@ -389,6 +389,8 @@ pub struct ThreadPageView {
     pub status: String,
     pub working: bool,
     pub loading: bool,
+    pub has_earlier: bool,
+    pub loading_earlier: bool,
     pub pinned: bool,
     pub settled: bool,
     pub archived: bool,

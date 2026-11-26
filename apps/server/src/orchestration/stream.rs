@@ -101,14 +101,6 @@ impl Sent {
     }
 }
 
-/// [`thread_stream`] as the socket sends it.
-pub fn thread_stream_sent(store: Store, input: ThreadSubscription) -> BoxStream<'static, Result<domovoi_rpc::Encoded, Failure>> {
-    let thread_id = input.thread_id.clone();
-    thread_stream(store, input)
-        .map(move |item| item.and_then(|sent| sent.encoded().map_err(|e| projection_error(&thread_id, e.to_string()))))
-        .boxed()
-}
-
 fn projection_error(thread_id: &str, message: String) -> Failure {
     Failure::ThreadProjection { thread_id: thread_id.to_owned(), message }
 }
@@ -116,15 +108,24 @@ fn projection_error(thread_id: &str, message: String) -> Failure {
 /// The thread as it is now, with the sequence events are to be sent after:
 /// as a client is sent it, or with `all_records` whole.
 pub fn snapshot(store: &Store, thread_id: &str, all_records: bool) -> Result<ThreadSnapshot, Failure> {
-    // Read first: an event committed after it is in the thread already, and
-    // is sent again, which changes nothing.
-    let snapshot_sequence = store.latest_sequence().map_err(|e| projection_error(thread_id, e.to_string()))?;
-    let thread = store
-        .thread(thread_id)
-        .map_err(|e| projection_error(thread_id, e.to_string()))?
-        .ok_or_else(|| projection_error(thread_id, format!("Unknown thread {thread_id}")))?;
-    let projection = if all_records { thread.projection() } else { thread.projection().for_client() };
-    Ok(ThreadSnapshot { snapshot_sequence, projection })
+    let cached = store.db().with(|connection| {
+        let Some(thread) = store.thread_cache().thread(thread_id) else { return Ok(None) };
+        // Commits publish to the cache while holding this same lock.
+        let at: i64 = connection.query_row("SELECT COALESCE(MAX(sequence), 0) FROM events", [], |row| row.get(0))?;
+        Ok(Some((at as u64, thread)))
+    }).map_err(|e| projection_error(thread_id, e.to_string()))?;
+    let (snapshot_sequence, projection) = if let Some((at, thread)) = cached {
+        (at, thread.projection())
+    } else {
+        store.db().read(|connection| {
+            let tx = connection.unchecked_transaction()?;
+            let at: i64 = tx.query_row("SELECT COALESCE(MAX(sequence), 0) FROM events", [], |row| row.get(0))?;
+            Ok(super::events::load_thread_records(&tx, thread_id, all_records, true)?.map(|thread| (at as u64, thread.projection())))
+        }).map_err(|e| projection_error(thread_id, e.to_string()))?
+            .ok_or_else(|| projection_error(thread_id, format!("Unknown thread {thread_id}")))?
+    };
+    let projection = if all_records { projection } else { projection.for_client() };
+    Ok(ThreadSnapshot { snapshot_sequence, projection, history_before: None })
 }
 
 pub fn snapshot_item(store: &Store, thread_id: &str, all_records: bool) -> Result<(u64, ThreadStreamItem), Failure> {
@@ -133,40 +134,76 @@ pub fn snapshot_item(store: &Store, thread_id: &str, all_records: bool) -> Resul
 }
 
 /// The thread's events in `(after, through]` as a subscription replays them.
+#[cfg(test)]
 pub fn replay(store: &Store, thread_id: &str, after: u64, through: u64, all_records: bool) -> Result<Vec<ThreadStreamItem>, crate::store::StoreError> {
-    let events = store.thread_events_after(thread_id, after, through)?;
-    Ok(events
-        .into_iter()
-        .filter_map(|e| e.thread_event.map(|event| (e.sequence, event)))
-        .filter(|(_, event)| all_records || !event.body.for_the_server_only())
-        .map(|(sequence, event)| ThreadStreamItem::Event { sequence, event: Box::new(event) })
-        .collect())
+    Ok(replay_items(store.thread_events_after(thread_id, after, through)?, all_records).collect())
 }
 
-pub fn thread_stream(store: Store, input: ThreadSubscription) -> BoxStream<'static, Result<Sent, Failure>> {
+fn replay_items(events: Vec<StoredEvent>, all_records: bool) -> impl Iterator<Item = ThreadStreamItem> {
+    events.into_iter()
+        .filter_map(|e| e.thread_event.map(|event| (e.sequence, event)))
+        .filter(move |(_, event)| all_records || !event.body.for_the_server_only())
+        .map(|(sequence, event)| ThreadStreamItem::Event { sequence, event: Box::new(event) })
+}
+
+const REPLAY_EVENTS: i64 = 128;
+const REPLAY_BYTES: i64 = 256 * 1024;
+pub(super) static SYNC_READS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
+
+async fn synchronize(store: &Store, tid: &str, after: Option<u64>, all: bool, windowed: bool) -> Result<(u64, Vec<domovoi_rpc::Encoded>), Failure> {
+    let store = store.clone();
+    let thread_id = tid.to_owned();
+    let permit = SYNC_READS.acquire().await.map_err(|e| projection_error(tid, e.to_string()))?;
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        if let Some(after) = after
+            && let Some((through, events)) = store.bounded_thread_replay(&thread_id, after, REPLAY_EVENTS, REPLAY_BYTES, all)
+                .map_err(|e| projection_error(&thread_id, e.to_string()))?
+        {
+            let items = replay_items(events, all)
+                .map(|item| encode_item(&thread_id, &Sent::Item(item)))
+                .collect::<Result<_, _>>()?;
+            return Ok((through, items));
+        }
+        if windowed {
+            let snapshot = super::history::snapshot(&store, &thread_id)?;
+            let through = snapshot.snapshot_sequence;
+            let item = encode_item(&thread_id, &Sent::Item(ThreadStreamItem::Snapshot(Box::new(snapshot))))?;
+            return Ok((through, vec![item]));
+        }
+        let (through, item) = snapshot_item(&store, &thread_id, all)?;
+        Ok((through, vec![encode_item(&thread_id, &Sent::Item(item))?]))
+    }).await.map_err(|e| projection_error(tid, e.to_string()))?
+}
+
+fn encode_item(tid: &str, sent: &Sent) -> Result<domovoi_rpc::Encoded, Failure> {
+    sent.encoded().map_err(|error| projection_error(tid, error.to_string()))
+}
+
+pub fn thread_stream(store: Store, input: ThreadSubscription, windowed: bool) -> BoxStream<'static, Result<domovoi_rpc::Encoded, Failure>> {
     async_stream::stream! {
         let mut live = store.subscribe();
         let (tid, all) = (input.thread_id.clone(), input.all_records);
-        let high_water = match store.latest_sequence() {
-            Ok(s) => s,
-            Err(e) => { yield Err(projection_error(&tid, e.to_string())); return; }
-        };
-        let mut last_sent = match input.after_sequence {
-            // What the client missed, if the log still reaches back to where it was.
-            Some(after) if after <= high_water && store.replays_from(after).unwrap_or(false) => {
-                match replay(&store, &tid, after, high_water, all) {
-                    Ok(items) => for item in items { yield Ok(Sent::Item(item)); },
-                    Err(e) => { yield Err(projection_error(&tid, e.to_string())); return; }
-                }
-                high_water
+        let mut last_sent = match synchronize(&store, &tid, input.after_sequence, all, windowed).await {
+            Ok((through, items)) => {
+                for item in items { yield Ok(item); }
+                through
             }
-            _ => match snapshot_item(&store, &tid, all) {
-                Ok((seq, item)) => { yield Ok(Sent::Item(item)); seq }
-                Err(e) => { yield Err(e); return; }
-            },
+            Err(e) => { yield Err(e); return; }
         };
         if input.request_completion_marker {
-            yield Ok(Sent::Item(ThreadStreamItem::Synchronized));
+            if windowed {
+                #[derive(Serialize)]
+                #[serde(rename_all = "camelCase")]
+                struct Synchronized {
+                    kind: &'static str,
+                    snapshot_sequence: u64,
+                }
+                yield domovoi_rpc::encoded(&Synchronized { kind: "synchronized", snapshot_sequence: last_sent })
+                    .map_err(|error| projection_error(&tid, error.to_string()));
+            } else {
+                yield encode_item(&tid, &Sent::Item(ThreadStreamItem::Synchronized));
+            }
         }
         loop {
             match live.recv().await {
@@ -174,22 +211,15 @@ pub fn thread_stream(store: Store, input: ThreadSubscription) -> BoxStream<'stat
                 Ok(e) if !e.thread_event.as_ref().is_some_and(|event| all || !event.body.for_the_server_only()) => {}
                 Ok(e) => {
                     last_sent = e.sequence;
-                    yield Ok(Sent::Live(e));
+                    yield encode_item(&tid, &Sent::Live(e));
                 }
                 Err(RecvError::Lagged(_)) => {
-                    // Fell behind the broadcast: the missed events are in the log
-                    // (an indexed read of this thread's), so send them instead of
-                    // a whole new snapshot. Live events up to there are skipped above.
-                    let missed = store.latest_sequence()
-                        .and_then(|through| Ok((through, replay(&store, &tid, last_sent, through, all)?)));
-                    match missed {
+                    match synchronize(&store, &tid, Some(last_sent), all, windowed).await {
                         Ok((through, items)) => {
-                            for item in items { yield Ok(Sent::Item(item)); }
+                            for item in items { yield Ok(item); }
                             last_sent = through;
                         }
-                        Err(_) => {
-                            if let Ok((seq, item)) = snapshot_item(&store, &tid, all) { last_sent = seq; yield Ok(Sent::Item(item)); }
-                        }
+                        Err(e) => { yield Err(e); return; }
                     }
                 }
                 Err(RecvError::Closed) => return,
@@ -308,6 +338,22 @@ mod tests {
         assert!(replayed.iter().all(|item| matches!(item, ThreadStreamItem::Event { .. })));
     }
 
+    #[tokio::test]
+    async fn a_resume_larger_than_the_replay_budget_starts_with_a_window() {
+        use crate::test_records::{append, message, thread};
+        let store = Store::new(crate::db::Db::open_in_memory().unwrap());
+        let origin = crate::orchestration::events::Origin::default();
+        append(&store, "t1", "thread.created", thread("t1", "p"), &origin).unwrap();
+        let large = "x".repeat(REPLAY_BYTES as usize);
+        append(&store, "t1", "message.updated", message("t1", "m1", "user", &large, false), &origin).unwrap();
+        assert!(store.bounded_thread_replay("t1", 1, REPLAY_EVENTS, REPLAY_BYTES, false).unwrap().is_none());
+
+        let input = ThreadSubscription { thread_id: "t1".into(), after_sequence: Some(1), request_completion_marker: false, all_records: false };
+        let encoded = thread_stream(store, input, true).next().await.unwrap().unwrap();
+        let item = serde_json::from_str::<ThreadStreamItem>(encoded.get()).unwrap();
+        assert!(matches!(item, ThreadStreamItem::Snapshot(snapshot) if snapshot.snapshot_sequence == 2));
+    }
+
     /// A client that reconnects is sent the events it missed while the log
     /// still holds them all, and the thread whole once the log was trimmed
     /// past where the client was.
@@ -324,7 +370,7 @@ mod tests {
             let store = store.clone();
             async move {
                 let subscription = ThreadSubscription { thread_id: "t1".into(), after_sequence: Some(after), request_completion_marker: false, all_records: false };
-                serde_json::to_value(thread_stream(store, subscription).next().await.unwrap().unwrap()).unwrap()
+                serde_json::from_str::<Value>(thread_stream(store, subscription, false).next().await.unwrap().unwrap().get()).unwrap()
             }
         };
         assert_eq!(first(3).await["kind"], "event", "the log holds everything after 3");

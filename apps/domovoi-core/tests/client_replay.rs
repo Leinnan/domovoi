@@ -1914,6 +1914,42 @@ fn a_thread_opened_again_shows_at_once_and_resumes_its_stream() {
     assert!(model.recent_threads.iter().any(|r| r.id == "t1"));
 }
 
+#[test]
+fn earlier_pages_merge_without_replacing_live_rows_or_leaking_across_switches() {
+    let (mut model, _) = connected();
+    model.supports_thread_windows = true;
+    let requests = sent_requests(&run(&mut model, Event::SelectThread { thread_id: "t1".into() }));
+    let subscription = requests.iter().find(|r| r["tag"] == "orchestration.subscribeThreadWindow").unwrap();
+    let sub = subscription["id"].as_str().unwrap();
+    let full = thread_with("t1", 3, 41);
+    let mut latest = full.clone();
+    latest["historyBefore"] = json!("41:i-t1-3");
+    latest["projection"]["turnItems"] = json!([full["projection"]["turnItems"][2]]);
+    let _ = sock(&mut model, chunk(sub, &[latest]));
+    assert!(DomovoiApp.view(&model).thread.unwrap().has_earlier);
+    assert_eq!(rows_of(&model, "t1"), ["t1 says 3"]);
+
+    let older = sent_requests(&run(&mut model, Event::LoadEarlier));
+    let request = older.iter().find(|r| r["tag"] == "orchestration.getThreadHistory").unwrap();
+    assert_eq!(request["payload"]["before"], "41:i-t1-3");
+    let details = |request: &Value, items: &[Value], before: Value| {
+        exit_ok(request["id"].as_str().unwrap(), json!({ "snapshotSequence": 41, "historyBefore": before, "items": items }))
+    };
+    let _ = sock(&mut model, chunk(sub, &said("t1", 4, 42)));
+    let items = full["projection"]["turnItems"].as_array().unwrap();
+    let _ = sock(&mut model, details(request, &items[1..], json!("40:i-t1-2")));
+    assert_eq!(rows_of(&model, "t1"), ["t1 says 2", "t1 says 3", "t1 says 4"]);
+    assert_eq!(model.thread_sequence, 43, "history cannot rewind the live cursor");
+
+    let next = sent_requests(&run(&mut model, Event::LoadEarlier));
+    let request = next.iter().find(|r| r["tag"] == "orchestration.getThreadHistory").unwrap();
+    let _ = run(&mut model, Event::SelectThread { thread_id: "t2".into() });
+    let _ = run(&mut model, Event::SelectThread { thread_id: "t1".into() });
+    let _ = sock(&mut model, details(request, &items[..1], Value::Null));
+    assert_eq!(rows_of(&model, "t1"), ["t1 says 2", "t1 says 3", "t1 says 4"]);
+    assert!(DomovoiApp.view(&model).thread.unwrap().has_earlier);
+}
+
 /// A stream item of thread `tid`'s: `item` with its event's envelope naming `tid`.
 fn of_thread(tid: &str, mut item: Value) -> Value {
     item["event"]["threadId"] = json!(tid);

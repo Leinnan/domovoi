@@ -129,11 +129,12 @@ methods! {
     "orchestration.getFullThreadDiff" => Unary, ORCHESTRATION_READ, Client;
     "orchestration.getNativeChildWork" => Unary, ORCHESTRATION_READ, Kept(kept::WORKFLOWS);
     "orchestration.getThreadFamily" => Unary, ORCHESTRATION_READ, Kept(kept::THREAD_READS);
+    "orchestration.getThreadHistory" => Unary, ORCHESTRATION_READ, Client;
     "orchestration.getThreadLinkMetadata" => Unary, ORCHESTRATION_READ, Kept(kept::THREAD_READS);
     "orchestration.getThreadProjection" => Unary, ORCHESTRATION_READ, Kept(kept::THREAD_READS);
     "orchestration.getThreadTitles" => Unary, ORCHESTRATION_READ, Kept(kept::THREAD_READS);
     "orchestration.getTurnDiff" => Unary, ORCHESTRATION_READ, Client;
-    "orchestration.getTurnItem" => Unary, ORCHESTRATION_READ, Kept(kept::THREAD_READS);
+    "orchestration.getTurnItem" => Unary, ORCHESTRATION_READ, Client;
     "orchestration.getWorkflowScript" => Unary, ORCHESTRATION_READ, Kept(kept::WORKFLOWS);
     "orchestration.getWorktreeThreadIds" => Unary, ORCHESTRATION_READ, Kept(kept::THREAD_READS);
     "orchestration.launchThread" => Unary, ORCHESTRATION_OPERATE, Client;
@@ -143,6 +144,7 @@ methods! {
     "orchestration.subscribeCommandOutput" => Stream, ORCHESTRATION_READ, Kept(kept::WORKFLOWS);
     "orchestration.subscribeShell" => Stream, ORCHESTRATION_READ, Client;
     "orchestration.subscribeThread" => Stream, ORCHESTRATION_READ, Client;
+    "orchestration.subscribeThreadWindow" => Stream, ORCHESTRATION_READ, Client;
     "peerLinks.link" => Unary, ACCESS_WRITE, Kept(kept::LINKED_SERVERS);
     "peerLinks.list" => Unary, ACCESS_READ, Kept(kept::LINKED_SERVERS);
     "peerLinks.unlink" => Unary, ACCESS_WRITE, Kept(kept::LINKED_SERVERS);

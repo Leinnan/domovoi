@@ -288,6 +288,7 @@ fn thread_chunk(model: &mut Model, tid: &str, item: Value) -> Vec<Cmd> {
         // A snapshot replaces the thread.
         ThreadStreamItem::Snapshot(snapshot) => {
             let sequence = snapshot.snapshot_sequence;
+            let before = snapshot.history_before.clone();
             let thread = Thread::from_snapshot(*snapshot);
             if thread.record.id.as_str() != tid {
                 note_misrouted(model, tid, "a snapshot of another thread");
@@ -295,6 +296,9 @@ fn thread_chunk(model: &mut Model, tid: &str, item: Value) -> Vec<Cmd> {
             }
             model.changes.frame_is_wide();
             model.cache_dirty = true;
+            model.invalidate_history_requests();
+            model.history_before = before;
+            model.thread_window_bytes = model.rpc.frame_bytes;
             model.thread_sequence = sequence;
             model.thread = Some(thread);
             model.thread_gaps = 0;
@@ -307,12 +311,15 @@ fn thread_chunk(model: &mut Model, tid: &str, item: Value) -> Vec<Cmd> {
             model.item_cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clear();
             model.markdown_prefixes.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clear();
             let urls = update::request_asset_urls(model);
-            if model.panel.open && model.panel.tab == "diff" {
-                return vec![urls, update::load_diff(model)];
+            if model.panel.open && matches!(model.panel.tab.as_str(), "diff" | "artifacts") {
+                return vec![urls, update::load_panel_tab(model)];
             }
             vec![urls]
         }
         ThreadStreamItem::Synchronized => {
+            if model.thread_windowed && let Some(sequence) = sequence {
+                model.thread_sequence = model.thread_sequence.max(sequence);
+            }
             model.changes.frame_is_wide();
             model.thread_loading = false;
             vec![update::request_asset_urls(model)]
@@ -361,6 +368,10 @@ fn thread_chunk(model: &mut Model, tid: &str, item: Value) -> Vec<Cmd> {
                 return vec![];
             }
             let Some(thread) = model.thread.as_mut() else { return vec![] };
+            if model.thread_windowed && !thread.turn_items.contains(&item_id) {
+                model.thread_sequence = model.thread_sequence.max(sequence);
+                return vec![];
+            }
             match thread.append(&item_id, at, &text, &updated_at) {
                 Some(applied) => match reach(thread, &applied) {
                     Reach::Nothing => {}
@@ -430,6 +441,7 @@ fn chunk(model: &mut Model, route: &Route, v: Value) -> Vec<Cmd> {
                 Some(ServerConfigStreamEvent::Snapshot(snapshot)) => {
                     let config = snapshot.config;
                     let terminal_details = config.terminal_details == Some(true);
+                    model.supports_thread_windows = config.thread_windows == Some(true);
                     model.set_settings(Some(config.settings));
                     model.providers = listed(model, "a provider", config.providers);
                     model.keybindings = listed(model, "a keyboard shortcut", config.keybindings);
@@ -684,6 +696,52 @@ fn exit_ok(model: &mut Model, route: Route, value: Value) -> Vec<Cmd> {
         }
         Route::FindInThread(rev) if rev == model.find.revision => {
             model.find.result = read::<FindInThreadResult>(model, "what was found in the thread", value);
+            if let Some(found) = model.find.result.as_ref().and_then(|r| r.active_match.as_ref())
+                && model.thread.as_ref().is_some_and(|thread| {
+                    !thread.turn_items.contains(found.entry_id.as_str())
+                        && thread.turn_item_of_message(&found.entry_id.as_str().into()).is_none()
+                })
+            {
+                let id = found.entry_id.clone();
+                return vec![update::reveal_history_match(model, &id)];
+            }
+            vec![]
+        }
+        Route::ThreadItemDetail { thread_id, item_id, generation }
+            if model.selected_thread.as_deref() == Some(thread_id.as_str()) && model.history_generation == generation =>
+        {
+            #[derive(serde::Deserialize)]
+            struct Detail {
+                item: Option<TurnItem>,
+            }
+            if let Some(item) = read::<Detail>(model, "the command's output", value).and_then(|detail| detail.item)
+                && item.id().as_str() == item_id
+                && let Some(thread) = model.thread.as_mut()
+            {
+                thread.hydrate_item(item);
+                model.thread_window_bytes = model.thread_window_bytes.saturating_add(model.rpc.frame_bytes);
+            }
+            vec![]
+        }
+        Route::ThreadHistory { thread_id, generation, find_revision }
+            if model.selected_thread.as_deref() == Some(&thread_id)
+                && model.history_generation == generation
+                && find_revision.is_none_or(|rev| model.find.open && rev == model.find.revision) =>
+        {
+            if find_revision.is_none() {
+                model.history_loading = false;
+            }
+            if let Some(page) = read::<domovoi_model::typed::ThreadHistory>(model, "earlier messages", value)
+                && let Some(thread) = model.thread.as_mut()
+                && page.snapshot_sequence >= thread.snapshot_sequence
+            {
+                if find_revision.is_none() {
+                    model.history_before.clone_from(&page.history_before);
+                }
+                thread.extend_history(page);
+                model.thread_window_bytes = model.thread_window_bytes.saturating_add(model.rpc.frame_bytes);
+                return vec![update::request_asset_urls(model)];
+            }
             vec![]
         }
         Route::Mention(rev) => {
@@ -1272,7 +1330,30 @@ fn exit_failed(model: &mut Model, route: Route, cause: &Value) -> Vec<Cmd> {
             model.toast("success", format!("Started “{title}”."));
             return vec![];
         }
+        Route::Thread(tid)
+            if model.thread_windowed && message == "Unknown request tag: orchestration.subscribeThreadWindow" =>
+        {
+            model.supports_thread_windows = false;
+            model.thread_windowed = false;
+            model.thread_sequence = 0;
+            model.history_before = None;
+            model.invalidate_history_requests();
+            return vec![update::subscribe_thread(model, tid)];
+        }
         Route::Thread(_) => model.thread_loading = false,
+        Route::ThreadItemDetail { thread_id, generation, .. }
+            if model.selected_thread.as_deref() != Some(thread_id.as_str()) || model.history_generation != *generation => return vec![],
+        Route::ThreadHistory { thread_id, generation, find_revision } => {
+            if model.selected_thread.as_deref() != Some(thread_id.as_str())
+                || model.history_generation != *generation
+                || find_revision.is_some_and(|rev| !model.find.open || rev != model.find.revision)
+            {
+                return vec![];
+            }
+            if find_revision.is_none() {
+                model.history_loading = false;
+            }
+        }
         _ => {}
     }
     let label = match &route {

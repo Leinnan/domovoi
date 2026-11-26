@@ -8,6 +8,7 @@ pub mod context;
 pub mod effects;
 pub mod naming;
 pub mod events;
+pub mod history;
 pub mod failure;
 pub mod projection;
 pub mod recovery;

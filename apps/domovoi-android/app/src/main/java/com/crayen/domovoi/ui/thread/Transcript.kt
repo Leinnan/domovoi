@@ -288,6 +288,15 @@ fun Transcript(thread: ThreadPageView, retryBlocked: Boolean, actions: Transcrip
                     }
                 }
             }
+            if (thread.hasEarlier) {
+                item("earlier") {
+                    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                        TextButton(onClick = { actions.send(Event.LoadEarlier) }, enabled = !thread.loadingEarlier) {
+                            Text(if (thread.loadingEarlier) "Loading earlier messages…" else "Show earlier messages")
+                        }
+                    }
+                }
+            }
             if (thread.loading && thread.items.isEmpty()) {
                 item("loading") { Box(Modifier.fillMaxWidth().padding(Space.xxl), contentAlignment = Alignment.Center) { CircularProgressIndicator() } }
             } else if (thread.items.isEmpty() && thread.pendingSends.isEmpty() && thread.queued.isEmpty() && !thread.working && thread.backgroundTasks.isEmpty()) {

@@ -58,6 +58,17 @@ When the fixtures or a bench's subject change, the old and the new are run
 once on the same build and that row is written down, so a new input does not
 read as a change of speed.
 
+### Opening long threads
+
+`cargo test --release -p domovoi-server --bin domovoi-server perf_thread_window_by_history_length -- --ignored --nocapture --test-threads=1`
+compares full and windowed server snapshots in alternation. It reports
+median build plus encode time and uncompressed bytes for 793, 2,000 and
+10,000 command-heavy items. The synthetic case exercises the size of the
+transcript independently of the number of runs. For native switch latency,
+measure from selection through the first usable transcript and record
+separately for a cold switch, a cached switch, and a reconnect that needs
+a replacement window.
+
 ### The data migration
 
 Each step of a records rewrite (`apps/server/src/data_format.rs`) is timed and

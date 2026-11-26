@@ -56,6 +56,7 @@ pub enum Act {
     Revert(String, String),
     /// Draw earlier rows too.
     Earlier,
+    EarlierPage,
     /// The plan and checklist opened or shut.
     Progress,
     /// The find box's text.

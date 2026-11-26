@@ -16,14 +16,13 @@ use std::time::Duration;
 use crux_core::{Core, Request};
 use crux_http::HttpError;
 use crux_http::protocol::{HttpHeader, HttpRequest, HttpResponse, HttpResult};
-use domovoi_core::delta::ViewDelta;
+use domovoi_core::delta::{FfiApp, ViewDelta};
 use domovoi_core::local::{LocalOperation, LocalOutput};
 use domovoi_core::notify::{NotifyOperation, NotifyOutput};
 use domovoi_core::socket::{SocketEvent, SocketOperation};
 use domovoi_core::store::{StoreOperation, StoreOutput};
 use domovoi_core::tunnel::{TunnelOperation, TunnelOutput};
-use domovoi_core::view::ViewModel;
-use domovoi_core::{DomovoiApp, Effect, Event};
+use domovoi_core::{Effect, Event};
 use domovoi_remote::{Bridge, ClientEndpoint, Network, RelayUrl};
 use futures::{SinkExt, StreamExt};
 use tokio::sync::{Mutex, Notify, mpsc};
@@ -187,7 +186,7 @@ struct FocusContext {
 }
 
 struct Engine {
-    core: Core<DomovoiApp>,
+    core: Core<FfiApp>,
     store: Arc<SecureStore>,
     config: HostConfig,
     http: reqwest::Client,
@@ -900,21 +899,17 @@ pub fn start(store: Arc<SecureStore>, config: HostConfig) -> (HostHandle, mpsc::
     let coalesce = config.render_coalesce;
     let engine = Engine::new(store, config, ui_tx.clone());
 
-    let initial_vm = engine.core.view();
-    let initial_delta = ViewDelta::between(None, &initial_vm);
+    let initial_delta = engine.core.view();
     // The channel is new and empty, so this fits.
     let _ = ui_tx.try_send(HostEvent::Delta(Box::new(initial_delta)));
 
     let render_engine = Arc::clone(&engine);
     let render_task = tokio::spawn(async move {
-        let mut last_view: Option<ViewModel> = Some(initial_vm);
         loop {
             render_engine.render_notify.notified().await;
             tokio::time::sleep(coalesce).await;
             if render_engine.render_dirty.swap(false, Ordering::AcqRel) {
-                let next = render_engine.core.view();
-                let delta = ViewDelta::between(last_view.as_ref(), &next);
-                last_view = Some(next);
+                let delta = render_engine.core.view();
                 if ui_tx.send(HostEvent::Delta(Box::new(delta))).await.is_err() {
                     break;
                 }

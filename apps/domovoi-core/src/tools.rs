@@ -782,6 +782,10 @@ pub(crate) fn command(v: &mut ItemView, c: &CommandExecutionItem, ctx: Ctx) {
     if v.kind != "command" {
         v.kind = "command".into();
     }
+    if c.output_omitted == Some(true) {
+        v.truncated = true;
+        v.expandable = true;
+    }
     v.exit_code = exit;
     match exit {
         Some(code) if code != 0 => {

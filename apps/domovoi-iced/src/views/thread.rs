@@ -129,6 +129,13 @@ pub fn thread_view<'a>(app: &'a App, thread: &'a ThreadPageView) -> Element<'a, 
     // Transcript body
     let mut transcript = Column::new().spacing(L).padding([L, CONTENT_GUTTER]).max_width(TRANSCRIPT_MAX_WIDTH).width(Length::Fill);
 
+    if thread.has_earlier {
+        transcript = transcript.push(w::small_button(
+            if thread.loading_earlier { "Loading earlier messages…" } else { "Show earlier messages" },
+            w::secondary_style,
+            (!thread.loading_earlier).then(|| core(Event::LoadEarlier)),
+        ));
+    }
     if thread.loading && thread.items.is_empty() {
         transcript = transcript.push(w::muted("Loading thread…", TEXT_UI));
     } else if thread.items.is_empty() && thread.pending_sends.is_empty() && thread.queued.is_empty() && !thread.working && thread.background_tasks.is_empty() {

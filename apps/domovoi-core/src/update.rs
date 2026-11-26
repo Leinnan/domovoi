@@ -75,9 +75,15 @@ pub fn request_asset_urls(model: &mut Model) -> Cmd {
         return Command::done();
     }
     let Some(thread) = model.thread.as_ref() else { return Command::done() };
+    let shown_messages: std::collections::HashSet<_> = if model.thread_windowed {
+        thread.turn_items.iter().filter_map(domovoi_model::typed::TurnItem::message_id).collect()
+    } else {
+        Default::default()
+    };
     let wanted: Vec<ImageAttachment> = thread
         .messages
         .iter()
+        .filter(|message| !model.thread_windowed || shown_messages.contains(&message.id))
         .flat_map(|m| &m.attachments)
         .filter_map(|a| match a {
             ChatAttachment::Image(image) if !model.asset_urls.contains_key(&image.id) => Some(image.clone()),
@@ -198,6 +204,7 @@ fn respond(thread_id: &str, request_id: &str, decision: &str, answers: Option<Ve
 /// The socket is gone with every open request: nothing answers them now,
 /// so whatever waits on one stops waiting (sends in the outbox go again).
 pub fn requests_lost(model: &mut Model) {
+    model.invalidate_history_requests();
     model.rpc.reset();
     model.asset_urls.retain(|_, url| !url.is_empty());
     model.socket_lost_flags();
@@ -271,12 +278,67 @@ pub fn subscribe_thread(model: &mut Model, thread_id: &str) -> Cmd {
     // The cursor is resumed only into the thread it is the cursor of.
     let showing = model.held_thread(thread_id).is_some() && model.thread_sequence > 0;
     model.thread_loading = !showing;
-    let request = requests::orchestration_subscribe_thread(&thread_id.into(), showing.then_some(model.thread_sequence));
+    if !showing {
+        model.thread_windowed = model.supports_thread_windows && !model.thread_force_full && !(model.panel.open && model.panel.tab == "artifacts");
+    }
+    let after = showing.then_some(model.thread_sequence);
+    let request = if model.thread_windowed {
+        requests::orchestration_subscribe_thread_window(&thread_id.into(), after)
+    } else {
+        requests::orchestration_subscribe_thread(&thread_id.into(), after)
+    };
+    call(model, request, route)
+}
+
+pub fn load_earlier(model: &mut Model) -> Cmd {
+    if model.history_loading || model.connection != Connection::Connected {
+        return Command::done();
+    }
+    let (Some(thread), Some(before)) = (model.selected_thread.clone(), model.history_before.as_deref()) else {
+        return Command::done();
+    };
+    let request = requests::orchestration_get_thread_history(&thread.as_str().into(), before);
+    model.history_loading = true;
+    call(model, request, Route::ThreadHistory { thread_id: thread, generation: model.history_generation, find_revision: None }).and(render())
+}
+
+/// Temporarily restores the full projection for actions that need rows across the whole transcript.
+pub fn load_full_transcript(model: &mut Model) -> Cmd {
+    if model.connection != Connection::Connected {
+        return Command::done();
+    }
+    let Some(tid) = model.selected_thread.clone().filter(|_| model.history_before.is_some()) else {
+        return Command::done();
+    };
+    let route = Route::Thread(tid.clone());
+    let stop = unsubscribe(model, &route);
+    model.invalidate_history_requests();
+    model.thread_windowed = false;
+    model.thread_force_full = true;
+    model.thread_sequence = 0;
+    model.history_before = None;
+    stop.and(call(model, requests::orchestration_subscribe_thread(&tid.as_str().into(), None), route))
+}
+
+pub fn reveal_history_match(model: &mut Model, entry_id: &str) -> Cmd {
+    let Some(thread) = model.selected_thread.as_ref().filter(|_| model.history_before.is_some()).cloned() else {
+        return Command::done();
+    };
+    let request = requests::orchestration_get_thread_history_around(&thread.as_str().into(), entry_id);
+    let route = Route::ThreadHistory {
+        thread_id: thread, generation: model.history_generation, find_revision: Some(model.find.revision),
+    };
     call(model, request, route)
 }
 
 fn unsubscribe_threads(model: &mut Model, keep: Option<&str>) -> Cmd {
-    let open: Vec<Route> = model.rpc_routes().into_iter().filter(|r| matches!(r, Route::Thread(t) if Some(t.as_str()) != keep)).collect();
+    let open: Vec<Route> = model.rpc_routes().into_iter().filter(|route| match route {
+        Route::Thread(thread) | Route::ThreadHistory { thread_id: thread, .. } | Route::ThreadItemDetail { thread_id: thread, .. } => {
+            Some(thread.as_str()) != keep
+        }
+        Route::FindInThread(_) => model.thread_windowed,
+        _ => false,
+    }).collect();
     Command::all(open.iter().map(|r| unsubscribe(model, r)).collect::<Vec<_>>())
 }
 
@@ -328,7 +390,7 @@ pub fn load_panel_tab(model: &mut Model) -> Cmd {
             }
             Command::done()
         }
-        "artifacts" => ensure_active_artifact_loaded(model),
+        "artifacts" => load_full_transcript(model).and(ensure_active_artifact_loaded(model)),
         _ => Command::done(),
     }
 }
@@ -1624,8 +1686,20 @@ pub fn update(event: Event, model: &mut Model) -> Cmd {
             model.thread_gaps = 0;
             stop.and(subscribe_thread(model, &tid)).and(render())
         }
+        Event::LoadEarlier => load_earlier(model),
         Event::ExpandItem { id } => {
-            model.expanded.insert(id);
+            let detail = model.thread.as_ref().and_then(|thread| {
+                let domovoi_model::typed::TurnItem::CommandExecution(command) = thread.turn_items.get(id.as_str())? else { return None };
+                (command.output_omitted == Some(true)).then(|| thread.record.id.as_str().to_owned())
+            });
+            model.expanded.insert(id.clone());
+            if let Some(thread_id) = detail {
+                let request = requests::orchestration_get_turn_item(&thread_id, &id);
+                let route = Route::ThreadItemDetail { thread_id, item_id: id, generation: model.history_generation };
+                if !model.rpc.has(&route) {
+                    return call(model, request, route).and(render());
+                }
+            }
             render()
         }
         Event::CancelSend { id } => {

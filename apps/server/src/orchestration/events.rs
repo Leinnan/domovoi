@@ -226,15 +226,27 @@ fn drop_superseded_flushes(tx: &rusqlite::Connection, tid: &str, kind: &str, eve
     Ok(())
 }
 
+// Keep the indexed replay predicate aligned with EventBody::for_the_server_only.
+macro_rules! visible_events_sql {
+    ($all:literal) => {
+        concat!(" AND (", $all, " OR type NOT IN (
+            'run-attempt.created', 'run-attempt.updated', 'node.updated',
+            'provider-session.attached', 'provider-session.updated', 'provider-session.detached',
+            'provider-turn.updated', 'checkpoint-scope.created', 'context-handoff.updated',
+            'context-transfer.created', 'context-transfer.updated'
+        )) ")
+    };
+}
+
 /// The thread's events in `(after, through]` read on `c`. One that does not
 /// decode is left out with a warning.
-fn thread_events_on(c: &rusqlite::Connection, thread_id: &str, after: i64, through: i64) -> rusqlite::Result<Vec<StoredEvent>> {
-    let mut st = c.prepare_cached(
+fn thread_events_on(c: &rusqlite::Connection, thread_id: &str, after: i64, through: i64, all: bool) -> rusqlite::Result<Vec<StoredEvent>> {
+    let mut st = c.prepare_cached(concat!(
         "SELECT sequence, type, payload FROM events
-         WHERE aggregate_kind = 'thread' AND aggregate_id = ?1 AND sequence > ?2 AND sequence <= ?3
-         ORDER BY sequence",
-    )?;
-    let mut rows = st.query(params![thread_id, after, through])?;
+         WHERE aggregate_kind = 'thread' AND aggregate_id = ?1 AND sequence > ?2 AND sequence <= ?3",
+        visible_events_sql!("?4"), "ORDER BY sequence",
+    ))?;
+    let mut rows = st.query(params![thread_id, after, through, all])?;
     let mut events = Vec::new();
     while let Some(row) = rows.next()? {
         let event_type: String = row.get(1)?;
@@ -262,12 +274,24 @@ fn thread_events_on(c: &rusqlite::Connection, thread_id: &str, after: i64, throu
 /// `None` if the thread has no record, or one that does not decode; a record
 /// of its collections that does not decode is left out with a warning.
 pub(super) fn load_thread(c: &rusqlite::Connection, thread_id: &str) -> rusqlite::Result<Option<Thread>> {
+    load_thread_records(c, thread_id, true, true)
+}
+
+pub(super) fn load_thread_records(c: &rusqlite::Connection, thread_id: &str, all: bool, timeline: bool) -> rusqlite::Result<Option<Thread>> {
     let record: Option<String> =
         c.prepare_cached("SELECT record FROM threads WHERE id = ?1")?.query_row(params![thread_id], |r| r.get(0)).optional()?;
     let Some(record) = record.and_then(|r| decode_record::<AppThread>(&r, "thread record")) else { return Ok(None) };
     // Put in the order they first appeared here, not by the database: it
     // would copy every record's text to sort them.
-    let mut st = c.prepare_cached("SELECT kind, record, first_sequence FROM thread_entities WHERE thread_id = ?1")?;
+    let mut st = c.prepare_cached(if all {
+        "SELECT kind, record, first_sequence FROM thread_entities WHERE thread_id = ?1"
+    } else if timeline {
+        "SELECT kind, record, first_sequence FROM thread_entities WHERE thread_id = ?1 AND kind IN
+         ('runs', 'subagents', 'providerThreads', 'runtimeRequests', 'messages', 'plans', 'turnItems', 'checkpoints')"
+    } else {
+        "SELECT kind, record, first_sequence FROM thread_entities WHERE thread_id = ?1 AND kind IN
+         ('runs', 'subagents', 'providerThreads', 'runtimeRequests', 'messages', 'plans', 'checkpoints')"
+    })?;
     let mut rows = st.query(params![thread_id])?;
     let mut records: Vec<(i64, StoredRecord)> = Vec::new();
     while let Some(row) = rows.next()? {
@@ -447,17 +471,6 @@ impl Store {
         Ok(self.thread_cache().shell(thread_id))
     }
 
-    /// The thread as it is now, from the thread cache: a thread someone
-    /// watches is already there, kept current event by event, and is not
-    /// read from the database again for each client that opens it.
-    pub fn thread(&self, thread_id: &str) -> Result<Option<Arc<Thread>>, StoreError> {
-        if self.db().in_batch() {
-            return Ok(self.load_thread(thread_id)?.map(Arc::new));
-        }
-        self.cache_thread(thread_id)?;
-        Ok(self.thread_cache().thread(thread_id))
-    }
-
     /// Puts the thread in the thread cache, unless it is there or there is no such thread.
     fn cache_thread(&self, thread_id: &str) -> Result<(), StoreError> {
         if !self.thread_cache().contains(thread_id) {
@@ -474,7 +487,7 @@ impl Store {
                     // Under the writer lock: the thread's events committed since
                     // the load are applied, and none lands before the entry.
                     let sequence: i64 = c.query_row("SELECT COALESCE(MAX(sequence), 0) FROM events", [], |r| r.get(0))?;
-                    for event in thread_events_on(c, thread_id, loaded_at, sequence)? {
+                    for event in thread_events_on(c, thread_id, loaded_at, sequence, true)? {
                         if let Some(event) = event.thread_event {
                             thread.apply(event);
                         }
@@ -685,8 +698,33 @@ impl Store {
 
     /// The thread's events in `(after, through]`, read through the
     /// `events_aggregate` index (not by filtering the whole range).
+    #[cfg(test)]
     pub fn thread_events_after(&self, thread_id: &str, after: u64, through: u64) -> Result<Vec<StoredEvent>, StoreError> {
-        Ok(self.db().read(|c| thread_events_on(c, thread_id, after as i64, through as i64))?)
+        Ok(self.db().read(|c| thread_events_on(c, thread_id, after as i64, through as i64, true))?)
+    }
+
+    /// Reads a reconnect's watermark, retention boundary and replay in one read transaction.
+    /// None means the reader needs a replacement snapshot.
+    pub(super) fn bounded_thread_replay(&self, thread_id: &str, after: u64, max_events: i64, max_bytes: i64, all: bool) -> Result<Option<(u64, Vec<StoredEvent>)>, StoreError> {
+        Ok(self.db().read(|c| {
+            let tx = c.unchecked_transaction()?;
+            let through: i64 = tx.query_row("SELECT COALESCE(MAX(sequence), 0) FROM events", [], |row| row.get(0))?;
+            let oldest: i64 = tx.query_row("SELECT COALESCE(MIN(sequence), 0) FROM events", [], |row| row.get(0))?;
+            if after > through as u64 || after.saturating_add(1) < oldest as u64 {
+                return Ok(None);
+            }
+            let (count, bytes): (i64, i64) = tx.prepare_cached(concat!(
+                "SELECT COUNT(*), COALESCE(SUM(bytes), 0) FROM (
+                    SELECT length(CAST(payload AS BLOB)) AS bytes FROM events
+                    WHERE aggregate_kind = 'thread' AND aggregate_id = ?1 AND sequence > ?2 AND sequence <= ?3",
+                visible_events_sql!("?5"), "ORDER BY sequence LIMIT ?4)",
+            ))?.query_row(params![thread_id, after as i64, through, max_events + 1, all], |row| Ok((row.get(0)?, row.get(1)?)))?;
+            if count > max_events || bytes > max_bytes {
+                return Ok(None);
+            }
+            let events = thread_events_on(&tx, thread_id, after as i64, through, all)?;
+            Ok(Some((through as u64, events)))
+        })?)
     }
 
     /// What the request `command_id` was answered with, if it was carried out

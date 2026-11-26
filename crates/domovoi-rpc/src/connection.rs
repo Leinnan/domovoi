@@ -83,6 +83,18 @@ pub enum Outgoing {
     Pong,
 }
 
+/// Stream chunks waiting for the transport can be discarded after an interrupt.
+struct Queued {
+    message: Outgoing,
+    cancel: Option<CancellationToken>,
+}
+
+impl From<Outgoing> for Queued {
+    fn from(message: Outgoing) -> Self {
+        Self { message, cancel: None }
+    }
+}
+
 /// How a request ended ([`crate::message::ExitEncoded`] as it is written).
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "_tag")]
@@ -144,10 +156,13 @@ pub async fn serve_connection<C, R, W, RE>(
     // requests feeding it (a stream stops pulling, and a live stream that
     // falls behind its broadcast resyncs from the log) instead of queueing
     // without limit in this process.
-    let (tx, mut rx) = mpsc::channel::<Outgoing>(OUTBOUND_QUEUE);
+    let (tx, mut rx) = mpsc::channel::<Queued>(OUTBOUND_QUEUE);
     let pack = options.pack;
     let writer = tokio::spawn(async move {
-        while let Some(message) = rx.recv().await {
+        while let Some(Queued { message, cancel }) = rx.recv().await {
+            if cancel.as_ref().is_some_and(CancellationToken::is_cancelled) {
+                continue;
+            }
             let frame = message.frame();
             let frame = match pack {
                 false => frame,
@@ -157,6 +172,9 @@ pub async fn serve_connection<C, R, W, RE>(
                     Err(_) => return,
                 },
             };
+            if cancel.as_ref().is_some_and(CancellationToken::is_cancelled) {
+                continue;
+            }
             if outgoing.send(frame).await.is_err() {
                 return;
             }
@@ -179,7 +197,7 @@ pub async fn serve_connection<C, R, W, RE>(
             Ok(m) => m,
             Err(e) => {
                 let _ = tx
-                    .send(Outgoing::Defect { defect: Value::String(format!("Failed to decode client message: {e}")) })
+                    .send(Outgoing::Defect { defect: Value::String(format!("Failed to decode client message: {e}")) }.into())
                     .await;
                 continue;
             }
@@ -189,7 +207,7 @@ pub async fn serve_connection<C, R, W, RE>(
                 FromClient::Ping => {
                     // Never waits: this loop must keep reading acks. With the
                     // queue full the client is not reading pongs anyway.
-                    let _ = tx.try_send(Outgoing::Pong);
+                    let _ = tx.try_send(Outgoing::Pong.into());
                 }
                 FromClient::Ack { request_id } => {
                     if let Some(entry) = inflight.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(&request_id) {
@@ -222,7 +240,7 @@ fn start_request<C: Send + Sync + 'static>(
     router: &Arc<Router<C>>,
     ctx: &Arc<C>,
     mut request: Request,
-    tx: &mpsc::Sender<Outgoing>,
+    tx: &mpsc::Sender<Queued>,
     inflight: &InflightMap,
     tasks: &TaskTracker,
     options: &ConnectionOptions,
@@ -285,7 +303,10 @@ fn start_request<C: Send + Sync + 'static>(
                             }
                         }
                         if !values.is_empty() {
-                            let _ = tx.send(Outgoing::Chunk { request_id: id.clone(), values }).await;
+                            let _ = tx.send(Queued {
+                                message: Outgoing::Chunk { request_id: id.clone(), values },
+                                cancel: Some(cancel.clone()),
+                            }).await;
                             if supports_ack {
                                 ack.notified().await;
                             }
@@ -306,7 +327,7 @@ fn start_request<C: Send + Sync + 'static>(
         if let Exit::Failure { cause } = &exit {
             record_failure(&tracing::Span::current(), cause);
         }
-        let _ = tx.send(Outgoing::Exit { request_id: id.clone(), exit }).await;
+        let _ = tx.send(Outgoing::Exit { request_id: id.clone(), exit }.into()).await;
     }.instrument(span));
 }
 

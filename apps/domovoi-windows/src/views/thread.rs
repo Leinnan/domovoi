@@ -136,6 +136,17 @@ pub fn thread(core: &CoreLink, thread: &Thread, sidebar: &SidebarView, icons: Ic
                 .into(),
         );
     }
+    if hidden == 0 && page.has_earlier {
+        let on_act = draw.on_act.clone();
+        rows.push(
+            Button::new()
+                .horizontal_alignment(HorizontalAlignment::Center)
+                .content(caption(if page.loading_earlier { "Loading earlier messages…" } else { "Show earlier messages" }))
+                .is_enabled(!page.loading_earlier)
+                .on_click(move || on_act.call(Act::EarlierPage))
+                .into(),
+        );
+    }
     rows.extend(shown.iter().map(|entry| items::entry(core, entry, draw)));
     if page.working || !page.background_tasks.is_empty() {
         rows.push(working(core, page, draw.on_act));

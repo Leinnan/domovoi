@@ -36,6 +36,7 @@ pub fn item_id(item_id: &str) -> Id {
 #[derive(Debug, Clone, PartialEq, Default)]
 struct Signature {
     rows: usize,
+    first_id: String,
     last_id: String,
     last_len: usize,
     cards: usize,
@@ -46,6 +47,7 @@ impl Signature {
         let last = t.items.last();
         Self {
             rows: t.items.len(),
+            first_id: t.items.first().map(|item| item.id.clone()).unwrap_or_default(),
             last_id: last.map(|i| i.id.clone()).unwrap_or_default(),
             last_len: last.map_or(0, |i| i.text.len() + i.blocks.len() + i.output.as_ref().map_or(0, |o| o.len())),
             cards: t.pending_requests.len() + t.queued.len() + t.pending_sends.len() + t.background_tasks.len() + usize::from(t.working),
@@ -66,6 +68,7 @@ pub struct Transcript {
     /// Distance from the bottom per thread, for threads left scrolled up.
     memory: HashMap<String, f32>,
     find_item: Option<String>,
+    history_prepended: bool,
 }
 
 impl Transcript {
@@ -87,11 +90,13 @@ impl Transcript {
             self.last = None;
             self.unseen = false;
             self.find_item = None;
+            self.history_prepended = false;
             let from_end = self.memory.get(&t.id).copied().unwrap_or(0.0);
             self.following = from_end <= FOLLOW_SLACK;
             task = scroll_to_from_end(from_end);
         } else if sig != self.signature && !self.following && sig.rows > self.signature.rows {
-            self.unseen = true;
+            self.history_prepended = sig.first_id != self.signature.first_id && sig.last_id == self.signature.last_id;
+            self.unseen |= !self.history_prepended;
         }
         self.signature = sig;
 
@@ -116,7 +121,11 @@ impl Transcript {
             Some((prev_from_end, prev_h, prev_bounds)) if (content_h - prev_h).abs() > 0.5 && (bounds_h - prev_bounds).abs() < 0.5 => {
                 if !self.following {
                     let top = prev_h - prev_bounds - prev_from_end;
-                    let pinned = (content_h - bounds_h - top).max(0.0);
+                    let pinned = if std::mem::take(&mut self.history_prepended) {
+                        prev_from_end
+                    } else {
+                        (content_h - bounds_h - top).max(0.0)
+                    };
                     self.last = Some((pinned, content_h, bounds_h));
                     task = scroll_to_from_end(pinned);
                     self.remember(pinned);

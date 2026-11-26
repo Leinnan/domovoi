@@ -33,6 +33,7 @@ struct Transcript: View {
     /// million points for a 50,000-point thread) and each move corrects the
     /// guess by a little. The rest comes back with "Show Earlier".
     @State private var shownLines = Transcript.window
+    @State private var earlierAnchor: String?
     static let window = 80
 
     private struct ActivityJump {
@@ -94,6 +95,22 @@ struct Transcript: View {
                         }
                         .buttonStyle(.borderless)
                         .font(TypeRole.meta)
+                        .id("earlier")
+                    } else if thread.hasEarlier {
+                        Button {
+                            earlierAnchor = lines.first.flatMap { line in
+                                switch line {
+                                case .item(let item): return item.id
+                                case .group(_, _, let items): return items.first?.id
+                                }
+                            }
+                            book.pinning = false
+                            core.update(.loadEarlier)
+                        } label: {
+                            Text(thread.loadingEarlier ? "Loading earlier messages…" : "Show Earlier").frame(maxWidth: .infinity).tapTarget()
+                        }
+                        .buttonStyle(.borderless)
+                        .disabled(thread.loadingEarlier)
                         .id("earlier")
                     }
                     ForEach(lines) { line in
@@ -184,6 +201,17 @@ struct Transcript: View {
                     try? await Task.sleep(for: .seconds(delay))
                     if following { toEnd(proxy) }
                 }
+            }
+            .onChange(of: thread.loadingEarlier) { _, loading in
+                guard !loading, let anchor = earlierAnchor else { return }
+                earlierAnchor = nil
+                let line = core.view.lines.first { line in
+                    switch line {
+                    case .item(let item): return item.id == anchor
+                    case .group(_, _, let items): return items.contains { $0.id == anchor }
+                    }
+                }
+                showEarlier(proxy, keeping: line?.id)
             }
             .onScrollPhaseChange { _, phase in
                 userScrolling = phase == .tracking || phase == .interacting || phase == .decelerating

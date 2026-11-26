@@ -303,6 +303,7 @@ pub enum Event {
     CancelSend { id: String },
     /// Shows a row's long output in full.
     ExpandItem { id: String },
+    LoadEarlier,
     /// Puts a message's text in the composer to change and send again.
     EditMessage { text: String },
     /// Adds `text` to the end of the draft (a quoted diff line), on its own paragraph.

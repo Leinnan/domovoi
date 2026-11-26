@@ -524,6 +524,10 @@ impl MainWindow {
                 self.transcript.shown += transcript::WINDOW;
                 self.refresh_pictures();
             }
+            Act::EarlierPage => {
+                self.transcript.shown += transcript::WINDOW;
+                self.send(Event::LoadEarlier);
+            }
             Act::Progress => {
                 self.transcript.progress_open = !self.transcript.progress_open;
                 // The page is shorter with the plan open: one that was at its end stays there.

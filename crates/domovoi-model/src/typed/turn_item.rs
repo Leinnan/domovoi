@@ -223,6 +223,23 @@ impl TurnItem {
         }
     }
 
+    /// Keeps MCP image descriptors while removing data fetched through an asset URL.
+    pub fn strip_inline_images(&mut self) {
+        let output = match self {
+            Self::DynamicTool(tool) => tool.output.as_mut(),
+            Self::Other(item) if item.item_type() == "mcp_tool_call" => item.record.get_mut("output"),
+            _ => None,
+        };
+        let Some(parts) = output.and_then(|output| output.get_mut("content")).and_then(Value::as_array_mut) else { return };
+        for part in parts {
+            if part.get("type").and_then(Value::as_str) == Some("image")
+                && let Some(descriptor) = part.as_object_mut()
+            {
+                descriptor.remove("data");
+            }
+        }
+    }
+
     /// The text that grows while the item streams: a reply's or reasoning's
     /// text, a proposed plan's markdown, a command's output once it has some.
     /// `None` for an item that does not stream.

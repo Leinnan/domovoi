@@ -245,6 +245,14 @@ const MIGRATIONS: &[&str] = &[
     // tool's new name.
     "UPDATE OR REPLACE thread_permission_rules SET rule = 'mcp__domovoi__' || substr(rule, length('mcp__t3__t3_') + 1) WHERE substr(rule, 1, length('mcp__t3__t3_')) = 'mcp__t3__t3_';
      UPDATE OR REPLACE thread_permission_rules SET rule = 'mcp__domovoi__' || substr(rule, length('mcp__t3__') + 1) WHERE substr(rule, 1, length('mcp__t3__')) = 'mcp__t3__';",
+    // 19: keyset reads of a thread's transcript in insertion order.
+    "CREATE INDEX thread_entities_history ON thread_entities (thread_id, first_sequence, entity_id)
+     WHERE kind = 'turnItems';
+     CREATE INDEX thread_entities_pending_items ON thread_entities (thread_id)
+     WHERE kind = 'turnItems' AND CASE WHEN json_valid(record) THEN
+       json_extract(record, '$.type') IN ('approval_request', 'user_input_request')
+       OR (json_extract(record, '$.type') = 'secret_request' AND json_extract(record, '$.secretStatus') = 'pending')
+     ELSE 0 END;",
 ];
 
 impl Db {

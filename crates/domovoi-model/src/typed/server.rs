@@ -942,6 +942,9 @@ pub struct ServerConfigOf<S> {
     /// Domovoi's live and saved terminal metadata.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub terminal_details: Option<bool>,
+    /// Supports opening a bounded transcript and loading its earlier pages.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_windows: Option<bool>,
     pub observability: ServerObservability,
     pub settings: S,
     /// Present when an administrator's policy manages the server.

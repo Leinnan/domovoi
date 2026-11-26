@@ -444,7 +444,7 @@ fn connection_placeholder(core: &CoreLink, conn: &ConnectionView, server: Option
             .font_size(16.0)
             .font_weight(FontWeight::SEMI_BOLD)
             .into(),
-        caption(if connecting {
+        caption(&if connecting {
             format!("Loading {} from {name}.", section.title().to_lowercase())
         } else if let Some(err) = conn.error.as_deref().filter(|e| !e.is_empty()) {
             err.to_owned()

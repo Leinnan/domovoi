@@ -101,6 +101,8 @@ struct OfflineCopy<'a> {
     threads: &'a [ThreadShell],
     #[serde(skip_serializing_if = "Option::is_none")]
     thread: Option<&'a ThreadProjection>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    history_before: Option<&'a str>,
 }
 
 /// An offline copy as it is read back: the thread list as the records the
@@ -117,6 +119,8 @@ struct SavedCopy {
     /// takes it apart into the thread's records.
     #[serde(default)]
     thread: Option<Value>,
+    #[serde(default)]
+    history_before: Option<String>,
 }
 
 /// Saves the thread list and the open thread for a launch without the server.
@@ -136,7 +140,11 @@ pub fn save_cache(model: &mut Model) -> Cmd {
         .and_then(|id| model.held_thread(id))
         .and_then(|thread| serde_json::to_string(&thread.projection()).ok())
         .filter(|text| text.len() <= CACHED_THREAD_MAX);
-    let copy = OfflineCopy { version: 1, saved_at: model.now_ms, projects: &model.projects, threads: &model.threads, thread: None };
+    let history_before = thread.as_ref().and(model.history_before.as_deref());
+    let copy = OfflineCopy {
+        version: if history_before.is_some() { 2 } else { 1 },
+        saved_at: model.now_ms, projects: &model.projects, threads: &model.threads, thread: None, history_before,
+    };
     let mut value = serde_json::to_string(&copy).expect("records and JSON serialize");
     if let Some(thread) = thread
         && value.ends_with('}')
@@ -154,7 +162,7 @@ pub fn cache_loaded(model: &mut Model, environment_id: String, value: Option<Str
     if model.active_env.as_deref() != Some(environment_id.as_str()) || !model.threads.is_empty() {
         return Command::done();
     }
-    let Some(saved) = value.and_then(|v| serde_json::from_str::<SavedCopy>(&v).ok()).filter(|saved| saved.version == 1) else { return Command::done() };
+    let Some(saved) = value.and_then(|v| serde_json::from_str::<SavedCopy>(&v).ok()).filter(|saved| matches!(saved.version, 1 | 2)) else { return Command::done() };
     model.projects = saved.projects;
     model.threads = saved.threads;
     model.from_cache = !model.threads.is_empty();
@@ -168,6 +176,7 @@ pub fn cache_loaded(model: &mut Model, environment_id: String, value: Option<Str
         && model.selected_thread.as_deref() == Some(thread.record.id.as_str())
     {
         model.thread = Some(thread);
+        model.history_before = saved.history_before;
     }
     render()
 }

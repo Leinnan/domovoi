@@ -838,6 +838,8 @@ fn thread_page_body(model: &Model) -> Option<(ThreadPageView, Vec<crate::artifac
         // Nothing to wait for while it is being started: its message is shown.
         // Records held for another thread are never shown as this one's.
         loading: launching.is_none() && (model.held_thread(tid).is_none() || model.thread_loading),
+        has_earlier: model.history_before.is_some(),
+        loading_earlier: model.history_loading,
         pinned: shell.is_some_and(is_pinned),
         settled: shell.is_some_and(is_settled),
         archived: shell.is_some_and(|shell| shell.archived_at.is_some()),

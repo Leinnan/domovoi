@@ -645,7 +645,14 @@ pub fn register(r: Router<ConnCtx>) -> Router<ConnCtx> {
             crate::orchestration::checkpoints::turn_diff(&ctx.state.store, &input.thread_id, 0, input.to_turn_count, DiffCall::FullThreadDiff).await
         })
         .stream("orchestration.subscribeThread", |ctx, input: crate::orchestration::stream::ThreadSubscription| {
-            crate::orchestration::stream::thread_stream_sent(ctx.state.store.clone(), input)
+            crate::orchestration::stream::thread_stream(ctx.state.store.clone(), input, false)
+        })
+        .stream("orchestration.subscribeThreadWindow", |ctx, mut input: crate::orchestration::stream::ThreadSubscription| {
+            input.all_records = false;
+            crate::orchestration::stream::thread_stream(ctx.state.store.clone(), input, true)
+        })
+        .unary("orchestration.getThreadHistory", |ctx: Arc<ConnCtx>, input: crate::orchestration::history::HistoryInput| async move {
+            crate::orchestration::history::read_older(ctx.state.store.clone(), input).await
         })
 }
 

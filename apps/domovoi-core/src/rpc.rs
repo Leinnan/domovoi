@@ -49,6 +49,8 @@ pub enum Route {
     Browse(u32),
     SearchThreads(u32),
     FindInThread(u32),
+    ThreadHistory { thread_id: String, generation: u64, find_revision: Option<u32> },
+    ThreadItemDetail { thread_id: String, item_id: String, generation: u64 },
     Mention(u32),
     FileSearch(u32),
     /// A palette search (`files` or `content`), by its revision.
@@ -101,6 +103,7 @@ pub enum Route {
 #[derive(Debug, Default)]
 pub struct RpcClient {
     next_id: u64,
+    pub(crate) frame_bytes: usize,
     pending: HashMap<String, Route>,
 }
 
@@ -174,6 +177,7 @@ impl RpcClient {
     pub fn receive(&mut self, text: &str) -> Vec<Reply> {
         let Ok(text) = domovoi_rpc::packed::unpack(text) else { return vec![] };
         let text = &*text;
+        self.frame_bytes = text.len();
         let Ok(value) = serde_json::from_str::<Value>(text) else { return vec![] };
         let messages: Vec<Value> = match value {
             Value::Array(a) => a,

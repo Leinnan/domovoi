@@ -228,6 +228,13 @@ pub struct Model {
     /// after a reconnect instead of loading it again.
     pub thread_sequence: u64,
     pub thread_loading: bool,
+    pub supports_thread_windows: bool,
+    pub thread_windowed: bool,
+    pub thread_force_full: bool,
+    pub history_before: Option<String>,
+    pub history_loading: bool,
+    pub history_generation: u64,
+    pub thread_window_bytes: usize,
     /// Signed URLs (relative to the server) of attachments, by id; ones
     /// asked for are in `asset_urls` as empty until the answer comes.
     pub asset_urls: HashMap<String, String>,
@@ -314,13 +321,16 @@ pub struct RecentThread {
     pub sequence: u64,
     /// Its transcript's rows, as built.
     pub rows: Vec<(TurnItemId, BuiltRow)>,
+    pub windowed: bool,
+    pub history_before: Option<String>,
+    pub window_bytes: usize,
+    pub cache_weight: usize,
 }
 
 /// At most this many threads are kept once left ...
 pub const RECENT_THREADS: usize = 8;
-/// ... holding at most this many turn items between them (a long thread's
-/// items with their rows are a few KB each).
-pub const RECENT_TURN_ITEMS: usize = 12_000;
+/// Budget for the wire payload retained by recent threads and their built rows.
+const RECENT_THREAD_BYTES: usize = 16 * 1024 * 1024;
 
 impl Model {
     /// Keeps the open thread, with its rows, among the recent ones, before
@@ -336,16 +346,22 @@ impl Model {
         }
         let rows: Vec<(TurnItemId, BuiltRow)> = self.item_cache.get_mut().unwrap_or_else(std::sync::PoisonError::into_inner).drain().collect();
         self.recent_threads.retain(|r| r.id != id);
-        self.recent_threads.push_back(RecentThread { id, thread, sequence: self.thread_sequence, rows });
-        let mut items: usize = self.recent_threads.iter().map(|r| r.thread.turn_items.len()).sum();
-        while self.recent_threads.len() > RECENT_THREADS || (items > RECENT_TURN_ITEMS && self.recent_threads.len() > 1) {
-            if let Some(old) = self.recent_threads.pop_front() {
-                items -= old.thread.turn_items.len();
-            }
+        let window_bytes = self.thread_window_bytes;
+        // Allow for both the records and the built view, including their
+        // per-item allocation overhead. Arc-backed payloads are shared.
+        let cache_weight = window_bytes.saturating_mul(2).saturating_add(thread.turn_items.len().saturating_mul(1024));
+        if cache_weight > RECENT_THREAD_BYTES {
+            return;
         }
-        // The newest alone may be over the budget: kept only if it fits.
-        if items > RECENT_TURN_ITEMS {
-            self.recent_threads.clear();
+        self.recent_threads.push_back(RecentThread {
+            id, thread, sequence: self.thread_sequence, rows, windowed: self.thread_windowed,
+            history_before: self.history_before.take(), window_bytes, cache_weight,
+        });
+        let mut bytes: usize = self.recent_threads.iter().map(|recent| recent.cache_weight).sum();
+        while self.recent_threads.len() > RECENT_THREADS || bytes > RECENT_THREAD_BYTES {
+            if let Some(oldest) = self.recent_threads.pop_front() {
+                bytes -= oldest.cache_weight;
+            }
         }
     }
 
@@ -356,6 +372,11 @@ impl Model {
     /// was, with the sequence to resume its stream after.
     pub fn open_thread(&mut self, id: Option<String>) {
         self.keep_open_thread();
+        self.history_before = None;
+        self.thread_windowed = false;
+        self.thread_force_full = false;
+        self.thread_window_bytes = 0;
+        self.invalidate_history_requests();
         let (thread, sequence) = match id.as_deref().and_then(|id| self.take_recent_thread(id)) {
             Some((thread, sequence)) => (Some(thread), sequence),
             None => (None, 0),
@@ -374,6 +395,11 @@ impl Model {
         self.composer.recall = None;
     }
 
+    pub fn invalidate_history_requests(&mut self) {
+        self.history_generation = self.history_generation.wrapping_add(1);
+        self.history_loading = false;
+    }
+
     /// The open thread, if what is held is `id`'s own.
     pub fn held_thread(&self, id: &str) -> Option<&domovoi_model::typed::Thread> {
         self.thread.as_ref().filter(|thread| thread.record.id.as_str() == id && self.selected_thread.as_deref() == Some(id))
@@ -386,6 +412,9 @@ impl Model {
         let cache = self.item_cache.get_mut().unwrap_or_else(std::sync::PoisonError::into_inner);
         cache.clear();
         cache.extend(recent.rows);
+        self.thread_windowed = recent.windowed;
+        self.history_before = recent.history_before;
+        self.thread_window_bytes = recent.window_bytes;
         Some((recent.thread, recent.sequence))
     }
 }

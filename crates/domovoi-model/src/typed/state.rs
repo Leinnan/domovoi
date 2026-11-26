@@ -279,6 +279,28 @@ impl Thread {
         }
     }
 
+    /// Hydrates a command's preview if it still represents the same revision.
+    pub fn hydrate_item(&mut self, item: TurnItem) {
+        if let Some(TurnItem::CommandExecution(held)) = self.turn_items.get(item.id())
+            && held.output_omitted == Some(true)
+            && &held.updated_at == item.updated_at()
+        {
+            self.turn_items.put(item);
+        }
+    }
+
+    /// Fills gaps in a paged transcript. A live record already held is authoritative.
+    pub fn extend_history(&mut self, page: super::ThreadHistory) {
+        let mut items = self.turn_items.as_slice().to_vec();
+        items.extend(page.items.into_iter().filter(|item| !self.turn_items.contains(item.id())));
+        self.turn_items = Records::from_shared(items);
+        if !page.subagents.is_empty() {
+            let mut subagents = self.subagents.as_slice().to_vec();
+            subagents.extend(page.subagents.into_iter().filter(|agent| !self.subagents.contains(&agent.id)));
+            self.subagents = Records::from_shared(subagents);
+        }
+    }
+
     /// Everything the thread consists of, as the server sends it.
     pub fn projection(&self) -> ThreadProjection {
         ThreadProjection {

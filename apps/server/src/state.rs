@@ -185,6 +185,7 @@ impl AppState {
             issues: kb.issues.into(),
             providers: self.providers.snapshot().await.into(),
             terminal_details: Some(true),
+            thread_windows: Some(true),
             observability: ServerObservability {
                 logs_directory_path: self.paths.logs.to_string_lossy().into_owned(),
                 local_tracing_enabled: crate::trace_writer::enabled(),
