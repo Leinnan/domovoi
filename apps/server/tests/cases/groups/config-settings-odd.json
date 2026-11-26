@@ -1,0 +1,215 @@
+{
+ "cases": [
+  {
+   "tag": "server.getConfig",
+   "payload": {},
+   "note": "unknown keys at any depth and values of a wrong type are sent as the file has them"
+  },
+  {
+   "tag": "subscribeServerConfig",
+   "payload": {},
+   "expect": "chunk"
+  },
+  {
+   "tag": "provider.auth.start",
+   "payload": {
+    "instanceId": "codex-ok"
+   },
+   "expect": "failure",
+   "error": "ProviderSetupError",
+   "note": "an instance beside one that is no instance"
+  },
+  {
+   "tag": "provider.auth.start",
+   "payload": {
+    "instanceId": "bad"
+   },
+   "expect": "failure",
+   "error": "ProviderSetupError"
+  },
+  {
+   "tag": "provider.auth.start",
+   "payload": {
+    "instanceId": "no-driver"
+   },
+   "expect": "failure",
+   "error": "ProviderSetupError"
+  },
+  {
+   "tag": "provider.install.cancel",
+   "payload": {
+    "instanceId": "codex-ok",
+    "operationId": "op1"
+   }
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {}
+   },
+   "note": "saved again: nothing is lost"
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {
+     "worktreesDirectory": "/w"
+    }
+   },
+   "note": "a directory after one that was no string"
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {
+     "setModelFavorites": [
+      {
+       "provider": "codex",
+       "model": "b",
+       "favorite": true
+      },
+      {
+       "provider": "",
+       "model": "no-provider",
+       "favorite": false
+      }
+     ]
+    }
+   },
+   "note": "toggles over a list with an entry that is no favorite"
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {
+     "defaultAutoPull": true,
+     "storageCleanup": {
+      "logsAfterDays": 3
+     }
+    }
+   },
+   "note": "the wrong values put right"
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {
+     "defaultAutoPull": 1,
+     "responseStreamingMode": 5,
+     "deviceHosts": {
+      "not": "a list"
+     },
+     "storageCleanup": "none",
+     "favorites": "none",
+     "providerModelPreferences": []
+    }
+   },
+   "note": "a patch with values of a wrong type is merged as it is"
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {
+     "setModelFavorites": "nope",
+     "setModelsHidden": [
+      {
+       "provider": "codex"
+      },
+      5
+     ],
+     "setProviderModelOrder": {
+      "modelOrder": "x"
+     }
+    }
+   },
+   "note": "operations of a wrong shape"
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {
+     "setProviderModelOrder": "nope",
+     "worktreeCleanup": "off",
+     "usageLimitSources": [
+      1
+     ],
+     "secretProviders": {
+      "s": 5
+     },
+     "projectSettingsOverrides": {
+      "p9": 1
+     }
+    }
+   },
+   "note": "more of a wrong shape"
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {
+     "textGenerationModelSelection": {
+      "model": "still-only-a-model"
+     }
+    }
+   }
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {},
+    "providerInstanceMutation": {
+     "instanceId": "x",
+     "instance": {
+      "driver": "codex"
+     }
+    }
+   },
+   "note": "a mutation without an operation does nothing"
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {
+     "providerInstances": "none"
+    },
+    "providerInstanceMutation": {
+     "operation": "upsert",
+     "instance": {
+      "driver": "codex"
+     }
+    }
+   },
+   "note": "a mutation without an id, over instances that are no record"
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {},
+    "providerInstanceMutation": {
+     "operation": "upsert",
+     "instanceId": "raw"
+    }
+   },
+   "note": "a mutation without an instance"
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": [
+     1,
+     2
+    ]
+   },
+   "note": "a patch that is no record"
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {},
+   "note": "no patch"
+  },
+  {
+   "tag": "server.getConfig",
+   "payload": {}
+  }
+ ]
+}

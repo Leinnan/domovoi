@@ -95,16 +95,6 @@ impl CodexServer {
         let _ = tokio::time::timeout(std::time::Duration::from_secs(10), crate::providers::codex::read_limits(&self.rpc)).await;
     }
 
-    /// `feedback/upload` for a native thread; returns the feedback id.
-    pub async fn upload_feedback(&self, native_thread_id: &str, reason: Option<&str>) -> Result<String, String> {
-        let mut params = json!({ "classification": "bug", "includeLogs": true, "threadId": native_thread_id });
-        if let Some(r) = reason {
-            params["reason"] = json!(r);
-        }
-        let res = self.rpc.request("feedback/upload", params).await.map_err(|e| e.to_string())?;
-        Ok(res["threadId"].as_str().unwrap_or(native_thread_id).to_owned())
-    }
-
     pub async fn revert(&self, native_thread_id: &str, before_native_turn: &str) -> Result<(), String> {
         self.rpc.request("thread/revert", json!({ "threadId": native_thread_id, "beforeTurnId": before_native_turn }))
             .await.map(|_| ()).map_err(|e| e.to_string())

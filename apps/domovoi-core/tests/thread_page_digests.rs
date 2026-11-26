@@ -148,13 +148,13 @@ fn explore(model: &mut Model, row: &Value) {
     model.changes.wide();
 }
 
-/// The recorded TypeScript-server sessions.
-const FIXTURES: [&str; 2] = ["ts-session1", "ts-session2-boot"];
+/// The recorded sessions.
+const FIXTURES: [&str; 1] = ["session1"];
 
 /// The subscription chunks of a recorded session, in the order they were
 /// sent: `(request tag, thread subscribed to, the chunk's values)`.
 fn recorded_chunks(name: &str) -> Vec<(String, String, Vec<Value>)> {
-    let path = format!("{}/../../fixtures/golden/{name}/wire.ndjson", env!("CARGO_MANIFEST_DIR"));
+    let path = format!("{}/../../fixtures/native/{name}/wire.ndjson", env!("CARGO_MANIFEST_DIR"));
     let text = std::fs::read_to_string(path).expect("the recorded session");
     let mut requests: BTreeMap<(i64, String), Value> = BTreeMap::new();
     let mut chunks = vec![];

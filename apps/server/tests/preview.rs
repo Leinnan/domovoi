@@ -13,6 +13,9 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
+/// The socket URL names the version of the protocol the test speaks.
+const PROTOCOL: u32 = domovoi_model::PROTOCOL_VERSION;
+
 type Ws = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
 fn http() -> reqwest::Client {
@@ -147,40 +150,12 @@ async fn refused(server: &impl Base, path: &str, cookie: Option<&str>) -> (u16, 
 }
 
 async fn rpc(server: &Server, cookie: &str) -> Ws {
-    ws(server, "/ws?orchestrationProtocol=2", Some(cookie)).await.unwrap()
-}
-
-/// Every RPC frame the tests sent and got, for `wire-check.ts`.
-static TRANSCRIPT: std::sync::Mutex<Vec<Value>> = std::sync::Mutex::new(Vec::new());
-
-fn record(conn: u64, frame: &Value) {
-    TRANSCRIPT.lock().unwrap().push(json!({ "kind": "ws", "conn": conn, "frame": frame }));
-}
-
-/// Decodes what was recorded with t3code's schemas (skipped without Node 26 and the reference checkout).
-fn schema_check(name: &str) {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let node = std::env::var("DOMOVOI_NODE").unwrap_or_else(|_| "node".into());
-    let version = Command::new(&node).arg("--version").output().ok().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned());
-    let major: u32 = version.as_deref().and_then(|v| v.trim_start_matches('v').split('.').next()?.parse().ok()).unwrap_or(0);
-    if !root.join(".reference/t3code/packages/contracts").exists() || major < 26 {
-        eprintln!("schema check skipped (needs .reference/t3code and Node 26+, found {version:?})");
-        return;
-    }
-    let file = std::env::temp_dir().join(format!("domovoi-preview-{name}-{}.ndjson", std::process::id()));
-    let lines: String = TRANSCRIPT.lock().unwrap().iter().map(|r| format!("{r}\n")).collect();
-    std::fs::write(&file, lines).unwrap();
-    let res = Command::new(&node).arg(root.join("conformance/wire-check.ts")).arg(&file).output().unwrap();
-    let _ = std::fs::remove_file(&file);
-    let text = String::from_utf8_lossy(&res.stdout);
-    assert!(res.status.success(), "t3code schema check failed:\n{text}");
-    eprintln!("{}", text.trim());
+    ws(server, &format!("/ws?protocol={PROTOCOL}"), Some(cookie)).await.unwrap()
 }
 
 /// One request's Exit frame.
 async fn call(ws: &mut Ws, id: &str, tag: &str, payload: Value) -> Value {
     let req = json!({ "_tag": "Request", "id": id, "tag": tag, "payload": payload, "headers": [] });
-    record(1, &req);
     ws.send(Message::Text(req.to_string().into())).await.unwrap();
     loop {
         let msg = tokio::time::timeout(Duration::from_secs(30), ws.next()).await.expect("an answer").expect("open").unwrap();
@@ -191,7 +166,6 @@ async fn call(ws: &mut Ws, id: &str, tag: &str, payload: Value) -> Value {
             continue;
         }
         if v["requestId"] == id && v["_tag"] == "Exit" {
-            record(1, &v);
             return v;
         }
     }
@@ -382,7 +356,6 @@ async fn the_server_browser_runs_streams_and_closes_a_server_tab() {
     // What subscribers are told, decoded with t3code's schemas at the end.
     let mut events = rpc(&server, &owner).await;
     let subscribe = json!({ "_tag": "Request", "id": "events", "tag": "subscribePreviewEvents", "payload": {}, "headers": [] });
-    record(2, &subscribe);
     events.send(Message::Text(subscribe.to_string().into())).await.unwrap();
     tokio::time::sleep(Duration::from_millis(200)).await;
     let opened = call(&mut socket, "open", "preview.open", json!({ "threadId": "t-browser", "url": format!("127.0.0.1:{site}/"), "runtime": "server", "colorScheme": "light", "zoomFactor": 1 })).await;
@@ -453,12 +426,10 @@ async fn the_server_browser_runs_streams_and_closes_a_server_tab() {
         let v: Value = serde_json::from_str(&t).unwrap();
         if v["_tag"] == "Chunk" {
             kinds.extend(v["values"].as_array().unwrap().iter().map(|e| e["type"].as_str().unwrap_or_default().to_owned()));
-            record(2, &v);
             events.send(Message::Text(json!({ "_tag": "Ack", "requestId": "events" }).to_string().into())).await.unwrap();
         }
     }
     assert!(kinds.first().is_some_and(|k| k == "opened") && kinds.last().is_some_and(|k| k == "closed") && kinds.iter().any(|k| k == "navigated"), "{kinds:?}");
-    schema_check("browser");
 }
 
 #[tokio::test(flavor = "multi_thread")]

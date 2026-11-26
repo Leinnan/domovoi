@@ -15,25 +15,21 @@ use domovoi_model::typed::{
     ServerProvider, ServerProviderDelta, ServerProviderState, ServerProviderUpdatedPayload, ServerUpsertKeybindingResult,
 };
 
-const FIXTURES: [&str; 2] = ["ts-session1", "ts-session2-boot"];
+const FIXTURES: [&str; 1] = ["session1"];
 const ENVIRONMENT_ROUTE: &str = "/.well-known/t3/environment";
 
 /// Kinds the recorded sessions are known to contain. Checking none of one of
 /// these means the walk over the fixtures broke, not that the types are right.
-const KINDS_IN_FIXTURES: [&str; 9] = [
+const KINDS_IN_FIXTURES: [&str; 5] = [
     "subscribeServerConfig snapshot",
     "subscribeServerConfig providerStatuses",
     "subscribeServerConfig settingsUpdated",
-    "subscribeServerConfig environmentThemesUpdated",
-    "subscribeServerConfig usageLimitSourcesUpdated",
     "subscribeServerLifecycle welcome",
     "subscribeServerLifecycle ready",
-    "server.refreshProviders",
-    "GET /.well-known/t3/environment",
 ];
 
 fn fixture(name: &str) -> Vec<Value> {
-    let path = format!("{}/../../fixtures/golden/{name}/wire.ndjson", env!("CARGO_MANIFEST_DIR"));
+    let path = format!("{}/../../fixtures/native/{name}/wire.ndjson", env!("CARGO_MANIFEST_DIR"));
     std::fs::read_to_string(&path).unwrap().lines().map(|line| serde_json::from_str(line).unwrap()).collect()
 }
 

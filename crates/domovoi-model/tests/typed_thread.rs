@@ -23,13 +23,13 @@ use domovoi_model::typed::{
     ThreadSnapshot, ThreadStreamItem,
 };
 
-const FIXTURES: [&str; 2] = ["ts-session1", "ts-session2-boot"];
+const FIXTURES: [&str; 1] = ["session1"];
 
 /// The collections of a thread's projection, in its order.
 const KINDS: [RecordKind; 15] = RecordKind::ALL;
 
 fn fixture(name: &str) -> Vec<Value> {
-    let path = format!("{}/../../fixtures/golden/{name}/wire.ndjson", env!("CARGO_MANIFEST_DIR"));
+    let path = format!("{}/../../fixtures/native/{name}/wire.ndjson", env!("CARGO_MANIFEST_DIR"));
     std::fs::read_to_string(&path).unwrap().lines().map(|line| serde_json::from_str(line).unwrap()).collect()
 }
 
@@ -334,7 +334,7 @@ const ITEM_TYPES: [&str; 10] = [
 
 /// The capabilities of a provider session, as the TypeScript server sent them.
 fn capabilities() -> Value {
-    thread_stream("ts-session1")
+    thread_stream("session1")
         .into_iter()
         .find_map(|(_, item)| (item["event"]["type"] == "provider-session.updated").then(|| item["event"]["payload"]["capabilities"].clone()))
         .expect("the fixture holds a provider session")

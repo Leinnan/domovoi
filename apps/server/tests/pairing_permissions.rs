@@ -9,6 +9,9 @@ use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest};
 
+/// The socket URL names the version of the protocol the test speaks.
+const PROTOCOL: u32 = domovoi_model::PROTOCOL_VERSION;
+
 /// iroh (through domovoi-remote) turns on reqwest's rustls backend without a crypto
 /// provider, so every client needs one installed first.
 fn http_client() -> reqwest::Client {
@@ -78,7 +81,7 @@ async fn connect(server: &Server, code: &str) -> tokio_tungstenite::WebSocketStr
     let res = http_client().post(format!("{base}/api/auth/browser-session")).json(&json!({ "credential": code })).send().await.unwrap();
     assert_eq!(res.status(), 200);
     let cookie = res.headers().get("set-cookie").unwrap().to_str().unwrap().split(';').next().unwrap().to_owned();
-    let mut req = format!("ws://127.0.0.1:{}/ws?orchestrationProtocol=2", server.port).into_client_request().unwrap();
+    let mut req = format!("ws://127.0.0.1:{}/ws?protocol={PROTOCOL}", server.port).into_client_request().unwrap();
     req.headers_mut().insert("cookie", cookie.parse().unwrap());
     tokio_tungstenite::connect_async(req).await.unwrap().0
 }

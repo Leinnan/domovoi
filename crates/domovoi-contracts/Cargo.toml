@@ -1,6 +1,6 @@
 [package]
 name = "domovoi-contracts"
-description = "Wire types for t3code's server API (subset of packages/contracts), validated against the real Effect schemas"
+description = "The Domovoi server's own wire types (sign-in, environment) and default settings"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

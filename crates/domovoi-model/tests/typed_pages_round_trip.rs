@@ -18,7 +18,7 @@ use domovoi_model::typed::{
     UsageSummary, WebhookFilter,
 };
 
-const FIXTURES: [&str; 2] = ["ts-session1", "ts-session2-boot"];
+const FIXTURES: [&str; 1] = ["session1"];
 
 /// The HTTP routes of these shapes the recorded sessions are known to contain.
 const SESSION: &str = "GET /api/auth/session";
@@ -39,7 +39,7 @@ const RPCS: [&str; 9] = [
 ];
 
 fn fixture(name: &str) -> Vec<Value> {
-    let path = format!("{}/../../fixtures/golden/{name}/wire.ndjson", env!("CARGO_MANIFEST_DIR"));
+    let path = format!("{}/../../fixtures/native/{name}/wire.ndjson", env!("CARGO_MANIFEST_DIR"));
     std::fs::read_to_string(&path).unwrap().lines().map(|line| serde_json::from_str(line).unwrap()).collect()
 }
 
@@ -231,8 +231,8 @@ fn recorded_payloads_round_trip_through_their_types() {
     }
     let report: Vec<String> = failures.iter().map(|(failure, count)| format!("{failure}\n    ({count} payloads)")).collect();
     assert!(failures.is_empty(), "payloads that do not round-trip:\n{}", report.join("\n"));
-    for kind in [SESSION, BROWSER_SESSION] {
-        assert!(checked.get(kind).copied().unwrap_or(0) > 0, "the fixtures contain `{kind}` bodies, but none was checked");
+    for kind in ["subscribeAuthAccess", "server.getHostResources", "server.getProcessDiagnostics", "server.getUsageSummary", "agentSessions.scan"] {
+        assert!(checked.get(kind).copied().unwrap_or(0) > 0, "the fixture contains `{kind}` answers, but none was checked");
     }
 }
 

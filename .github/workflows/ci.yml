@@ -1,7 +1,6 @@
 # The checks `just check` and `just test` run locally, on every push and pull
-# request: build and test with warnings as errors, the clippy gate, the client
-# parity check, and the conformance checks against t3code's own schemas (the
-# release in conformance/t3code-pin).
+# request: build and test with warnings as errors, the clippy gate and the
+# client parity check.
 name: CI
 
 on:
@@ -23,61 +22,13 @@ env:
   DOMOVOI_AGENT_SESSIONS_HOME: ${{ github.workspace }}/.ci-agent-sessions
 
 jobs:
-  reference:
-    name: t3code reference checkout
-    runs-on: ubuntu-latest
-    outputs:
-      commit: ${{ steps.pin.outputs.commit }}
-    steps:
-      - uses: actions/checkout@v5
-      - id: pin
-        run: |
-          read -r tag commit < <(grep -v '^#' conformance/t3code-pin)
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "commit=$commit" >> "$GITHUB_OUTPUT"
-      - id: cache
-        uses: actions/cache@v4
-        with:
-          path: .reference/t3code
-          key: t3code-${{ steps.pin.outputs.commit }}
-      - if: steps.cache.outputs.cache-hit != 'true'
-        uses: actions/checkout@v5
-        with:
-          repository: pingdotgg/t3code
-          ref: ${{ steps.pin.outputs.commit }}
-          path: .reference/t3code
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 26
-      - if: steps.cache.outputs.cache-hit != 'true'
-        uses: pnpm/action-setup@v4
-        with:
-          package_json_file: .reference/t3code/package.json
-      - if: steps.cache.outputs.cache-hit != 'true'
-        working-directory: .reference/t3code
-        run: pnpm install --frozen-lockfile
-      - name: Golden sessions decode with t3code's schemas
-        run: |
-          for wire in fixtures/golden/*/wire.ndjson; do node conformance/wire-check.ts "$wire" --quiet; done
-      - name: Effect's own RpcClient against effect-rpc
-        run: conformance/run.sh
-
   linux:
     name: Server on Linux
-    needs: reference
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
         with:
           lfs: true
-      - uses: actions/cache/restore@v4
-        with:
-          path: .reference/t3code
-          key: t3code-${{ needs.reference.outputs.commit }}
-          fail-on-cache-miss: true
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 26
       - name: System libraries for the status bar icon
         run: |
           sudo apt-get update -qq
@@ -86,25 +37,16 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Tests (server, remote, model, contracts, effect-rpc)
         run: |
-          DOMOVOI_NODE="$(command -v node)" cargo test --no-fail-fast \
+          cargo test --no-fail-fast \
             -p domovoi-server -p domovoi-remote -p domovoi-model -p domovoi-contracts -p effect-rpc
 
   macos:
     name: Workspace on macOS (just check)
-    needs: reference
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v5
         with:
           lfs: true
-      - uses: actions/cache/restore@v4
-        with:
-          path: .reference/t3code
-          key: t3code-${{ needs.reference.outputs.commit }}
-          fail-on-cache-miss: true
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 26
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
@@ -113,7 +55,7 @@ jobs:
       - name: Build, lints and client parity (warnings are errors)
         run: just check
       - name: Tests
-        run: DOMOVOI_NODE="$(command -v node)" cargo test --workspace --no-fail-fast
+        run: cargo test --workspace --no-fail-fast
 
   windows:
     name: Workspace on Windows (WinUI app, server, host)

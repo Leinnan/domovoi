@@ -240,16 +240,6 @@ fn failure(e: impl std::fmt::Display) -> Failure {
     Failure::ShellSnapshot { message: format!("Failed to prepare the application shell stream: {e}") }
 }
 
-/// `orchestration.getOlderSettledThreads`: the settled threads a client's
-/// shell left out. Domovoi sends every thread in the shell, so there are none.
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct OlderSettledThreads {
-    snapshot_sequence: u64,
-    threads: [ThreadShell; 0],
-    counts: [u64; 0],
-}
-
 /// What a diff between two turns is asked with. A field left out, or not of
 /// its type, reads as empty or zero, and the diff then fails by its own rules.
 #[derive(Deserialize)]
@@ -645,10 +635,6 @@ pub(crate) async fn launch_thread(orchestrator: &Orchestrator, input: Value) -> 
 
 pub fn register(r: Router<ConnCtx>) -> Router<ConnCtx> {
     r.stream("orchestration.subscribeShell", |ctx, input: ShellSubscription| shell_stream(ctx, input))
-        .unary("orchestration.getOlderSettledThreads", |ctx: Arc<ConnCtx>, _: serde::de::IgnoredAny| async move {
-            let snapshot_sequence = ctx.state.store.latest_sequence().map_err(failure)?;
-            Ok::<_, Failure>(OlderSettledThreads { snapshot_sequence, threads: [], counts: [] })
-        })
         .unary("projects.mutate", mutate)
         .unary("orchestration.launchThread", |ctx: Arc<ConnCtx>, input: Value| async move { launch_thread(&ctx.state.orchestrator, input).await })
         .unary("orchestration.dispatchCommand", |ctx: Arc<ConnCtx>, input: Value| async move { dispatch_command(&ctx.state.orchestrator, input).await })

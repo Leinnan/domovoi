@@ -2,8 +2,6 @@
 //! bundles, React), behind the `webview` cargo feature: the artifact's signed
 //! preview URL in a window of its own with the system webview (WKWebView on
 //! macOS, WebView2 on Windows, WebKitGTK on Linux) through `wry` and `tao`.
-//! t3code's web client shows artifacts in an iframe; this is the desktop
-//! app's counterpart.
 //!
 //! The window runs in a helper process: `domovoi-desktop --artifact-window
 //! <url> <title>`, started by [`open`]. It is not embedded in the Iced window

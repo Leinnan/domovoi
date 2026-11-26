@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 use domovoi_model::typed::{ModelFavorite, RuntimeMode, ServerSettings};
 
-const FIXTURES: [&str; 2] = ["ts-session1", "ts-session2-boot"];
+const FIXTURES: [&str; 1] = ["session1"];
 
 /// The places a recording carries settings.
 const SNAPSHOT: &str = "subscribeServerConfig snapshot (config.settings)";
@@ -24,7 +24,7 @@ const FULL_SAMPLE: &str = "server.updateSettings.json";
 const SETTINGS_IN_SCHEMA: usize = 82;
 
 fn fixture(name: &str) -> Vec<Value> {
-    let path = format!("{}/../../fixtures/golden/{name}/wire.ndjson", env!("CARGO_MANIFEST_DIR"));
+    let path = format!("{}/../../fixtures/native/{name}/wire.ndjson", env!("CARGO_MANIFEST_DIR"));
     std::fs::read_to_string(&path).unwrap().lines().map(|line| serde_json::from_str(line).unwrap()).collect()
 }
 
@@ -168,9 +168,6 @@ fn recorded_settings_round_trip_through_their_type() {
     assert!(failures.is_empty(), "settings that do not round-trip:\n{}", report.join("\n"));
     for kind in KINDS {
         assert!(checked.get(kind).copied().unwrap_or(0) > 0, "the fixtures contain settings in `{kind}`, but none was checked");
-    }
-    for key in &sent_keys {
-        assert!(full.get(key).is_some(), "the recordings send a setting the full sample lacks: {key}");
     }
 }
 

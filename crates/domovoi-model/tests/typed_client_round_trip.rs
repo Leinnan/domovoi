@@ -18,13 +18,13 @@ use domovoi_model::typed::{
     ExecutionEnvironmentDescriptor, ProjectShell, ResolvedKeybindingRule, ServerConfig, ServerProvider, ServerSettings, ThreadShell,
 };
 
-const FIXTURES: [&str; 2] = ["ts-session1", "ts-session2-boot"];
+const FIXTURES: [&str; 1] = ["session1"];
 
 /// Every value the server sent over the socket in the fixtures, with the RPC it answered.
 fn sent() -> Vec<(String, Value)> {
     let mut out = Vec::new();
     for name in FIXTURES {
-        let path = format!("{}/../../fixtures/golden/{name}/wire.ndjson", env!("CARGO_MANIFEST_DIR"));
+        let path = format!("{}/../../fixtures/native/{name}/wire.ndjson", env!("CARGO_MANIFEST_DIR"));
         let mut requests: BTreeMap<(i64, String), String> = BTreeMap::new();
         for line in std::fs::read_to_string(&path).unwrap().lines() {
             let record: Value = serde_json::from_str(line).unwrap();

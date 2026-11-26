@@ -496,11 +496,6 @@ impl Policy {
         self.refuse("remote clients", detail)
     }
 
-    /// The refusal of T3 Connect (`refuseConnect`).
-    pub fn refuse_connect(&self) -> Refused {
-        self.refuse("T3 Connect", None)
-    }
-
     /// Fails when the server would listen where the policy's clients leave out
     /// (`checkServerReachability`): beyond loopback, or over iroh, without `remote`.
     pub fn check_reachability(&self, host: &str, remote_flag: bool) -> Result<(), Refused> {

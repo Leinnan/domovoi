@@ -1629,7 +1629,7 @@ fn limit_windows(now_ms: i64, limits: Option<&domovoi_model::typed::ServerProvid
         .collect()
 }
 
-/// How far through its period a window is, 0–1 (t3code's `elapsedShare`):
+/// How far through its period a window is, 0–1:
 /// known only with both its length and when it refills.
 fn elapsed_share(now_ms: i64, w: &domovoi_model::typed::ServerProviderUsageWindow) -> Option<f64> {
     let length = w.window_duration_mins.filter(|m| *m > 0)? as f64 * 60_000.0;
@@ -1640,7 +1640,7 @@ fn elapsed_share(now_ms: i64, w: &domovoi_model::typed::ServerProviderUsageWindo
     Some(((length - (resets - now_ms) as f64) / length).clamp(0.0, 1.0))
 }
 
-/// Used against time gone, within 5 points of each other `on` (t3code's `paceOfShares`).
+/// Used against time gone, within 5 points of each other `on`.
 fn pace_of(used_percent: f64, elapsed: f64) -> &'static str {
     let gap = used_percent - elapsed * 100.0;
     if gap > 5.0 {
@@ -1652,7 +1652,7 @@ fn pace_of(used_percent: f64, elapsed: f64) -> &'static str {
     }
 }
 
-/// Why a provider's limits can't be shown (t3code's `limitsNotice`); empty when they can.
+/// Why a provider's limits can't be shown; empty when they can.
 fn limits_notice(limits: &domovoi_model::typed::ServerProviderUsageLimits) -> String {
     use domovoi_model::typed::ServerProviderUsageUnavailableReason as Reason;
     let message = |fallback: &str| limits.unavailable.as_ref().and_then(|u| u.message.clone()).filter(|m| !m.is_empty()).unwrap_or_else(|| fallback.to_owned());

@@ -1,6 +1,6 @@
-//! Crux core for a t3code-compatible client: pairs with a server, keeps the
+//! Crux core of the Domovoi clients: pairs with a server, keeps the
 //! shell (projects + threads), the selected thread, terminals, diffs, files,
-//! git status and settings in sync over Effect RPC, and turns user intents into
+//! git status and settings in sync over its RPC socket, and turns user intents into
 //! orchestration commands. Shells render the view model and run effects.
 //!
 //! The thread projection rules are `domovoi_model`'s, the same ones domovoi-server uses.

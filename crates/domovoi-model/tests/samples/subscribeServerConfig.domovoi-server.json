@@ -3117,12 +3117,6 @@
           "status": "ready"
         }
       ],
-      "availableEditors": [
-        "cursor",
-        "vscode",
-        "zed",
-        "file-manager"
-      ],
       "observability": {
         "logsDirectoryPath": "/Users/ada/.domovoi/userdata/logs",
         "localTracingEnabled": false,

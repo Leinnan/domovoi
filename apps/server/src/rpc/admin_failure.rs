@@ -60,22 +60,6 @@ pub enum StopLocalServerReason {
     SignalFailed,
 }
 
-/// Why a device tool was not updated.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum DeviceOperationReason {
-    CommandFailed,
-}
-
-/// Why the relay client was not installed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RelayInstallReason {
-    UnsupportedPlatform,
-    /// Domovoi downloads nothing: the client is for whoever runs the server to provide.
-    ManagedByPolicy,
-}
-
 /// Why no environment was linked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -90,25 +74,6 @@ pub enum PeerLinkReason {
     UnknownLink,
     Storage,
     Disabled,
-}
-
-/// Why a link request card was not answered.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PeerLinkRequestReason {
-    LoadFailed,
-    NotFound,
-    AlreadyAnswered,
-    RecordFailed,
-}
-
-/// Why no guest share was created.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum GuestShareReason {
-    Disabled,
-    /// Sharing is on, but Domovoi has no T3 Connect to share through.
-    ConnectUnavailable,
 }
 
 /// Why a secret request card was not answered.
@@ -126,15 +91,6 @@ pub enum SecretRequestReason {
     ReferenceUnreadable,
 }
 
-/// Why an MCP App's request was not carried out.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum McpAppReason {
-    /// The item is an app's, but Domovoi has no bridge to its provider.
-    ProviderUnsupported,
-    NotAnApp,
-}
-
 /// Why the ACP registry did nothing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -148,10 +104,6 @@ pub enum AcpRegistryReason {
     DownloadFailed,
     ArchiveInvalid,
     ChecksumMismatch,
-    SessionListUnsupported,
-    SessionDeleteUnsupported,
-    ProvidersUnsupported,
-    LogoutUnsupported,
 }
 
 /// A failed call of the administration groups, written as its tagged error.
@@ -190,31 +142,6 @@ pub enum Failure {
         cause: Option<Cause>,
     },
 
-    #[error("{reason}")]
-    #[serde(rename = "DeviceHostUnavailableError", rename_all = "camelCase")]
-    DeviceHostUnavailable {
-        host_id: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        host_label: Option<String>,
-        reason: String,
-    },
-
-    #[error("{operation}: {}", cause.message)]
-    #[serde(rename = "DeviceOperationError")]
-    DeviceOperation { operation: String, reason: DeviceOperationReason, cause: Cause },
-
-    #[error("{reason}")]
-    #[serde(rename = "DeviceEasAccountError")]
-    DeviceEasAccount { reason: &'static str },
-
-    #[error("{reason}")]
-    #[serde(rename = "DeviceSimlockIdentityError")]
-    DeviceSimlockIdentity { reason: &'static str },
-
-    #[error("{message}")]
-    #[serde(rename = "RelayClientInstallFailedError")]
-    RelayClientInstall { reason: RelayInstallReason, message: String },
-
     #[error("{message}")]
     #[serde(rename = "PeerLinkError")]
     PeerLink {
@@ -225,18 +152,6 @@ pub enum Failure {
         answered_as: Option<String>,
     },
 
-    #[error("the link request was not answered ({reason:?})")]
-    #[serde(rename = "PeerLinkRequestError")]
-    PeerLinkRequest {
-        reason: PeerLinkRequestReason,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        cause: Option<Cause>,
-    },
-
-    #[error("no guest share was created ({reason:?})")]
-    #[serde(rename = "GuestShareCreateError")]
-    GuestShareCreate { reason: GuestShareReason },
-
     #[error("the secret request was not answered ({reason:?})")]
     #[serde(rename = "SecretRequestError")]
     SecretRequest {
@@ -245,10 +160,6 @@ pub enum Failure {
         cause: Option<Cause>,
     },
 
-    #[error("the MCP App request of thread {thread_id} was not carried out ({reason:?})")]
-    #[serde(rename = "McpAppRequestError", rename_all = "camelCase")]
-    McpAppRequest { thread_id: String, reason: McpAppReason },
-
     #[error("{reason}")]
     #[serde(rename = "DatabaseReclaimError")]
     DatabaseReclaim { reason: String },
@@ -256,10 +167,6 @@ pub enum Failure {
     #[error("{detail}")]
     #[serde(rename = "TextGeneratorError")]
     TextGenerator { detail: &'static str },
-
-    #[error("Server update failed: {reason}")]
-    #[serde(rename = "ServerSelfUpdateError")]
-    ServerSelfUpdate { reason: &'static str },
 
     #[error("{message}")]
     #[serde(rename = "AcpRegistryOperationError")]
@@ -288,16 +195,6 @@ impl Failure {
         Failure::TextGenerator { detail }
     }
 
-    /// Domovoi is not installed in a way it could update itself.
-    pub fn self_update() -> Self {
-        Failure::ServerSelfUpdate { reason: "This server is not installed from npm or the desktop app, so it cannot update itself." }
-    }
-
-    /// What the ACP agents Domovoi runs cannot do (sessions of their own,
-    /// configurable providers, signing out from here).
-    pub fn acp_unsupported(reason: AcpRegistryReason, message: &str) -> Self {
-        Failure::AcpRegistry { reason, message: message.to_owned() }
-    }
 }
 
 #[cfg(test)]
@@ -336,27 +233,6 @@ mod tests {
         );
 
         assert_eq!(
-            json!(Failure::DeviceHostUnavailable { host_id: "ssh-1".into(), host_label: None, reason: "no hub".into() }),
-            json!({ "_tag": "DeviceHostUnavailableError", "hostId": "ssh-1", "reason": "no hub" })
-        );
-        assert_eq!(
-            json!(Failure::DeviceHostUnavailable { host_id: "local".into(), host_label: Some("This machine".into()), reason: "no hub".into() }),
-            json!({ "_tag": "DeviceHostUnavailableError", "hostId": "local", "hostLabel": "This machine", "reason": "no hub" })
-        );
-        assert_eq!(
-            json!(Failure::DeviceOperation { operation: "update hub".into(), reason: DeviceOperationReason::CommandFailed, cause: Cause::of("no hub") }),
-            json!({ "_tag": "DeviceOperationError", "operation": "update hub", "reason": "command_failed", "cause": { "message": "no hub" } })
-        );
-        assert_eq!(json!(Failure::DeviceEasAccount { reason: "no EAS" }), json!({ "_tag": "DeviceEasAccountError", "reason": "no EAS" }));
-        assert_eq!(json!(Failure::DeviceSimlockIdentity { reason: "no simlock" }), json!({ "_tag": "DeviceSimlockIdentityError", "reason": "no simlock" }));
-
-        for (reason, spelled) in [(RelayInstallReason::UnsupportedPlatform, "unsupported_platform"), (RelayInstallReason::ManagedByPolicy, "managed_by_policy")] {
-            assert_eq!(
-                json!(Failure::RelayClientInstall { reason, message: "Install it.".into() }),
-                json!({ "_tag": "RelayClientInstallFailedError", "reason": spelled, "message": "Install it." })
-            );
-        }
-        assert_eq!(
             json!(Failure::PeerLink { reason: PeerLinkReason::Disabled, message: "Off.".into(), answered_as: None }),
             json!({ "_tag": "PeerLinkError", "reason": "disabled", "message": "Off." })
         );
@@ -369,20 +245,6 @@ mod tests {
             json!({ "_tag": "PeerLinkError", "reason": "unreachable", "message": "m", "answeredAs": "Other" })
         );
         let reasons = [
-            (PeerLinkRequestReason::LoadFailed, "load_failed"), (PeerLinkRequestReason::NotFound, "not_found"),
-            (PeerLinkRequestReason::AlreadyAnswered, "already_answered"), (PeerLinkRequestReason::RecordFailed, "record_failed"),
-        ];
-        for (reason, spelled) in reasons {
-            assert_eq!(json!(Failure::PeerLinkRequest { reason, cause: None }), json!({ "_tag": "PeerLinkRequestError", "reason": spelled }));
-        }
-        assert_eq!(
-            json!(Failure::PeerLinkRequest { reason: PeerLinkRequestReason::LoadFailed, cause: Some(Cause::of("gone")) }),
-            json!({ "_tag": "PeerLinkRequestError", "reason": "load_failed", "cause": { "message": "gone" } })
-        );
-        for (reason, spelled) in [(GuestShareReason::Disabled, "disabled"), (GuestShareReason::ConnectUnavailable, "connect_unavailable")] {
-            assert_eq!(json!(Failure::GuestShareCreate { reason }), json!({ "_tag": "GuestShareCreateError", "reason": spelled }));
-        }
-        let reasons = [
             (SecretRequestReason::LoadFailed, "load_failed"), (SecretRequestReason::NotFound, "not_found"),
             (SecretRequestReason::AlreadyAnswered, "already_answered"), (SecretRequestReason::AgentStopped, "agent_stopped"),
             (SecretRequestReason::RecordFailed, "record_failed"), (SecretRequestReason::StoreFailed, "store_failed"),
@@ -394,23 +256,8 @@ mod tests {
             json!(Failure::SecretRequest { reason: SecretRequestReason::StoreFailed, cause: Some(Cause::of("no store")) }),
             json!({ "_tag": "SecretRequestError", "reason": "store_failed", "cause": { "message": "no store" } })
         );
-        for (reason, spelled) in [(McpAppReason::ProviderUnsupported, "provider-unsupported"), (McpAppReason::NotAnApp, "not-an-app")] {
-            assert_eq!(
-                json!(Failure::McpAppRequest { thread_id: "t1".into(), reason }),
-                json!({ "_tag": "McpAppRequestError", "threadId": "t1", "reason": spelled })
-            );
-        }
-
         assert_eq!(json!(Failure::DatabaseReclaim { reason: "database is locked".into() }), json!({ "_tag": "DatabaseReclaimError", "reason": "database is locked" }));
         assert_eq!(json!(Failure::text_generator("Not configured.")), json!({ "_tag": "TextGeneratorError", "detail": "Not configured." }));
-        assert_eq!(
-            json!(Failure::self_update()),
-            json!({ "_tag": "ServerSelfUpdateError", "reason": "This server is not installed from npm or the desktop app, so it cannot update itself." })
-        );
-        assert_eq!(
-            json!(Failure::acp_unsupported(AcpRegistryReason::SessionListUnsupported, "No sessions.")),
-            json!({ "_tag": "AcpRegistryOperationError", "reason": "session_list_unsupported", "message": "No sessions." })
-        );
         assert_eq!(json!(Failure::TelemetryUnavailable { message: "No telemetry." }), json!({ "message": "No telemetry." }));
     }
 }

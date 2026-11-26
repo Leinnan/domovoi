@@ -236,7 +236,7 @@ fn thread_events_on(c: &rusqlite::Connection, thread_id: &str, after: i64, throu
     let mut events = Vec::new();
     while let Some(row) = rows.next()? {
         let event_type: String = row.get(1)?;
-        let event = match stored::event(&event_type, row.get_ref(2)?.as_str()?) {
+        let event = match stored::event(row.get_ref(2)?.as_str()?) {
             Ok(event) => event,
             Err(e) => {
                 tracing::warn!("skipping a stored event that does not decode: {e}");
@@ -1016,62 +1016,6 @@ mod tests {
         assert_eq!(store.latest_sequence().unwrap(), before + 2);
         let kept = store.update_record_if("t1", "r1", &o, |_: &mut Run| false).unwrap();
         assert!(kept.is_none() && store.latest_sequence().unwrap() == before + 2, "an edit declined writes nothing");
-    }
-
-    /// A file change written by a server that kept its patch as `diff` is
-    /// read with the patch where the schema has it, however it is read.
-    #[test]
-    fn a_stored_file_change_keeps_the_patch_it_was_written_with() {
-        let store = Store::new(Db::open_in_memory().unwrap());
-        let o = Origin::default();
-        append(&store, "t1", "thread.created", thread("t1", "p"), &o).unwrap();
-        let patch = "diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-old\n+new";
-        let item = |id: &str, fields: Value| {
-            with(json!({ "id": id, "threadId": "t1", "ordinal": 1, "status": "completed", "updatedAt": crate::test_records::AT,
-                "type": "file_change", "fileName": "a.txt" }), fields)
-        };
-        // As an older server left them: the record and its event, each with `diff`.
-        let stored = [
-            item("old", json!({ "diff": patch })),
-            item("both", json!({ "diff": "stale", "diffStr": patch })),
-            item("mention", json!({ "type": "system_notice", "message": "see \"diff\": above", "diff": "not a patch of this type" })),
-        ];
-        store.db().with(|c| {
-            for (at, record) in stored.iter().enumerate() {
-                let event = json!({ "id": format!("e{at}"), "threadId": "t1", "occurredAt": crate::test_records::AT, "type": "turn-item.updated", "payload": record });
-                c.execute("INSERT INTO events (aggregate_kind, aggregate_id, type, payload, occurred_at) VALUES ('thread', 't1', 'turn-item.updated', ?1, 'x')", params![event.to_string()])?;
-                c.execute(
-                    "INSERT INTO thread_entities (thread_id, kind, entity_id, record, first_sequence) VALUES ('t1', 'turnItems', ?1, ?2, ?3)",
-                    params![record["id"].as_str(), record.to_string(), 10 + at as i64],
-                )?;
-            }
-            Ok(())
-        }).unwrap();
-
-        let patch_of = |item: &TurnItem| match item {
-            TurnItem::FileChange(change) => change.diff_str.clone(),
-            _ => None,
-        };
-        let loaded = store.load_thread("t1").unwrap().unwrap();
-        assert_eq!(loaded.turn_items.len(), 3);
-        assert_eq!(patch_of(loaded.turn_items.get("old").unwrap()).as_deref(), Some(patch));
-        assert_eq!(patch_of(loaded.turn_items.get("both").unwrap()).as_deref(), Some(patch), "a patch already in its place stays");
-        let replayed: Vec<Option<String>> = store.thread_events_after("t1", 0, 99).unwrap().iter().filter_map(|e| match &e.thread_event.as_ref()?.body {
-            EventBody::TurnItemUpdated(item) => Some(patch_of(item)),
-            _ => None,
-        }).collect();
-        assert_eq!(replayed, [Some(patch.to_owned()), Some(patch.to_owned()), None]);
-        // Read by its id, or with the others of its kind.
-        let by_id = store.record::<TurnItem>("t1", "old").unwrap().unwrap();
-        let by_kind = store.records::<TurnItem>("t1").unwrap();
-        assert_eq!(patch_of(&by_id).as_deref(), Some(patch));
-        assert_eq!(by_kind.iter().map(|item| patch_of(item)).collect::<Vec<_>>(), [Some(patch.to_owned()), Some(patch.to_owned()), None]);
-        // An item of another type is not taken for a file change.
-        assert!(matches!(&*by_kind[2], TurnItem::SystemNotice(notice) if notice.message == "see \"diff\": above"));
-        // And such a record is written again with its patch where the schema has it.
-        store.update_record("t1", "old", &o, |item: &mut TurnItem| item.set_status(domovoi_model::typed::TurnItemStatus::Failed)).unwrap().unwrap();
-        let rewritten = crate::test_records::stored(&store, "t1", RecordKind::TurnItem, "old");
-        assert_eq!((rewritten["diffStr"].as_str(), rewritten.get("diff"), rewritten["status"].as_str()), (Some(patch), None, Some("failed")));
     }
 
     /// A stored row that does not decode is left out, never fatal; a thread

@@ -1,0 +1,930 @@
+{
+ "env": {
+  "GIT_AUTHOR_DATE": "2024-01-02T03:04:05Z",
+  "GIT_COMMITTER_DATE": "2024-01-02T03:04:05Z",
+  "DOMOVOI_CODEX_BINARY": "$DIR/bin/textgen",
+  "DOMOVOI_CLAUDE_BINARY": "$DIR/bin/textgen"
+ },
+ "cases": [
+  {
+   "tag": "git.runStackedAction",
+   "payload": {
+    "actionId": "action-1",
+    "cwd": "$DIR/repos/notrepo",
+    "action": "commit",
+    "commitMessage": "x"
+   },
+   "all": true,
+   "expect": "failure",
+   "error": "GitCommandError",
+   "note": "not a repository"
+  },
+  {
+   "tag": "git.runStackedAction",
+   "payload": {
+    "actionId": "action-2",
+    "cwd": "$DIR/repos/missing",
+    "action": "push"
+   },
+   "all": true,
+   "expect": "failure",
+   "error": "GitCommandError",
+   "note": "no such folder"
+  },
+  {
+   "tag": "git.runStackedAction",
+   "payload": {
+    "actionId": "action-3",
+    "cwd": "$DIR/repos/plain",
+    "action": "push",
+    "featureBranch": true
+   },
+   "all": true,
+   "expect": "failure",
+   "error": "GitManagerError",
+   "note": "a feature branch is for commits only"
+  },
+  {
+   "tag": "git.runStackedAction",
+   "payload": {
+    "actionId": "action-4",
+    "cwd": "$DIR/repos/detached",
+    "action": "push"
+   },
+   "all": true,
+   "expect": "failure",
+   "error": "GitManagerError"
+  },
+  {
+   "tag": "git.runStackedAction",
+   "payload": {
+    "actionId": "action-5",
+    "cwd": "$DIR/repos/detached",
+    "action": "create_pr"
+   },
+   "all": true,
+   "expect": "failure",
+   "error": "GitManagerError"
+  },
+  {
+   "sh": "echo edit-6 >> repos/detached/README.md",
+   "tag": "git.runStackedAction",
+   "payload": {
+    "actionId": "action-6",
+    "cwd": "$DIR/repos/detached",
+    "action": "commit",
+    "commitMessage": "On no branch"
+   },
+   "all": true,
+   "note": "a commit on a detached head"
+  },
+  {
+   "tag": "git.runStackedAction",
+   "payload": {
+    "actionId": "action-7",
+    "cwd": "$DIR/repos/plain",
+    "action": "bogus"
+   },
+   "all": true,
+   "note": "an action outside the schema does nothing"
+  },
+  {
+   "tag": "git.runStackedAction",
+   "payload": {
+    "actionId": "action-8",
+    "cwd": "$DIR/repos/plain",
+    "action": "commit",
+    "commitMessage": "Nothing"
+   },
+   "all": true,
+   "note": "nothing to commit"
+  },
+  {
+   "sh": "echo edit-9 >> repos/plain/README.md",
+   "tag": "git.runStackedAction",
+   "payload": {
+    "actionId": "action-9",
+    "cwd": "$DIR/repos/plain",
+    "action": "commit",
+    "commitMessage": "Subject line\r\n\r\nBody text\nmore body\n"
+   },
+   "all": true
+  },
+  {
+   "sh": "echo edit-10 >> repos/plain/README.md && echo other >> repos/plain/calc.py",
+   "tag": "git.runStackedAction",
+   "payload": {
+    "actionId": "action-10",
+    "cwd": "$DIR/repos/plain",
+    "action": "commit",
+    "commitMessage": "Only the readme",
+    "filePaths": [
+     "README.md"
+    ]
+   },
+   "all": true,
+   "note": "only the paths named"
+  },
+  {
+   "tag": "git.runStackedAction",
+   "payload": {
+    "actionId": "action-11",
+    "cwd": "$DIR/repos/plain",
+    "action": "commit",
+    "commitMessage": "A subject that goes on and on, well past the seventy-two characters a toast shows of it"
+   },
+   "all": true,
+   "note": "the rest, with a written message: the subject is cut in the toast"
+  },
+  {
+   "sh": "echo edit-12 >> repos/plain/README.md",
+   "tag": "git.runStackedAction",
+   "payload": {
+    "actionId": "action-12",
+    "cwd": "$DIR/repos/plain",
+    "action": "commit",
+    "commitMessage": "x",
+    "filePaths": [
+     "no-such-file.txt"
+    ]
+   },
+   "all": true,
+   "expect": "failure",
+   "error": "GitCommandError",
+   "note": "a path that is not there"
+  },
+  {
+   "tag": "git.runStackedAction",
+   "payload": {
+    "actionId": "action-13",
+    "cwd": "$DIR/repos/plain",
+    "action": "commit",
+    "featureBranch": false
+   },
+   "all": true,
+   "note": "a generated message (Codex, the default)"
+  },
+  {
+   "sh": "echo edit-14 >> repos/plain/README.md",
+   "tag": "git.runStackedAction",
+   "payload": {
+    "actionId": "action-14",
+    "cwd": "$DIR/repos/plain",
+    "action": "commit",
+    "commitMessage": "  \n "
+   },
+   "all": true,
+   "note": "a blank message is none: generated"
+  },
+  {
+   "sh": "echo edit-15 >> repos/plain/README.md",
+   "tag": "git.runStackedAction",
+   "payload": {
+    "actionId": "action-15",
+    "cwd": "$DIR/repos/plain",
+    "action": "commit",
+    "filePaths": [
+     "README.md"
+    ]
+   },
+   "all": true,
+   "note": "a generated message for the paths named"
+  },
+  {
+   "tag": "git.runStackedAction",
+   "payload": {
+    "actionId": "action-16",
+    "cwd": "$DIR/repos/unborn",
+    "action": "commit",
+    "commitMessage": "First"
+   },
+   "all": true,
+   "note": "the first commit of a repository"
+  },
+  {
+   "tag": "git.runStackedAction",
+   "payload": {
+    "actionId": "action-17",
+    "cwd": "$DIR/repos/unborn",
+    "action": "commit",
+    "commitMessage": "Again"
+   },
+   "all": true,
+   "note": "nothing left"
+  },
+  {
+   "sh": "echo edit-18 >> repos/hooked/README.md",
+   "tag": "git.runStackedAction",
+   "payload": {
+    "actionId": "action-18",
+    "cwd": "$DIR/repos/hooked",
+    "action": "commit",
+    "commitMessage": "Refused"
+   },
+   "all": true,
+   "expect": "failure",
+   "error": "GitCommandError",
+   "note": "the pre-commit hook refuses"
+  },
+  {
+   "sh": "echo silent > textgen/mode && echo edit-19 >> repos/plain/README.md",
+   "tag": "git.runStackedAction",
+   "payload": {
+    "actionId": "action-19",
+    "cwd": "$DIR/repos/plain",
+    "action": "commit"
+   },
+   "all": true,
+   "expect": "failure",
+   "error": "TextGenerationError",
+   "note": "Codex: silent"
+  },
+  {
+   "sh": "echo fail > textgen/mode && echo edit-20 >> repos/plain/README.md",
+   "tag": "git.runStackedAction",
+   "payload": {
+    "actionId": "action-20",
+    "cwd": "$DIR/repos/plain",
+    "action": "commit"
+   },
+   "all": true,
+   "expect": "failure",
+   "error": "TextGenerationError",
+   "note": "Codex: fail"
+  },
+  {
+   "sh": "echo fail-quiet > textgen/mode && echo edit-21 >> repos/plain/README.md",
+   "tag": "git.runStackedAction",
+   "payload": {
+    "actionId": "action-21",
+    "cwd": "$DIR/repos/plain",
+    "action": "commit"
+   },
+   "all": true,
+   "expect": "failure",
+   "error": "TextGenerationError",
+   "note": "Codex: fail-quiet"
+  },
+  {
+   "sh": "echo not-json > textgen/mode && echo edit-22 >> repos/plain/README.md",
+   "tag": "git.runStackedAction",
+   "payload": {
+    "actionId": "action-22",
+    "cwd": "$DIR/repos/plain",
+    "action": "commit"
+   },
+   "all": true,
+   "expect": "failure",
+   "error": "TextGenerationError",
+   "note": "Codex: not-json"
+  },
+  {
+   "sh": "echo no-subject > textgen/mode && echo edit-23 >> repos/plain/README.md",
+   "tag": "git.runStackedAction",
+   "payload": {
+    "actionId": "action-23",
+    "cwd": "$DIR/repos/plain",
+    "action": "commit"
+   },
+   "all": true,
+   "expect": "failure",
+   "error": "TextGenerationError",
+   "note": "Codex: no-subject"
+  },
+  {
+   "sh": "echo no-keys > textgen/mode && echo edit-24 >> repos/plain/README.md",
+   "tag": "git.runStackedAction",
+   "payload": {
+    "actionId": "action-24",
+    "cwd": "$DIR/repos/plain",
+    "action": "commit"
+   },
+   "all": true,
+   "expect": "failure",
+   "error": "TextGenerationError",
+   "note": "Codex: no-keys"
+  },
+  {
+   "sh": "echo fenced > textgen/mode && echo edit-25 >> repos/plain/README.md",
+   "tag": "git.runStackedAction",
+   "payload": {
+    "actionId": "action-25",
+    "cwd": "$DIR/repos/plain",
+    "action": "commit"
+   },
+   "all": true,
+   "note": "Codex: fenced"
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {
+     "textGenerationModelSelection": {
+      "instanceId": "claudeAgent",
+      "model": "claude-haiku-5-5",
+      "options": [
+       {
+        "id": "effort",
+        "value": "high"
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "sh": "echo ok > textgen/mode && echo edit-26 >> repos/plain/README.md",
+   "tag": "git.runStackedAction",
+   "payload": {
+    "actionId": "action-26",
+    "cwd": "$DIR/repos/plain",
+    "action": "commit"
+   },
+   "all": true,
+   "note": "Claude: ok"
+  },
+  {
+   "sh": "echo list > textgen/mode && echo edit-27 >> repos/plain/README.md",
+   "tag": "git.runStackedAction",
+   "payload": {
+    "actionId": "action-27",
+    "cwd": "$DIR/repos/plain",
+    "action": "commit"
+   },
+   "all": true,
+   "note": "Claude: list"
+  },
+  {
+   "sh": "echo fenced > textgen/mode && echo edit-28 >> repos/plain/README.md",
+   "tag": "git.runStackedAction",
+   "payload": {
+    "actionId": "action-28",
+    "cwd": "$DIR/repos/plain",
+    "action": "commit"
+   },
+   "all": true,
+   "note": "Claude: fenced"
+  },
+  {
+   "sh": "echo error-result > textgen/mode && echo edit-29 >> repos/plain/README.md",
+   "tag": "git.runStackedAction",
+   "payload": {
+    "actionId": "action-29",
+    "cwd": "$DIR/repos/plain",
+    "action": "commit"
+   },
+   "all": true,
+   "expect": "failure",
+   "error": "TextGenerationError",
+   "note": "Claude: error-result"
+  },
+  {
+   "sh": "echo error-list > textgen/mode && echo edit-30 >> repos/plain/README.md",
+   "tag": "git.runStackedAction",
+   "payload": {
+    "actionId": "action-30",
+    "cwd": "$DIR/repos/plain",
+    "action": "commit"
+   },
+   "all": true,
+   "expect": "failure",
+   "error": "TextGenerationError",
+   "note": "Claude: error-list"
+  },
+  {
+   "sh": "echo error-empty > textgen/mode && echo edit-31 >> repos/plain/README.md",
+   "tag": "git.runStackedAction",
+   "payload": {
+    "actionId": "action-31",
+    "cwd": "$DIR/repos/plain",
+    "action": "commit"
+   },
+   "all": true,
+   "expect": "failure",
+   "error": "TextGenerationError",
+   "note": "Claude: error-empty"
+  },
+  {
+   "sh": "echo not-json > textgen/mode && echo edit-32 >> repos/plain/README.md",
+   "tag": "git.runStackedAction",
+   "payload": {
+    "actionId": "action-32",
+    "cwd": "$DIR/repos/plain",
+    "action": "commit"
+   },
+   "all": true,
+   "expect": "failure",
+   "error": "TextGenerationError",
+   "note": "Claude: not-json"
+  },
+  {
+   "sh": "echo fail > textgen/mode && echo edit-33 >> repos/plain/README.md",
+   "tag": "git.runStackedAction",
+   "payload": {
+    "actionId": "action-33",
+    "cwd": "$DIR/repos/plain",
+    "action": "commit"
+   },
+   "all": true,
+   "expect": "failure",
+   "error": "TextGenerationError",
+   "note": "Claude: fail"
+  },
+  {
+   "sh": "echo fail-quiet > textgen/mode && echo edit-34 >> repos/plain/README.md",
+   "tag": "git.runStackedAction",
+   "payload": {
+    "actionId": "action-34",
+    "cwd": "$DIR/repos/plain",
+    "action": "commit"
+   },
+   "all": true,
+   "expect": "failure",
+   "error": "TextGenerationError",
+   "note": "Claude: fail-quiet"
+  },
+  {
+   "sh": "echo no-structured > textgen/mode && echo edit-35 >> repos/plain/README.md",
+   "tag": "git.runStackedAction",
+   "payload": {
+    "actionId": "action-35",
+    "cwd": "$DIR/repos/plain",
+    "action": "commit"
+   },
+   "all": true,
+   "expect": "failure",
+   "error": "TextGenerationError",
+   "note": "Claude: no-structured"
+  },
+  {
+   "sh": "echo no-subject > textgen/mode && echo edit-36 >> repos/plain/README.md",
+   "tag": "git.runStackedAction",
+   "payload": {
+    "actionId": "action-36",
+    "cwd": "$DIR/repos/plain",
+    "action": "commit"
+   },
+   "all": true,
+   "expect": "failure",
+   "error": "TextGenerationError",
+   "note": "Claude: no-subject"
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {
+     "sourceControlWriterModelSelection": {
+      "instanceId": "codex",
+      "model": "gpt-writer",
+      "options": [
+       {
+        "id": "reasoningEffort",
+        "value": "medium"
+       }
+      ]
+     },
+     "sourceControlWritingStyle": {
+      "mode": "custom",
+      "customInstructions": "Use plain words."
+     }
+    }
+   }
+  },
+  {
+   "sh": "echo ok > textgen/mode",
+   "tag": "git.runStackedAction",
+   "payload": {
+    "actionId": "action-37",
+    "cwd": "$DIR/repos/plain",
+    "action": "commit"
+   },
+   "all": true,
+   "note": "the source control writer's model and the user's instructions"
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {
+     "sourceControlWriterModelSelection": null,
+     "sourceControlWritingStyle": {
+      "mode": "custom",
+      "customInstructions": "  "
+     }
+    }
+   }
+  },
+  {
+   "sh": "echo edit-38 >> repos/plain/README.md",
+   "tag": "git.runStackedAction",
+   "payload": {
+    "actionId": "action-38",
+    "cwd": "$DIR/repos/plain",
+    "action": "commit"
+   },
+   "all": true,
+   "note": "back to the text model, and blank instructions are none"
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {
+     "textGenerationModelSelection": {
+      "instanceId": "codex",
+      "model": "gpt-text"
+     },
+     "sourceControlWritingStyle": {
+      "mode": "repo_conventions",
+      "customInstructions": "ignored"
+     }
+    }
+   }
+  },
+  {
+   "tag": "git.runStackedAction",
+   "payload": {
+    "actionId": "action-39",
+    "cwd": "$DIR/repos/plain",
+    "action": "commit",
+    "featureBranch": true,
+    "commitMessage": "x"
+   },
+   "all": true,
+   "expect": "failure",
+   "error": "GitManagerError",
+   "note": "nothing to put on a feature branch"
+  },
+  {
+   "sh": "echo edit-40 >> repos/plain/README.md",
+   "tag": "git.runStackedAction",
+   "payload": {
+    "actionId": "action-40",
+    "cwd": "$DIR/repos/plain",
+    "action": "commit",
+    "featureBranch": true,
+    "commitMessage": "Add Thing"
+   },
+   "all": true,
+   "note": "named after the message"
+  },
+  {
+   "sh": "echo edit-41 >> repos/plain/README.md",
+   "tag": "git.runStackedAction",
+   "payload": {
+    "actionId": "action-41",
+    "cwd": "$DIR/repos/plain",
+    "action": "commit",
+    "featureBranch": true,
+    "commitMessage": "Add Thing"
+   },
+   "all": true,
+   "note": "the name is taken: the next one"
+  },
+  {
+   "sh": "echo edit-42 >> repos/plain/README.md",
+   "tag": "git.runStackedAction",
+   "payload": {
+    "actionId": "action-42",
+    "cwd": "$DIR/repos/plain",
+    "action": "commit",
+    "featureBranch": true
+   },
+   "all": true,
+   "note": "a generated message names the branch"
+  },
+  {
+   "sh": "echo empty-branch > textgen/mode && echo edit-43 >> repos/plain/README.md",
+   "tag": "git.runStackedAction",
+   "payload": {
+    "actionId": "action-43",
+    "cwd": "$DIR/repos/plain",
+    "action": "commit",
+    "featureBranch": true
+   },
+   "all": true,
+   "note": "a generated message without a branch: named after the subject"
+  },
+  {
+   "sh": "echo fail > textgen/mode && echo edit-44 >> repos/plain/README.md",
+   "tag": "git.runStackedAction",
+   "payload": {
+    "actionId": "action-44",
+    "cwd": "$DIR/repos/plain",
+    "action": "commit",
+    "featureBranch": true
+   },
+   "all": true,
+   "expect": "failure",
+   "error": "TextGenerationError",
+   "note": "the message is not written"
+  },
+  {
+   "sh": "echo ok > textgen/mode",
+   "tag": "git.runStackedAction",
+   "payload": {
+    "actionId": "action-45",
+    "cwd": "$DIR/repos/plain",
+    "action": "commit",
+    "featureBranch": true,
+    "commitMessage": "x",
+    "filePaths": [
+     "no-such-file.txt"
+    ]
+   },
+   "all": true,
+   "expect": "failure",
+   "error": "GitCommandError",
+   "note": "a path that is not there"
+  },
+  {
+   "tag": "git.runStackedAction",
+   "payload": {
+    "actionId": "action-46",
+    "cwd": "$DIR/repos/plain",
+    "action": "commit_push",
+    "featureBranch": true,
+    "commitMessage": "Keep going"
+   },
+   "all": true,
+   "expect": "failure",
+   "error": "GitCommandError",
+   "note": "committed on a feature branch, then no remote to push to"
+  },
+  {
+   "tag": "git.runStackedAction",
+   "payload": {
+    "actionId": "action-47",
+    "cwd": "$DIR/repos/onmain",
+    "action": "push"
+   },
+   "all": true,
+   "note": "nothing to push"
+  },
+  {
+   "sh": "echo edit-48 >> repos/onmain/README.md && gitc -C repos/onmain commit -qam Elsewhere",
+   "tag": "git.runStackedAction",
+   "payload": {
+    "actionId": "action-48",
+    "cwd": "$DIR/repos/onmain",
+    "action": "push"
+   },
+   "all": true,
+   "note": "a commit made elsewhere"
+  },
+  {
+   "sh": "echo edit-49 >> repos/onmain/README.md",
+   "tag": "git.runStackedAction",
+   "payload": {
+    "actionId": "action-49",
+    "cwd": "$DIR/repos/onmain",
+    "action": "commit_push",
+    "commitMessage": "Commit and push"
+   },
+   "all": true
+  },
+  {
+   "tag": "git.runStackedAction",
+   "payload": {
+    "actionId": "action-50",
+    "cwd": "$DIR/repos/onmain",
+    "action": "commit_push"
+   },
+   "all": true,
+   "note": "nothing to commit, nothing to push"
+  },
+  {
+   "tag": "git.runStackedAction",
+   "payload": {
+    "actionId": "action-51",
+    "cwd": "$DIR/repos/topic",
+    "action": "push"
+   },
+   "all": true,
+   "note": "the first push sets the upstream"
+  },
+  {
+   "sh": "echo edit-52 >> repos/topic/topic.txt",
+   "tag": "git.runStackedAction",
+   "payload": {
+    "actionId": "action-52",
+    "cwd": "$DIR/repos/topic",
+    "action": "commit_push",
+    "commitMessage": "More on topic"
+   },
+   "all": true
+  },
+  {
+   "tag": "git.runStackedAction",
+   "payload": {
+    "actionId": "action-53",
+    "cwd": "$DIR/repos/refused",
+    "action": "push"
+   },
+   "all": true,
+   "expect": "failure",
+   "error": "GitCommandError",
+   "note": "the remote has moved on"
+  },
+  {
+   "tag": "git.runStackedAction",
+   "payload": {
+    "actionId": "action-54",
+    "cwd": "$DIR/repos/plain",
+    "action": "push"
+   },
+   "all": true,
+   "expect": "failure",
+   "error": "GitCommandError",
+   "note": "no remote"
+  },
+  {
+   "tag": "git.runStackedAction",
+   "payload": {
+    "actionId": "action-55",
+    "cwd": "$DIR/repos/gitlab",
+    "action": "push"
+   },
+   "all": true,
+   "note": "not GitHub: a change request"
+  },
+  {
+   "tag": "git.runStackedAction",
+   "payload": {
+    "actionId": "action-56",
+    "cwd": "$DIR/repos/pushed",
+    "action": "create_pr"
+   },
+   "all": true,
+   "note": "pushed already: only the pull request, its text generated"
+  },
+  {
+   "tag": "git.runStackedAction",
+   "payload": {
+    "actionId": "action-57",
+    "cwd": "$DIR/repos/pushed",
+    "action": "create_pr"
+   },
+   "all": true,
+   "note": "it is open now"
+  },
+  {
+   "tag": "git.runStackedAction",
+   "payload": {
+    "actionId": "action-58",
+    "cwd": "$DIR/repos/ahead",
+    "action": "create_pr"
+   },
+   "all": true,
+   "note": "commits not pushed yet: pushed first"
+  },
+  {
+   "sh": "echo edit-59 >> repos/existing/existing.txt",
+   "tag": "git.runStackedAction",
+   "payload": {
+    "actionId": "action-59",
+    "cwd": "$DIR/repos/existing",
+    "action": "commit_push_pr",
+    "commitMessage": "One more"
+   },
+   "all": true,
+   "note": "one is open already"
+  },
+  {
+   "tag": "git.runStackedAction",
+   "payload": {
+    "actionId": "action-60",
+    "cwd": "$DIR/repos/existing",
+    "action": "push"
+   },
+   "all": true,
+   "note": "nothing left to push"
+  },
+  {
+   "sh": "echo 'pull request create failed: GraphQL: No commits between main and feature/failing (createPullRequest)' > gh/create-fail",
+   "tag": "git.runStackedAction",
+   "payload": {
+    "actionId": "action-61",
+    "cwd": "$DIR/repos/failing",
+    "action": "create_pr"
+   },
+   "all": true,
+   "expect": "failure",
+   "error": "SourceControlProviderError",
+   "note": "gh refuses"
+  },
+  {
+   "sh": "rm gh/create-fail && touch gh/create-silent",
+   "tag": "git.runStackedAction",
+   "payload": {
+    "actionId": "action-62",
+    "cwd": "$DIR/repos/silent",
+    "action": "create_pr"
+   },
+   "all": true,
+   "note": "made, but not listed afterwards"
+  },
+  {
+   "sh": "rm gh/create-silent && echo fail > textgen/mode",
+   "tag": "git.runStackedAction",
+   "payload": {
+    "actionId": "action-63",
+    "cwd": "$DIR/repos/filled",
+    "action": "create_pr"
+   },
+   "all": true,
+   "note": "its text is not generated: from the commits"
+  },
+  {
+   "sh": "echo no-title > textgen/mode",
+   "tag": "git.runStackedAction",
+   "payload": {
+    "actionId": "action-64",
+    "cwd": "$DIR/repos/untitled",
+    "action": "create_pr"
+   },
+   "all": true,
+   "note": "the model gives no title: from the commits"
+  },
+  {
+   "sh": "echo ok > textgen/mode",
+   "tag": "git.runStackedAction",
+   "payload": {
+    "actionId": "action-65",
+    "cwd": "$DIR/repos/templated",
+    "action": "create_pr"
+   },
+   "all": true,
+   "note": "the repository's template"
+  },
+  {
+   "tag": "server.updateSettings",
+   "payload": {
+    "patch": {
+     "sourceControlWritingStyle": {
+      "mode": "custom",
+      "customInstructions": "Be brief.",
+      "followChangeRequestTemplates": false
+     }
+    }
+   }
+  },
+  {
+   "tag": "git.runStackedAction",
+   "payload": {
+    "actionId": "action-66",
+    "cwd": "$DIR/repos/plainly",
+    "action": "create_pr"
+   },
+   "all": true,
+   "note": "the template is not followed, the user's instructions are"
+  },
+  {
+   "tag": "git.runStackedAction",
+   "payload": {
+    "actionId": "action-67",
+    "cwd": "$DIR/repos/nobase",
+    "action": "create_pr"
+   },
+   "all": true,
+   "note": "the remote names no default branch"
+  },
+  {
+   "sh": "echo edit-68 >> repos/stacked/stacked.txt",
+   "tag": "git.runStackedAction",
+   "payload": {
+    "actionId": "action-68",
+    "cwd": "$DIR/repos/stacked",
+    "action": "commit_push_pr",
+    "featureBranch": true
+   },
+   "all": true,
+   "note": "branch, commit, push and pull request in one"
+  },
+  {
+   "sh": "echo edit-69 >> repos/gitlab/lab.txt",
+   "tag": "git.runStackedAction",
+   "payload": {
+    "actionId": "action-69",
+    "cwd": "$DIR/repos/gitlab",
+    "action": "commit_push_pr",
+    "commitMessage": "Lab work"
+   },
+   "all": true,
+   "expect": "failure",
+   "error": "SourceControlProviderError",
+   "note": "not GitHub"
+  },
+  {
+   "sh": "echo 'To get started with GitHub CLI, please run:  gh auth login' > gh/fail",
+   "tag": "git.runStackedAction",
+   "payload": {
+    "actionId": "action-70",
+    "cwd": "$DIR/repos/loggedout",
+    "action": "create_pr"
+   },
+   "all": true,
+   "expect": "failure",
+   "error": "SourceControlProviderError",
+   "note": "gh is not logged in"
+  }
+ ]
+}

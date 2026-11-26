@@ -80,7 +80,7 @@ fn returning_from_a_suspension_starts_a_new_tunnel() {
     let mut model = signed_in();
     let _ = run(&mut model, Event::Reconnect);
     let (mut cmd, mut ticket) = tunnel_up(&mut model, 4242);
-    ticket.resolve(HttpResult::Ok(crux_http::protocol::HttpResponse::status(200).json(serde_json::json!({ "ticket": "t" })).build())).unwrap();
+    ticket.resolve(HttpResult::Ok(crux_http::protocol::HttpResponse::status(200).json(serde_json::json!({ "ticket": "t", "expiresAt": "2026-11-13T00:00:00.000Z", "protocol": domovoi_model::PROTOCOL_VERSION })).build())).unwrap();
     for event in cmd.events().collect::<Vec<_>>() {
         let _ = run(&mut model, event);
     }

@@ -84,7 +84,7 @@ pub fn records(c: &rusqlite::Connection, events: bool) -> rusqlite::Result<Vec<G
         let mut rows = st.query([])?;
         while let Some(row) = rows.next()? {
             let (sequence, event_type, text): (i64, _, _) = (row.get(0)?, row.get_ref(1)?.as_str()?, row.get_ref(2)?.as_str()?);
-            groups.row("events", event_type, text, || format!("event {sequence}"), outcome(stored::event(event_type, text)));
+            groups.row("events", event_type, text, || format!("event {sequence}"), outcome(stored::event(text)));
         }
     }
     Ok(groups.0.into_values().collect())

@@ -1,8 +1,8 @@
 //! Mermaid diagrams, drawn by the server: a shell names a completed Mermaid
 //! block with a key of its own (`LoadDiagram`), the core asks the server for
 //! a URL of it as a PNG (`assets.createUrl`, resource `mermaid-diagram`), and
-//! the view lists each diagram's URL by key. A server that does not draw
-//! diagrams (t3code's) fails the call, and the shell shows the source.
+//! the view lists each diagram's URL by key. When the server cannot draw one
+//! it fails the call, and the shell shows the source.
 
 use crate::{
     Model,

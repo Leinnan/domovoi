@@ -35,7 +35,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
             }),
         column![
             text("Connect to a Domovoi server").size(TEXT_TITLE).font(fonts::SEMIBOLD),
-            w::muted("domovoi-server or any t3code-compatible environment", TEXT_UI),
+            w::muted("domovoi-server on this machine or another", TEXT_UI),
         ]
         .spacing(XXS),
     ]

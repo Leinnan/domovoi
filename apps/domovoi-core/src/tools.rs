@@ -4,7 +4,7 @@
 //! `sed -n`, Antigravity's "File …", Codex's `view_image`); the look is
 //! decided here, once, for every shell.
 
-#![expect(clippy::disallowed_types, reason = "a tool call's input and output are whatever shape each tool defines (t3code `Schema.Unknown`)")]
+#![expect(clippy::disallowed_types, reason = "a tool call's input and output are whatever shape each tool defines")]
 
 use crate::view::{DiffFileView, FieldView, ItemView, LinkView, MarkdownBlock};
 use domovoi_model::typed::{CommandExecutionItem, DynamicToolItem, FileSearchItem, TurnItem, TurnItemStatus, WebSearchItem};

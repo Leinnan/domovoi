@@ -24,6 +24,9 @@ use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest};
 
+/// The socket URL names the version of the protocol the test speaks.
+const PROTOCOL: u32 = domovoi_model::PROTOCOL_VERSION;
+
 mod dump;
 /// Turns of the real agent CLIs (`DOMOVOI_LIVE_*_MODEL`).
 mod live;
@@ -1697,7 +1700,7 @@ async fn socket(server: &Server, token: &str) -> Ws {
         .json()
         .await
         .unwrap();
-    let url = format!("ws://127.0.0.1:{}/ws?orchestrationProtocol=2&wsTicket={}", server.port, res["ticket"].as_str().unwrap());
+    let url = format!("ws://127.0.0.1:{}/ws?protocol={PROTOCOL}&wsTicket={}", server.port, res["ticket"].as_str().unwrap());
     tokio_tungstenite::connect_async(url.into_client_request().unwrap()).await.unwrap().0
 }
 
@@ -1711,6 +1714,7 @@ fn fresh_id(prefix: &str) -> String {
 async fn call(ws: &mut Ws, id: &str, tag: &str, payload: Value) -> Value {
     let request = json!({ "_tag": "Request", "id": id, "tag": tag, "payload": payload, "headers": [] });
     record(&request);
+    Tap::write(2, "c2s", &request);
     ws.send(Message::Text(request.to_string().into())).await.unwrap();
     loop {
         let t = match ws.next().await {
@@ -1722,13 +1726,14 @@ async fn call(ws: &mut Ws, id: &str, tag: &str, payload: Value) -> Value {
         let v: Value = serde_json::from_str(&t).unwrap();
         if v["requestId"] == id && v["_tag"] == "Exit" {
             record(&v);
+            Tap::write(2, "s2c", &v);
             return v;
         }
     }
 }
 
-/// With `DOMOVOI_WIRE_OUT` set, appends a frame as `ws-tap` records it, for
-/// `node conformance/wire-check.ts` to decode with t3code's schemas.
+/// With `DOMOVOI_WIRE_OUT` set, appends a frame to that file, to read what a
+/// test's calls sent and got.
 fn record(frame: &Value) {
     use std::io::Write;
     // Tests run at once: one whole line at a time, or their frames interleave.
@@ -3762,28 +3767,38 @@ async fn perf_a_long_reply_watched_by_many_clients() {
     }
 }
 
-/// A socket whose every frame, either way, is written to a file as `ws-tap`
-/// records one (`{"kind":"ws","conn":1,"dir":"c2s"|"s2c","frame":…}`). It
-/// acknowledges each chunk, as a client does.
+/// A socket whose every frame, either way, is written to a file as one
+/// record (`{"kind":"ws","conn":1,"dir":"c2s"|"s2c","frame":…}`). It
+/// acknowledges each chunk, as a client does. While one is open, the calls
+/// the test drives its turns with ([`call`]: each request and its exit) are
+/// written to the same file as connection 2.
 struct Tap {
     requests: tokio::sync::mpsc::UnboundedSender<Value>,
     task: tokio::task::JoinHandle<()>,
     next: std::cell::Cell<u64>,
 }
 
+/// The file of the tap that is open.
+static TAPPED: std::sync::Mutex<Option<std::fs::File>> = std::sync::Mutex::new(None);
+
 impl Tap {
+    fn write(conn: u8, dir: &str, frame: &Value) {
+        use std::io::Write;
+        if let Some(file) = TAPPED.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_mut() {
+            writeln!(file, "{}", json!({ "kind": "ws", "conn": conn, "dir": dir, "frame": frame })).unwrap();
+        }
+    }
+
     fn open(mut ws: Ws, path: PathBuf) -> Tap {
+        *TAPPED.lock().unwrap() = Some(std::fs::File::create(&path).unwrap());
         let (requests, mut rx) = tokio::sync::mpsc::unbounded_channel::<Value>();
         let task = tokio::spawn(async move {
-            use std::io::Write;
-            let mut file = std::fs::File::create(&path).unwrap();
-            let mut write = |dir: &str, frame: &Value| writeln!(file, "{}", json!({ "kind": "ws", "conn": 1, "dir": dir, "frame": frame })).unwrap();
             let mut open = true;
             loop {
                 tokio::select! {
                     request = rx.recv(), if open => match request {
                         Some(frame) => {
-                            write("c2s", &frame);
+                            Tap::write(1, "c2s", &frame);
                             ws.send(Message::Text(frame.to_string().into())).await.unwrap();
                         }
                         None => open = false,
@@ -3791,10 +3806,10 @@ impl Tap {
                     frame = tokio::time::timeout(Duration::from_secs(2), ws.next()) => match frame {
                         Ok(Some(Ok(Message::Text(text)))) => {
                             let frame: Value = serde_json::from_str(&text).unwrap();
-                            write("s2c", &frame);
+                            Tap::write(1, "s2c", &frame);
                             if frame["_tag"] == "Chunk" {
                                 let ack = json!({ "_tag": "Ack", "requestId": frame["requestId"] });
-                                write("c2s", &ack);
+                                Tap::write(1, "c2s", &ack);
                                 ws.send(Message::Text(ack.to_string().into())).await.unwrap();
                             }
                         }
@@ -3819,26 +3834,61 @@ impl Tap {
     async fn close(self) {
         drop(self.requests);
         self.task.await.unwrap();
+        *TAPPED.lock().unwrap() = None;
     }
+}
+
+/// What a client reads beside its subscriptions: the methods of
+/// `tests/cases/calls` that change nothing, each with the payload of its
+/// first case that is expected to succeed (`$WORKSPACE`, `$PROJECT`,
+/// `$THREAD` and `$HOME` filled in; a case that needs anything else is left out).
+fn reads(workspace: &std::path::Path, home: &std::path::Path) -> Vec<(String, Value)> {
+    const READS: &[&str] = &[
+        "subscribeAuthAccess", "subscribeTerminalMetadata", "domovoi.terminals.subscribe", "scheduledTasks.subscribe", "scheduledTasks.listRuns",
+        "subscribeVcsStatus", "vcs.listRefs", "vcs.refreshStatus", "review.getDiffPreview", "projects.listEntries", "projects.searchEntries",
+        "projects.searchContents", "projects.readFile", "filesystem.browse", "orchestration.getArchivedShellSnapshot", "orchestration.searchThreads",
+        "orchestration.searchThread", "orchestration.getTurnDiff", "orchestration.getFullThreadDiff", "server.getHostResources",
+        "server.getProcessDiagnostics", "server.getUsageSummary", "server.getDatabaseStorage", "server.getStorageCleanupReport", "agentSessions.scan",
+        "pullRequests.list", "pullRequests.summary", "assets.createUrl",
+    ];
+    let folder = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/cases/calls");
+    let mut files: Vec<PathBuf> = std::fs::read_dir(&folder).unwrap().map(|entry| entry.unwrap().path()).filter(|path| path.extension().is_some_and(|e| e == "json")).collect();
+    files.sort();
+    let fill = |text: &str| text.replace("$WORKSPACE", &workspace.to_string_lossy()).replace("$PROJECT", "p1").replace("$THREAD", "t1").replace("$HOME", &home.to_string_lossy());
+    let mut out: Vec<(String, Value)> = vec![];
+    for file in files {
+        let cases: Vec<Value> = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+        for case in cases {
+            let tag = case["tag"].as_str().unwrap_or_default();
+            let payload = fill(&case["payload"].to_string());
+            if READS.contains(&tag) && case["expect"] != "failure" && !payload.contains('$') && !out.iter().any(|(seen, _)| seen == tag) {
+                out.push((tag.to_owned(), serde_json::from_str(&payload).unwrap()));
+            }
+        }
+    }
+    out
 }
 
 /// Records a session of this server for `fixtures/native` (not a test: it
 /// writes `DOMOVOI_RECORD_NATIVE`, a file, and checks only that the turns end).
 /// One socket subscribes as the client core does at a start (configuration,
 /// lifecycle, the thread list, then each thread as it is opened) and is
-/// recorded; a second one, not recorded, drives the turns:
+/// recorded whole, as connection 1. The calls that drive the turns go over a
+/// second socket, and each with its answer is recorded as connection 2:
 ///
 /// - thread `t1` on the scripted Codex: every kind of item and request,
 ///   each request answered;
 /// - thread `t2` on the scripted Claude: a reply with thinking, then a
 ///   20,000-character reply streamed over about ten seconds;
-/// - each thread subscribed to once more at the end, for its whole snapshot.
+/// - each thread subscribed to once more at the end, for its whole snapshot;
+/// - the calls a client reads with ([`reads`]), then a setting changed and a
+///   file edited, which the configuration and the checkout's status report.
 ///
 /// ```sh
 /// DOMOVOI_RECORD_NATIVE=$PWD/rec.ndjson cargo test -p domovoi-server --test provider_turns record_a_native_session -- --ignored
-/// scripts/scrub_recording.py --tap rec.ndjson --home "$HOME" --redact "$(hostname -s)=host" --out fixtures/native/session1
-/// scripts/check_fixtures.py fixtures
 /// ```
+///
+/// `fixtures/native/README.md` says how the file becomes a fixture.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "writes a recording; needs DOMOVOI_RECORD_NATIVE"]
 async fn record_a_native_session() {
@@ -3868,6 +3918,8 @@ async fn record_a_native_session() {
         json!({ "decision": "cancel" }),
     ];
     answering(&mut ws, &answers, 1, "completed").await;
+    let r = call(&mut ws, "v1", "orchestration.dispatchCommand", json!({ "type": "thread.visit", "commandId": "c-visit", "threadId": "t1", "visitedAt": "2026-11-26T12:00:00.000Z" })).await;
+    assert_eq!(r["exit"]["_tag"], "Success", "{r}");
 
     let r = call(&mut ws, "l2", "orchestration.launchThread", json!({ "commandId": "c-t2", "creationSource": "web", "threadId": "t2", "projectId": "p1",
         "title": "Streamed", "generateTitle": false, "modelSelection": { "instanceId": "claudeAgent", "model": "claude-haiku-5-5" },
@@ -3885,6 +3937,21 @@ async fn record_a_native_session() {
     for thread in ["t1", "t2"] {
         tap.send("orchestration.subscribeThread", json!({ "threadId": thread, "requestCompletionMarker": true }));
     }
+    // What the reads find: a file to read, a setting changed while the
+    // configuration is watched, and a change in the checkout while its status is.
+    std::fs::create_dir_all(workspace.join("notes")).unwrap();
+    std::fs::write(workspace.join("notes/todo.md"), "# To do\n\n- return the calc\n").unwrap();
+    std::fs::write(workspace.join("calc.py"), "def add(a, b):\n    return a + b\n").unwrap();
+    for (tag, payload) in reads(&workspace, &server.dir.join("home")) {
+        tap.send(&tag, payload);
+    }
+    let r = call(&mut ws, "u1", "server.updateSettings", json!({ "patch": { "defaultAutoPull": true } })).await;
+    assert_eq!(r["exit"]["_tag"], "Success", "{r}");
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    std::fs::write(workspace.join("a.txt"), "one\ntwo\n").unwrap();
+    let r = call(&mut ws, "u2", "vcs.refreshStatus", json!({ "cwd": workspace })).await;
+    assert_eq!(r["exit"]["_tag"], "Success", "{r}");
+    tokio::time::sleep(Duration::from_secs(2)).await;
     tap.close().await;
 }
 

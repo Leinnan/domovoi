@@ -260,19 +260,6 @@ impl Settings {
         Settings::from_document(fields)
     }
 
-    /// Sets settings on the record. A setting whose written form changed
-    /// replaces what the document held for it (objects merge key by key, so
-    /// the keys of another build inside them stay); one set to `None` keeps
-    /// what the document held.
-    pub fn update(&mut self, change: impl FnOnce(&mut ServerSettings)) {
-        let before = encoded(&self.record);
-        let mut record = self.record.clone();
-        change(&mut record);
-        let changed: Map<String, Value> = encoded(&record).into_iter().filter(|(key, value)| before.get(key) != Some(value)).collect();
-        let mut fields = self.fields();
-        merge(&mut fields, &changed);
-        *self = Settings::from_document(fields);
-    }
 }
 
 /// What `server.updateSettings` is asked to change (`ClientServerSettingsPatch`).
@@ -655,7 +642,7 @@ mod tests {
         let mut rx = subscribe();
         let mut settings = load(&dir);
         assert_eq!(settings.keep_awake_while_agents_work, Some(true), "the defaults are read");
-        settings.update(|s| s.keep_awake_while_agents_work = Some(false));
+        settings = settings.patched(&serde_json::from_value(json!({ "keepAwakeWhileAgentsWork": false })).unwrap());
         save(&dir, &settings).unwrap();
         assert_eq!(load(&dir).keep_awake_while_agents_work, Some(false));
         // Other tests save settings too: ours is among what was announced.
@@ -738,17 +725,6 @@ mod tests {
         assert_eq!(document["futureSetting"], json!({ "level": 4, "deep": { "deeper": [1, 2.0, { "x": null }] } }));
         assert_eq!(document["storageCleanup"], json!({ "futureRule": 1, "logsAfterDays": 3, "worktreeOnMerge": true, "newerRule": "x" }));
         assert_eq!(serde_json::from_value::<SettingsPatch>(json!([1])).unwrap(), SettingsPatch::default(), "a patch that is no object changes nothing");
-
-        let mut updated = settings.clone();
-        updated.update(|s| {
-            s.default_auto_pull = Some(false);
-            s.storage_cleanup.as_mut().unwrap().worktree_on_delete = Some(true);
-        });
-        assert_eq!(updated.default_auto_pull, Some(false), "a set value replaces one of a wrong type");
-        let document = updated.document();
-        assert_eq!(document["defaultAutoPull"], false);
-        assert_eq!(document["storageCleanup"], json!({ "futureRule": 1, "logsAfterDays": "soon", "worktreeOnMerge": true, "worktreeOnDelete": true }));
-        assert_eq!(document["futureSetting"], odd()["futureSetting"]);
 
         let with = settings.with_instance(&mutation(json!({ "operation": "upsert", "instanceId": "codex-9", "instance": { "driver": "codex", "futureField": 2 } })));
         assert!(with.provider_instances.as_ref().unwrap().contains_key("codex-9"));

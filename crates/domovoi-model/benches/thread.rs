@@ -1,6 +1,6 @@
 //! Thread read model over a real session and over grown copies of it.
 //!
-//! The recorded Codex thread of `fixtures/golden/ts-session1` (snapshot plus
+//! The recorded Codex thread of `fixtures/native/session1` (snapshot plus
 //! the events streamed after it) is replayed as-is, then grown to N turn items
 //! and messages to show how `apply` and `shell()` scale with thread length.
 //! The server derives a shell after every event, the client applies every
@@ -12,7 +12,7 @@
 //!
 //! The benches are named `typed_…` because each was first measured beside the
 //! same work on the untyped JSON model this crate once held. The names are
-//! kept so their history in `docs/verification.md` still reads.
+//! kept so their history in `docs/performance.md` still reads.
 //!
 //! `cargo bench -p domovoi-model`
 
@@ -21,20 +21,20 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, LazyLock};
 use domovoi_model::typed::{DomainEvent, Thread, ThreadProjection, ThreadSnapshot};
 
-const THREAD: &str = "6421f1e6-14f6-4d7a-89b3-6e82dac38210";
+const THREAD: &str = "t1";
 
 /// The sizes the grown thread is measured at.
 const SIZES: [usize; 3] = [100, 1000, 5000];
 
 /// What `grown` makes at each of `SIZES`: turn items, messages, and records of
 /// every kind. The numbers the benches' history was measured on.
-const GROWN: [(usize, usize, usize); 3] = [(100, 100, 225), (1000, 1000, 2025), (5000, 5000, 10025)];
+const GROWN: [(usize, usize, usize); 3] = [(100, 100, 241), (1000, 1000, 2041), (5000, 5000, 10041)];
 
 /// The recorded session. `DOMOVOI_FIXTURES` names another `fixtures` folder: a
 /// build kept by `tools/perf.py` reads the recording it was saved with.
 fn recording() -> std::path::PathBuf {
     let fixtures = std::env::var_os("DOMOVOI_FIXTURES").map_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures"), Into::into);
-    fixtures.join("golden/ts-session1/wire.ndjson")
+    fixtures.join("native/session1/wire.ndjson")
 }
 
 struct Recorded {

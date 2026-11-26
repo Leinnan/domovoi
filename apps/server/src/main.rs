@@ -249,15 +249,6 @@ enum Cmd {
         #[command(subcommand)]
         action: service::ServiceCmd,
     },
-    /// Reach a remote Domovoi server over iroh: serve it on a loopback port, so the
-    /// t3code web app (or any HTTP client) can use it.
-    Connect {
-        /// A `domovoi://connect?…` link, an iroh ticket or an endpoint id.
-        link: String,
-        /// Loopback port for the bridge (0 picks a free one).
-        #[arg(long, default_value_t = 0)]
-        bridge_port: u16,
-    },
 }
 
 /// The flags of this run that a server started at login (the login item, the
@@ -409,10 +400,6 @@ fn run() -> Fallible {
     }
     let paths = state::Paths::new(args.home_dir.clone())?;
     match &args.command {
-        Some(Cmd::Connect { link, bridge_port }) => {
-            let _log = logging::init(None);
-            runtime()?.block_on(connect(&paths, link, *bridge_port, &args.relays, args.web_url.as_deref()))
-        }
         Some(Cmd::Pair { ttl_minutes, permissions, remote, light, json }) => {
             let _log = logging::init(None);
             let policy = policy::install_from_system()?;
@@ -875,36 +862,6 @@ async fn serve(args: &Args, paths: state::Paths, base: Base, shutdown: tokio_uti
 const SHUTDOWN_GRACE: std::time::Duration = std::time::Duration::from_secs(3);
 
 /// `domovoi-server connect`: a loopback bridge to a remote server.
-async fn connect(paths: &state::Paths, link: &str, port: u16, relays: &[String], web_url: Option<&str>) -> Fallible {
-    let (ticket, code) = remote::parse_link(link);
-    let ticket = domovoi_remote::parse_ticket(&ticket)?;
-    let key = remote::load_or_create_key(&paths.home.join("remote").join("client.key"))?;
-    println!("device: {}", key.public());
-    println!("dialing {}…", ticket.endpoint_addr().id);
-    let bridge = domovoi_remote::Bridge::start(key, remote::network(relays)?, ticket, port).await?;
-    let base = format!("http://127.0.0.1:{}", bridge.port());
-    println!("bridge: {base}");
-    if let Some(code) = code {
-        println!("pairingUrl: {}/pair#token={code}", web_url.unwrap_or(&base).trim_end_matches('/'));
-    }
-    let mut last = String::new();
-    loop {
-        tokio::select! {
-            _ = tokio::signal::ctrl_c() => break,
-            () = tokio::time::sleep(std::time::Duration::from_secs(2)) => {
-                let s = bridge.status();
-                let line = format!("connected: {}, path: {:?}, rtt: {:?} ms, error: {:?}", s.connected, s.path, s.rtt_ms, s.error);
-                if line != last {
-                    println!("{line}");
-                    last = line;
-                }
-            }
-        }
-    }
-    bridge.stop().await;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     #[test]

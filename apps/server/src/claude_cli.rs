@@ -5,7 +5,7 @@
 //!         `user` messages, and `control_response`s answering the CLI's requests.
 //! stdout: `system`/`assistant`/`user`/`stream_event`/`result` messages, plus
 //!         `control_request` (`can_use_tool`) and `control_response`s.
-//! Wire shapes were taken from a recorded session (fixtures/golden/ts-session1/claude-cli.*).
+//! Wire shapes were taken from a recorded session (fixtures/provider/claude-cli.*).
 
 #![expect(clippy::disallowed_types, clippy::disallowed_macros, reason = "the Claude CLI's stream-json and control messages")]
 
@@ -401,7 +401,7 @@ mod tests {
             effort: Some("medium".into()), extra_dirs: vec![], fork_from: None, mcp_config: None, allowed_tools: vec![], append_system_prompt: None, enable_artifacts: false,
         };
         let a = opts.args();
-        let recorded = include_str!("../../../fixtures/golden/ts-session1/claude-cli.args.txt");
+        let recorded = include_str!("../../../fixtures/provider/claude-cli.args.txt");
         for flag in ["--output-format", "stream-json", "--input-format", "--permission-prompt-tool=stdio",
                      "--include-partial-messages", "--model=claude-haiku-5-5", "--permission-mode=default", "--effort=medium"] {
             assert!(recorded.lines().any(|l| l == flag), "{flag} not in recorded args");
@@ -419,7 +419,7 @@ mod tests {
 
     #[test]
     fn permission_answer_matches_recorded_shape() {
-        let recorded: Value = include_str!("../../../fixtures/golden/ts-session1/claude-cli.stdin.ndjson")
+        let recorded: Value = include_str!("../../../fixtures/provider/claude-cli.stdin.ndjson")
             .lines()
             .map(|l| serde_json::from_str::<Value>(l).unwrap())
             .find(|m| m["type"] == "control_response")

@@ -1,11 +1,6 @@
 //! What a subscription to one thread delivers: the thread as it is, then each
 //! event as it happens.
 //!
-//! A snapshot may arrive in t3code's compact form, where every id of its
-//! projection is a number indexing an `ids` table sent alongside. Decoding
-//! expands that form, exactly as t3code's own decoder does, so a
-//! [`ThreadSnapshot`] always holds real ids and is written back without the table.
-//!
 //! An item that is already parsed JSON is best decoded with
 //! [`ThreadStreamItem::from_value`], which takes the JSON apart. `Deserialize`
 //! on a `serde_json::Value` gives the same item but rebuilds the JSON first.
@@ -74,13 +69,8 @@ pub struct ThreadSnapshot {
 }
 
 impl ThreadSnapshot {
-    /// The snapshot in `fields`, whose compact ids, if it has an `ids` table, are expanded first.
+    /// The snapshot in `fields`.
     fn decode<E: Error>(mut fields: Map<String, Value>) -> Result<Self, E> {
-        if let Some(Value::Array(ids)) = fields.remove("ids")
-            && let Some(Value::Object(projection)) = fields.get_mut("projection")
-        {
-            expand_record_ids(projection, &ids);
-        }
         Ok(Self {
             snapshot_sequence: required(&mut fields, "snapshotSequence")?,
             projection: required(&mut fields, "projection")?,
@@ -89,48 +79,6 @@ impl ThreadSnapshot {
             latest_local_turn_ordinal: nullable(&mut fields, "latestLocalTurnOrdinal")?,
             turn_items_omit_local_visible: optional(&mut fields, "turnItemsOmitLocalVisible")?,
         })
-    }
-}
-
-/// Expands t3code's opt-in compact id table in place (`orchestrationV2IdTable`):
-/// on each record (array element or object directly under `container`, and its
-/// `item`), numbers under `id` / `*Id` index `ids`, as do numbers in `*Ids` lists.
-fn expand_record_ids(container: &mut Map<String, Value>, ids: &[Value]) {
-    fn is_id_key(k: &str) -> bool {
-        k == "id" || k.ends_with("Id")
-    }
-    fn expand_record(record: &mut Map<String, Value>, ids: &[Value]) {
-        for (k, v) in record.iter_mut() {
-            match v {
-                Value::Number(n) if is_id_key(k) => {
-                    if let Some(x) = n.as_u64().and_then(|i| ids.get(i as usize)) {
-                        *v = x.clone();
-                    }
-                }
-                Value::Array(list) if k.ends_with("Ids") => {
-                    for e in list.iter_mut() {
-                        if let Some(x) = e.as_u64().and_then(|i| ids.get(i as usize)) {
-                            *e = x.clone();
-                        }
-                    }
-                }
-                Value::Object(item) if k == "item" => expand_record(item, ids),
-                _ => {}
-            }
-        }
-    }
-    for v in container.values_mut() {
-        match v {
-            Value::Array(records) => {
-                for r in records.iter_mut() {
-                    if let Value::Object(m) = r {
-                        expand_record(m, ids);
-                    }
-                }
-            }
-            Value::Object(m) => expand_record(m, ids),
-            _ => {}
-        }
     }
 }
 
@@ -187,29 +135,5 @@ impl ThreadStreamItem {
 impl<'de> Deserialize<'de> for ThreadStreamItem {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         Self::from_fields(Map::deserialize(deserializer)?)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn expands_compact_ids_like_t3code() {
-        let mut projection = json!({
-            "thread": { "id": 0, "projectId": 1, "title": "t", "updatedAt": "u" },
-            "runs": [{ "id": 2, "ordinal": 1, "status": "completed", "handoffIds": [3, 0] }],
-            "visibleTurnItems": [{ "position": 0, "visibility": "local", "sourceThreadId": 0, "sourceItemId": 3,
-                                   "item": { "id": 3, "runId": 2, "type": "user_message", "ordinal": 1000001 } }],
-            "updatedAt": "u",
-        });
-        let ids = [json!("thread-a"), json!("project-b"), json!("run-c"), json!("item-d")];
-        expand_record_ids(projection.as_object_mut().unwrap(), &ids);
-        assert_eq!(projection["thread"], json!({ "id": "thread-a", "projectId": "project-b", "title": "t", "updatedAt": "u" }));
-        assert_eq!(projection["runs"][0], json!({ "id": "run-c", "ordinal": 1, "status": "completed", "handoffIds": ["item-d", "thread-a"] }), "non-id numbers untouched");
-        let row = &projection["visibleTurnItems"][0];
-        assert_eq!((&row["position"], &row["sourceThreadId"], &row["sourceItemId"]), (&json!(0), &json!("thread-a"), &json!("item-d")));
-        assert_eq!(row["item"], json!({ "id": "item-d", "runId": "run-c", "type": "user_message", "ordinal": 1000001 }), "a row's item is expanded too");
     }
 }

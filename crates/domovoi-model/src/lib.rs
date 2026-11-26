@@ -17,6 +17,13 @@
 
 pub mod typed;
 
+/// The version of what the server and its clients send each other. It goes
+/// up with every change one side makes that the other must know about, so a
+/// server and a client of different versions say which of them needs
+/// updating instead of misreading each other. 2 was the last version shared
+/// with t3code.
+pub const PROTOCOL_VERSION: u32 = 3;
+
 /// `encodeURIComponent` for the id characters t3code uses (`:` and `%`).
 pub fn enc(s: &str) -> String {
     s.replace('%', "%25").replace(':', "%3A")

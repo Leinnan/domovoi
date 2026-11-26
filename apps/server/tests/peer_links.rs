@@ -1,24 +1,22 @@
 //! Linked environments over iroh against the real binary: two servers with
 //! `--remote --relay disabled` (nothing leaves this machine), one linked to
 //! the other with a pairing link and code from it; the link listed, used, and
-//! ended from either side. Every frame is decoded with t3code's schemas
-//! (`conformance/wire-check.ts`).
+//! ended from either side.
 
 use futures::{SinkExt, StreamExt};
 use serde_json::{Value, json};
 use std::io::{BufRead, BufReader};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest};
 
+/// The socket URL names the version of the protocol the test speaks.
+const PROTOCOL: u32 = domovoi_model::PROTOCOL_VERSION;
+
 fn http_client() -> reqwest::Client {
     let _ = rustls::crypto::ring::default_provider().install_default();
     reqwest::Client::new()
-}
-
-fn workspace_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(2).unwrap().to_owned()
 }
 
 struct Server {
@@ -88,16 +86,15 @@ async fn connect(server: &Server) -> (Ws, String) {
     let res = http_client().post(format!("{base}/api/auth/browser-session")).json(&json!({ "credential": server.startup_code })).send().await.unwrap();
     assert_eq!(res.status(), 200);
     let cookie = res.headers().get("set-cookie").unwrap().to_str().unwrap().split(';').next().unwrap().to_owned();
-    let mut req = format!("ws://127.0.0.1:{}/ws?orchestrationProtocol=2", server.port).into_client_request().unwrap();
+    let mut req = format!("ws://127.0.0.1:{}/ws?protocol={PROTOCOL}", server.port).into_client_request().unwrap();
     req.headers_mut().insert("cookie", cookie.parse().unwrap());
     (tokio_tungstenite::connect_async(req).await.unwrap().0, cookie)
 }
 
-/// Calls `tag`; the first Chunk or the Exit, with both frames kept for the schema check.
+/// Calls `tag`; the first Chunk or the Exit.
 struct Rpc {
     ws: Ws,
     id: u64,
-    transcript: Vec<Value>,
 }
 
 impl Rpc {
@@ -105,7 +102,6 @@ impl Rpc {
         self.id += 1;
         let id = self.id.to_string();
         let request = json!({ "_tag": "Request", "id": id, "tag": tag, "payload": payload, "headers": [] });
-        self.transcript.push(json!({ "kind": "ws", "conn": 0, "dir": "c2s", "frame": request }));
         self.ws.send(Message::Text(request.to_string().into())).await.unwrap();
         let deadline = tokio::time::Instant::now() + Duration::from_secs(90);
         loop {
@@ -119,7 +115,6 @@ impl Rpc {
             if v["requestId"] != json!(id) {
                 continue;
             }
-            self.transcript.push(json!({ "kind": "ws", "conn": 0, "dir": "s2c", "frame": v.clone() }));
             if v["_tag"] == "Chunk" {
                 let interrupt = json!({ "_tag": "Interrupt", "requestId": id, "interruptors": [] });
                 self.ws.send(Message::Text(interrupt.to_string().into())).await.unwrap();
@@ -143,23 +138,6 @@ impl Rpc {
     }
 }
 
-fn schema_check(transcript: &[Value], name: &str) {
-    let root = workspace_root();
-    let node = std::env::var("DOMOVOI_NODE").unwrap_or_else(|_| "node".into());
-    let version = Command::new(&node).arg("--version").output().ok().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned());
-    let major: u32 = version.as_deref().and_then(|v| v.trim_start_matches('v').split('.').next()?.parse().ok()).unwrap_or(0);
-    if !root.join(".reference/t3code/packages/contracts").exists() || major < 26 {
-        eprintln!("schema check skipped (needs .reference/t3code and Node 26+, found {version:?})");
-        return;
-    }
-    let file = std::env::temp_dir().join(format!("domovoi-peer-links-{name}-{}.ndjson", std::process::id()));
-    std::fs::write(&file, transcript.iter().map(|r| format!("{r}\n")).collect::<String>()).unwrap();
-    let res = Command::new(&node).arg(root.join("conformance/wire-check.ts")).arg(&file).arg("--quiet").output().unwrap();
-    let _ = std::fs::remove_file(&file);
-    assert!(res.status.success(), "t3code schema check failed:\n{}", String::from_utf8_lossy(&res.stdout));
-    eprintln!("{}", String::from_utf8_lossy(&res.stdout).trim());
-}
-
 /// The sessions `server` lists for linked environments (`subscribeAuthAccess`).
 async fn linked_sessions(peer: &mut Rpc) -> Vec<Value> {
     let chunk = peer.call("subscribeAuthAccess", json!({})).await;
@@ -177,9 +155,9 @@ async fn linked_sessions(peer: &mut Rpc) -> Vec<Value> {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_server_links_another_over_iroh_and_either_side_ends_it() {
     let (a, b) = (start("a"), start("b"));
-    let mut here = Rpc { ws: connect(&a).await.0, id: 0, transcript: vec![] };
+    let mut here = Rpc { ws: connect(&a).await.0, id: 0 };
     let (peer_ws, peer_cookie) = connect(&b).await;
-    let mut there = Rpc { ws: peer_ws, id: 0, transcript: vec![] };
+    let mut there = Rpc { ws: peer_ws, id: 0 };
     let b_env = here_env(&b).await;
     let (link, code) = pairing(&b);
 
@@ -246,9 +224,6 @@ async fn a_server_links_another_over_iroh_and_either_side_ends_it() {
     assert_eq!(here.ok("peerLinks.unlink", json!({ "environmentId": b_env })).await, json!({ "removed": false }));
     assert!(!a.home.join("userdata/server-secrets").read_dir().map(|d| d.flatten().any(|e| e.file_name().to_string_lossy().starts_with("peer-link-"))).unwrap_or(false));
 
-    let mut transcript = here.transcript;
-    transcript.extend(there.transcript);
-    schema_check(&transcript, "two-servers");
 }
 
 /// The environment id `server` answers with.

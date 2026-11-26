@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""Turn raw ws-tap / provider logs into committable golden fixtures.
+"""Turn a recorded session (and provider logs) into a committable fixture.
 
-Scrubs account identifiers, credentials, and machine-specific paths, and drops
-browser telemetry. Usage:
+Scrubs account identifiers, credentials, and machine-specific paths. Usage
+(`fixtures/native/README.md` says how a session is recorded):
 
-    scripts/scrub_recording.py --tap rec.ndjson --provider-log events.<thread>.log \
-        --home /Users/me --out fixtures/golden/<name>
+    scripts/scrub_recording.py --tap rec.ndjson --home /Users/me --out fixtures/native/<name>
 
 Run scripts/check_fixtures.py afterwards; it fails if anything sensitive remains.
 """

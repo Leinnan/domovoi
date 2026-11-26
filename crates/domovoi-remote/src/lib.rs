@@ -6,8 +6,8 @@
 //! WebSocket works), served by the same axum router as the TCP listener.
 //!
 //! Clients run a [`Bridge`]: a loopback TCP listener whose connections are
-//! piped into bi-streams on one shared iroh connection. Existing HTTP and
-//! WebSocket clients (URLSession, the t3code web app) then work unchanged
+//! piped into bi-streams on one shared iroh connection. HTTP and WebSocket
+//! clients (URLSession, an image loader, a webview) then work unchanged
 //! against `http://127.0.0.1:<port>`. The bridge grants nothing by itself;
 //! the server authenticates every request.
 

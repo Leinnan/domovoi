@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/*", "apps/server", "apps/server-launcher", "apps/ws-tap", "apps/domovoi-core", "apps/domovoi-iced", "apps/domovoi-windows"]
+members = ["crates/*", "apps/server", "apps/server-launcher", "apps/domovoi-core", "apps/domovoi-iced", "apps/domovoi-windows"]
 
 [workspace.package]
 version = "0.1.0"

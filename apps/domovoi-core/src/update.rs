@@ -203,17 +203,16 @@ pub fn requests_lost(model: &mut Model) {
     model.socket_lost_flags();
 }
 
-fn ws_url(server_url: &str, surface: &str, ticket: &str) -> String {
+fn ws_url(server_url: &str, ticket: &str) -> String {
     let base = server_url.trim_end_matches('/');
     let ws = base.replacen("https://", "wss://", 1).replacen("http://", "ws://", 1);
-    let surface = if surface.is_empty() { "desktop" } else { surface };
-    format!("{ws}/ws?clientSurface={surface}&orchestrationProtocol=2&wsTicket={ticket}")
+    format!("{ws}/ws?protocol={}&wsTicket={ticket}", domovoi_model::PROTOCOL_VERSION)
 }
 
 /// Opens the RPC socket with a one-time ticket.
 pub fn open_socket(model: &mut Model, ticket: &str) -> Cmd {
     model.rpc.reset();
-    let url = ws_url(&model.server_url, &model.surface, ticket);
+    let url = ws_url(&model.server_url, ticket);
     let attempt = model.attempt;
     Command::stream_from_shell(SocketOperation::Open { url }).then_send(move |event| Event::Socket { attempt, event })
 }
@@ -887,8 +886,8 @@ pub fn skill_query(draft: &str) -> Option<(usize, &str)> {
     (boundary && !money && !q.contains(char::is_whitespace) && q.len() <= 80).then_some((start, q))
 }
 
-/// The app's own slash commands (t3code's `/model` and `/clear`, and
-/// `/plan` and `/fork`): what they take after their name, and what they do.
+/// The app's own slash commands (`/model`, `/clear`, `/plan` and
+/// `/fork`): what they take after their name, and what they do.
 pub const BUILTIN_COMMANDS: [(&str, &str, &str); 4] = [
     ("model", "[model]", "Switch the model (or pick one)"),
     ("plan", "", "Plan first: turn plan mode on or off"),

@@ -45,33 +45,19 @@ default:
 build:
     cargo build --workspace
 
-# Check out the t3code release in conformance/t3code-pin under .reference/t3code and
-# install its packages: the schemas the conformance checks decode with (needs pnpm)
-reference:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    read -r tag commit < <(grep -v '^#' conformance/t3code-pin)
-    if [ ! -d .reference/t3code/.git ]; then
-      git clone -q --filter=blob:none https://github.com/pingdotgg/t3code.git .reference/t3code
-    fi
-    git -C .reference/t3code fetch -q --tags origin
-    git -C .reference/t3code checkout -q "$commit"
-    [ "$(git -C .reference/t3code rev-parse "$tag^{commit}")" = "$commit" ] || { echo "reference: $tag is not $commit" >&2; exit 1; }
-    (cd .reference/t3code && pnpm install --frozen-lockfile)
-
-# Every test; the schema checks also run when Node 26+ is on PATH (or in DOMOVOI_NODE)
+# Every test
 test:
-    DOMOVOI_NODE="${DOMOVOI_NODE:-$(command -v node || true)}" cargo test --workspace
+    cargo test --workspace
 
 # Every RPC method called for each answer and failure it can give, group by
-# group (conformance/rpc-groups); six to ten minutes. `just rpc-groups vcs-status,vcs-refs` runs some
+# group (apps/server/tests/cases/groups); six to ten minutes. `just rpc-groups vcs-status,vcs-refs` runs some
 rpc-groups groups="":
-    DOMOVOI_NODE="${DOMOVOI_NODE:-$(command -v node || true)}" {{ if groups == "" { "" } else { "DOMOVOI_GROUPS=" + groups } }} cargo test -p domovoi-server --test rpc_calls every_rpc_group_answers_as_recorded -- --ignored --nocapture
+    {{ if groups == "" { "" } else { "DOMOVOI_GROUPS=" + groups } }} cargo test -p domovoi-server --test rpc_calls every_rpc_group_answers_as_recorded -- --ignored --nocapture
 
 # Turns of the real agent CLIs (spends tokens): `just live claude`, `just live codex`,
 # `just live claude native_fork`, `just live antigravity`. Models: DOMOVOI_LIVE_CLAUDE_MODEL (default
-# claude-haiku-5-5), DOMOVOI_LIVE_CODEX_MODEL (default gpt-6-luna). Every frame is
-# recorded and decoded with t3code's schemas afterwards (Node 26+ in DOMOVOI_NODE).
+# claude-haiku-5-5), DOMOVOI_LIVE_CODEX_MODEL (default gpt-6-luna). What the tests'
+# calls sent and got is written to target/live-<provider>.ndjson (or DOMOVOI_WIRE_OUT).
 live provider filter="":
     #!/usr/bin/env bash
     set -uo pipefail
@@ -87,12 +73,7 @@ live provider filter="":
     out="${DOMOVOI_WIRE_OUT:-target/live-{{provider}}.ndjson}"
     rm -f "$out"
     DOMOVOI_WIRE_OUT="$PWD/$out" cargo test -p domovoi-server --test provider_turns "live::{{ if provider == "both" { "a_thread_switched" } else if provider == "antigravity" { "antigravity::" + filter } else { provider + "::" + filter } }}" -- --test-threads="${LIVE_THREADS:-{{ if provider == "antigravity" { "1" } else { "3" } }}}" --nocapture
-    status=$?
-    node="${DOMOVOI_NODE:-$(command -v node || true)}"
-    if [ -n "$node" ] && [ -s "$out" ]; then
-      "$node" conformance/wire-check.ts "$out" || status=1
-    fi
-    exit $status
+    exit $?
 
 # Build this checkout's measurements (benches, `perf_*` tests, the server) and keep them
 # under .reference/perf/<label>, so they can be run again after the code has changed
@@ -636,7 +617,7 @@ windows-test:
 # The server's integration tests on Windows (all but the live ones, which need real agent CLIs)
 [windows]
 windows-test-server:
-    {{windows_test_env}} cargo test -p domovoi-server --test config_wire --test document_text --test golden_replay --test managed_policy --test ops --test pairing_permissions --test peer_links --test preview --test provider_turns --test push --test remote_access --test rpc_calls --test webpush
+    {{windows_test_env}} cargo test -p domovoi-server --test config_wire --test document_text --test managed_policy --test ops --test pairing_permissions --test peer_links --test preview --test provider_turns --test push --test remote_access --test rpc_calls --test webpush
 
 # Start the WinUI app against a running server with a fresh pairing code; fails unless it connects
 [windows]

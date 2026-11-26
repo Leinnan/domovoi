@@ -1,10 +1,9 @@
-//! Wire codec over a real session: every WebSocket frame recorded from the
-//! TypeScript server in `fixtures/golden/ts-session1/wire.ndjson` (1742
-//! frames; config chunks of about 190 KB are the worst case).
+//! Wire codec over a real session: every WebSocket frame of the recording
+//! in `fixtures/native/session1/wire.ndjson` (a thread's snapshots of some
+//! hundred kilobytes are the worst case).
 //!
 //! `cargo bench -p effect-rpc`
 
-use effect_rpc::frame_parts::{SOCKET_FRAME_PART_BYTES, split_socket_frame};
 use effect_rpc::message::{FromServer, decode_client_frame, encode_server_message};
 use serde_json::Value;
 use std::sync::LazyLock;
@@ -13,7 +12,7 @@ use std::sync::LazyLock;
 /// build kept by `tools/perf.py` reads the recording it was saved with.
 fn recording() -> std::path::PathBuf {
     let fixtures = std::env::var_os("DOMOVOI_FIXTURES").map_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures"), Into::into);
-    fixtures.join("golden/ts-session1/wire.ndjson")
+    fixtures.join("native/session1/wire.ndjson")
 }
 
 struct Frames {
@@ -110,18 +109,11 @@ fn encode_server_session() -> usize {
     FRAMES.server.iter().map(|m| encode_server_message(divan::black_box(m)).len()).sum()
 }
 
-/// Every encoded server message through the frame splitter (`?frameParts=1`).
-#[divan::bench]
-fn split_server_session() -> usize {
-    FRAMES.server_text.iter().map(|t| split_socket_frame(divan::black_box(t), SOCKET_FRAME_PART_BYTES).len()).sum()
-}
-
-/// The largest server message alone (a config chunk), encoded and split.
+/// The largest server message alone (a config chunk), encoded.
 #[divan::bench]
 fn largest_server_message() -> usize {
     let (i, _) = FRAMES.server_text.iter().enumerate().max_by_key(|(_, t)| t.len()).expect("frames");
-    let text = encode_server_message(divan::black_box(&FRAMES.server[i]));
-    split_socket_frame(&text, SOCKET_FRAME_PART_BYTES).len()
+    encode_server_message(divan::black_box(&FRAMES.server[i])).len()
 }
 
 /// Every server message of the session read back from its JSON, as a client

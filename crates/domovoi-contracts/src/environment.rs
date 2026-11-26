@@ -62,7 +62,7 @@ impl From<&EnvironmentDescriptor> for ExecutionEnvironmentDescriptor {
 /// Server version domovoi-server reports. Clients gate features on capabilities, and
 /// on version for update prompts, so it mirrors the t3code release it targets.
 pub const SERVER_VERSION: &str = "0.1.9";
-pub const ORCHESTRATION_PROTOCOL_VERSION: u32 = 2;
+pub const ORCHESTRATION_PROTOCOL_VERSION: u32 = domovoi_model::PROTOCOL_VERSION;
 /// Highest t3code migration whose schema the client may rely on.
 pub const DATABASE_MIGRATION: u32 = 89;
 

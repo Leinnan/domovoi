@@ -994,7 +994,6 @@ pub struct ServerConfigOf<S> {
     pub keybindings: ResolvedKeybindingsConfig,
     pub issues: ForwardList<ServerConfigIssue>,
     pub providers: ForwardList<ServerProvider>,
-    pub available_editors: ForwardList<EditorId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remote_open_targets: Option<ForwardList<RemoteOpenTarget>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

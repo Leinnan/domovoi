@@ -46,16 +46,6 @@ pub enum Failure {
     #[serde(rename = "ProviderSetupError", rename_all = "camelCase")]
     ProviderSetup { instance_id: String, operation: &'static str, detail: String },
 
-    /// `provider.consumeResetCredit` for a usage limit source (`UsageLimitSourceError`).
-    #[error("{detail}")]
-    #[serde(rename = "UsageLimitSourceError")]
-    UsageLimitSource { detail: String },
-
-    /// `provider.uploadFeedback` (`ProviderUploadFeedbackError`).
-    #[error("{cause}")]
-    #[serde(rename = "ProviderUploadFeedbackError", rename_all = "camelCase")]
-    UploadFeedback { thread_id: String, cause: String },
-
     /// `subscribeAuthAccess` (`AuthAccessStreamError`).
     #[error("{message}")]
     #[serde(rename = "AuthAccessStreamError")]
@@ -169,11 +159,6 @@ mod tests {
         assert_eq!(
             json!(Failure::setup("codex", "remove-install", "There is no managed Codex installation to remove.")),
             json!({ "_tag": "ProviderSetupError", "instanceId": "codex", "operation": "remove-install", "detail": "There is no managed Codex installation to remove." })
-        );
-        assert_eq!(json!(Failure::UsageLimitSource { detail: "gone".into() }), json!({ "_tag": "UsageLimitSourceError", "detail": "gone" }));
-        assert_eq!(
-            json!(Failure::UploadFeedback { thread_id: "t1".into(), cause: "Thread t1 was not found.".into() }),
-            json!({ "_tag": "ProviderUploadFeedbackError", "threadId": "t1", "cause": "Thread t1 was not found." })
         );
         assert_eq!(json!(Failure::AccessStream { message: "no disk".into() }), json!({ "_tag": "AuthAccessStreamError", "message": "no disk" }));
         assert_eq!(

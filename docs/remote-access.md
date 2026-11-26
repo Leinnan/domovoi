@@ -2,8 +2,7 @@
 
 `domovoi-server` can be reached from other devices over [iroh](https://iroh.computer):
 dial-by-key QUIC with hole punching and an encrypted relay fallback. No account,
-no port forwarding. The iPhone and Mac apps, and the unmodified t3code web app
-through `domovoi-server connect`, use it.
+no port forwarding. Every Domovoi app uses it.
 
 ## Turning it on
 

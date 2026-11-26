@@ -1,23 +1,15 @@
 //! Reading a thread's stored JSON: every record and event the store holds is
 //! read through here, into its type.
 //!
-//! Two things happen on the way:
-//!
-//! - one spelling of an older server is carried over to the schema's
-//!   (`carry_patch_to_diff_str`): that row is another server's JSON, read as
-//!   JSON for the one key it spells differently, and typed from there;
-//! - a row this server wrote is decoded straight from its text. The model
-//!   decodes an event, and a turn item, by first reading the JSON into a map,
-//!   because the `type` that says what the rest is may come anywhere. In a row
-//!   this server wrote it comes where it is looked for here, so the record is
-//!   read once, into its type. Any other row is decoded as the model does it:
-//!   the result is the same either way.
-
-#![expect(clippy::disallowed_types, reason = "a turn item row an older server wrote (`diff` for `diffStr`), read as JSON for that one key")]
+//! A row this server wrote is decoded straight from its text. The model
+//! decodes an event, and a turn item, by first reading the JSON into a map,
+//! because the `type` that says what the rest is may come anywhere. In a row
+//! this server wrote it comes where it is looked for here, so the record is
+//! read once, into its type. Any other row is decoded as the model does it:
+//! the result is the same either way.
 
 use serde::Deserialize;
 use serde::de::Error;
-use serde_json::Value;
 use std::borrow::Cow;
 use std::sync::Arc;
 use domovoi_model::typed::{
@@ -28,58 +20,17 @@ use domovoi_model::typed::{
 /// What comes before an event's record in its JSON, when the record is the last thing in it.
 pub(super) const PAYLOAD_KEY: &str = ",\"payload\":";
 
-/// A `file_change` turn item's patch under `diffStr`, where the schema keeps
-/// it. Servers before this one wrote it as `diff`, which the schema does not
-/// have: read as it is stored, such an item would lose its patch. Says
-/// whether `item` was one of those.
-fn carry_patch_to_diff_str(item: &mut Value) -> bool {
-    if item["type"] != "file_change" {
-        return false;
-    }
-    let Some(fields) = item.as_object_mut() else { return false };
-    let Some(patch) = fields.shift_remove("diff") else { return false };
-    if patch.is_string() && !fields.contains_key("diffStr") {
-        fields.insert("diffStr".to_owned(), patch);
-    }
-    true
-}
-
-/// `text` with the record at `record_in` (the whole of it, or its `payload`)
-/// spelled as this server writes it; `text` itself when it already is.
-fn spelled_as_now<'a>(text: &'a str, record_in: fn(&mut Value) -> &mut Value) -> Cow<'a, str> {
-    // Nearly every record has no `diff` at all, and is not parsed for this.
-    if memchr::memmem::find(text.as_bytes(), b"\"diff\":").is_some()
-        && let Ok(mut stored) = serde_json::from_str::<Value>(text)
-        && carry_patch_to_diff_str(record_in(&mut stored))
-    {
-        return Cow::Owned(stored.to_string());
-    }
-    Cow::Borrowed(text)
-}
-
-/// The JSON of a stored record of `kind`, as this server reads it.
-fn record_json(kind: RecordKind, text: &str) -> Cow<'_, str> {
-    if kind == RecordKind::TurnItem { spelled_as_now(text, |record| record) } else { Cow::Borrowed(text) }
-}
-
-/// The JSON of a stored event of type `event_type`, as this server reads it.
-fn event_json<'a>(event_type: &str, text: &'a str) -> Cow<'a, str> {
-    if event_type == "turn-item.updated" { spelled_as_now(text, |event| &mut event["payload"]) } else { Cow::Borrowed(text) }
-}
-
 /// A stored record of the given kind.
 pub(super) fn record(kind: RecordKind, text: &str) -> serde_json::Result<StoredRecord> {
-    let text = record_json(kind, text);
     match kind {
-        RecordKind::TurnItem => turn_item(&text).map(|item| StoredRecord::TurnItem(Arc::new(item))),
-        kind => StoredRecord::from_json(kind, &text),
+        RecordKind::TurnItem => turn_item(text).map(|item| StoredRecord::TurnItem(Arc::new(item))),
+        kind => StoredRecord::from_json(kind, text),
     }
 }
 
-/// A stored event of type `event_type`.
-pub(super) fn event(event_type: &str, text: &str) -> serde_json::Result<DomainEvent> {
-    let text = event_json(event_type, text);
-    event_written_here(&text).or_else(|_| serde_json::from_str(&text))
+/// A stored event.
+pub(super) fn event(text: &str) -> serde_json::Result<DomainEvent> {
+    event_written_here(text).or_else(|_| serde_json::from_str(text))
 }
 
 /// Declares the turn item types read straight from their text, each with its record.
@@ -212,7 +163,7 @@ fn body(event_type: &str, record: &str) -> serde_json::Result<EventBody> {
 mod tests {
     use super::*;
     use crate::test_records::{AT, assistant_item, message, run, thread, with};
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     fn envelope(event_type: &str, payload: &Value) -> String {
         json!({ "id": "e1", "threadId": "t,\"payload\":{", "driver": "codex", "providerInstanceId": "codex", "occurredAt": AT, "type": event_type, "payload": payload }).to_string()
@@ -242,7 +193,7 @@ mod tests {
             let written = serde_json::to_string(&by_model).unwrap();
             for text in [&given, &written] {
                 assert_eq!(event_written_here(text).unwrap(), by_model, "{event_type}: {text}");
-                assert_eq!(event(event_type, text).unwrap(), by_model);
+                assert_eq!(event(text).unwrap(), by_model);
             }
         }
     }
@@ -260,9 +211,9 @@ mod tests {
             json!({ "id": "e1", "threadId": "t1", "occurredAt": AT, "type": "run.paused", "payload": record }).to_string(),
         ] {
             assert!(event_written_here(&text).is_err(), "{text}");
-            assert_eq!(event("run.created", &text).unwrap(), serde_json::from_str::<DomainEvent>(&text).unwrap());
+            assert_eq!(event(&text).unwrap(), serde_json::from_str::<DomainEvent>(&text).unwrap());
         }
-        assert!(event("run.created", "{\"type\":\"run.created\"}").is_err(), "an event the model does not read is not read here either");
+        assert!(event("{\"type\":\"run.created\"}").is_err(), "an event the model does not read is not read here either");
     }
 
     #[test]

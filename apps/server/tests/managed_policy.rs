@@ -4,7 +4,7 @@
 //! in `server.getConfig`, locked settings and disallowed providers are
 //! refused with t3code's typed error, webhook tasks are blocked, and a policy
 //! this build cannot enforce, or a refused way of listening, stops the
-//! server. Every frame is decoded with t3code's schemas.
+//! server.
 
 use futures::{SinkExt, StreamExt};
 use serde_json::{Value, json};
@@ -14,13 +14,12 @@ use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest};
 
+/// The socket URL names the version of the protocol the test speaks.
+const PROTOCOL: u32 = domovoi_model::PROTOCOL_VERSION;
+
 fn http_client() -> reqwest::Client {
     let _ = rustls::crypto::ring::default_provider().install_default();
     reqwest::Client::new()
-}
-
-fn workspace_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).ancestors().nth(2).unwrap().to_owned()
 }
 
 fn fixture(name: &str) -> PathBuf {
@@ -84,7 +83,6 @@ type Ws = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<t
 struct Rpc {
     ws: Ws,
     id: u64,
-    transcript: Vec<Value>,
 }
 
 impl Rpc {
@@ -93,16 +91,15 @@ impl Rpc {
         let res = http_client().post(format!("{base}/api/auth/browser-session")).json(&json!({ "credential": server.startup_code })).send().await.unwrap();
         assert_eq!(res.status(), 200);
         let cookie = res.headers().get("set-cookie").unwrap().to_str().unwrap().split(';').next().unwrap().to_owned();
-        let mut req = format!("ws://127.0.0.1:{}/ws?orchestrationProtocol=2", server.port).into_client_request().unwrap();
+        let mut req = format!("ws://127.0.0.1:{}/ws?protocol={PROTOCOL}", server.port).into_client_request().unwrap();
         req.headers_mut().insert("cookie", cookie.parse().unwrap());
-        Rpc { ws: tokio_tungstenite::connect_async(req).await.unwrap().0, id: 0, transcript: vec![] }
+        Rpc { ws: tokio_tungstenite::connect_async(req).await.unwrap().0, id: 0 }
     }
 
     async fn call(&mut self, tag: &str, payload: Value) -> Value {
         self.id += 1;
         let id = self.id.to_string();
         let request = json!({ "_tag": "Request", "id": id, "tag": tag, "payload": payload, "headers": [] });
-        self.transcript.push(json!({ "kind": "ws", "conn": 0, "dir": "c2s", "frame": request }));
         self.ws.send(Message::Text(request.to_string().into())).await.unwrap();
         let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
         loop {
@@ -116,7 +113,6 @@ impl Rpc {
             if v["requestId"] != json!(id) {
                 continue;
             }
-            self.transcript.push(json!({ "kind": "ws", "conn": 0, "dir": "s2c", "frame": v.clone() }));
             return v;
         }
     }
@@ -132,23 +128,6 @@ impl Rpc {
         assert_eq!(reply["exit"]["_tag"], "Failure", "{tag}: {reply}");
         reply["exit"]["cause"][0]["error"].clone()
     }
-}
-
-fn schema_check(transcript: &[Value], name: &str) {
-    let root = workspace_root();
-    let node = std::env::var("DOMOVOI_NODE").unwrap_or_else(|_| "node".into());
-    let version = Command::new(&node).arg("--version").output().ok().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned());
-    let major: u32 = version.as_deref().and_then(|v| v.trim_start_matches('v').split('.').next()?.parse().ok()).unwrap_or(0);
-    if !root.join(".reference/t3code/packages/contracts").exists() || major < 26 {
-        eprintln!("schema check skipped (needs .reference/t3code and Node 26+, found {version:?})");
-        return;
-    }
-    let file = std::env::temp_dir().join(format!("domovoi-policy-{name}-{}.ndjson", std::process::id()));
-    std::fs::write(&file, transcript.iter().map(|r| format!("{r}\n")).collect::<String>()).unwrap();
-    let res = Command::new(&node).arg(root.join("conformance/wire-check.ts")).arg(&file).arg("--quiet").output().unwrap();
-    let _ = std::fs::remove_file(&file);
-    assert!(res.status.success(), "t3code schema check failed:\n{}", String::from_utf8_lossy(&res.stdout));
-    eprintln!("{}", String::from_utf8_lossy(&res.stdout).trim());
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -225,13 +204,6 @@ async fn a_managed_server_tells_clients_and_refuses_what_its_policy_locks() {
     let hook = http_client().post(format!("http://127.0.0.1:{}{path}", server.port)).body("{}").send().await.unwrap();
     assert_eq!(hook.status(), 403);
     assert_eq!(hook.json::<Value>().await.unwrap(), json!({ "error": "blocked_by_policy" }));
-
-    // No T3 Connect: the relay client is not installed.
-    let relay = rpc.call("cloud.installRelayClient", json!({})).await;
-    assert_eq!(relay["exit"]["cause"][0]["error"]["reason"], "managed_by_policy", "{relay}");
-    assert_eq!(relay["exit"]["cause"][0]["error"]["message"], "Acme Corp's policy does not allow T3 Connect.");
-
-    schema_check(&rpc.transcript, "acme");
 }
 
 /// Runs the server until it exits; its exit code and what it printed.

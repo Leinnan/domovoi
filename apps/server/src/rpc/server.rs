@@ -8,7 +8,7 @@ use effect_rpc::Router;
 use futures::StreamExt;
 use futures::stream::BoxStream;
 use serde::de::IgnoredAny;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::sync::Arc;
 use domovoi_model::typed::{
     EnvironmentTheme, ServerConfigEnvironmentThemesUpdatedPayload, ServerConfigProviderStatusesPayload, ServerConfigSettingsUpdatedPayloadOf,
@@ -127,10 +127,6 @@ struct RefreshProvidersInput {
     instance_id: Option<String>,
 }
 
-/// The answer of `server.probe`: an empty record.
-#[derive(Serialize)]
-struct Probed {}
-
 async fn refresh_providers(ctx: Arc<ConnCtx>, input: RefreshProvidersInput) -> Result<ServerProviderUpdatedPayload, Never> {
     let all = ctx.state.providers.refresh(input.instance_id.as_deref()).await;
     let _ = ctx.state.provider_updates.send(all.clone());
@@ -145,8 +141,6 @@ pub fn register(r: Router<ConnCtx>) -> Router<ConnCtx> {
     r.stream("subscribeServerConfig", |ctx, input: ConfigSubscription| config_stream(ctx, input))
         .stream("subscribeServerLifecycle", |ctx, _: IgnoredAny| lifecycle_stream(ctx))
         .unary("server.refreshProviders", refresh_providers)
-        .unary("server.probe", |_, _: IgnoredAny| async { Ok::<_, Never>(Probed {}) })
-        .unary("server.reportClientActivity", |_, _: IgnoredAny| async { Ok::<_, Never>(()) })
 }
 
 #[cfg(test)]

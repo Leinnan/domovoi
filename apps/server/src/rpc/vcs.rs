@@ -77,7 +77,6 @@ fn status_stream(input: CwdInput) -> BoxStream<'static, Result<VcsStatusStreamEv
 pub fn register(r: Router<ConnCtx>) -> Router<ConnCtx> {
     r.stream("subscribeVcsBranch", |_, input: CwdInput| branch_stream(input))
         .stream("subscribeVcsStatus", |_, input: CwdInput| status_stream(input))
-        .unary("vcs.refreshBranch", |_, _: IgnoredAny| async { Ok::<_, Never>(()) })
         .unary("vcs.listRefs", |_: Arc<ConnCtx>, input: ListRefsInput| async move {
             Ok::<_, Never>(vcs::list_refs(&input.cwd, input.query.as_deref(), input.limit.unwrap_or(100)).await)
         })

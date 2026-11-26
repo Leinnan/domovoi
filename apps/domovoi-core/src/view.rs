@@ -204,7 +204,7 @@ pub struct EnvironmentView {
 /// Settings → Remote Access: the connected server's iroh side.
 #[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
 pub struct RemoteAccessView {
-    /// The server supports it (Domovoi servers do; t3code servers do not).
+    /// The server has remote access routes.
     pub available: bool,
     pub enabled: bool,
     pub running: bool,

@@ -33,7 +33,7 @@ use domovoi_model::typed::{
 };
 use std::net::{IpAddr, SocketAddr};
 use domovoi_remote::RemotePeer;
-use domovoi_contracts::environment::ORCHESTRATION_PROTOCOL_VERSION;
+use domovoi_model::PROTOCOL_VERSION;
 
 /// The iroh peer a request came through, as its endpoint id (`None` for TCP).
 type Peer = Option<Extension<RemotePeer>>;
@@ -84,7 +84,6 @@ pub fn router(state: SharedState) -> Router {
         .merge(crate::push_web::routes())
         .route("/api/orchestration/shell", get(shell_snapshot))
         .route("/mcp", post(mcp_post).get(|| async { StatusCode::METHOD_NOT_ALLOWED }).delete(|| async { StatusCode::METHOD_NOT_ALLOWED }))
-        .route("/api/observability/v1/traces", post(|| async { StatusCode::NO_CONTENT }))
         .route("/api/assets/attachment/{token}", get(attachment_asset))
         .route(&format!("{}/{{token}}", crate::file_images::ROUTE_PREFIX), get(project_image))
         .route(&format!("{}/{{token}}", crate::diagrams::ROUTE_PREFIX), get(diagram_image))
@@ -804,7 +803,7 @@ async fn ws_ticket(State(state): State<SharedState>, headers: HeaderMap, peer: P
         Err(r) => return r,
     };
     let (ticket, expires_at) = state.auth.mint_ws_ticket(&session);
-    let mut res = Json(AuthWebSocketTicketResult { ticket, expires_at: expires_at.into() }).into_response();
+    let mut res = Json(AuthWebSocketTicketResult { ticket, expires_at: expires_at.into(), protocol: Some(PROTOCOL_VERSION) }).into_response();
     res.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     res
 }
@@ -1132,10 +1131,6 @@ async fn ws(
     Query(q): Query<HashMap<String, String>>,
     upgrade: Result<WebSocketUpgrade, axum::extract::ws::rejection::WebSocketUpgradeRejection>,
 ) -> Response {
-    // t3code checks the protocol first, before the upgrade and any credential.
-    if !compatible_protocol(&q) {
-        return protocol_incompatible();
-    }
     let upgrade = match upgrade {
         Ok(upgrade) => upgrade,
         Err(rejection) => return rejection.into_response(),
@@ -1159,8 +1154,13 @@ async fn ws(
             session
         }
     };
+    // A signed-in client of another protocol version gets a socket that only
+    // says which side to update: an app from before the versions were
+    // compared shows nothing else the server can send it.
+    if let Some(advice) = update_advice(&q) {
+        return upgrade.on_upgrade(move |socket| tell_to_update(socket, advice));
+    }
     let options = ConnectionOptions {
-        frame_parts: q.contains_key(effect_rpc::frame_parts::SOCKET_FRAME_PARTS_QUERY_PARAM),
         // A client that vanished (no Close frame) is closed within about 40 s,
         // so it stops counting as an open app (pushes go to it again).
         heartbeat: Some(heartbeat_interval()),
@@ -1190,31 +1190,43 @@ async fn ws(
     })
 }
 
-/// t3code `ORCHESTRATION_PROTOCOL_QUERY_PARAM`.
-const ORCHESTRATION_PROTOCOL_QUERY_PARAM: &str = "orchestrationProtocol";
+/// The socket URL's parameter naming the client's [`PROTOCOL_VERSION`].
+const PROTOCOL_QUERY_PARAM: &str = "protocol";
 
-/// t3code `hasCompatibleOrchestrationProtocol`: the socket URL names this
-/// server's orchestration protocol.
-fn compatible_protocol(query: &HashMap<String, String>) -> bool {
-    query.get(ORCHESTRATION_PROTOCOL_QUERY_PARAM).map(String::as_str) == Some(ORCHESTRATION_PROTOCOL_VERSION.to_string().as_str())
+const CLIENT_TOO_OLD: &str = "This app is too old for the Domovoi server it connects to. Update Domovoi on this device.";
+const SERVER_TOO_OLD: &str = "This Domovoi server is older than this app. Update domovoi-server on the machine it runs on.";
+
+/// What to tell a client whose socket URL names another protocol version
+/// than this server's, or none (an app from before the parameter existed).
+fn update_advice(query: &HashMap<String, String>) -> Option<&'static str> {
+    match query.get(PROTOCOL_QUERY_PARAM).and_then(|version| version.parse::<u32>().ok()) {
+        Some(version) if version == PROTOCOL_VERSION => None,
+        Some(version) if version > PROTOCOL_VERSION => Some(SERVER_TOO_OLD),
+        _ => Some(CLIENT_TOO_OLD),
+    }
 }
 
-/// What t3code's `/ws` answers a client of another protocol (HTTP 426).
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ProtocolIncompatible {
-    code: &'static str,
-    message: String,
-    orchestration_protocol_version: u32,
-}
-
-fn protocol_incompatible() -> Response {
-    let body = ProtocolIncompatible {
-        code: "orchestration_protocol_incompatible",
-        message: format!("Update this client to one that supports orchestration protocol {ORCHESTRATION_PROTOCOL_VERSION}."),
-        orchestration_protocol_version: ORCHESTRATION_PROTOCOL_VERSION,
-    };
-    (StatusCode::UPGRADE_REQUIRED, Json(body)).into_response()
+/// Serves a socket of another protocol version: `advice` is sent as a
+/// protocol defect at once and again for every frame the client sends, and
+/// nothing else is. Every version of the app shows a defect's text, and the
+/// socket stays open so the app does not keep reconnecting to be told again.
+async fn tell_to_update(mut socket: axum::extract::ws::WebSocket, advice: &'static str) {
+    use axum::extract::ws::Message;
+    let frame = effect_rpc::message::encode_server_message(&effect_rpc::message::FromServer::Defect { defect: advice.into() });
+    if socket.send(Message::Text(frame.clone().into())).await.is_err() {
+        return;
+    }
+    while let Some(Ok(message)) = socket.recv().await {
+        match message {
+            Message::Text(_) => {
+                if socket.send(Message::Text(frame.clone().into())).await.is_err() {
+                    return;
+                }
+            }
+            Message::Close(_) => return,
+            _ => {}
+        }
+    }
 }
 
 #[cfg(test)]

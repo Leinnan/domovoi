@@ -1,19 +1,12 @@
-//! `provider.*` setup RPCs, after t3code's `ProviderAuthService`,
-//! `ProviderInstallation`, `subscribeChatGptHandoff` and the
-//! `provider.uploadFeedback` / `provider.consumeResetCredit` handlers.
+//! `provider.*` setup RPCs: signing a provider instance in and out, and its
+//! managed installation.
 //!
 //! Antigravity instances sign in here (`crate::antigravity::auth`).
 //!
-//! Domovoi runs the plain Codex and Claude drivers. In t3code those drivers have no
-//! sign-in controller (sign-in happens in the CLIs) and only Codex in managed
-//! setup mode has a managed installation, so the auth methods answer with
-//! t3code's typed "does not support sign-in" errors. Differences:
-//! - managed Codex installation (a download into the server home) is not
-//!   implemented: subscribing shows an idle state, starting it fails;
-//! - the ChatGPT handoff (an OAuth flow against ChatGPT) is refused;
-//! - reset credits are never offered: the usage limits snapshots carry
-//!   (`crate::usage_limits`) never name banked resets, so consuming one
-//!   answers `noCredit`; usage limit sources are not supported.
+//! The Codex and Claude drivers sign in through their own CLIs, so for them
+//! the sign-in methods answer with a typed "does not support sign-in" error.
+//! A managed Codex installation (a download into the server home) is not
+//! implemented: subscribing shows an idle state, starting it fails.
 
 #![expect(clippy::disallowed_types, reason = "a provider instance's `config`: the driver's own settings, which the schema leaves open")]
 
@@ -23,11 +16,9 @@ use crate::providers::{CLAUDE, CODEX};
 use crate::state::ConnCtx;
 use effect_rpc::Router;
 use futures::StreamExt;
-use futures::stream::BoxStream;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::Arc;
-use domovoi_model::typed::ProviderThread;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -39,7 +30,6 @@ struct InstanceInput {
 /// configured instances of those drivers.
 struct Instance {
     driver: String,
-    enabled: bool,
     /// Codex's `setupMode` is `managed`.
     managed: bool,
     /// The executable the instance names, trimmed; empty when it names none.
@@ -56,10 +46,8 @@ async fn instance(ctx: &ConnCtx, id: &str) -> Option<Instance> {
     // The driver's own settings, an open record: the few it shares with the server are read from it.
     let config = configured.and_then(|c| c.config.as_ref());
     let of_config = |key: &str| config.and_then(|c| c.get(key));
-    let enabled = configured.and_then(|c| c.enabled).or(of_config("enabled").and_then(Value::as_bool)).unwrap_or(true);
     Some(Instance {
         driver,
-        enabled,
         managed: of_config("setupMode").and_then(Value::as_str) == Some("managed"),
         binary_path: of_config("binaryPath").and_then(Value::as_str).map(str::trim).unwrap_or_default().to_owned(),
     })
@@ -163,104 +151,6 @@ struct CancelInstallInput {
     operation_id: String,
 }
 
-/// A stream that fails at once.
-fn failing_stream(e: Failure) -> BoxStream<'static, Result<Never, Failure>> {
-    futures::stream::once(async move { Err(e) }).boxed()
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ResetCreditInput {
-    instance_id: Option<String>,
-    source_id: Option<String>,
-}
-
-/// The answer of `provider.consumeResetCredit` (`ProviderConsumeResetCreditResult`).
-#[derive(Debug, Serialize)]
-struct ResetCreditResult {
-    outcome: ResetCreditOutcome,
-}
-
-/// `ProviderConsumeResetCreditOutcome`: Domovoi offers no reset credits.
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-enum ResetCreditOutcome {
-    NoCredit,
-}
-
-async fn consume_reset_credit(ctx: Arc<ConnCtx>, input: ResetCreditInput) -> Result<ResetCreditResult, Failure> {
-    if let Some(source) = input.source_id {
-        let settings = ctx.state.settings.read().await;
-        // Only a source whose `enabled` is set counts as on here.
-        let enabled = settings.usage_limit_sources.as_ref().and_then(|sources| sources.get(&source)).and_then(|config| config.enabled) == Some(true);
-        let detail = if enabled { "Usage limit sources are not supported by this server." } else { "The usage limit source is missing or disabled." };
-        return Err(Failure::UsageLimitSource { detail: detail.to_owned() });
-    }
-    let id = input.instance_id.unwrap_or_default();
-    match instance(&ctx, &id).await {
-        None => Err(Failure::setup(&id, "consume-reset-credit", "Provider instance not found.")),
-        Some(i) if !i.enabled => Err(Failure::setup(&id, "consume-reset-credit", "This provider is disabled.")),
-        Some(_) => Ok(ResetCreditResult { outcome: ResetCreditOutcome::NoCredit }),
-    }
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct FeedbackInput {
-    thread_id: String,
-    reason: Option<String>,
-}
-
-/// The answer of `provider.uploadFeedback` (`ProviderUploadFeedbackResult`).
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct FeedbackResult {
-    feedback_id: String,
-}
-
-/// `provider.uploadFeedback`: Codex uploads through its live app-server; the
-/// Claude CLI has no feedback upload.
-async fn upload_feedback(ctx: Arc<ConnCtx>, input: FeedbackInput) -> Result<FeedbackResult, Failure> {
-    let err = |cause: &str| Failure::UploadFeedback { thread_id: input.thread_id.clone(), cause: cause.to_owned() };
-    let store = &ctx.state.store;
-    let thread = store.app_thread(&input.thread_id).map_err(|e| err(&e.to_string()))?;
-    let Some(thread) = thread.filter(|t| t.deleted_at.is_none()) else {
-        return Err(err(&format!("Thread {} was not found.", input.thread_id)));
-    };
-    let threads = store.records::<ProviderThread>(&input.thread_id).map_err(|e| err(&e.to_string()))?;
-    let provider_thread = threads.iter().find(|p| Some(&p.id) == thread.active_provider_thread_id.as_ref()).or(threads.last());
-    let Some(pt) = provider_thread.filter(|p| p.provider_session_id.is_some()) else {
-        return Err(err("No provider session has run in this thread yet."));
-    };
-    let not_running = "The provider session is no longer running. Send a message first.";
-    let host = crate::adapters::HOST.get();
-    match pt.driver.as_str() {
-        "codex" => {
-            let server = match host {
-                Some(h) => h.live_codex().await,
-                None => None,
-            };
-            let (Some(server), Some(native)) = (server, pt.native_thread_ref.as_ref().and_then(|native| native.native_id.as_deref())) else {
-                return Err(err(not_running));
-            };
-            let id = server.upload_feedback(native, input.reason.as_deref()).await.map_err(|_| err("Failed to upload Codex thread feedback."))?;
-            Ok(FeedbackResult { feedback_id: id })
-        }
-        driver => {
-            let live = match (host, driver) {
-                (Some(h), CLAUDE) => h.has_live_claude(&input.thread_id).await,
-                (Some(h), crate::providers::PI) => h.has_live_pi(&input.thread_id).await,
-                _ => false,
-            };
-            if live {
-                Err(err(&format!("Provider '{driver}' does not support feedback uploads.")))
-            } else {
-                Err(err(not_running))
-            }
-        }
-    }
-}
-
 /// `ProviderAuthCompleteInput`, `ProviderAuthCancelInput` (and the instance of any other).
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -280,11 +170,6 @@ fn antigravity(id: &str) -> Option<&str> {
 
 pub fn register(r: Router<ConnCtx>) -> Router<ConnCtx> {
     let r = r
-        .unary("provider.consumeResetCredit", consume_reset_credit)
-        .unary("provider.uploadFeedback", upload_feedback)
-        .stream("provider.chatgpt.handoff.subscribe", |_ctx: Arc<ConnCtx>, input: InstanceInput| {
-            failing_stream(Failure::setup(&input.instance_id, "start", "ChatGPT sign-in handoff is not available on this server."))
-        })
         .stream("provider.auth.subscribe", |ctx: Arc<ConnCtx>, input: InstanceInput| {
             if let Some(id) = antigravity(&input.instance_id) {
                 return crate::antigravity::auth::subscribe(id, ctx.session.token_hash.clone()).map(Ok::<_, Failure>).boxed();
@@ -315,19 +200,6 @@ pub fn register(r: Router<ConnCtx>) -> Router<ConnCtx> {
                 None => Err(auth_controller(&ctx, &input.instance_id, "logout").await),
             }
         });
-    // Every other sign-in operation fails at the controller lookup (or, for
-    // Antigravity, takes nothing its sign-in asks).
-    let auth_ops = [
-        ("provider.auth.respond", "respond"),
-        ("provider.auth.removeMethod", "removeMethod"),
-        ("provider.chatgpt.reconnect-profile", "export"),
-        ("provider.chatgpt.import-profile", "import"),
-    ];
-    let r = auth_ops.into_iter().fold(r, |r, (tag, operation)| {
-        r.unary(tag, move |ctx: Arc<ConnCtx>, input: InstanceInput| async move {
-            Err::<Never, _>(auth_controller(&ctx, &input.instance_id, operation).await)
-        })
-    });
     r.unary("provider.install.start", |ctx: Arc<ConnCtx>, input: InstanceInput| async move {
         if let Some(id) = antigravity(&input.instance_id) {
             return crate::antigravity::install::start(id).await.map(AnyInstall::Antigravity);
@@ -388,7 +260,5 @@ mod tests {
             json!({ "driver": "codex", "operationId": null, "phase": "idle", "downloadedBytes": 0, "totalBytes": null, "version": null,
                 "installedVersion": null, "source": null, "canRemove": false, "message": null })
         );
-        assert_eq!(json!(ResetCreditResult { outcome: ResetCreditOutcome::NoCredit }), json!({ "outcome": "noCredit" }));
-        assert_eq!(json!(FeedbackResult { feedback_id: "f1".into() }), json!({ "feedbackId": "f1" }));
     }
 }

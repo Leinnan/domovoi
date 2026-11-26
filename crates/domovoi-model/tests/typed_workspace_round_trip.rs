@@ -17,35 +17,26 @@ use domovoi_model::typed::{
     TerminalSessionStatus, ThreadLaunchResult, ThreadTurnDiff,
 };
 
-const FIXTURES: [&str; 2] = ["ts-session1", "ts-session2-boot"];
+const FIXTURES: [&str; 1] = ["session1"];
 
 /// What the recorded sessions are known to contain. Checking none of one of
 /// these means the walk over the fixtures broke, not that the types are right.
-const KINDS_IN_FIXTURES: [&str; 20] = [
+const KINDS_IN_FIXTURES: [&str; 11] = [
     "orchestration.subscribeShell synchronized",
     "orchestration.subscribeShell snapshot",
     "orchestration.subscribeShell project.updated",
     "orchestration.subscribeShell thread.updated",
     "shell snapshot",
     "project shell",
-    "GET /api/orchestration/shell resumable",
     "subscribeTerminalMetadata snapshot",
-    "subscribeTerminalMetadata upsert",
-    "terminal.attach snapshot",
-    "terminal.attach output",
-    "terminal.attach activity",
-    "terminal.open",
     "filesystem.browse",
     "projects.readFile",
     "projects.mutate",
-    "assets.createUrl",
     "orchestration.launchThread",
-    "orchestration.dispatchCommand",
-    "orchestration.getOlderSettledThreads",
 ];
 
 fn fixture(name: &str) -> Vec<Value> {
-    let path = format!("{}/../../fixtures/golden/{name}/wire.ndjson", env!("CARGO_MANIFEST_DIR"));
+    let path = format!("{}/../../fixtures/native/{name}/wire.ndjson", env!("CARGO_MANIFEST_DIR"));
     std::fs::read_to_string(&path).unwrap().lines().map(|line| serde_json::from_str(line).unwrap()).collect()
 }
 

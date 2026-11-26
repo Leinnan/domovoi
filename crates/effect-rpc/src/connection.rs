@@ -14,7 +14,6 @@
 //! `rpc.transport` and `rpc.system`; a failed exit records `otel.status_code`
 //! `ERROR` and the cause, an interrupted one `otel.interrupted`.
 
-use crate::frame_parts::{SOCKET_FRAME_PART_BYTES, split_socket_frame_owned};
 use crate::message::{FromClient, FromServer, RequestEncoded, RequestId, decode_client_frame, encode_server_message};
 use crate::message::{CauseEncoded, ExitEncoded};
 use tracing::Instrument;
@@ -35,8 +34,6 @@ const OUTBOUND_QUEUE: usize = 256;
 pub struct ConnectionOptions {
     /// Wait for client `Ack`s between stream chunks (Effect's default).
     pub supports_ack: bool,
-    /// Split large outgoing frames (`?frameParts=1`).
-    pub frame_parts: bool,
     /// Maximum values per `Chunk` message.
     pub max_chunk_values: usize,
     /// WebSocket transports: send a Ping control frame this often, and close
@@ -50,7 +47,6 @@ impl Default for ConnectionOptions {
     fn default() -> Self {
         Self {
             supports_ack: true,
-            frame_parts: false,
             max_chunk_values: 256,
             heartbeat: None,
         }
@@ -100,19 +96,10 @@ pub async fn serve_connection<C, R, W, RE>(
     // falls behind its broadcast resyncs from the log) instead of queueing
     // without limit in this process.
     let (tx, mut rx) = mpsc::channel::<FromServer>(OUTBOUND_QUEUE);
-    let frame_parts = options.frame_parts;
     let writer = tokio::spawn(async move {
         while let Some(message) = rx.recv().await {
-            let frame = encode_server_message(&message);
-            let parts = if frame_parts {
-                split_socket_frame_owned(frame, SOCKET_FRAME_PART_BYTES)
-            } else {
-                vec![frame]
-            };
-            for part in parts {
-                if outgoing.send(part).await.is_err() {
-                    return;
-                }
+            if outgoing.send(encode_server_message(&message)).await.is_err() {
+                return;
             }
         }
         let _ = outgoing.close().await;

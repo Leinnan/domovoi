@@ -184,7 +184,6 @@ impl AppState {
             keybindings: kb.keybindings.into(),
             issues: kb.issues.into(),
             providers: self.providers.snapshot().await.into(),
-            available_editors: crate::rpc::available_editors().into(),
             remote_open_targets: None,
             direct_endpoints: None,
             terminal_details: Some(true),

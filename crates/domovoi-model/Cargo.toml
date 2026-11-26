@@ -1,6 +1,6 @@
 [package]
 name = "domovoi-model"
-description = "Typed records of the t3code wire schemas and the thread read model on them, shared by domovoi-server and the Crux client core"
+description = "The records Domovoi stores and sends, and the thread read model on them, shared by domovoi-server and the Crux client core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

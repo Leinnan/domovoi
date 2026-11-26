@@ -267,11 +267,6 @@ impl Host {
         self.codex.lock().await.clone()
     }
 
-    /// Whether this thread's Claude CLI is still running.
-    pub async fn has_live_claude(&self, thread_id: &str) -> bool {
-        self.claude.lock().await.contains_key(thread_id)
-    }
-
     async fn codex(&self) -> Result<Arc<codex::CodexServer>, String> {
         let mut slot = self.codex.lock().await;
         if let Some(c) = slot.as_ref() {
@@ -415,11 +410,6 @@ impl Host {
         let s = acp::AcpSession::start(input, turn.native_thread_id(), self.log_dir.clone(), &crate::attachments::dir(&self.userdata)).await?;
         self.acp.lock().await.insert(thread_id.to_owned(), s.clone());
         Ok(s)
-    }
-
-    /// Whether this thread's pi is still running.
-    pub async fn has_live_pi(&self, thread_id: &str) -> bool {
-        self.pi.lock().await.contains_key(thread_id)
     }
 
     async fn claude_session(&self, thread_id: &str, turn: &turn::Turn, input: &TurnInput) -> Result<Arc<claude::ClaudeSession>, String> {

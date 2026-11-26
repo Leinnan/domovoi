@@ -12,6 +12,9 @@ use std::time::Duration;
 use domovoi_remote::{Bridge, Network, SecretKey};
 use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest};
 
+/// The socket URL names the version of the protocol the test speaks.
+const PROTOCOL: u32 = domovoi_model::PROTOCOL_VERSION;
+
 fn http_client() -> reqwest::Client {
     let _ = rustls::crypto::ring::default_provider().install_default();
     reqwest::Client::new()
@@ -129,7 +132,7 @@ async fn open_ws(base: &str, token: &str) -> Ws {
     let res = http_client().post(format!("{base}/api/auth/websocket-ticket/rpc")).bearer_auth(token).send().await.unwrap();
     assert_eq!(res.status(), 200);
     let ticket = res.json::<Value>().await.unwrap()["ticket"].as_str().unwrap().to_owned();
-    let url = format!("{}/ws?orchestrationProtocol=2&wsTicket={ticket}", base.replacen("http", "ws", 1));
+    let url = format!("{}/ws?protocol={PROTOCOL}&wsTicket={ticket}", base.replacen("http", "ws", 1));
     tokio_tungstenite::connect_async(url.into_client_request().unwrap()).await.unwrap().0
 }
 
@@ -215,7 +218,7 @@ async fn remote_devices_pair_and_stay_bound_to_their_key() {
     };
     let res = http_client().post(format!("{local}/api/auth/browser-session")).json(&json!({ "credential": local_code })).send().await.unwrap();
     let cookie = res.headers().get("set-cookie").unwrap().to_str().unwrap().split(';').next().unwrap().to_owned();
-    let mut req = format!("ws://127.0.0.1:{}/ws?orchestrationProtocol=2", server.port).into_client_request().unwrap();
+    let mut req = format!("ws://127.0.0.1:{}/ws?protocol={PROTOCOL}", server.port).into_client_request().unwrap();
     req.headers_mut().insert("cookie", cookie.parse().unwrap());
     let mut owner = tokio_tungstenite::connect_async(req).await.unwrap().0;
     let snapshot = loop {

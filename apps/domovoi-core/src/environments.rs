@@ -2,7 +2,7 @@
 //!
 //! An environment is local (an HTTP URL) or remote (an iroh ticket, reached
 //! through the shell's loopback tunnel). Either way the client pairs once
-//! with a one-time code through t3code's token exchange (`/oauth/token`),
+//! with a one-time code through a token exchange (`/oauth/token`),
 //! keeps the bearer token in the shell's secure store, and opens each RPC
 //! socket with a fresh one-time ticket.
 //!
@@ -708,9 +708,17 @@ pub fn ticket_issued(model: &mut Model, res: HttpResult) -> Cmd {
     match answer(res) {
         Answer::Ok(body) => {
             model.refusals = 0;
-            let ticket = read::<AuthWebSocketTicketResult>(model, "the server's sign-in answer", body).map(|issued| issued.ticket).unwrap_or_default();
+            let issued = read::<AuthWebSocketTicketResult>(model, "the server's sign-in answer", body);
             // The server took this device's sign-in: it is the one the link named.
-            adopt_ticket(model).and(open_socket(model, &ticket)).and(render())
+            let adopted = adopt_ticket(model);
+            // A server of another protocol version and this app would
+            // misread each other: say which of the two to update, and keep
+            // asking (the server may be updated while the app waits).
+            if let Some(advice) = issued.as_ref().and_then(|issued| update_advice(issued.protocol)) {
+                return adopted.and(retry_later(model, advice.into()));
+            }
+            let ticket = issued.map(|issued| issued.ticket).unwrap_or_default();
+            adopted.and(open_socket(model, &ticket)).and(render())
         }
         Answer::Rejected(401, _) => {
             // Revoked or expired: pairing again is the only way back, unless
@@ -750,6 +758,16 @@ pub fn ticket_issued(model: &mut Model, res: HttpResult) -> Cmd {
         // Through a tunnel this is the bridge failing to reach the server: the
         // next attempt starts a new one rather than retrying a stuck bridge.
         Answer::Unreachable(e) => restart_tunnel(model).and(retry_later(model, format!("Could not reach the server: {e}"))),
+    }
+}
+
+/// What to tell the user when the server's protocol version (none from a
+/// server older than the versions) is not this app's; `None` when it is.
+fn update_advice(server: Option<u32>) -> Option<&'static str> {
+    match server {
+        Some(version) if version == domovoi_model::PROTOCOL_VERSION => None,
+        Some(version) if version > domovoi_model::PROTOCOL_VERSION => Some("This app is too old for this server. Update Domovoi on this device."),
+        _ => Some("This server is older than this app. Update domovoi-server on the machine it runs on."),
     }
 }
 
@@ -1346,7 +1364,7 @@ pub fn remote_access_loaded(model: &mut Model, res: HttpResult) -> Cmd {
                 model.pages.remote_link = None;
             }
         }
-        // A t3code server has no remote access routes.
+        // A server built without remote access has no such route.
         Answer::Rejected(404, _) => model.pages.remote = None,
         Answer::Rejected(code, body) => model.pages.remote_error = Some(rejection_message(code, &body)),
         Answer::Unreachable(e) => model.pages.remote_error = Some(e),

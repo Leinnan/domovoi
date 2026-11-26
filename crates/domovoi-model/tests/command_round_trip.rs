@@ -2,29 +2,18 @@
 //! came from.
 //!
 //! Two sources: every `orchestration.dispatchCommand` and
-//! `orchestration.launchThread` request in the recorded sessions, and one
-//! example of every command type, written from t3code's schema with every
-//! field the schema defines. The examples of commands a client may send are
-//! also decoded by t3code's own schema when the checkout and Node 26 are there.
+//! `orchestration.launchThread` request in the recorded session, and one
+//! example of every command type, with every field it defines.
 
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use domovoi_model::typed::{Command, ThreadLaunchInput, ThreadLaunchResult};
 
-mod support;
 
-const FIXTURES: [&str; 2] = ["ts-session1", "ts-session2-boot"];
+const FIXTURES: [&str; 1] = ["session1"];
 
 /// The command types the recorded sessions are known to contain.
-const RECORDED_TYPES: [&str; 5] = ["checkpoint.rollback", "message.dispatch", "runtime-request.respond", "thread.runtime-mode.set", "thread.visit"];
-
-/// The command types of `OrchestrationV2InternalCommand`, which t3code's RPC does not accept.
-const INTERNAL_TYPES: [&str; 15] = [
-    "thread.guest-share.open", "thread.guest-share.redeem", "thread.guest-message.submit", "thread.project.adopt-folder",
-    "thread.pull-request-watch.checks-reopen", "thread.pull-request-watch.sync", "delegated_task.remote.request",
-    "delegated_task.remote.complete", "delegated_task.remote.stop", "checkpoint.rollback.fail", "runtime-request.delivery.fail",
-    "thread.interrupt.unresponsive", "thread.background-work.settle", "secret_request.record", "link_request.record",
-];
+const RECORDED_TYPES: [&str; 3] = ["message.dispatch", "runtime-request.respond", "thread.visit"];
 
 fn workspace_root() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -34,7 +23,7 @@ fn workspace_root() -> std::path::PathBuf {
 fn recorded(rpc: &str) -> Vec<Value> {
     let mut payloads = Vec::new();
     for name in FIXTURES {
-        let path = workspace_root().join(format!("fixtures/golden/{name}/wire.ndjson"));
+        let path = workspace_root().join(format!("fixtures/native/{name}/wire.ndjson"));
         for line in std::fs::read_to_string(&path).unwrap().lines() {
             let line: Value = serde_json::from_str(line).unwrap();
             let frame = &line["frame"];
@@ -95,7 +84,7 @@ fn recorded_launches_round_trip_through_their_type() {
 fn recorded_answers_round_trip_through_their_types() {
     let (mut launched, mut dispatched) = (0, 0);
     for name in FIXTURES {
-        let path = workspace_root().join(format!("fixtures/golden/{name}/wire.ndjson"));
+        let path = workspace_root().join(format!("fixtures/native/{name}/wire.ndjson"));
         let mut requests: BTreeMap<(i64, String), String> = BTreeMap::new();
         for line in std::fs::read_to_string(&path).unwrap().lines() {
             let line: Value = serde_json::from_str(line).unwrap();
@@ -114,14 +103,8 @@ fn recorded_answers_round_trip_through_their_types() {
                         dispatched += 1;
                     }
                     Some("orchestration.launchThread") => {
-                        // As any reader sees it: the projection's compact ids expanded and the `ids` table gone.
-                        let mut expanded = value.clone();
-                        let fields = expanded.as_object_mut().expect("a launch result is an object");
-                        if let Some(Value::Array(ids)) = fields.remove("ids") {
-                            support::expand_record_ids(fields["projection"].as_object_mut().expect("a projection"), &ids);
-                        }
-                        let result: ThreadLaunchResult = serde_json::from_value(expanded.clone()).expect("a launch result");
-                        assert_eq!(json!(result), expanded);
+                        let result: ThreadLaunchResult = serde_json::from_value(value.clone()).expect("a launch result");
+                        assert_eq!(json!(result), *value);
                         launched += 1;
                     }
                     _ => {}
@@ -320,16 +303,6 @@ fn launch_examples() -> Vec<Value> {
     ]
 }
 
-/// The command types t3code's schema file defines, read from the checkout if it is there.
-fn schema_types() -> Option<BTreeSet<String>> {
-    let schema = std::fs::read_to_string(workspace_root().join(".reference/t3code/packages/contracts/src/orchestrationV2.ts")).ok()?;
-    let from = schema.find("export const OrchestrationV2Command = Schema.Union([")?;
-    let to = schema.find("export type OrchestrationV2ServerCommand")?;
-    // A command's own `type` is indented four spaces; the unions inside commands are deeper.
-    let types = schema[from..to].lines().filter_map(|line| line.strip_prefix("    type: Schema.Literal(\"")?.strip_suffix("\"),")).map(str::to_owned);
-    Some(types.collect())
-}
-
 #[test]
 fn every_command_type_has_an_example_that_round_trips() {
     let mut covered = BTreeSet::new();
@@ -346,50 +319,10 @@ fn every_command_type_has_an_example_that_round_trips() {
     let known: BTreeSet<String> = Command::TYPES.iter().map(|ty| (*ty).to_owned()).collect();
     assert_eq!(covered, known, "an example for every command type, and no other");
     assert_eq!(known.len(), Command::TYPES.len(), "no type is declared twice");
-    match schema_types() {
-        Some(schema) => assert_eq!(known, schema, "the command types of t3code's schema"),
-        None => eprintln!("t3code's schema file is not here: the list of command types was not compared with it"),
-    }
     for sent in launch_examples() {
         let input: ThreadLaunchInput = serde_json::from_value(sent.clone()).unwrap_or_else(|error| panic!("a launch example does not decode: {error}"));
         assert_eq!(json!(input), sent);
     }
     let unrecorded: Vec<&str> = Command::TYPES.iter().copied().filter(|ty| !RECORDED_TYPES.contains(ty)).collect();
     eprintln!("{} command types round-trip from examples; {} of them are not in the recordings: {}", known.len(), unrecorded.len(), unrecorded.join(", "));
-}
-
-/// The examples of commands a client may send, and of launches, are what
-/// t3code's own schema accepts. Needs the t3code checkout and Node 26.
-#[test]
-#[expect(clippy::disallowed_methods, reason = "a test runs Node directly; the server's process helpers are not this crate's")]
-fn examples_fit_the_schema_of_t3code() {
-    let root = workspace_root();
-    let node = std::env::var("DOMOVOI_NODE").unwrap_or_else(|_| "node".into());
-    let version = std::process::Command::new(&node).arg("--version").output().ok().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned());
-    let major: u32 = version.as_deref().and_then(|v| v.trim_start_matches('v').split('.').next()?.parse().ok()).unwrap_or(0);
-    if !root.join(".reference/t3code/packages/contracts").exists() || major < 26 {
-        eprintln!("schema check skipped (needs .reference/t3code and Node 26+, found {version:?})");
-        return;
-    }
-    let mut frames = String::new();
-    let mut id = 0;
-    let mut request = |tag: &str, payload: &Value| {
-        id += 1;
-        frames.push_str(&json!({ "kind": "ws", "conn": 1, "frame": { "_tag": "Request", "id": id.to_string(), "tag": tag, "payload": payload } }).to_string());
-        frames.push('\n');
-    };
-    let public: Vec<Value> = examples().into_iter().filter(|c| !INTERNAL_TYPES.contains(&c["type"].as_str().unwrap_or_default())).collect();
-    for command in &public {
-        request("orchestration.dispatchCommand", command);
-    }
-    for launch in launch_examples() {
-        request("orchestration.launchThread", &launch);
-    }
-    let file = std::env::temp_dir().join(format!("domovoi-command-examples-{}.ndjson", std::process::id()));
-    std::fs::write(&file, frames).unwrap();
-    let checked = std::process::Command::new(&node).arg(root.join("conformance/wire-check.ts")).arg(&file).output().unwrap();
-    let _ = std::fs::remove_file(&file);
-    let text = String::from_utf8_lossy(&checked.stdout);
-    assert!(checked.status.success(), "t3code's schema refuses an example:\n{text}\n{}", String::from_utf8_lossy(&checked.stderr));
-    eprintln!("{} command examples and {} launch examples decoded by t3code's schema: {}", public.len(), launch_examples().len(), text.trim().lines().last().unwrap_or_default());
 }

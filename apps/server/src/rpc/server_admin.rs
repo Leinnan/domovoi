@@ -786,8 +786,6 @@ struct UrlAuthInput {
 pub fn register(r: Router<ConnCtx>) -> Router<ConnCtx> {
     let r = r
         .unary("server.getConfig", |ctx: Arc<ConnCtx>, _: serde::de::IgnoredAny| async move { Ok::<_, Never>(ctx.state.server_config().await) })
-        // Only installed Swift TestFlight builds of t3code still ask; the settings are also in `server.getConfig`.
-        .unary("server.getSettings", |ctx: Arc<ConnCtx>, _: IgnoredAny| async move { Ok::<_, Never>(ctx.state.settings.read().await.clone()) })
         .unary("server.updateSettings", update_settings)
         .unary("server.upsertKeybinding", |ctx: Arc<ConnCtx>, i: UpsertInput| async move {
             crate::keybindings::upsert(&ctx.state.paths.keybindings(), &i).map(domovoi_model::typed::ServerUpsertKeybindingResult::from)
@@ -828,11 +826,6 @@ pub fn register(r: Router<ConnCtx>) -> Router<ConnCtx> {
         .unary("server.signalProcess", |_ctx: Arc<ConnCtx>, Sent(i): Sent<SignalInput>| async move {
             Ok::<_, Never>(super::telemetry::signal_process(i.pid.unwrap_or(0), i.start_time_ms.unwrap_or(0), i.signal.unwrap_or(Signal::Interrupt)).await)
         })
-        // Domovoi is not published to npm: there is no release to name.
-        .unary("server.getNpmRelease", |_ctx: Arc<ConnCtx>, _: IgnoredAny| async move { Ok::<_, Never>(None::<Never>) })
-        .unary("server.updateServer", |_ctx: Arc<ConnCtx>, _: IgnoredAny| async move { Err::<Never, _>(Failure::self_update()) })
-        .stream("server.updateServerWithProgress", |_ctx: Arc<ConnCtx>, _: IgnoredAny| futures::stream::once(async { Err::<Never, _>(Failure::self_update()) }))
-        .unary("server.commitDesktopUpdate", |_ctx: Arc<ConnCtx>, _: IgnoredAny| async move { Err::<Never, _>(Failure::self_update()) })
         .unary("server.updateProvider", |ctx: Arc<ConnCtx>, i: crate::provider_update::UpdateInput| async move { crate::provider_update::update(&ctx.state, i).await });
     // The user opened the sign-in an ACP agent asked for (`elicitation/create`, mode `url`).
     let r = r.unary("server.acceptAcpRegistryUrlAuth", |_ctx: Arc<ConnCtx>, Sent(i): Sent<UrlAuthInput>| async move {
@@ -844,18 +837,7 @@ pub fn register(r: Router<ConnCtx>) -> Router<ConnCtx> {
         })
         .unary("server.prepareAcpRegistryAgent", |_ctx: Arc<ConnCtx>, i: AcpAgentInput| async move { crate::acp_registry::prepare(&i.agent_id, None).await })
         .unary("server.uninstallAcpRegistryManagedBinary", |_ctx: Arc<ConnCtx>, i: AcpAgentInput| async move { crate::acp_registry::uninstall(&i.agent_id) });
-    use crate::rpc::admin_failure::AcpRegistryReason as Why;
-    [
-        ("server.listAcpRegistrySessions", Why::SessionListUnsupported, "Domovoi does not list an ACP agent's own sessions; its threads continue their sessions."),
-        ("server.importAcpRegistrySession", Why::SessionListUnsupported, "Domovoi does not import an ACP agent's own sessions."),
-        ("server.deleteAcpRegistrySession", Why::SessionDeleteUnsupported, "Domovoi does not delete an ACP agent's own sessions."),
-        ("server.listAcpRegistryProviders", Why::ProvidersUnsupported, "Domovoi does not configure an ACP agent's model providers; use the agent's own settings."),
-        ("server.setAcpRegistryProvider", Why::ProvidersUnsupported, "Domovoi does not configure an ACP agent's model providers; use the agent's own settings."),
-        ("server.disableAcpRegistryProvider", Why::ProvidersUnsupported, "Domovoi does not configure an ACP agent's model providers; use the agent's own settings."),
-        ("server.logoutAcpRegistry", Why::LogoutUnsupported, "Sign the ACP agent out with its own command."),
-    ]
-    .into_iter()
-    .fold(r, |r, (tag, why, message)| r.unary(tag, move |_ctx: Arc<ConnCtx>, _: IgnoredAny| async move { Err::<Never, _>(Failure::acp_unsupported(why, message)) }))
+    r
 }
 
 #[cfg(test)]

@@ -125,10 +125,10 @@ fn stream_token(model: &mut Model, id: &str, text: &mut String, k: u64) {
 /// build kept by `tools/perf.py` reads the recording it was saved with.
 fn recording() -> std::path::PathBuf {
     let fixtures = std::env::var_os("DOMOVOI_FIXTURES").map_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures"), Into::into);
-    fixtures.join("golden/ts-session1/wire.ndjson")
+    fixtures.join("native/session1/wire.ndjson")
 }
 
-/// From the recorded TypeScript-server session: the config snapshot item,
+/// From the recorded session: the config snapshot item,
 /// the shell stream's items, and one thread shell to copy.
 fn recorded_boot() -> (Value, Vec<Value>, Value) {
     let path = recording();
@@ -433,7 +433,9 @@ fn thread_open_snapshot(b: divan::Bencher, n: usize) {
 #[divan::bench]
 fn shell_snapshot_apply_1000(b: divan::Bencher) {
     let (_, shell, template) = recorded_boot();
-    let projects: Vec<Value> = shell.iter().find(|v| v["kind"] == "snapshot").map(|v| v["snapshot"]["projects"].clone()).and_then(|p| p.as_array().cloned()).unwrap_or_default();
+    // The recorded snapshot was sent before the session made its project: the project is in the item after it.
+    let projects: Vec<Value> = shell.iter().filter(|v| v["kind"] == "project.updated").map(|v| v["project"].clone()).collect();
+    assert!(!projects.is_empty(), "the recording holds a project");
     let project = projects.first().map(|p| p["id"].clone()).unwrap_or(Value::Null);
     let threads: Vec<Value> = (0..1000)
         .map(|i| {

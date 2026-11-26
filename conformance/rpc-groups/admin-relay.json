@@ -1,8 +1,0 @@
-{ "env": { "T3CODE_CLOUDFLARED_PATH": "$DIR/override/cloudflared" },
-  "cases": [
-    { "tag": "cloud.getRelayClientStatus", "payload": {}, "note": "the override names no file: missing, whatever PATH has" },
-    { "tag": "cloud.installRelayClient", "payload": {}, "all": true, "expect": "failure", "error": "RelayClientInstallFailedError" },
-    { "sh": "./make-cloudflared override/cloudflared 2025.6.1", "tag": "cloud.getRelayClientStatus", "payload": {}, "note": "the override at the minimum version" },
-    { "tag": "cloud.installRelayClient", "payload": {}, "all": true },
-    { "sh": "./make-cloudflared override/cloudflared 2025.6.0", "tag": "cloud.getRelayClientStatus", "payload": {}, "note": "one patch below the minimum" }
-  ] }

@@ -19,6 +19,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest};
 
+/// The socket URL names the version of the protocol the test speaks.
+const PROTOCOL: u32 = domovoi_model::PROTOCOL_VERSION;
+
 fn http() -> reqwest::Client {
     let _ = rustls::crypto::ring::default_provider().install_default();
     reqwest::Client::new()
@@ -191,7 +194,7 @@ async fn socket(server: &Server, token: &str) -> Ws {
         .json()
         .await
         .unwrap();
-    let url = format!("ws://127.0.0.1:{}/ws?orchestrationProtocol=2&wsTicket={}", server.port, res["ticket"].as_str().unwrap());
+    let url = format!("ws://127.0.0.1:{}/ws?protocol={PROTOCOL}&wsTicket={}", server.port, res["ticket"].as_str().unwrap());
     tokio_tungstenite::connect_async(url.into_client_request().unwrap()).await.unwrap().0
 }
 

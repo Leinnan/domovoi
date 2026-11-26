@@ -1,6 +1,6 @@
 [package]
 name = "domovoi-server"
-description = "Rust execution server, wire-compatible with t3code's apps/server"
+description = "The Domovoi execution server: runs coding agents and serves them to the Domovoi apps"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

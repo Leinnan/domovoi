@@ -634,12 +634,6 @@
           "skills": []
         }
       ],
-      "availableEditors": [
-        "cursor",
-        "vscode",
-        "zed",
-        "file-manager"
-      ],
       "remoteOpenTargets": [
         {
           "kind": "tailscale",

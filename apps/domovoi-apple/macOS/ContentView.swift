@@ -434,7 +434,7 @@ struct ConnectView: View {
                 DomovoiMark(size: 42)
                 VStack(alignment: .leading) {
                     Text("Connect to a Domovoi server").font(.title2.bold())
-                    Text("domovoi-server or any t3code-compatible environment").foregroundStyle(.secondary)
+                    Text("domovoi-server on this Mac or another machine").foregroundStyle(.secondary)
                 }
             }
             if let local = connection.localServer {

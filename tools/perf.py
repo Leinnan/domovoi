@@ -192,6 +192,8 @@ def parse_divan(text, prefix):
     """{`prefix.bench[.arg]`: median in µs} from divan's table."""
     out = {}
     stack = []
+    # A measurement printed while a bench ran split that bench's row in two.
+    text = re.sub(r"PERF \S+ \S+ \S+\n", "", text)
     for line in text.splitlines():
         if "│" not in line or "fastest" in line:
             continue
@@ -211,11 +213,13 @@ def parse_divan(text, prefix):
     return out
 
 
+# A measurement's own line. It may follow other text on its line: the test
+# harness's `test name ... `, or the start of a bench's row in divan's table.
+PERF_LINE = re.compile(r"PERF (\S+) (-?[\d.]+(?:e-?\d+)?) (\S+)$", re.M)
+
+
 def parse_perf_lines(text):
-    out = {}
-    for match in re.finditer(r"^PERF (\S+) (-?[\d.]+(?:e-?\d+)?) (\S+)$", text, re.M):
-        out[match.group(1)] = (float(match.group(2)), match.group(3))
-    return out
+    return {match.group(1): (float(match.group(2)), match.group(3)) for match in PERF_LINE.finditer(text)}
 
 
 def run(label, only=None, real_home=None):

@@ -6,7 +6,6 @@
 
 #[cfg(feature = "server")]
 pub mod connection;
-pub mod frame_parts;
 pub mod message;
 #[cfg(feature = "server")]
 pub mod router;

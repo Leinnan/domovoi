@@ -742,9 +742,6 @@ pub fn register(r: Router<ConnCtx>) -> Router<ConnCtx> {
         })
     })
     .unary("orchestration.searchThread", |ctx: Arc<ConnCtx>, input: FindInput| async move { search_thread(&ctx.state, &input) })
-    .stream("orchestration.searchThreadStream", |ctx: Arc<ConnCtx>, input: FindInput| {
-        futures::stream::once(async move { search_thread(&ctx.state, &input) }).boxed()
-    })
     .unary("orchestration.searchThreads", |ctx: Arc<ConnCtx>, input: SearchThreadsInput| async move {
         search_threads(&ctx.state, &input)
     })
@@ -759,10 +756,6 @@ pub fn register(r: Router<ConnCtx>) -> Router<ConnCtx> {
         Ok::<_, Failure>(NativeChildWork { children })
     })
     .stream("orchestration.subscribeCommandOutput", |ctx, input: CommandOutputInput| command_output(ctx, input))
-    .stream("orchestration.subscribePromptSuggestion", |_ctx: Arc<ConnCtx>, _input: ThreadOnly| {
-        // Domovoi's adapters produce no prompt suggestions; the latest is none.
-        futures::stream::once(async { Ok::<Option<Nothing>, Failure>(None) }).chain(futures::stream::pending())
-    })
 }
 
 #[cfg(test)]

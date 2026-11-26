@@ -15,6 +15,9 @@ use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest};
 
+/// The socket URL names the version of the protocol the test speaks.
+const PROTOCOL: u32 = domovoi_model::PROTOCOL_VERSION;
+
 mod dump;
 
 type Ws = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
@@ -90,7 +93,7 @@ async fn session_cookie(base: &str, code: &str) -> (String, Value) {
 }
 
 async fn open_socket(port: u16, cookie: &str) -> Ws {
-    let mut req = format!("ws://127.0.0.1:{port}/ws?orchestrationProtocol=2").into_client_request().unwrap();
+    let mut req = format!("ws://127.0.0.1:{port}/ws?protocol={PROTOCOL}").into_client_request().unwrap();
     req.headers_mut().insert("cookie", cookie.parse().unwrap());
     tokio_tungstenite::connect_async(req).await.unwrap().0
 }

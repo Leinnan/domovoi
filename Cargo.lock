@@ -11755,22 +11755,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ws-tap"
-version = "0.1.0"
-dependencies = [
- "axum",
- "clap",
- "futures",
- "reqwest 0.13.5",
- "rustls",
- "serde_json",
- "tokio",
- "tokio-tungstenite 0.30.0",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "ws_stream_wasm"
 version = "0.7.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -220,6 +220,10 @@ string_enum! {
 pub struct AuthWebSocketTicketResult {
     pub ticket: String,
     pub expires_at: Timestamp,
+    /// The server's [`crate::PROTOCOL_VERSION`]. A server from before the
+    /// number existed sends none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub protocol: Option<u32>,
 }
 
 // ---- a rejected request ----

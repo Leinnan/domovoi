@@ -1,0 +1,17 @@
+{ "fixture": true,
+  "cases": [
+    { "tag": "peerLinks.list", "payload": {} },
+    { "tag": "peerLinks.link", "payload": { "url": "http://192.0.2.10:3773", "pairingCode": "ABCDEFGHJKLM", "access": "read-only" }, "expect": "failure", "error": "PeerLinkError", "note": "the setting is off" },
+    { "tag": "peerLinks.unlink", "payload": { "environmentId": "env-elsewhere" } },
+    { "tag": "server.updateSettings", "payload": { "patch": { "linkedEnvironmentsEnabled": true, "guestSharingEnabled": true } } },
+    { "tag": "peerLinks.link", "payload": { "url": "http://192.0.2.10:3773", "pairingCode": "ABCDEFGHJKLM", "access": "read-only" }, "expect": "failure", "error": "PeerLinkError", "note": "the setting is on: Domovoi still links nothing" },
+
+    { "tag": "secrets.answerRequest", "payload": { "threadId": "$THREAD", "turnItemId": "$ITEM", "answer": { "type": "decline" } }, "expect": "failure", "error": "SecretRequestError", "note": "not_found: the item is no secret request" },
+    { "tag": "secrets.answerRequest", "payload": { "threadId": "$THREAD", "turnItemId": "nope", "answer": { "type": "save", "secret": "s" } }, "expect": "failure", "error": "SecretRequestError" },
+    { "tag": "secrets.answerRequest", "payload": { "threadId": "nope", "turnItemId": "x", "answer": { "type": "save", "secret": "s" } }, "expect": "failure", "error": "SecretRequestError", "note": "load_failed, with its cause" },
+
+    { "tag": "secrets.answerRequest", "payload": { "threadId": "$THREAD", "turnItemId": "$ITEM", "answer": ["decline"] }, "expect": "failure", "error": "SecretRequestError", "note": "an answer of any shape is taken: what it says matters only for a card that is waiting" },
+
+    { "tag": "orchestration.dispatchCommand", "payload": { "type": "thread.delete", "commandId": "connect-delete", "threadId": "$THREAD" } },
+    { "tag": "secrets.answerRequest", "payload": { "threadId": "$THREAD", "turnItemId": "$ITEM", "answer": { "type": "decline" } }, "expect": "failure", "error": "SecretRequestError", "note": "not_found: the thread is deleted" }
+  ] }

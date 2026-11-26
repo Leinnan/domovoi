@@ -1,0 +1,35 @@
+{
+  "fixture": true,
+  "normalize": [["git version [0-9][^\"]*", "git version <version>"]],
+  "cases": [
+    { "tag": "server.discoverSourceControl", "payload": {} },
+    { "tag": "server.discoverSourceControl", "payload": null, "note": "a payload outside the schema, still answered" },
+
+    { "tag": "subscribeWorktreeSetup", "payload": { "threadId": "nope" }, "expect": "chunk" },
+    { "tag": "worktreeSetup.cancel", "payload": { "threadId": "nope" } },
+    { "tag": "orchestration.launchThread", "payload": { "commandId": "wt-launch", "creationSource": "web", "threadId": "thread-wt", "projectId": "$PROJECT", "title": "In a worktree",
+        "modelSelection": { "instanceId": "claudeAgent", "model": "claude-haiku-5-5" }, "runtimeMode": "approval-required", "interactionMode": "default",
+        "workspaceStrategy": { "type": "worktree", "baseRef": "main" }, "initialMessage": { "messageId": "wt-m1", "text": "hello", "attachments": [] } } },
+    { "tag": "subscribeWorktreeSetup", "payload": { "threadId": "thread-wt" }, "expect": "chunk" },
+    { "tag": "worktreeSetup.cancel", "payload": { "threadId": "thread-wt" }, "note": "over already" },
+    { "tag": "orchestration.launchThread", "payload": { "commandId": "wt-launch-2", "creationSource": "web", "threadId": "thread-wt-named", "projectId": "$PROJECT", "title": "On a named branch",
+        "modelSelection": { "instanceId": "claudeAgent", "model": "claude-haiku-5-5" }, "runtimeMode": "approval-required", "interactionMode": "default",
+        "workspaceStrategy": { "type": "worktree", "baseRef": "main", "branch": "feature/named" }, "initialMessage": { "messageId": "wt-m2", "text": "hello", "attachments": [] } } },
+    { "tag": "subscribeWorktreeSetup", "payload": { "threadId": "thread-wt-named" }, "expect": "chunk" },
+    { "tag": "orchestration.launchThread", "payload": { "commandId": "wt-launch-3", "creationSource": "web", "threadId": "thread-wt-failed", "projectId": "$PROJECT", "title": "From a base that is not there",
+        "modelSelection": { "instanceId": "claudeAgent", "model": "claude-haiku-5-5" }, "runtimeMode": "approval-required", "interactionMode": "default",
+        "workspaceStrategy": { "type": "worktree", "baseRef": "no-such-base" }, "initialMessage": { "messageId": "wt-m3", "text": "hello", "attachments": [] } }, "expect": "failure", "error": "OrchestrationV2ThreadLaunchError" },
+    { "tag": "subscribeWorktreeSetup", "payload": { "threadId": "thread-wt-failed" }, "expect": "chunk" },
+    { "tag": "worktreeSetup.cancel", "payload": { "threadId": "thread-wt-failed" } },
+    { "sh": "cd workspace && printf '{\"scripts\":[{\"name\":\"setup\",\"command\":\"true\",\"runOnWorktreeCreate\":true}]}' > t3.json && printf '[submodule \"lib\"]\\n\\tpath = lib\\n\\turl = ../no-such-repository\\n' > .gitmodules && gitc add -A && gitc commit -qm 'A setup script and submodules'",
+      "tag": "orchestration.launchThread", "payload": { "commandId": "wt-launch-4", "creationSource": "web", "threadId": "thread-wt-setup", "projectId": "$PROJECT", "title": "With a setup script",
+        "modelSelection": { "instanceId": "claudeAgent", "model": "claude-haiku-5-5" }, "runtimeMode": "approval-required", "interactionMode": "default",
+        "workspaceStrategy": { "type": "worktree", "baseRef": "main", "branch": "feature/setup" }, "initialMessage": { "messageId": "wt-m4", "text": "hello", "attachments": [] } } },
+    { "tag": "subscribeWorktreeSetup", "payload": { "threadId": "thread-wt-setup" }, "expect": "chunk" },
+    { "sh": "cd workspace && printf '{\"scripts\":[{\"name\":\"setup\",\"command\":\" \",\"runOnWorktreeCreate\":true}]}' > t3.json && gitc add t3.json && gitc update-index --add --cacheinfo 160000,$(git rev-parse HEAD),lib && gitc commit -qm 'A submodule that cannot be fetched, a script with no command'",
+      "tag": "orchestration.launchThread", "payload": { "commandId": "wt-launch-5", "creationSource": "web", "threadId": "thread-wt-warned", "projectId": "$PROJECT", "title": "With warnings",
+        "modelSelection": { "instanceId": "claudeAgent", "model": "claude-haiku-5-5" }, "runtimeMode": "approval-required", "interactionMode": "default",
+        "workspaceStrategy": { "type": "worktree", "baseRef": "main", "branch": "feature/warned" }, "initialMessage": { "messageId": "wt-m5", "text": "hello", "attachments": [] } } },
+    { "tag": "subscribeWorktreeSetup", "payload": { "threadId": "thread-wt-warned" }, "expect": "chunk" }
+  ]
+}

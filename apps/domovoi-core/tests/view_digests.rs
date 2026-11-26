@@ -5,7 +5,7 @@
 //!
 //! The walks are driven the way a shell drives the core: events in, effects
 //! answered. What the server says comes from the recorded TypeScript-server
-//! sessions (`fixtures/golden`), from the sample payloads next to the typed
+//! sessions (`fixtures/native`), from the sample payloads next to the typed
 //! records (`crates/domovoi-model/tests/samples`), and, when `DOMOVOI_THREADS` names an
 //! export of a server's own threads, from the shells of those threads.
 //! Nothing here reaches into the model's server state, so the same file
@@ -87,7 +87,9 @@ impl<'a> Walk<'a> {
     fn new(name: &str, sink: &'a mut dyn FnMut(Step)) -> Self {
         let mut http = HashMap::new();
         http.insert("/oauth/token".to_owned(), (200, sample("auth.access-token")));
-        http.insert("/api/auth/websocket-ticket/rpc".to_owned(), (200, sample("auth.ws-ticket")));
+        let mut ticket = sample("auth.ws-ticket");
+        ticket["protocol"] = serde_json::json!(domovoi_model::PROTOCOL_VERSION);
+        http.insert("/api/auth/websocket-ticket/rpc".to_owned(), (200, ticket));
         Self { name: name.to_owned(), model: Model::default(), store: HashMap::new(), http, sent: vec![], saved: vec![], refused: vec![], given: HashSet::new(), made: vec![], steps: 0, unasked: 0, sink }
     }
 
@@ -336,7 +338,7 @@ struct Recorded {
 }
 
 fn recorded(name: &str) -> Vec<Recorded> {
-    let path = format!("{}/fixtures/golden/{name}/wire.ndjson", root());
+    let path = format!("{}/fixtures/native/{name}/wire.ndjson", root());
     let text = std::fs::read_to_string(path).expect("the recorded session");
     let mut requests: BTreeMap<(i64, String), Value> = BTreeMap::new();
     let mut out = vec![];
@@ -507,7 +509,7 @@ fn walk_lists(walk: &mut Walk) {
 
 /// The settings the server last sent, as the recording has them.
 fn recorded_settings() -> Value {
-    recorded("ts-session1").into_iter().filter(|frame| frame.kind == "Chunk" && frame.request["tag"] == "subscribeServerConfig").flat_map(|frame| frame.values).filter(|value| value["type"] == "snapshot").map(|value| value["config"]["settings"].clone()).last().expect("a recorded config snapshot")
+    recorded("session1").into_iter().filter(|frame| frame.kind == "Chunk" && frame.request["tag"] == "subscribeServerConfig").flat_map(|frame| frame.values).filter(|value| value["type"] == "snapshot").map(|value| value["config"]["settings"].clone()).last().expect("a recorded config snapshot")
 }
 
 /// The composer of a new thread: the model picker, favorites, hidden
@@ -1091,7 +1093,7 @@ fn exported(path: &str) -> (Vec<Value>, Vec<Value>, Vec<Value>) {
 fn walk_export(path: &str, sink: &mut dyn FnMut(Step)) {
     let (rows, shells, projects) = exported(path);
     let mut walk = Walk::connected("export", sink);
-    for frame in recorded("ts-session1") {
+    for frame in recorded("session1") {
         if frame.kind != "Chunk" {
             continue;
         }
@@ -1176,7 +1178,7 @@ fn walk_export(path: &str, sink: &mut dyn FnMut(Step)) {
 
 /// Every step of the measurement, in order.
 fn steps(sink: &mut dyn FnMut(Step)) {
-    for name in ["ts-session1", "ts-session2-boot"] {
+    for name in ["session1"] {
         let mut walk = Walk::connected(&format!("fixture:{name}"), sink);
         walk.step("connected");
         replay(&mut walk, name);
@@ -1338,7 +1340,7 @@ fn list_view_cost() {
     let (_, shells, projects) = exported(&path);
     let mut sink = |_: Step| {};
     let mut walk = Walk::connected("cost", &mut sink);
-    for frame in recorded("ts-session1").into_iter().filter(|frame| frame.kind == "Chunk" && frame.request["tag"] == "subscribeServerConfig") {
+    for frame in recorded("session1").into_iter().filter(|frame| frame.kind == "Chunk" && frame.request["tag"] == "subscribeServerConfig") {
         walk.chunk(|open| *open == Route::Config, &frame.values);
     }
     let snapshot = json!({ "kind": "snapshot", "snapshot": { "schemaVersion": 2, "snapshotSequence": 10, "threads": shells, "archivedThreads": [], "projects": projects } });

@@ -8,16 +8,14 @@ use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
-use support::expand_record_ids;
 use domovoi_model::typed::{
     AppThread, Checkpoint, CheckpointScope, ContextHandoff, ContextTransfer, ConversationMessage, DomainEvent, EventBody,
     ExecutionNode, PlanArtifact, ProjectedTurnItem, ProviderSession, ProviderThread, ProviderTurn, RecordKind, Run, RunAttempt,
     RuntimeRequest, StoredEvent, Subagent, ThreadProjection, ThreadShell, ThreadStreamItem, TurnItem,
 };
 
-mod support;
 
-const FIXTURES: [&str; 2] = ["ts-session1", "ts-session2-boot"];
+const FIXTURES: [&str; 1] = ["session1"];
 
 /// The names of the fifteen collections of a thread's projection, in its order.
 fn collections() -> [&'static str; 15] {
@@ -59,7 +57,7 @@ const EVENT_TYPES: [&str; 46] = [
 ];
 
 fn fixture(name: &str) -> Vec<Value> {
-    let path = format!("{}/../../fixtures/golden/{name}/wire.ndjson", env!("CARGO_MANIFEST_DIR"));
+    let path = format!("{}/../../fixtures/native/{name}/wire.ndjson", env!("CARGO_MANIFEST_DIR"));
     std::fs::read_to_string(&path).unwrap().lines().map(|line| serde_json::from_str(line).unwrap()).collect()
 }
 
@@ -89,8 +87,7 @@ fn streamed() -> Vec<(String, Value)> {
     items
 }
 
-/// Every orchestration record in the fixtures, by kind, as it was sent (with
-/// a snapshot's compact ids expanded, which is how any reader sees it).
+/// Every orchestration record in the fixtures, by kind, as it was sent.
 fn recorded() -> BTreeMap<&'static str, Vec<Value>> {
     let mut records: BTreeMap<&'static str, Vec<Value>> = BTreeMap::new();
     for (rpc, value) in streamed() {
@@ -103,23 +100,9 @@ fn recorded() -> BTreeMap<&'static str, Vec<Value>> {
     records
 }
 
-/// A `subscribeThread` item as any reader sees it: a snapshot's compact ids
-/// expanded and the `ids` table gone.
-fn expanded(item: &Value) -> Value {
-    let mut item = item.clone();
-    let fields = item.as_object_mut().unwrap();
-    if let Some(Value::Array(ids)) = fields.remove("ids") {
-        expand_record_ids(fields["projection"].as_object_mut().unwrap(), &ids);
-    }
-    item
-}
-
 fn collect_thread_item(item: &Value, records: &mut BTreeMap<&'static str, Vec<Value>>) {
     if item["kind"] == "snapshot" {
-        let mut projection = item["projection"].as_object().unwrap().clone();
-        if let Some(ids) = item.get("ids").and_then(Value::as_array) {
-            expand_record_ids(&mut projection, ids);
-        }
+        let projection = item["projection"].as_object().unwrap().clone();
         records.entry(THREAD).or_default().push(projection["thread"].clone());
         for kind in collections().into_iter().chain([VISIBLE_TURN_ITEMS]) {
             if let Some(list) = projection.get(kind).and_then(Value::as_array) {
@@ -302,13 +285,11 @@ fn recorded_thread_streams_round_trip_through_their_types() {
     let items: Vec<Value> = streamed().into_iter().filter(|(rpc, _)| rpc == "orchestration.subscribeThread").map(|(_, item)| item).collect();
     let mut item_kinds: BTreeMap<String, usize> = BTreeMap::new();
     let mut event_types: BTreeMap<String, usize> = BTreeMap::new();
-    let mut compact_snapshots = 0;
     let mut failures: BTreeMap<String, usize> = BTreeMap::new();
     for item in &items {
         let kind = item["kind"].as_str().unwrap();
         *item_kinds.entry(kind.to_owned()).or_default() += 1;
-        compact_snapshots += usize::from(item.get("ids").is_some());
-        let sent = expanded(item);
+        let sent = item.clone();
         assert_eq!(ThreadStreamItem::from_value(sent.clone()).ok(), serde_json::from_value(sent.clone()).ok(), "taking parsed JSON apart gives the same item as reading it");
         if let Err(why) = round_trip::<ThreadStreamItem>(&sent) {
             *failures.entry(format!("stream item `{kind}` {why}")).or_default() += 1;
@@ -317,10 +298,6 @@ fn recorded_thread_streams_round_trip_through_their_types() {
             if let Err(why) = round_trip::<ThreadProjection>(&sent["projection"]) {
                 *failures.entry(format!("projection {why}")).or_default() += 1;
             }
-            // The compact form decodes to the same snapshot as the expanded one.
-            let compact: ThreadStreamItem = serde_json::from_value(item.clone()).unwrap();
-            assert_eq!(ThreadStreamItem::from_value(item.clone()).unwrap(), compact);
-            assert_eq!(serde_json::to_value(&compact).unwrap(), sent, "a snapshot's compact ids expand on decode");
         }
         if kind == "event" {
             let event = &item["event"];
@@ -342,7 +319,6 @@ fn recorded_thread_streams_round_trip_through_their_types() {
     for (kind, count) in &item_kinds {
         println!("  {kind:<34} {count}");
     }
-    println!("  (snapshots sent with a compact id table: {compact_snapshots})");
     println!("events checked, by type:");
     for (event_type, count) in &event_types {
         println!("  {event_type:<34} {count}");
@@ -355,7 +331,6 @@ fn recorded_thread_streams_round_trip_through_their_types() {
     for kind in ["snapshot", "event", "synchronized"] {
         assert!(item_kinds.get(kind).copied().unwrap_or(0) > 0, "the fixtures contain `{kind}` items, but none was checked");
     }
-    assert!(compact_snapshots > 0, "the fixtures contain snapshots with a compact id table");
     for event_type in event_types.keys() {
         assert!(EVENT_TYPES.contains(&event_type.as_str()), "the fixtures contain an event type the schema does not: {event_type}");
     }

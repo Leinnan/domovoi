@@ -1,16 +1,13 @@
-//! Calls every RPC listed in `conformance/rpc-calls/*.json` (one file per
+//! Calls every RPC listed in `apps/server/tests/cases/calls/*.json` (one file per
 //! area, run in file-name order) against the real
 //! `domovoi-server` binary and checks each answer's kind (first chunk / success /
 //! typed failure). Defects and unregistered methods always fail.
-//!
-//! When the t3code checkout and Node 26+ are available, every request and
-//! answer is also decoded with t3code's own schemas (`conformance/wire-check.ts`).
 //!
 //! Case fields: `tag`, `payload`, `expect` (`chunk` | `success` | `failure`),
 //! optional `error` (the failure's `_tag`). Strings in payloads may use
 //! `$WORKSPACE`, `$PROJECT`, `$THREAD`, `$HOME` and `$ITEM` (the thread's first turn item).
 //!
-//! `conformance/rpc-groups/<name>.json` holds, group by group, the calls that
+//! `apps/server/tests/cases/groups/<name>.json` holds, group by group, the calls that
 //! reach every answer and every failure of a group's methods; see
 //! [`every_rpc_group_answers_as_recorded`].
 
@@ -21,6 +18,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest};
+
+/// The socket URL names the version of the protocol the test speaks.
+const PROTOCOL: u32 = domovoi_model::PROTOCOL_VERSION;
 
 mod dump;
 
@@ -52,7 +52,7 @@ fn http_client() -> reqwest::Client {
 
 type Ws = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
-/// The checkout whose `conformance` folder is read: this one, or with
+/// The checkout whose cases are read: this one, or with
 /// `DOMOVOI_WORKSPACE_ROOT` another (a test built here, run for a copy).
 fn workspace_root() -> PathBuf {
     let root = std::env::var("DOMOVOI_WORKSPACE_ROOT").map(PathBuf::from).unwrap_or_else(|_| Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."));
@@ -127,9 +127,9 @@ fn start_env(dir: &Path, transport: Transport, env: &[(String, String)]) -> Serv
         // Agent-session scans read this empty home, never the real ~/.claude or ~/.codex.
         .env("DOMOVOI_AGENT_SESSIONS_HOME", dir.join("agent-home"))
         // The ACP registry the cases search: a file, not the network.
-        .env("DOMOVOI_ACP_REGISTRY_URL", format!("file://{}/../../conformance/acp-registry.json", env!("CARGO_MANIFEST_DIR")))
+        .env("DOMOVOI_ACP_REGISTRY_URL", format!("file://{}/tests/cases/acp-registry.json", env!("CARGO_MANIFEST_DIR")))
         // The usage rate table: a file in LiteLLM's format, not the network.
-        .env("DOMOVOI_USAGE_RATES_URL", format!("file://{}/../../conformance/usage-rates.json", env!("CARGO_MANIFEST_DIR")))
+        .env("DOMOVOI_USAGE_RATES_URL", format!("file://{}/tests/cases/usage-rates.json", env!("CARGO_MANIFEST_DIR")))
         // No headless browser: a server preview tab a case opens loads nothing.
         .env("DOMOVOI_PREVIEW_BROWSER_BINARY", "/nonexistent/chrome")
         .envs(env.iter().map(|(key, value)| (key.as_str(), value.as_str())))
@@ -206,7 +206,7 @@ async fn connect_with_cookie(server: &Server) -> (Ws, String) {
         .unwrap();
     assert_eq!(res.status(), 200);
     let cookie = res.headers().get("set-cookie").unwrap().to_str().unwrap().split(';').next().unwrap().to_owned();
-    let mut req = format!("ws://127.0.0.1:{}/ws?orchestrationProtocol=2", server.port).into_client_request().unwrap();
+    let mut req = format!("ws://127.0.0.1:{}/ws?protocol={PROTOCOL}", server.port).into_client_request().unwrap();
     req.headers_mut().insert("cookie", cookie.parse().unwrap());
     (tokio_tungstenite::connect_async(req).await.unwrap().0, cookie)
 }
@@ -630,7 +630,6 @@ async fn all_cases(transport: Transport) {
     let workspace = workspace.canonicalize().unwrap();
     let server = start_with(&dir, transport);
     let mut ws = connect(&server).await;
-    let mut transcript: Vec<Value> = vec![];
     let mut id = 0u64;
 
     // Fixture data: a project and a thread whose turn fails at once.
@@ -676,7 +675,7 @@ async fn all_cases(transport: Transport) {
         ("$ITEM", item),
         ("$HOME", dirs_home()),
     ];
-    let mut files: Vec<PathBuf> = std::fs::read_dir(workspace_root().join("conformance/rpc-calls"))
+    let mut files: Vec<PathBuf> = std::fs::read_dir(workspace_root().join("apps/server/tests/cases/calls"))
         .unwrap()
         .map(|e| e.unwrap().path())
         .filter(|p| p.extension().is_some_and(|e| e == "json"))
@@ -695,13 +694,10 @@ async fn all_cases(transport: Transport) {
         let mut payload = case["payload"].clone();
         substitute(&mut payload, &vars);
         id += 1;
-        let request = json!({ "_tag": "Request", "id": id.to_string(), "tag": tag, "payload": payload, "headers": [] });
-        transcript.push(json!({ "kind": "ws", "conn": 0, "dir": "c2s", "frame": request }));
         let Some(reply) = call(&mut ws, id, tag, &payload).await else {
             problems.push(format!("{tag}: no reply"));
             continue;
         };
-        transcript.push(json!({ "kind": "ws", "conn": 0, "dir": "s2c", "frame": reply }));
         let mut answer = reply.clone();
         // Request ids count the calls before this one, the waiting ones included.
         if let Some(fields) = answer.as_object_mut() {
@@ -736,7 +732,6 @@ async fn all_cases(transport: Transport) {
         dump::write_value(&dir, "rpc-calls-answers", &json!(answers), started);
         dump::write(&dir, "rpc-calls", started);
     }
-    schema_check(&transcript, &format!("{transport:?}"));
     eprintln!("{} calls answered as expected", cases.len());
 }
 
@@ -746,29 +741,6 @@ fn truncate(s: &str) -> String {
 
 fn dirs_home() -> String {
     std::env::var("HOME").unwrap_or_else(|_| "/".into())
-}
-
-fn schema_check(transcript: &[Value], name: &str) {
-    let root = workspace_root();
-    let node = std::env::var("DOMOVOI_NODE").unwrap_or_else(|_| "node".into());
-    let version = Command::new(&node).arg("--version").output().ok().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned());
-    let major: u32 = version.as_deref().and_then(|v| v.trim_start_matches('v').split('.').next()?.parse().ok()).unwrap_or(0);
-    if !root.join(".reference/t3code/packages/contracts").exists() || major < 26 {
-        eprintln!("schema check skipped (needs .reference/t3code and Node 26+, found {version:?})");
-        return;
-    }
-    let file = std::env::temp_dir().join(format!("domovoi-calls-{name}-{}.ndjson", std::process::id()));
-    let out: String = transcript.iter().map(|r| format!("{r}\n")).collect();
-    std::fs::write(&file, out).unwrap();
-    let res = Command::new(&node).arg(root.join("conformance/wire-check.ts")).arg(&file).arg("--quiet").output().unwrap();
-    if std::env::var("DOMOVOI_KEEP_TRANSCRIPT").is_ok() {
-        eprintln!("transcript kept at {}", file.display());
-    } else {
-        let _ = std::fs::remove_file(&file);
-    }
-    let text = String::from_utf8_lossy(&res.stdout);
-    assert!(res.status.success(), "t3code schema check failed:\n{text}");
-    eprintln!("{}", text.trim());
 }
 
 /// Scratch flow end to end: a "No project" thread gets its own folder, which
@@ -859,7 +831,7 @@ async fn terminal_writes_keep_their_order() {
     assert!(output.contains("ordered-42\r\n"), "the command ran (Enter arrived after the text): {output:?}");
 }
 
-/// What a file of `conformance/rpc-groups` asks for besides its calls.
+/// What a file of `apps/server/tests/cases/groups` asks for besides its calls.
 #[derive(serde::Deserialize, Default)]
 #[serde(default, deny_unknown_fields)]
 struct Group {
@@ -895,19 +867,16 @@ struct GroupCase {
     anonymous: bool,
     /// The expected HTTP status.
     status: Option<u16>,
-    /// Leave the call out of the t3code schema check (say why in `note`).
-    skip_schema: bool,
     /// Why the case is there.
     note: Option<String>,
 }
 
 /// Sends a request and reads its stream to the end: every value, then the exit frame.
-async fn call_all(ws: &mut Ws, id: u64, tag: &str, payload: &Value) -> Option<(Vec<Value>, Value, Vec<Value>)> {
+async fn call_all(ws: &mut Ws, id: u64, tag: &str, payload: &Value) -> Option<(Vec<Value>, Value)> {
     let req = json!({ "_tag": "Request", "id": id.to_string(), "tag": tag, "payload": payload, "headers": [] });
     ws.send(Message::Text(req.to_string().into())).await.unwrap();
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     let mut values = vec![];
-    let mut frames = vec![];
     loop {
         let msg = match tokio::time::timeout_at(deadline, ws.next()).await {
             Ok(Some(Ok(m))) => m,
@@ -927,14 +896,13 @@ async fn call_all(ws: &mut Ws, id: u64, tag: &str, payload: &Value) -> Option<(V
         if v["requestId"] != json!(id.to_string()) && v["_tag"] != "Defect" {
             continue;
         }
-        frames.push(v.clone());
         if v["_tag"] == "Chunk" {
             values.extend(v["values"].as_array().cloned().unwrap_or_default());
             let ack = json!({ "_tag": "Ack", "requestId": id.to_string() });
             ws.send(Message::Text(ack.to_string().into())).await.unwrap();
             continue;
         }
-        return Some((values, v, frames));
+        return Some((values, v));
     }
 }
 
@@ -966,7 +934,7 @@ fn replace_in(v: &mut Value, patterns: &[(regex::Regex, String)]) {
     }
 }
 
-/// Group by group (`conformance/rpc-groups/<name>.json`, with `DOMOVOI_GROUPS=a,b`
+/// Group by group (`apps/server/tests/cases/groups/<name>.json`, with `DOMOVOI_GROUPS=a,b`
 /// only those), every method of the group is called for each answer and each
 /// failure it can give. Each group gets a folder (`$DIR`) and a server of its
 /// own, whose `PATH` begins with `$DIR/bin` and whose `HOME` is
@@ -982,7 +950,7 @@ fn replace_in(v: &mut Value, patterns: &[(regex::Regex, String)]) {
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "six to ten minutes: run with `just rpc-groups`"]
 async fn every_rpc_group_answers_as_recorded() {
-    let folder = workspace_root().join("conformance/rpc-groups");
+    let folder = workspace_root().join("apps/server/tests/cases/groups");
     let mut files: Vec<PathBuf> = std::fs::read_dir(&folder).unwrap().map(|e| e.unwrap().path()).filter(|p| p.extension().is_some_and(|e| e == "json")).collect();
     files.sort();
     let only: Option<Vec<String>> = std::env::var("DOMOVOI_GROUPS").ok().map(|names| names.split(',').map(str::to_owned).collect());
@@ -1070,7 +1038,6 @@ async fn group_cases(name: &str, group: Group, folder: &Path) -> (usize, usize, 
     }
 
     let patterns: Vec<(regex::Regex, String)> = group.normalize.iter().map(|(pattern, stands_for)| (regex::Regex::new(pattern).expect("pattern"), stands_for.clone())).collect();
-    let mut transcript: Vec<Value> = vec![];
     let mut problems = vec![];
     let mut answers: Vec<Value> = vec![];
     let mut failures = 0;
@@ -1118,16 +1085,11 @@ async fn group_cases(name: &str, group: Group, folder: &Path) -> (usize, usize, 
         let Some(tag) = case.tag.as_deref() else { continue };
         methods.insert(tag.to_owned());
         id += 1;
-        let request = json!({ "_tag": "Request", "id": id.to_string(), "tag": tag, "payload": payload, "headers": [] });
         let (reply, mut answer, value) = if case.all {
-            let Some((values, exit, frames)) = call_all(&mut ws, id, tag, &payload).await else {
+            let Some((values, exit)) = call_all(&mut ws, id, tag, &payload).await else {
                 problems.push(format!("{tag}: no end of the stream"));
                 continue;
             };
-            if !case.skip_schema {
-                transcript.push(json!({ "kind": "ws", "conn": 0, "dir": "c2s", "frame": request }));
-                transcript.extend(frames.into_iter().map(|frame| json!({ "kind": "ws", "conn": 0, "dir": "s2c", "frame": frame })));
-            }
             let first = values.first().cloned().unwrap_or(Value::Null);
             let mut end = exit.clone();
             if let Some(fields) = end.as_object_mut() {
@@ -1139,10 +1101,6 @@ async fn group_cases(name: &str, group: Group, folder: &Path) -> (usize, usize, 
                 problems.push(format!("{tag}: no reply to {}", truncate(&payload.to_string())));
                 continue;
             };
-            if !case.skip_schema {
-                transcript.push(json!({ "kind": "ws", "conn": 0, "dir": "c2s", "frame": request }));
-                transcript.push(json!({ "kind": "ws", "conn": 0, "dir": "s2c", "frame": reply }));
-            }
             let value = if reply["_tag"] == "Chunk" { reply["values"][0].clone() } else { reply["exit"]["value"].clone() };
             (reply.clone(), reply, value)
         };
@@ -1182,7 +1140,6 @@ async fn group_cases(name: &str, group: Group, folder: &Path) -> (usize, usize, 
     // Written before anything is asserted: a dump of what was answered is how a wrong expectation is put right.
     dump::write_value(&dir, &format!("rpc-group-{name}-answers"), &json!(answers), started);
     assert!(problems.is_empty(), "{name}: {} of {} calls wrong:\n{}", problems.len(), group.cases.len(), problems.join("\n"));
-    schema_check(&transcript, &format!("group-{name}"));
     eprintln!("group {name}: {} answers ({failures} failures) of {} methods", answers.len(), methods.len());
     (answers.len(), failures, methods.len())
 }

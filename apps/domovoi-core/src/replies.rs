@@ -116,7 +116,7 @@ fn shell_chunk(model: &mut Model, item: Value) -> Vec<Cmd> {
         }
     };
     match item {
-        // Identity-roots snapshots only refresh project identities (t3code ShellStream).
+        // Identity-roots snapshots only refresh project identities.
         ShellStreamItem::Snapshot { snapshot, resolved_repository_identity_roots: Some(_) } => {
             for mut project in snapshot.projects {
                 crate::project_icons::shell_project(&mut model.project_icons, &mut project);
@@ -217,41 +217,8 @@ fn reach(thread: &Thread, applied: &Applied) -> Reach {
     }
 }
 
-/// domovoi-server writes the patch of a Codex edit on its `file_change` item as
-/// `diff`. The schema's field for an edit's diff is `diffStr`, the one a
-/// thread keeps: the patch is moved there.
-fn name_patches_as_the_schema_does(item: &mut Value) {
-    fn rename(turn_item: &mut Value) {
-        if turn_item["type"] == "file_change"
-            && let Some(fields) = turn_item.as_object_mut()
-            && !fields.contains_key("diffStr")
-            && let Some(patch) = fields.remove("diff")
-        {
-            fields.insert("diffStr".into(), patch);
-        }
-    }
-    if item["kind"] == "event" {
-        if item["event"]["type"] == "turn-item.updated"
-            && let Some(turn_item) = item.get_mut("event").and_then(|event| event.get_mut("payload"))
-        {
-            rename(turn_item);
-        }
-        return;
-    }
-    let Some(projection) = item.get_mut("projection") else { return };
-    for turn_item in projection.get_mut("turnItems").and_then(Value::as_array_mut).into_iter().flatten() {
-        rename(turn_item);
-    }
-    for visible in projection.get_mut("visibleTurnItems").and_then(Value::as_array_mut).into_iter().flatten() {
-        if let Some(turn_item) = visible.get_mut("item") {
-            rename(turn_item);
-        }
-    }
-}
-
 /// One item of a thread's stream, read from the JSON it arrived as.
-fn stream_item(mut item: Value) -> serde_json::Result<ThreadStreamItem> {
-    name_patches_as_the_schema_does(&mut item);
+fn stream_item(item: Value) -> serde_json::Result<ThreadStreamItem> {
     ThreadStreamItem::from_value(item)
 }
 

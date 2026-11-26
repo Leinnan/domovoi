@@ -1,6 +1,5 @@
-//! Client side of Effect RPC (JSON serialization) as t3code's client-runtime
-//! speaks it: numbered requests, chunk acknowledgements, interrupts, and
-//! frameParts reassembly.
+//! Client side of the RPC socket (Effect RPC's JSON serialization):
+//! numbered requests, chunk acknowledgements and interrupts.
 
 #![expect(clippy::disallowed_types, clippy::disallowed_macros, reason = "the RPC framing: a frame is read as JSON and taken apart, and a failure's cause is kept for its message")]
 
@@ -8,10 +7,6 @@ use effect_rpc::message::{FromServer, RequestId};
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::collections::HashMap;
-
-/// The most a frame sent in parts may hold (a long thread's history is a
-/// few megabytes).
-const MAX_FRAME_BYTES: usize = 256 * 1024 * 1024;
 
 /// Where a request's replies go.
 #[derive(Debug, Clone, PartialEq)]
@@ -107,7 +102,6 @@ pub enum Route {
 pub struct RpcClient {
     next_id: u64,
     pending: HashMap<String, Route>,
-    parts: String,
 }
 
 /// A decoded server message with its request's purpose.
@@ -177,28 +171,11 @@ impl RpcClient {
 
     pub fn reset(&mut self) {
         self.pending.clear();
-        self.parts.clear();
     }
 
-    /// Decodes one WebSocket text frame (joining `frameParts` if present).
+    /// Decodes one WebSocket text frame.
     pub fn receive(&mut self, text: &str) -> Vec<Reply> {
-        let joined;
-        let whole = if let Some(part) = text.strip_prefix('\u{1e}') {
-            // A frame that never ends must not grow without bound: past the
-            // limit its parts are dropped (the request it answers times out).
-            if self.parts.len() + part.len() > MAX_FRAME_BYTES {
-                self.parts = String::new();
-                return vec![];
-            }
-            self.parts.push_str(part);
-            return vec![];
-        } else if self.parts.is_empty() {
-            text
-        } else {
-            joined = std::mem::take(&mut self.parts) + text;
-            &joined
-        };
-        let Ok(value) = serde_json::from_str::<Value>(whole) else { return vec![] };
+        let Ok(value) = serde_json::from_str::<Value>(text) else { return vec![] };
         let messages: Vec<Value> = match value {
             Value::Array(a) => a,
             v => vec![v],
@@ -265,14 +242,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn routes_chunks_and_exits_and_joins_parts() {
+    fn routes_chunks_and_exits() {
         let mut c = RpcClient::default();
         let (id, frame) = c.request("orchestration.subscribeShell", &json!({}), Route::Shell);
         assert_eq!(serde_json::from_str::<Value>(&frame).unwrap(), json!({ "_tag": "Request", "id": id, "tag": "orchestration.subscribeShell", "payload": {}, "headers": [] }));
         let chunk = json!({ "_tag": "Chunk", "requestId": id, "values": [{ "kind": "synchronized" }] }).to_string();
-        let (a, b) = chunk.split_at(10);
-        assert!(c.receive(&format!("\u{1e}{a}")).is_empty());
-        match &c.receive(b)[..] {
+        match &c.receive(&chunk)[..] {
             [Reply::Chunk { route: Route::Shell, values, .. }] => assert_eq!(values[0]["kind"], "synchronized"),
             other => panic!("{other:?}"),
         }

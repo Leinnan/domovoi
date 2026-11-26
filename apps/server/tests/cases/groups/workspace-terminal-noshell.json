@@ -1,0 +1,9 @@
+{
+  "env": { "SHELL": "$DIR/bin/noshell" },
+  "cases": [
+    { "tag": "terminal.open", "payload": { "threadId": "thread-a", "terminalId": "term-1", "cwd": "$DIR/work" }, "expect": "failure", "error": "TerminalCwdError", "note": "the unchanged server answers with `TerminalCwdError`, which in t3code is a union of three errors and no tag" },
+    { "tag": "terminal.attach", "payload": { "threadId": "thread-a", "terminalId": "term-2", "cwd": "$DIR/work" }, "expect": "failure", "error": "TerminalCwdError", "note": "the unchanged server answers with `TerminalCwdError`, which in t3code is a union of three errors and no tag" },
+    { "tag": "subscribeTerminalMetadata", "payload": {}, "expect": "chunk", "note": "a terminal that did not start is not listed" },
+    { "tag": "terminal.observe", "payload": { "threadId": "thread-a", "terminalId": "term-1" }, "expect": "failure", "error": "TerminalSessionLookupError" }
+  ]
+}

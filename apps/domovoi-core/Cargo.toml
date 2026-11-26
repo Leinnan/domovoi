@@ -1,6 +1,6 @@
 [package]
 name = "domovoi_core"
-description = "Crux client core for t3code-compatible servers: connection, Effect RPC, projects, threads, approvals"
+description = "Crux client core of the Domovoi apps: connection, RPC, projects, threads, approvals"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

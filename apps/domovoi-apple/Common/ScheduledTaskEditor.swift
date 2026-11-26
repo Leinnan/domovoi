@@ -26,7 +26,7 @@ struct ScheduledTaskEditor: View {
     }
 
     /// A new task in `projectId`: daily at 9:00 in a new thread, with the
-    /// composer's model, in full access (as t3code): nobody is there to
+    /// composer's model, in full access: nobody is there to
     /// answer an unattended run's questions.
     static func new(projectId: String) -> ScheduledTaskEdit {
         ScheduledTaskEdit(id: "", name: "", prompt: "", projectId: projectId, scheduleKind: "fixed_time", intervalMinutes: 60, timeOfDay: "09:00",

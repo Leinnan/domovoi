@@ -1,5 +1,5 @@
-//! Operations: `/health` and `/ready`, compressed HTTP responses, the RPC
-//! socket's orchestration protocol check (HTTP 426), and `domovoi-server doctor`.
+//! Operations: `/health` and `/ready`, compressed HTTP responses, what the RPC
+//! socket tells a client of another protocol version, and `domovoi-server doctor`.
 
 #![cfg_attr(windows, allow(dead_code, reason = "the tests using these helpers script fake CLIs as shell scripts, so they run on Unix only"))]
 
@@ -9,6 +9,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+
+/// The socket URL names the version of the protocol the test speaks.
+const PROTOCOL: u32 = domovoi_model::PROTOCOL_VERSION;
 
 /// iroh (through domovoi-remote) turns on reqwest's rustls backend without a crypto
 /// provider, so every client needs one installed first.
@@ -110,31 +113,85 @@ async fn health_ready_compression_and_protocol_check() {
     let environment = client.get(format!("{base}/.well-known/t3/environment")).header("accept-encoding", "gzip").send().await.unwrap();
     assert_eq!(environment.headers().get("content-encoding").and_then(|v| v.to_str().ok()), Some("gzip"));
     let environment: Value = serde_json::from_slice(&gunzip(&environment.bytes().await.unwrap())).unwrap();
-    assert_eq!(environment["orchestrationProtocolVersion"], 2);
+    assert_eq!(environment["orchestrationProtocolVersion"], PROTOCOL);
 
-    // The socket refuses another protocol before it asks for a credential.
-    for query in ["", "?orchestrationProtocol=1", "?orchestrationProtocol=two"] {
+    // The socket asks for a credential first, whatever protocol the URL names.
+    for query in [String::new(), "?orchestrationProtocol=2".to_owned(), format!("?protocol={PROTOCOL}")] {
         let req = format!("ws://127.0.0.1:{}/ws{query}", server.port).into_client_request().unwrap();
         let Err(tokio_tungstenite::tungstenite::Error::Http(res)) = tokio_tungstenite::connect_async(req).await else {
-            panic!("the socket opened for {query:?}");
+            panic!("the socket opened without a credential for {query:?}");
         };
-        assert_eq!(res.status(), 426, "{query:?}");
-        let body: Value = serde_json::from_slice(res.body().as_deref().unwrap()).unwrap();
-        assert_eq!(
-            body,
-            serde_json::json!({
-                "code": "orchestration_protocol_incompatible",
-                "message": "Update this client to one that supports orchestration protocol 2.",
-                "orchestrationProtocolVersion": 2,
-            })
-        );
-        assert!(res.headers().get("content-encoding").is_none());
+        assert_eq!(res.status(), 401, "{query:?}");
     }
-    let req = format!("ws://127.0.0.1:{}/ws?orchestrationProtocol=2", server.port).into_client_request().unwrap();
-    let Err(tokio_tungstenite::tungstenite::Error::Http(res)) = tokio_tungstenite::connect_async(req).await else {
-        panic!("the socket opened without a credential");
-    };
-    assert_eq!(res.status(), 401);
+}
+
+/// A signed-in client of another protocol version is told which side to
+/// update, as a defect (the one thing every version of the app shows), at
+/// once and again for whatever it sends; nothing it asks for is answered.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_client_of_another_protocol_version_is_told_to_update() {
+    use futures::StreamExt;
+    let (server, mut current) = start_signed_in("protocol", &[]).await;
+    send(&mut current, "1", "subscribeServerLifecycle", serde_json::json!({})).await;
+    let first = next_frame(&mut current).await;
+    assert_eq!((first["_tag"].as_str(), first["requestId"].as_str()), (Some("Chunk"), Some("1")), "this version is served: {first}");
+
+    let token = bearer_token(&server).await;
+    // An app from before the versions were compared, an older one that names
+    // its version, and one newer than the server.
+    for (query, advice) in [
+        ("orchestrationProtocol=2".to_owned(), "Update Domovoi on this device."),
+        (format!("protocol={}", PROTOCOL - 1), "Update Domovoi on this device."),
+        (format!("protocol={}", PROTOCOL + 1), "Update domovoi-server on the machine it runs on."),
+    ] {
+        let mut req = format!("ws://127.0.0.1:{}/ws?{query}", server.port).into_client_request().unwrap();
+        req.headers_mut().insert("authorization", format!("Bearer {token}").parse().unwrap());
+        let mut ws = tokio_tungstenite::connect_async(req).await.unwrap_or_else(|e| panic!("the socket did not open for {query}: {e}")).0;
+        let told = next_frame(&mut ws).await;
+        assert_eq!(told["_tag"], "Defect", "{query}: {told}");
+        assert!(told["defect"].as_str().unwrap().ends_with(advice), "{query}: {told}");
+        send(&mut ws, "1", "subscribeServerLifecycle", serde_json::json!({})).await;
+        assert_eq!(next_frame(&mut ws).await, told, "{query}: every frame is answered with the same advice");
+        let nothing_more = tokio::time::timeout(Duration::from_millis(300), ws.next()).await;
+        assert!(nothing_more.is_err(), "{query}: the request itself is not served");
+    }
+}
+
+/// The next text frame, parsed.
+async fn next_frame(ws: &mut Ws) -> Value {
+    use futures::StreamExt;
+    loop {
+        let message = tokio::time::timeout(Duration::from_secs(10), ws.next()).await.expect("a frame").expect("the socket is open").unwrap();
+        if let tokio_tungstenite::tungstenite::Message::Text(text) = message {
+            return serde_json::from_str(&text).unwrap();
+        }
+    }
+}
+
+/// A bearer token for a new device, from a pairing code minted beside the running server.
+async fn bearer_token(server: &Server) -> String {
+    let out = Command::new(env!("CARGO_BIN_EXE_domovoi-server"))
+        .env("DOMOVOI_NO_SESSION_IMPORT", "1")
+        .env("DOMOVOI_NO_SHELL_ENV", "1")
+        .args(["--home-dir", server.home.to_str().unwrap(), "--port", &server.port.to_string(), "pair"])
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&out.stdout).into_owned();
+    let code = text.lines().find_map(|l| l.split("#token=").nth(1)).expect("a pairing code").trim().to_owned();
+    let body = format!(
+        "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Atoken-exchange&subject_token={code}&subject_token_type=urn%3At3%3Aparams%3Aoauth%3Atoken-type%3Aenvironment-bootstrap&requested_token_type=urn%3Aietf%3Aparams%3Aoauth%3Atoken-type%3Aaccess_token&client_device_type=mobile"
+    );
+    let res: Value = http_client()
+        .post(format!("http://127.0.0.1:{}/oauth/token", server.port))
+        .header("content-type", "application/x-www-form-urlencoded")
+        .body(body)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    res["access_token"].as_str().expect("an access token").to_owned()
 }
 
 /// Runs `domovoi-server doctor --json` with `home` and `path` as PATH.
@@ -274,7 +331,7 @@ async fn start_signed_in(tag: &str, env: &[(&str, String)]) -> (Server, Ws) {
         .await
         .unwrap();
     let cookie = res.headers().get("set-cookie").unwrap().to_str().unwrap().split(';').next().unwrap().to_owned();
-    let mut req = format!("ws://127.0.0.1:{port}/ws?orchestrationProtocol=2").into_client_request().unwrap();
+    let mut req = format!("ws://127.0.0.1:{port}/ws?protocol={PROTOCOL}").into_client_request().unwrap();
     req.headers_mut().insert("cookie", cookie.parse().unwrap());
     (server, tokio_tungstenite::connect_async(req).await.unwrap().0)
 }

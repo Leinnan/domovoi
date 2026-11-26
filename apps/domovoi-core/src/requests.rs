@@ -803,7 +803,7 @@ mod tests {
         assert_eq!(sent(&server_update_settings(SettingsPatch::Settings(&one)))["payload"], json!({ "patch": { "defaultAutoPull": true } }));
     }
 
-    /// `secrets.answerRequest` as t3code's schema has it; its value shows in
+    /// `secrets.answerRequest` as the server reads it; its value shows in
     /// no debug output.
     #[test]
     fn a_secret_answer_carries_the_value_only_in_its_payload() {

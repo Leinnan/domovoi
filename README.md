@@ -7,9 +7,7 @@ and Windows apps, wherever you are.
 
 It has two parts:
 
-- **`domovoi-server`**: an execution server written in Rust. It speaks the same
-  wire protocol as [t3code](https://github.com/pingdotgg/t3code)'s server, so
-  the unmodified t3code web client works against it too.
+- **`domovoi-server`**: an execution server written in Rust.
 - **Native clients**: SwiftUI apps for macOS, iOS and iPadOS, a Kotlin app for
   Android, and a Rust desktop app built with [Iced](https://iced.rs) for Linux,
   Windows and macOS. All of them share one Rust client core built on
@@ -39,13 +37,13 @@ account or port forwarding.
 - **Google Antigravity**, signed in with the server machine's own `agy`
   sign-in (`agy` keeps one Google account per user, shared with the terminal
   and the Antigravity IDE; added instances use an API key or Vertex). Sign in
-  and install it from Settings > Providers in any client (or the t3code web
-  client): when the browser isn't on the server's machine, paste Google's
-  redirect URL back into the field. The account's models and thinking levels
+  and install it from Settings > Providers in any client: when the browser
+  isn't on the server's machine, paste Google's redirect URL back into the
+  field. The account's models and thinking levels
   show in every client.
 - **ACP agents and registry**: add any Agent Client Protocol agent by command
   or install one from the ACP registry (platform binary, npm or `uvx`), plus
-  t3code's Grok, Kiro and fx drivers.
+  drivers for Grok, Kiro and fx.
 - **Scheduled tasks and webhooks**: run prompts on an interval, at fixed times
   of day and weekdays, once at a set time, or when a webhook URL
   (`/api/hooks/…`) receives a request (with HMAC-SHA256 signature verification,
@@ -98,17 +96,16 @@ account or port forwarding.
 | `apps/domovoi-windows` | `Domovoi.exe`, the native Windows app (WinUI 3 on `windows-reactor`, in progress) |
 | `apps/server-launcher` | `domovoi-server-launcher.exe`: starts the Windows server with no console window, and restarts it after a failure |
 | `packaging/windows` | The Windows installers (WiX MSIs) |
-| `apps/ws-tap` | Recording reverse proxy that captures HTTP and WebSocket RPC traffic as NDJSON fixtures |
 | `crates/effect-rpc` | Server side of Effect's RPC wire protocol |
-| `crates/domovoi-contracts` | Wire types for t3code's server API, validated against the real Effect schemas |
+| `crates/domovoi-contracts` | The server's own wire types (sign-in, environment) and its default settings |
 | `crates/domovoi-model` | Typed records and the thread read model, shared by the server and the client core |
 | `crates/domovoi-remote` | HTTP/1.1 over iroh streams, plus a loopback bridge for clients |
 | `crates/domovoi-local` | How a client finds and signs in to the server on the same machine: the descriptor the server writes and the request files a client proves itself with |
 | `crates/domovoi-desktop-host` | Runs the client core's effects on Tokio, with secure storage and `domovoi://` link hand-off, for the Rust desktop clients |
-| `conformance/` | Schema checks and RPC test cases run against t3code's own client code |
-| `fixtures/golden/` | Recorded sessions used for replay tests and benchmarks |
-| `tools/` | Icon generator, binary size report, cross-build and Linux deployment scripts |
-| `docs/` | [Remote access and deployment](docs/remote-access.md), [verification](docs/verification.md) |
+| `apps/server/tests/cases/` | The RPC test cases: every method called for the answers and failures it can give |
+| `fixtures/` | A recorded session of the server (`native/`) and of provider CLIs (`provider/`), for tests and benchmarks |
+| `tools/` | Icon generator, binary size report, performance comparison (`perf.py`), cross-build and Linux deployment scripts |
+| `docs/` | [Remote access and deployment](docs/remote-access.md), [verification](docs/verification.md), [performance](docs/performance.md) |
 
 ## Getting started
 
@@ -206,17 +203,20 @@ a physical iPhone with your own team, set `DEVELOPMENT_TEAM=<team id>`.
 ## Testing
 
 ```sh
-just test          # all Rust tests; the schema checks also run when Node 26+ is on PATH
+just test          # all Rust tests
 just check         # Git LFS files present, then build everything and fail on any warning or lint finding
 just desktop-test  # Iced desktop unit tests and headless UI snapshot flows
 just android-test  # Kotlin unit tests for the Android shell
 just rpc-groups    # every RPC method against every answer it can give (6 to 10 minutes)
+just perf-pairs before after   # two kept builds measured in alternation (docs/performance.md)
 ```
 
-The tests replay recorded t3code sessions against the real server binary. They
-also check every request and answer against t3code's own Effect schemas.
-[docs/verification.md](docs/verification.md) describes the full acceptance
-setup, which runs the unmodified t3code web client against `domovoi-server`.
+The server's tests run the real binary: every RPC method is called for the
+answers and failures it can give, and scripted stand-ins for the provider CLIs
+play whole turns. The client core is driven the way a shell drives it, from a
+session recorded from the server. [docs/verification.md](docs/verification.md)
+describes the checks; [docs/performance.md](docs/performance.md) how a change
+is measured.
 
 ## License
 

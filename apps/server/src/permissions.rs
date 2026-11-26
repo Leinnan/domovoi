@@ -1,7 +1,7 @@
-//! Per-RPC authorization, mirroring t3code's `RpcScopeAuthorization`: every
-//! method requires one permission, checked against the session before any
-//! handler runs. The table is t3code's own (`RpcAuthorization.ts`, generated
-//! into `domovoi-contracts/defaults/rpc-permissions.json`), plus its payload rules.
+//! Per-RPC authorization: every method requires one permission, checked
+//! against the session before any handler runs. The table is
+//! `domovoi-contracts/defaults/rpc-permissions.json`; a few methods need
+//! another permission for some payloads.
 //!
 //! A request is checked as it arrived, before any handler decodes it, so the
 //! payload rules read the few fields they need from its JSON.
@@ -181,16 +181,10 @@ mod tests {
     }
 
     #[test]
-    fn table_covers_every_t3code_method() {
-        assert_eq!(domovoi_contracts::defaults::rpc_permissions().len(), 235);
-    }
-
-    #[test]
-    fn every_t3code_method_is_registered() {
+    fn the_table_names_only_methods_the_server_has() {
         let router = crate::rpc::router();
-        let registered: std::collections::HashSet<&str> = router.tags().collect();
-        let mut missing: Vec<&String> = domovoi_contracts::defaults::rpc_permissions().keys().filter(|t| !registered.contains(t.as_str())).collect();
-        missing.sort();
-        assert!(missing.is_empty(), "t3code methods without a handler: {missing:?}");
+        let mut gone: Vec<&String> = domovoi_contracts::defaults::rpc_permissions().keys().filter(|method| !router.has(method)).collect();
+        gone.sort();
+        assert!(gone.is_empty(), "permissions for methods that are not registered: {gone:?}");
     }
 }

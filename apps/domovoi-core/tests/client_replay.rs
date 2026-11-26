@@ -18,7 +18,7 @@ use domovoi_core::{Effect, Event, Model, DomovoiApp};
 
 mod common;
 
-const THREAD: &str = "6421f1e6-14f6-4d7a-89b3-6e82dac38210";
+const THREAD: &str = "t1";
 
 /// Records as a server sends them, for the threads these tests make up: a
 /// test writes the fields it is about, and the rest of what the schema
@@ -307,12 +307,17 @@ mod records {
     }
 }
 
+/// What a server of this app's protocol version answers a request for a socket ticket.
+fn ticket_answer(ticket: &str) -> Value {
+    json!({ "ticket": ticket, "expiresAt": "2026-11-13T00:00:00.000Z", "protocol": domovoi_model::PROTOCOL_VERSION })
+}
+
 fn fixture() -> Vec<Value> {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/golden/ts-session1/wire.ndjson");
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/native/session1/wire.ndjson");
     std::fs::read_to_string(path).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect()
 }
 
-/// (shell stream items, this thread's snapshot + events, final TS shell)
+/// (shell stream items, this thread's snapshot + events, the thread's last shell as the server sent it)
 fn recorded() -> (Vec<Value>, Vec<Value>, Value) {
     let mut reqs: BTreeMap<(i64, String), Value> = BTreeMap::new();
     let (mut shell, mut thread_items, mut last_shell) = (vec![], BTreeMap::new(), Value::Null);
@@ -432,7 +437,7 @@ impl Shell {
     fn paired() -> Self {
         let mut shell = Shell::default();
         shell.routes.insert("/oauth/token".into(), (200, json!({ "access_token": "tok-1", "issued_token_type": "urn:ietf:params:oauth:token-type:access_token", "token_type": "Bearer", "expires_in": 100, "scope": "orchestration:read" })));
-        shell.routes.insert("/api/auth/websocket-ticket/rpc".into(), (200, json!({ "ticket": "tick-1", "expiresAt": "2026-11-13T00:00:00.000Z" })));
+        shell.routes.insert("/api/auth/websocket-ticket/rpc".into(), (200, ticket_answer("tick-1")));
         shell
     }
 
@@ -534,7 +539,7 @@ fn connected() -> (Model, Vec<Value>) {
 }
 
 #[test]
-fn core_reaches_t3code_state_from_recorded_frames() {
+fn core_reaches_the_servers_state_from_recorded_frames() {
     let (mut model, sent) = connected();
     let shell_id = sent.iter().find(|r| r["tag"] == "orchestration.subscribeShell").expect("shell subscription")["id"].as_str().unwrap().to_owned();
     assert!(sent.iter().any(|r| r["tag"] == "subscribeServerConfig"));
@@ -547,7 +552,7 @@ fn core_reaches_t3code_state_from_recorded_frames() {
     }
     model.sidebar_layout.grouping = Grouping::Project;
     let view = DomovoiApp.view(&model);
-    assert!(view.sidebar.projects.iter().any(|p| p.title == "playground"));
+    assert!(view.sidebar.projects.iter().any(|p| p.title == "w"));
 
     // Select the thread: the core subscribes and records the visit.
     let sent = sent_requests(&run(&mut model, Event::SelectThread { thread_id: THREAD.into() }));
@@ -561,20 +566,49 @@ fn core_reaches_t3code_state_from_recorded_frames() {
 
     let view = DomovoiApp.view(&model);
     let listed = view.sidebar.projects.iter().flat_map(|p| p.threads.iter()).chain(view.sidebar.settled.iter()).find(|t| t.id == THREAD).expect("thread listed");
-    let ts_status = domovoi_core::replies::shell_status(&serde_json::from_value(ts_shell.clone()).expect("t3code's shell fits the schema"));
-    assert_eq!(listed.status, ts_status.as_str(), "thread list status matches t3code's shell ({})", ts_shell["status"]);
+    let ts_status = domovoi_core::replies::shell_status(&serde_json::from_value(ts_shell.clone()).expect("the server's shell decodes"));
+    assert_eq!(listed.status, ts_status.as_str(), "thread list status matches the server's shell ({})", ts_shell["status"]);
     let detail = view.thread.expect("thread page");
     assert_eq!(view.route, "thread");
-    assert_eq!(detail.items.len() as u64, ts_shell["visibleItemCount"].as_u64().unwrap(), "visible items match t3code's count");
+    assert_eq!(detail.items.len() as u64, ts_shell["visibleItemCount"].as_u64().unwrap(), "visible items match the server's count");
     assert_eq!(detail.items.first().map(|i| i.kind.as_str()), Some("user"));
     assert!(detail.items.iter().any(|i| i.kind == "approval"), "approval cards are shown");
     let cp = detail.items.iter().find(|i| i.kind == "checkpoint").expect("checkpoint row");
     assert!(cp.checkpoint.is_some(), "checkpoint rows link their checkpoint");
     assert!(!detail.checkpoints.is_empty());
-    assert!(detail.items[0].text.starts_with("Add a function sub(a, b)"), "user text comes from the message entity");
+    assert!(detail.items[0].text.starts_with("ALL of it"), "user text comes from the message entity");
     assert!(detail.items.iter().any(|i| i.kind == "assistant" && !i.blocks.is_empty()), "assistant markdown is split into blocks");
     assert!(detail.pending_requests.is_empty(), "approvals were all answered");
     assert!(!detail.working);
+}
+
+/// A server of another protocol version is not connected to: the app says
+/// which side to update and asks again later. One that names no version is
+/// from before the versions were compared.
+#[test]
+fn a_server_of_another_protocol_version_is_named_not_connected_to() {
+    let mine = domovoi_model::PROTOCOL_VERSION;
+    for (theirs, advice) in [
+        (json!(mine + 1), "This app is too old for this server. Update Domovoi on this device."),
+        (json!(mine - 1), "This server is older than this app. Update domovoi-server on the machine it runs on."),
+        (Value::Null, "This server is older than this app. Update domovoi-server on the machine it runs on."),
+    ] {
+        let mut shell = Shell::paired();
+        let mut answer = json!({ "ticket": "tick-1", "expiresAt": "2026-11-13T00:00:00.000Z" });
+        if !theirs.is_null() {
+            answer["protocol"] = theirs.clone();
+        }
+        shell.routes.insert("/api/auth/websocket-ticket/rpc".into(), (200, answer));
+        let mut model = Model::default();
+        let _ = shell.drive(&mut model, Event::Launch { surface: "mobile".into(), device_label: "Test Phone".into(), device_os: "iOS".into() });
+        let effects = shell.drive(&mut model, Event::Connect { server_url: "http://h:1/".into(), pairing_code: "CODE".into() });
+        assert_eq!(socket_url(&effects), None, "protocol {theirs}: no socket is opened");
+        let connection = DomovoiApp.view(&model).connection;
+        assert_eq!(connection.error.as_deref(), Some(advice), "protocol {theirs}");
+        assert_eq!(connection.state, "reconnecting", "protocol {theirs}: the app asks again, the server may be updated meanwhile");
+        assert!(connection.reconnect_in_seconds > 0, "protocol {theirs}");
+        assert!(!connection.server_changed && !connection.needs_pairing, "protocol {theirs}: the device stays paired");
+    }
 }
 
 #[test]
@@ -592,7 +626,7 @@ fn pairing_exchanges_the_code_for_a_saved_token() {
     // The ticket request carries the token; the socket URL the ticket.
     let ticket = &shell.requests[1];
     assert!(ticket.headers.iter().any(|h| h.name.eq_ignore_ascii_case("authorization") && h.value == "Bearer tok-1"));
-    assert!(socket_url(&effects).unwrap().starts_with("ws://h:1/ws?clientSurface=mobile&orchestrationProtocol=2&wsTicket=tick-1"));
+    assert!(socket_url(&effects).unwrap().starts_with("ws://h:1/ws?protocol=3&wsTicket=tick-1"));
     // Saved: the environment, which one is active, and its token.
     let env_id = model.active_env.clone().unwrap();
     assert_eq!(shell.store.get(&format!("token:{env_id}")).map(String::as_str), Some("tok-1"));
@@ -1328,7 +1362,7 @@ fn retries_back_off_and_reset_only_once_the_server_answers() {
         assert!((low..=high).contains(delay), "{delays:?}");
     }
     // A server that takes the socket and drops it at once keeps backing off.
-    shell.routes.insert("/api/auth/websocket-ticket/rpc".into(), (200, json!({ "ticket": "t", "expiresAt": "2026-11-13T00:00:00.000Z" })));
+    shell.routes.insert("/api/auth/websocket-ticket/rpc".into(), (200, ticket_answer("t")));
     let retry_gen = model.retry_gen;
     let _ = shell.drive(&mut model, Event::RetryTimer { retry_gen });
     let _ = sock(&mut model, SocketEvent::Opened);
@@ -1359,7 +1393,7 @@ fn a_server_that_refuses_this_device_for_good_is_not_retried() {
     assert_eq!(view.connection.reconnect_in_seconds, 0);
     assert!(run(&mut model, Event::Reconnect).is_empty(), "no retry loop");
     // Pairing again clears it.
-    shell.routes.insert("/api/auth/websocket-ticket/rpc".into(), (200, json!({ "ticket": "t", "expiresAt": "2026-11-13T00:00:00.000Z" })));
+    shell.routes.insert("/api/auth/websocket-ticket/rpc".into(), (200, ticket_answer("t")));
     connected_to(&mut shell, &mut model, "http://a:1", "NEWCODE");
     assert!(!DomovoiApp.view(&model).connection.server_changed);
 }
@@ -2427,14 +2461,14 @@ fn resumed_after(model: &mut Model) -> Value {
 }
 
 #[test]
-fn a_codex_patch_written_as_diff_shows_as_the_change_an_approval_would_make() {
+fn a_codex_patch_shows_as_the_change_an_approval_would_make() {
     let (mut model, _) = connected();
     let stream = open_stream(&mut model);
     let native = json!({ "driver": "codex", "nativeId": "call_1" });
     let patch = "--- a/src/main.rs\n+++ b/src/main.rs\n@@ -1 +1 @@\n-let a = 1;\n+let a = 2;\n";
-    // domovoi-server's record of a Codex edit: the patch under `diff`.
+    // The server's record of a Codex edit: the whole patch.
     let edit = |id: &str, ordinal: u64| json!({ "id": id, "type": "file_change", "nativeItemRef": native, "status": "waiting", "ordinal": ordinal,
-        "fileName": "main.rs", "changes": [{ "path": "src/main.rs" }], "diff": patch });
+        "fileName": "main.rs", "changes": [{ "path": "src/main.rs" }], "diffStr": patch });
     let snapshot = records::snapshot(1, json!({
         "turnItems": [
             edit("edit", 1),
@@ -2595,17 +2629,6 @@ fn the_open_thread_comes_back_from_the_offline_copy_if_it_can_be_read() {
     let page = DomovoiApp.view(&fresh).thread.unwrap();
     assert_eq!(page.items.iter().map(|i| (i.kind.as_str(), i.text.as_str(), i.title.as_str())).collect::<Vec<_>>(), [("user", "hello", ""), ("command", "", "make")]);
     assert!(!page.loading);
-
-    // As an earlier version wrote it.
-    let mut edit = json!({ "id": "ie", "type": "file_change", "ordinal": 3, "fileName": "a.rs", "diff": "--- a/a.rs\n+++ b/a.rs\n@@ -1 +1 @@\n-x\n+y\n" });
-    records::complete("turnItems", &mut edit);
-    let mut earlier = copy.clone();
-    earlier["thread"]["turnItems"].as_array_mut().unwrap().push(edit.clone());
-    earlier["thread"]["visibleTurnItems"].as_array_mut().unwrap().push(json!({ "position": 2, "visibility": "local", "sourceThreadId": "t1", "sourceItemId": "ie", "item": edit }));
-    let fresh = restore(earlier.to_string());
-    let page = DomovoiApp.view(&fresh).thread.unwrap();
-    assert_eq!(page.items.len(), 3);
-    assert_eq!(page.items[2].diff.as_ref().map(|d| (d.path.as_str(), d.additions, d.deletions)), Some(("a.rs", 1, 1)));
 
     // A thread that is not one this app can read, and one that is another thread's.
     let mut unreadable = copy.clone();
@@ -5684,7 +5707,7 @@ fn a_saved_entry_for_this_machines_server_is_signed_in_again_once() {
     assert_eq!(model.environments.len(), 1, "the saved entry, not a second one");
 
     // With a server that takes the new sign-in, the user sees nothing of it.
-    shell.routes.insert("/api/auth/websocket-ticket/rpc".into(), (200, json!({ "ticket": "tick-2", "expiresAt": "2026-11-13T00:00:00.000Z" })));
+    shell.routes.insert("/api/auth/websocket-ticket/rpc".into(), (200, ticket_answer("tick-2")));
     let mut model = Model::default();
     shell.requests.clear();
     let effects = launch(&mut shell, &mut model, "desktop");
