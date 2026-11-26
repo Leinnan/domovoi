@@ -9,7 +9,8 @@ and Linux:
   headless as a scheduled task.
 - **Domovoi** (`Domovoi.exe`) is the WinUI 3 app, built in Rust on
   `windows-reactor` like lwa_fm's and wihaister's Windows shells. It is the
-  main desktop client here, and in progress (see its milestones below).
+  main desktop client here. `just parity` holds it to every feature of the
+  core, like the other clients.
 - **Domovoi Desktop** (`domovoi-desktop.exe`) is the Iced app, the same one
   as on Linux and macOS, with every feature of the core.
 - **The installers** are two per-user MSIs: everything, or the server alone.
@@ -230,15 +231,32 @@ fork pins one rev for every windows-rs crate.
 - **Registry.** The apps register their AppUserModelID and `domovoi://`
   through the Registry API, not `reg.exe`.
 
-Milestones (`just parity --matrix` counts the `windows` column; `WIP_CLIENTS`
-in `tools/parity.py` keeps its gaps out of the check until M4):
+Milestones (`just parity --matrix` counts the `windows` column, and `just
+parity` fails on a gap in it):
 
 | | What | State |
 |---|---|---|
 | M1 | Pairing (link, or URL and code), reconnecting, the thread list (by status or project), the transcript (markdown, commands, edits, tool calls), toasts | done |
-| M2 | Composer (send, stop), approvals, notifications and their buttons | send, stop and approvals done; question answers, attachments, model picker to do |
-| M3 | Terminal panel, settings, command palette | to do |
-| M4 | Pull requests, usage, agent sessions, folder browser, diagrams and images; parity enforced | to do |
+| M2 | Composer (send, stop), approvals, notifications and their buttons | done: the model list and its options, effort, plan mode, permissions, pictures, the `@`, `/` and `$` lists, the queue, question answers, secrets |
+| M3 | Terminal panel, settings, command palette | done: the panel beside the thread (diff, artifacts, terminal, files, Git), every Settings section with the scheduled task editor and the companion, the palette |
+| M4 | Pull requests, usage, agent sessions, folder browser, diagrams and images; parity enforced | done: `windows` is out of `WIP_CLIENTS`, and `tools/parity-allowlist.toml` lists what it leaves out on purpose (pushes and replies from a notification, as the Iced app) |
+
+`just parity --matrix` counted 1057 of 1071 for `windows` on 2026-11-26 (308
+at M1). The other 14 are in the allowlist: 6 that no client uses, and 8 the
+Iced app leaves out too. `just windows-snapshots` saves a picture of each
+screen.
+
+What the app does differently from the Iced app, on purpose or for now:
+
+- **Artifacts.** A page that runs (HTML, React, a hosted one) opens in the
+  browser; its source, and SVG and Mermaid drawings, show in the panel.
+- **The companion** is a drawing made for each mood, not painted frame by
+  frame: it does not blink or follow the pointer.
+- **The terminal** is drawn as lines of text. Ctrl+Shift+C copies its screen,
+  Ctrl+V pastes, and Ctrl with a letter goes to the shell.
+- **Menus** open from the button beside a thread or project, not from a
+  right click, and the sidebar and the panel have fixed widths.
+- **A long thread** draws its last 60 entries, and earlier ones on request.
 
 ## Known limits
 

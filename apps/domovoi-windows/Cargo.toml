@@ -15,6 +15,14 @@ path = "src/main.rs"
 domovoi_core = { path = "../domovoi-core" }
 # The core's effects, secure storage and domovoi:// links, shared with the Iced app.
 domovoi-desktop-host = { path = "../../crates/domovoi-desktop-host" }
+# Copying a pairing link or code (Settings, Access), and a picture pasted into a message.
+arboard = { version = "3", default-features = false, features = ["image-data"] }
+# A provider's sign-in page, opened in the browser.
+open = "5"
+# A scheduled task's time, between what is typed here and what the server takes.
+jiff = "0.2.42"
+# The pairing link as a QR code, drawn as an SVG.
+qrcode = { version = "0.14.1", default-features = false }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
@@ -22,8 +30,10 @@ tracing-subscriber = { workspace = true }
 # (scroll observation, scroll-to, TextBox selection, wheel and X buttons on
 # top of upstream). Every windows-rs crate must use the same rev.
 windows-reactor = { workspace = true }
+# The file dialog for a message's pictures.
+windows-pickers = { workspace = true }
 # Win32 beside the UI (the wake window), the version the server uses.
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_System_LibraryLoader", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_System_LibraryLoader", "Win32_System_Time", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 
 [target.'cfg(windows)'.build-dependencies]
 # Stages the Windows App SDK runtime beside the exe and embeds its manifest.

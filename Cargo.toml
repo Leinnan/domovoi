@@ -24,6 +24,7 @@ divan = "0.1.21"
 # rev for every windows-rs crate.
 windows-reactor = { git = "https://github.com/Leinnan/windows-rs", rev = "31f34dae58c03844fc3ff0dd49dd0bff8867ff83" }
 windows-reactor-setup = { git = "https://github.com/Leinnan/windows-rs", rev = "31f34dae58c03844fc3ff0dd49dd0bff8867ff83" }
+windows-pickers = { git = "https://github.com/Leinnan/windows-rs", rev = "31f34dae58c03844fc3ff0dd49dd0bff8867ff83", default-features = false, features = ["reactor"] }
 
 # Dependencies (serde_json, the PTY, git and grep crates) run optimized in dev
 # builds; Domovoi's own code stays fast to compile and debuggable.

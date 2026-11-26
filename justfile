@@ -621,6 +621,12 @@ windows-smoke url=("http://127.0.0.1:" + port) home=home: (windows-build "false"
     code=$(cargo run -q -p domovoi-server -- --home-dir {{home}} --port {{port}} pair | grep -o 'token=[A-Z0-9-]*' | cut -d= -f2); \
     DOMOVOI_STORE=memory DOMOVOI_LOCAL_SERVER=off DOMOVOI_SMOKE=1 DOMOVOI_SERVER={{url}} DOMOVOI_PAIRING="$code" timeout 60 target/debug/Domovoi.exe
 
+# Pictures of the WinUI app's screens in target/ui-snapshots/windows, against a server of its own; fails when a screen cannot be reached
+[windows]
+windows-snapshots: (windows-build "false")
+    cargo build -q -p domovoi-server
+    pwsh -NoProfile -File apps/domovoi-windows/tools/snapshots.ps1
+
 # The server and its launcher (release) as a zip in dist/, for a machine that takes no installer
 [windows]
 windows-server-package: lfs-check

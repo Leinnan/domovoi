@@ -1,20 +1,21 @@
 # Core events and view-model fields a client does not use on purpose
 # (`tools/parity.py`, `just parity`). Each entry names the clients that leave
-# it out (`macos`, `ios`, `android`, `desktop`, or `*` for all) and why.
+# it out (`macos`, `ios`, `android`, `desktop`, `windows`, or `*` for all) and
+# why.
 # Anything a client lacks that is not listed here is a gap the check reports.
 
 # ---- events ----
 
 [events.ActivityToken]
-missing = ["macos", "android", "desktop"]
+missing = ["macos", "android", "desktop", "windows"]
 reason = "Live Activities exist only on iOS."
 
 [events.PushToken]
-missing = ["macos", "android", "desktop"]
+missing = ["macos", "android", "desktop", "windows"]
 reason = "APNs device tokens: only the iPhone app registers for APNs pushes (Android uses PushEndpoint)."
 
 [events.PushEndpoint]
-missing = ["macos", "ios", "desktop"]
+missing = ["macos", "ios", "desktop", "windows"]
 reason = "UnifiedPush (Web Push) endpoints come from an Android distributor; Apple devices use APNs (PushToken), and desktop apps notify while running."
 
 [events.CreateScheduled]
@@ -38,11 +39,11 @@ missing = ["ios", "android"]
 reason = "Keyboard shortcuts are edited on the desktop clients only."
 
 [events.RespondToThread]
-missing = ["desktop"]
+missing = ["desktop", "windows"]
 reason = "Approving from outside the app (Live Activity, widget, ongoing notification) is a mobile surface."
 
 [events.AnswerFromNotification]
-missing = ["desktop"]
+missing = ["desktop", "windows"]
 reason = "Desktop notifications take no typed reply (freedesktop, Windows), and the core's local notice carries no question id; see notify.rs."
 
 [events.ConnectLocalServer]
@@ -68,15 +69,15 @@ missing = ["android"]
 reason = "Android opens each panel tab as its own screen."
 
 [fields."ComposerView.is_new_thread"]
-missing = ["ios", "android", "desktop"]
+missing = ["ios", "android", "desktop", "windows"]
 reason = "These clients show the new-thread composer from the route (`new-thread`) instead."
 
 [fields."EnvironmentView.server_id"]
-missing = ["macos", "desktop"]
+missing = ["macos", "desktop", "windows"]
 reason = "Matches pushes and notification actions to a saved server; only iOS and Android act on those outside the app."
 
 [fields."RemoteAccessView.push_configured"]
-missing = ["macos", "android", "desktop"]
+missing = ["macos", "android", "desktop", "windows"]
 reason = "Whether the server has an APNs key: only iOS registers for pushes."
 
 [fields."ThreadPageView.checkpoints"]

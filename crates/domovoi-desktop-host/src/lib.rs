@@ -11,10 +11,14 @@
 //! Nothing here knows the UI toolkit. Each client forwards the channel to its
 //! own UI thread.
 
+pub mod attach;
 mod engine;
 pub mod links;
 pub mod logging;
+pub mod palette;
+pub mod prefs;
 mod store;
+pub mod system;
 #[cfg(windows)]
 pub mod windows;
 

@@ -45,12 +45,38 @@ pub fn selected() -> Brush {
     Color::argb(0x26, 0x80, 0x80, 0x80).into()
 }
 
+/// No fill at all (a row that is not the selected one).
+pub fn clear() -> Brush {
+    Color::argb(0, 0, 0, 0).into()
+}
+
+/// The window's own colour, opaque (behind a badge on an icon).
+pub fn solid() -> Brush {
+    ThemeBrush::SolidBackground.into()
+}
+
+/// The colour text is in: a ring that stands out on any swatch.
+pub fn primary() -> Brush {
+    ThemeBrush::PrimaryText.into()
+}
+
 pub fn accent() -> Brush {
     ThemeBrush::AccentText.into()
 }
 
 pub fn critical() -> Brush {
     ThemeBrush::SystemCritical.into()
+}
+
+/// An opaque `0xRRGGBB` colour (a project's, from the shared palette).
+pub fn rgb(hex: u32) -> Brush {
+    Color::rgb((hex >> 16) as u8, (hex >> 8) as u8, hex as u8).into()
+}
+
+/// The fill of a tile holding something drawn in `hex`: that colour, faint
+/// (a little stronger on a dark window, as the other clients have it).
+pub fn tint(hex: u32, dark: bool) -> Brush {
+    Color::argb(if dark { 0x29 } else { 0x1C }, (hex >> 16) as u8, (hex >> 8) as u8, hex as u8).into()
 }
 
 /// A Segoe Fluent Icons glyph.

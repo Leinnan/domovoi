@@ -34,7 +34,10 @@ do, and how to tell it's done.
 | 10. Registry, Task Scheduler | Done. The host uses `RegSetKeyValueW` and `RegGetValueW` (tested). `service status` reads the task's XML and its numeric last result, not the translated status column (tested). |
 | 11. Terminals | Partly. `cmd.exe` is tested by `rpc_calls`, and Windows shells no longer get `-l`. Not done: Windows PowerShell 5.1, Git Bash, WSL, resize. |
 | 12. Installer edges | `packaging/windows/cycle.ps1` (`just windows-installer-cycle`) covers upgrade, downgrade, repair, a feature added later, the two products' conflict (now exclusive: the full MSI replaces the server-only one and keeps its features) and uninstall. The MSI now stops only programs running from its own folder. Data left on uninstall and the firewall prompt are documented. Not done: running it in CI on a clean VM. |
-| 13–16 | Not started. |
+| 13. Milestones | Done (2026-11-26): the transcript's rows, the panel beside the thread, the palette, the scheduled task editor, the companion, pull requests and usage. `windows` is out of `WIP_CLIENTS` and `just parity` holds it. |
+| 14. Transcripts, accessibility | Partly: a thread draws its last 60 entries and more on request, and controls have automation names. Not done: a virtualized list, the scaling, contrast and Narrator passes. |
+| 15. UI tests | Partly: `just windows-snapshots` walks the new-thread page, the palette, the panel's tabs and Settings. Not done: a scripted turn, and running it in CI. |
+| 16 | Not started. |
 | 17 | The two `client_replay` failures are not about the clock: `limit_windows` orders windows by kind (session, weekly, monthly), and the tests expect the fullest first. Both came in `adf6350`; which one is meant needs a decision. Not done: registry policy, arm64, winget, Antigravity's browser. |
 
 ## P0: before anyone relies on it
@@ -285,16 +288,23 @@ To check on a Windows machine:
 
 ### 13. Milestones M2 to M4
 
-- **Missing, by milestone:**
-  - **M2:** question answers (`RespondUserInput`), attachments, the model and
-    effort picker, the runtime mode.
-  - **M3:** the terminal panel, settings, the command palette.
-  - **M4:** pull requests, usage, agent sessions, the folder browser,
-    diagrams and images (`HostEvent::ImageLoaded` is ignored today).
-- **How:** take each from the Iced app (`apps/domovoi-iced/src/views`) and
-  the macOS views as the spec.
-- **Done when:** `windows` leaves `WIP_CLIENTS` in `tools/parity.py`, and
+- **State:** done. `windows` left `WIP_CLIENTS` in `tools/parity.py`, and
   `just parity` enforces it like the other clients.
+- **Left around the milestones:**
+  - A right-click menu on a thread or project (the menu is on the button
+    beside it; the toolkit reports a right press on a `Border`, so it can be
+    built).
+  - A sidebar and a panel that can be dragged wider.
+  - An artifact that runs shown in the window (WebView2) instead of the
+    browser.
+  - Bringing a row into view: a find's match, a step under way and an
+    artifact's message are opened and drawn, but the page is not scrolled to
+    them.
+- **Not tried on screen** (unit-tested or built only): a pull request's
+  detail, review and comment (the test server had none open); an opened
+  artifact; a file's editing and saving; committing, branches and worktrees
+  in the Git tab (the test project was a real repository); the terminal's
+  focused look, wheel and resize; shortcuts with Ctrl held.
 
 ### 14. Transcripts, accessibility and display
 
@@ -323,6 +333,14 @@ To check on a Windows machine:
     images.
   - Run it in the `windows` CI job (GitHub's Windows runners have a desktop
     session) and upload the images as an artifact.
+- **So far:** `just windows-snapshots` (`apps/domovoi-windows/tools/snapshots.ps1`)
+  starts a server with an empty home, pairs, adds this repository as a
+  project, and walks the new-thread page, both sidebar groupings, the
+  palette, each tab of the panel and every Settings section, saving a
+  picture of each. It fails when a control it
+  presses is missing.
+- **Left:** sending a message to the scripted fake Claude and checking the
+  transcript and an approval card; running it in the `windows` CI job.
 - **Done when:** a broken layout or a missing view fails CI.
 
 ### 16. The windows-rs fork

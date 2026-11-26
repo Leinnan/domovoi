@@ -4,9 +4,8 @@
 Every user-facing `Event` the core takes (`apps/domovoi-core/src/app.rs`, the
 variants before the first `#[serde(skip)]`) and every field of the view model
 (`apps/domovoi-core/src/view.rs`) should be used by each client: macOS, iOS,
-Android, the Iced desktop app and the WinUI app for Windows (in progress, see
-`WIP_CLIENTS`). A name a client never mentions is a feature
-it lacks. Differences that are on purpose are listed, with the reason, in
+Android, the Iced desktop app and the WinUI app for Windows. A name a client
+never mentions is a feature it lacks. Differences that are on purpose are listed, with the reason, in
 `tools/parity-allowlist.toml`. The check fails on any other gap, and on an
 allowlist entry that no longer holds, so the list stays true.
 
@@ -37,10 +36,10 @@ CLIENTS = {
     "desktop": ("rust", [APPS / "domovoi-iced" / "src"]),
     "windows": ("rust", [APPS / "domovoi-windows" / "src"]),
 }
-# Clients still being built (docs/windows.md, milestones): in `--matrix` and
-# counted, but their gaps don't fail the check yet. Drop one from here once it
-# reaches the others, and the check holds it to them.
-WIP_CLIENTS = {"windows"}
+# Clients still being built: in `--matrix` and counted, but their gaps don't
+# fail the check yet. Drop one from here once it reaches the others, and the
+# check holds it to them. None is being built now.
+WIP_CLIENTS = set()
 EXTENSIONS = {"swift": ".swift", "kotlin": ".kt", "rust": ".rs"}
 # Fixtures: they build views and send events to draw a screen, not as a feature.
 SKIP_FILES = {"Snapshots.swift", "IOSSnapshots.swift", "ui_tests.rs"}

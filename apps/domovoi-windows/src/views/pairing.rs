@@ -19,6 +19,8 @@ pub struct Hooks {
     pub on_code: Callback<std::rc::Rc<str>>,
     pub on_pair_link: Callback<()>,
     pub on_pair_code: Callback<()>,
+    /// Forget the server that refuses this device.
+    pub on_forget: Callback<()>,
 }
 
 /// The form, centred on the window, under the card for the server on this
@@ -54,6 +56,22 @@ pub fn pairing(connection: &ConnectionView, draft: &Draft, hooks: Hooks) -> View
             .on_click(move || hooks.on_pair_code.call(()))
             .into(),
     ];
+    if connection.server_changed {
+        // Reinstalled, replaced, or this device was revoked: its saved sign-in is no use.
+        let label = connection.environments.iter().find(|e| e.id == connection.active_environment_id).map_or("This server", |e| e.label.as_str());
+        let on_forget = hooks.on_forget;
+        lines.insert(
+            1,
+            InfoBar::new()
+                .is_open(true)
+                .is_closable(false)
+                .severity(InfoBarSeverity::Warning)
+                .title(format!("{label} no longer accepts this device"))
+                .message("Pair again with a new link or code, or forget the server.")
+                .into(),
+        );
+        lines.insert(2, Button::new().automation_name(format!("Forget {label}")).content(TextBlock::new().text(format!("Forget {label}"))).on_click(move || on_forget.call(())).into());
+    }
     if busy {
         lines.push(
             StackPanel::new()

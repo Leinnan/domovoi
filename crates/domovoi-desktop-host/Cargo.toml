@@ -16,6 +16,9 @@ futures = { workspace = true }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 tokio-tungstenite = { version = "0.26", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
 serde_json = { workspace = true }
+# A message's pictures as data URLs, and a pasted bitmap as a PNG (`attach`).
+base64 = "0.22"
+png = "0.18"
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 tracing-appender = "0.2.4"

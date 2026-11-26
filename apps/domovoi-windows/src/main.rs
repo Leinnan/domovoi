@@ -7,24 +7,42 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
 #[cfg(windows)]
+mod companion;
 mod core_link;
 #[cfg(windows)]
+mod hwnd;
+#[cfg(windows)]
+mod icons;
+#[cfg(windows)]
 mod launch;
+#[cfg(windows)]
+mod media;
+#[cfg(windows)]
+mod menus;
+#[cfg(windows)]
+mod overlays;
+#[cfg(windows)]
+mod shortcuts;
 #[cfg(windows)]
 mod store;
 #[cfg(windows)]
 mod theme;
 #[cfg(windows)]
+mod time;
+#[cfg(windows)]
 mod ui_thread;
 #[cfg(windows)]
 mod views;
+#[cfg(windows)]
+mod widgets;
 #[cfg(windows)]
 mod window;
 
 #[cfg(windows)]
 fn main() {
     // A windowed program: its stderr goes nowhere, so the log is a file too.
-    let _log = domovoi_desktop_host::logging::init(core_link::IDENTITY, "warn,domovoi_windows=info,domovoi_desktop_host=info");
+    // This crate's own lines are named for its binary, `Domovoi`.
+    let _log = domovoi_desktop_host::logging::init(core_link::IDENTITY, "warn,Domovoi=info,domovoi_desktop_host=info");
     let launch = launch::Launch::from_args(std::env::args().skip(1));
     // A link opened while the app runs goes to it, and this launch ends.
     if domovoi_desktop_host::links::start(core_link::IDENTITY, launch.link.as_deref()) {
