@@ -78,7 +78,7 @@ impl Paths {
 
 /// Makes `dir` and what is missing above it; `dir` itself for this user only
 /// (the folders above it get the modes the umask gives).
-fn create_private_dir(dir: &std::path::Path) -> std::io::Result<()> {
+pub(crate) fn create_private_dir(dir: &std::path::Path) -> std::io::Result<()> {
     if dir.is_dir() {
         return Ok(());
     }

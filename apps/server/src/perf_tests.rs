@@ -148,6 +148,16 @@ fn flush(store: &Store, thread: &str, text: &str, streaming: bool) {
     store.append_event(thread, turn_item(thread, &id, 1_000_000, text, streaming), &o).expect("item");
 }
 
+/// One measurement as `tools/perf.py` reads it: a name, a number and its unit.
+fn report(name: &str, value: f64, unit: &str) {
+    println!("PERF {name} {value:.4} {unit}");
+}
+
+/// The time of one of `n` calls, in microseconds.
+fn micros(total: Duration, n: u32) -> f64 {
+    total.as_secs_f64() * 1e6 / f64::from(n)
+}
+
 fn per_call(total: Duration, n: u32) -> String {
     format!("{:>9.1} µs", total.as_secs_f64() * 1e6 / f64::from(n))
 }
@@ -185,6 +195,9 @@ fn perf_append_and_shell_by_thread_size() {
             "perf n={n:>5}: append per event {}   thread_shell from SQL per call {}   flush + 10 subscribers' shells (cached) {}",
             per_call(append, reps), per_call(shell, reps), per_call(cached, reps),
         );
+        report(&format!("store.append_event.{n}"), micros(append, reps), "us");
+        report(&format!("store.thread_shell_from_sql.{n}"), micros(shell, reps), "us");
+        report(&format!("store.flush_and_10_shells.{n}"), micros(cached, reps), "us");
         let _ = std::fs::remove_dir_all(dir);
     }
 }
@@ -210,7 +223,9 @@ fn perf_resume_after_other_threads_were_busy() {
             got = store.thread_events_after("t1", after, through).expect("events").len();
         }
         assert_eq!(got, 50);
-        println!("perf other-thread events={noise:>6}: thread_events_after (50 of mine) {}", per_call(started.elapsed(), reps));
+        let took = started.elapsed();
+        println!("perf other-thread events={noise:>6}: thread_events_after (50 of mine) {}", per_call(took, reps));
+        report(&format!("store.resume_behind.{noise}"), micros(took, reps), "us");
         let _ = std::fs::remove_dir_all(dir);
     }
 }
@@ -246,6 +261,7 @@ fn perf_event_log_bytes_per_streamed_reply() {
         (after - before) / total as i64,
         page_bytes as f64 / 1e6,
     );
+    report("store.reply_20k.event_log_bytes", (after - before) as f64, "bytes");
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -293,6 +309,12 @@ fn count_commits(store: &Store) -> Arc<AtomicU64> {
 fn percentile(sorted: &[Duration], p: f64) -> f64 {
     let i = ((sorted.len() as f64 - 1.0) * p).round() as usize;
     sorted[i].as_secs_f64() * 1e6
+}
+
+fn median_micros(times: &[Duration]) -> f64 {
+    let mut sorted = times.to_vec();
+    sorted.sort();
+    percentile(&sorted, 0.5)
 }
 
 fn spread(mut times: Vec<Duration>) -> String {
@@ -354,6 +376,9 @@ async fn perf_streamed_flush_through_turn() {
             "perf n={n:>5}: streamed flush through Turn {}   {:.1} events and {:.1} commits per flush",
             per_call(spent, flushes), f64::from(events) / f64::from(flushes), commits.load(Ordering::Relaxed) as f64 / f64::from(flushes),
         );
+        report(&format!("turn.flush.{n}"), micros(spent, flushes), "us");
+        report(&format!("turn.events_per_flush.{n}"), f64::from(events) / f64::from(flushes), "count");
+        report(&format!("turn.commits_per_flush.{n}"), commits.load(Ordering::Relaxed) as f64 / f64::from(flushes), "count");
         let _ = std::fs::remove_dir_all(dir);
     }
 }
@@ -380,6 +405,8 @@ async fn perf_command_latency_by_thread_size() {
             crate::rpc::shell::dispatch_command(&o, send).await.expect("send");
             sends.push(started.elapsed());
         }
+        report(&format!("command.thread_visit.{n}.p50"), median_micros(&visits), "us");
+        report(&format!("command.message_dispatch.{n}.p50"), median_micros(&sends), "us");
         println!("perf n={n:>5}: thread.visit {}\n              message.dispatch {}", spread(visits), spread(sends));
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -410,6 +437,7 @@ fn perf_appends_with_concurrent_turns() {
             })
             .collect();
         let times: Vec<Duration> = workers.into_iter().flat_map(|w| w.join().expect("worker")).collect();
+        report(&format!("store.flush3_with_{turns}_turns.p50"), median_micros(&times), "us");
         println!("perf {turns} turn(s) streaming at once, 1000-entity threads: one flush (3 events) {}", spread(times));
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -479,7 +507,9 @@ fn perf_shell_snapshot_of_many_threads() {
         let snap = crate::rpc::shell::snapshot_of(&store).expect("snapshot");
         assert_eq!(snap.threads.len(), 500);
     }
-    println!("perf shell snapshot, 500 threads of 40 entities: {:.1} ms", started.elapsed().as_secs_f64() * 1e3 / f64::from(reps));
+    let took = started.elapsed();
+    println!("perf shell snapshot, 500 threads of 40 entities: {:.1} ms", took.as_secs_f64() * 1e3 / f64::from(reps));
+    report("shell.snapshot_500_threads", micros(took, reps), "us");
     let _ = std::fs::remove_dir_all(dir);
 }
 
@@ -528,6 +558,7 @@ async fn perf_launch_idle_thread() {
                 assert_eq!(launched.projection.thread.branch.as_deref(), Some("main"), "the branch was looked up");
             }
         }
+        report(&format!("launch.idle.{project}.p50"), median_micros(&times), "us");
         println!("perf idle launch, {project:>5}: {}", spread(times));
     }
     let _ = std::fs::remove_dir_all(dir);
@@ -551,6 +582,8 @@ fn perf_shell_first_items_encode() {
         bytes = items.iter().map(|i| serde_json::to_string(&serde_json::to_value(i).expect("value")).expect("text").len()).collect();
         times.push(started.elapsed());
     }
+    report("shell.first_items_1000_threads.p50", median_micros(&times), "us");
+    report("shell.first_items_1000_threads.bytes", bytes.iter().sum::<usize>() as f64, "bytes");
     println!("perf shell first items, 1000 threads: {} ; bytes per item {bytes:?}", spread(times));
     let _ = std::fs::remove_dir_all(dir);
 }
@@ -576,6 +609,172 @@ async fn perf_bytes_allocated_by_streamed_deltas() {
         "perf 20,000-character reply in 5000 deltas: {:.2} MB allocated ({:.0}x the reply), {:.1} ms",
         bytes as f64 / 1e6, bytes as f64 / text.len() as f64, took.as_secs_f64() * 1e3,
     );
+    report("turn.deltas_20k.allocated_bytes", bytes as f64, "bytes");
+    report("turn.deltas_20k.time", took.as_secs_f64() * 1e6, "us");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// One item of a thread subscription as the socket carries it: the frame's bytes.
+fn thread_frame(item: &impl serde::Serialize) -> String {
+    let value = serde_json::to_value(item).expect("an item is plain data");
+    effect_rpc::message::encode_server_message(&effect_rpc::message::FromServer::Chunk { request_id: effect_rpc::message::RequestId::Str("1".into()), values: vec![value] })
+}
+
+/// Opening a thread: what its snapshot costs to read from the database and
+/// to encode, and how many bytes the client is sent.
+#[test]
+#[ignore = "measurement; run with --ignored --nocapture"]
+fn perf_thread_snapshot_by_thread_size() {
+    for n in [100usize, 1000, 5000] {
+        let (store, dir) = temp_store("thread-snapshot");
+        seed(&store, "t1", n);
+        let reps = 5u32;
+        let (mut build, mut encode, mut bytes) = (Duration::ZERO, Duration::ZERO, 0);
+        for _ in 0..reps {
+            let started = Instant::now();
+            let (_, item) = crate::orchestration::stream::snapshot_item(&store, "t1").expect("snapshot");
+            build += started.elapsed();
+            let started = Instant::now();
+            bytes = thread_frame(&item).len();
+            encode += started.elapsed();
+        }
+        println!("perf n={n:>5}: thread snapshot build {}   encode {}   {:.2} MB", per_call(build, reps), per_call(encode, reps), bytes as f64 / 1e6);
+        report(&format!("thread.snapshot.build.{n}"), micros(build, reps), "us");
+        report(&format!("thread.snapshot.encode.{n}"), micros(encode, reps), "us");
+        report(&format!("thread.snapshot.bytes.{n}"), bytes as f64, "bytes");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
+/// A 20,000-character reply streamed through `Turn` in 20-character deltas
+/// over about ten seconds (the flush throttle runs on the clock): the bytes a
+/// client watching the thread is sent, the events it is sent them in, and
+/// what the reply leaves in the database once it is final.
+#[tokio::test]
+#[ignore = "measurement; run with --ignored --nocapture"]
+async fn perf_wire_and_disk_bytes_per_streamed_reply() {
+    let (store, dir) = temp_store("reply-bytes");
+    let (o, _effects) = orchestrator(store.clone());
+    launched(&o, "t1", 10).await;
+    let stored = |store: &Store| -> (i64, i64) {
+        store
+            .db()
+            .with(|c| {
+                let events: i64 = c.query_row("SELECT COALESCE(SUM(LENGTH(payload)), 0) FROM events", [], |r| r.get(0))?;
+                let records: i64 = c.query_row("SELECT COALESCE(SUM(LENGTH(record)), 0) FROM thread_entities", [], |r| r.get(0))?;
+                Ok((events, records))
+            })
+            .expect("bytes")
+    };
+    let before = stored(&store);
+    let mut turn = turn_of(&store, "t1");
+    let mut live = store.subscribe();
+    let (mut text, mut sent, mut events, mut peak) = (String::new(), 0usize, 0u32, 0i64);
+    let mut drain = |sent: &mut usize, events: &mut u32| {
+        while let Ok(event) = live.try_recv() {
+            if event.thread_event.is_some() {
+                *sent += thread_frame(&crate::orchestration::stream::Sent::Live(event)).len();
+                *events += 1;
+            }
+        }
+    };
+    for _ in 0..1000 {
+        turn.assistant_delta("live", &mut text, "twenty characters...");
+        drain(&mut sent, &mut events);
+        peak = peak.max(stored(&store).0);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    turn.assistant("live", &text, false, None);
+    drain(&mut sent, &mut events);
+    let after = stored(&store);
+    let reply = text.len();
+    println!(
+        "perf streamed reply of {reply} chars through Turn: {events} events, {:.2} MB sent to one subscriber ({:.0}x the reply); event log at its largest {:.2} MB, left {:.2} MB; records left {:.2} MB",
+        sent as f64 / 1e6, sent as f64 / reply as f64, (peak - before.0) as f64 / 1e6, (after.0 - before.0) as f64 / 1e6, (after.1 - before.1) as f64 / 1e6,
+    );
+    report("turn.reply_20k.wire_bytes", sent as f64, "bytes");
+    report("turn.reply_20k.events", f64::from(events), "count");
+    report("turn.reply_20k.event_log_peak_bytes", (peak - before.0) as f64, "bytes");
+    report("turn.reply_20k.event_log_left_bytes", (after.0 - before.0) as f64, "bytes");
+    report("turn.reply_20k.records_left_bytes", (after.1 - before.1) as f64, "bytes");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// On a copy of a real home's database (`DOMOVOI_PERF_HOME` names the home;
+/// its database is copied first and the copy is what is opened, so the home
+/// is never written): opening it, the shell snapshot, the largest thread's
+/// snapshot, and reading every thread as a search does. No server is started
+/// on it: one would run the home's scheduled tasks and unfinished work.
+#[test]
+#[ignore = "measurement over a real home; needs DOMOVOI_PERF_HOME"]
+fn perf_real_home() {
+    let Ok(home) = std::env::var("DOMOVOI_PERF_HOME") else {
+        println!("perf real home: skipped, DOMOVOI_PERF_HOME is not set");
+        return;
+    };
+    let source = std::path::Path::new(&home).join("userdata").join("domovoi.sqlite");
+    let dir = std::env::temp_dir().join(format!("domovoi-perf-real-{}", crate::util::new_uuid()));
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let path = dir.join("domovoi.sqlite");
+    std::fs::copy(&source, &path).unwrap_or_else(|e| panic!("{} could not be copied: {e}", source.display()));
+    // The first open brings the schema up to date; the second is a start's.
+    drop(Db::open(&path).expect("db"));
+    let started = Instant::now();
+    let store = Store::new(Db::open(&path).expect("db"));
+    let opened = started.elapsed();
+    let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+
+    // First, before anything has read a thread: opening the largest one as
+    // the first thing after a start, then again.
+    let largest: String = store
+        .db()
+        .read(|c| c.query_row("SELECT thread_id FROM thread_entities GROUP BY thread_id ORDER BY SUM(LENGTH(record)) DESC LIMIT 1", [], |r| r.get(0)))
+        .expect("a thread with records");
+    let started = Instant::now();
+    let (_, item) = crate::orchestration::stream::snapshot_item(&store, &largest).expect("thread snapshot");
+    let build = started.elapsed();
+    let started = Instant::now();
+    let thread_bytes = thread_frame(&item).len();
+    let encode = started.elapsed();
+    drop(item);
+    let started = Instant::now();
+    let again = crate::orchestration::stream::snapshot_item(&store, &largest).expect("thread snapshot");
+    let build_again = started.elapsed();
+    drop(again);
+
+    let started = Instant::now();
+    let snapshot = crate::rpc::shell::snapshot_of(&store).expect("shell snapshot");
+    let shell_cold = started.elapsed();
+    let threads = snapshot.threads.len() + snapshot.archived_threads.len();
+    let started = Instant::now();
+    let items = crate::rpc::shell::initial_items(crate::rpc::shell::snapshot_of(&store).expect("shell snapshot"));
+    let shell_bytes: usize = items.iter().map(|i| thread_frame(i).len()).sum();
+    let shell_warm = started.elapsed();
+
+    let ids: Vec<String> = store.thread_ids().expect("thread ids").into_iter().map(|(id, _)| id).collect();
+    let started = Instant::now();
+    let mut loaded = 0;
+    for id in &ids {
+        loaded += usize::from(store.load_thread(id).expect("thread").is_some());
+    }
+    let every = started.elapsed();
+
+    println!(
+        "perf real home ({:.0} MB, {threads} threads): open {:.1} ms; shell snapshot cold {:.1} ms, then with its frames {:.1} ms and {:.2} MB; largest thread snapshot build {:.1} ms (again {:.1} ms), encode {:.1} ms, {:.2} MB; reading all {loaded} threads {:.0} ms",
+        size as f64 / 1e6, opened.as_secs_f64() * 1e3, shell_cold.as_secs_f64() * 1e3, shell_warm.as_secs_f64() * 1e3, shell_bytes as f64 / 1e6,
+        build.as_secs_f64() * 1e3, build_again.as_secs_f64() * 1e3, encode.as_secs_f64() * 1e3, thread_bytes as f64 / 1e6, every.as_secs_f64() * 1e3,
+    );
+    report("real.largest_thread.snapshot.build_again", build_again.as_secs_f64() * 1e6, "us");
+    report("real.database_bytes", size as f64, "bytes");
+    report("real.open", opened.as_secs_f64() * 1e6, "us");
+    report("real.shell_snapshot.cold", shell_cold.as_secs_f64() * 1e6, "us");
+    report("real.shell_snapshot.with_frames", shell_warm.as_secs_f64() * 1e6, "us");
+    report("real.shell_snapshot.bytes", shell_bytes as f64, "bytes");
+    report("real.largest_thread.snapshot.build", build.as_secs_f64() * 1e6, "us");
+    report("real.largest_thread.snapshot.encode", encode.as_secs_f64() * 1e6, "us");
+    report("real.largest_thread.snapshot.bytes", thread_bytes as f64, "bytes");
+    report("real.read_every_thread", every.as_secs_f64() * 1e6, "us");
+    drop(store);
     let _ = std::fs::remove_dir_all(dir);
 }
 

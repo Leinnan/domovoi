@@ -3708,6 +3708,22 @@ async fn perf_a_long_reply_watched_by_many_clients() {
             let parts: Vec<f64> = s.split(':').map(|p| p.parse().unwrap_or(0.0)).collect();
             parts.iter().fold(0.0, |acc, p| acc * 60.0 + p)
         };
+        // The server's resident memory (`ps` reports kilobytes), at its largest while the turn runs.
+        let rss = |pid: u32| -> u64 {
+            let out = Command::new("ps").args(["-o", "rss=", "-p", &pid.to_string()]).output().unwrap();
+            String::from_utf8_lossy(&out.stdout).trim().parse::<u64>().unwrap_or(0) * 1024
+        };
+        let peak_rss = std::sync::atomic::AtomicU64::new(0);
+        let sampler = async {
+            let mut stop = stop_rx.clone();
+            loop {
+                peak_rss.fetch_max(rss(server.child.id()), std::sync::atomic::Ordering::Relaxed);
+                tokio::select! {
+                    _ = tokio::time::sleep(Duration::from_millis(250)) => {}
+                    _ = stop.changed() => return,
+                }
+            }
+        };
         let driver = async {
             tokio::time::sleep(Duration::from_millis(500)).await;
             let cpu_before = cpu(server.child.id());
@@ -3724,7 +3740,8 @@ async fn perf_a_long_reply_watched_by_many_clients() {
             stop_tx.send(true).unwrap();
             (elapsed, cpu_used)
         };
-        let (results, (elapsed, cpu_used)) = tokio::join!(watching, driver);
+        let (results, (elapsed, cpu_used), ()) = tokio::join!(watching, driver, sampler);
+        let peak_rss = peak_rss.load(std::sync::atomic::Ordering::Relaxed);
 
         let mut lat: Vec<f64> = results.iter().flat_map(|r| r.0.iter().copied()).collect();
         lat.sort_by(f64::total_cmp);
@@ -3737,7 +3754,205 @@ async fn perf_a_long_reply_watched_by_many_clients() {
             "perf clients={clients:>2}: turn {:.1}s, server CPU {cpu_used:.1}s, {values} values delivered, event latency p50 {:.0} ms p99 {:.0} ms max {:.0} ms, {snapshots} lag snapshots, events table {rows} rows {:.1} MB",
             elapsed.as_secs_f64(), pct(0.5), pct(0.99), lat.last().copied().unwrap_or(f64::NAN), bytes as f64 / 1e6,
         );
+        println!("PERF load.{clients}.server_cpu {cpu_used:.4} s");
+        println!("PERF load.{clients}.latency_p50 {:.4} ms", pct(0.5));
+        println!("PERF load.{clients}.latency_p99 {:.4} ms", pct(0.99));
+        println!("PERF load.{clients}.lag_snapshots {snapshots} count");
+        println!("PERF load.{clients}.server_peak_memory {peak_rss} bytes");
     }
+}
+
+/// A socket whose every frame, either way, is written to a file as `ws-tap`
+/// records one (`{"kind":"ws","conn":1,"dir":"c2s"|"s2c","frame":…}`). It
+/// acknowledges each chunk, as a client does.
+struct Tap {
+    requests: tokio::sync::mpsc::UnboundedSender<Value>,
+    task: tokio::task::JoinHandle<()>,
+    next: std::cell::Cell<u64>,
+}
+
+impl Tap {
+    fn open(mut ws: Ws, path: PathBuf) -> Tap {
+        let (requests, mut rx) = tokio::sync::mpsc::unbounded_channel::<Value>();
+        let task = tokio::spawn(async move {
+            use std::io::Write;
+            let mut file = std::fs::File::create(&path).unwrap();
+            let mut write = |dir: &str, frame: &Value| writeln!(file, "{}", json!({ "kind": "ws", "conn": 1, "dir": dir, "frame": frame })).unwrap();
+            let mut open = true;
+            loop {
+                tokio::select! {
+                    request = rx.recv(), if open => match request {
+                        Some(frame) => {
+                            write("c2s", &frame);
+                            ws.send(Message::Text(frame.to_string().into())).await.unwrap();
+                        }
+                        None => open = false,
+                    },
+                    frame = tokio::time::timeout(Duration::from_secs(2), ws.next()) => match frame {
+                        Ok(Some(Ok(Message::Text(text)))) => {
+                            let frame: Value = serde_json::from_str(&text).unwrap();
+                            write("s2c", &frame);
+                            if frame["_tag"] == "Chunk" {
+                                let ack = json!({ "_tag": "Ack", "requestId": frame["requestId"] });
+                                write("c2s", &ack);
+                                ws.send(Message::Text(ack.to_string().into())).await.unwrap();
+                            }
+                        }
+                        Ok(Some(Ok(_))) => {}
+                        Ok(_) => return,
+                        // Nothing more is asked, and nothing has come for two seconds.
+                        Err(_) if !open => return,
+                        Err(_) => {}
+                    },
+                }
+            }
+        });
+        Tap { requests, task, next: std::cell::Cell::new(1) }
+    }
+
+    /// Sends a request, numbered as the client core numbers its own.
+    fn send(&self, tag: &str, payload: Value) {
+        let id = self.next.replace(self.next.get() + 1).to_string();
+        self.requests.send(json!({ "_tag": "Request", "id": id, "tag": tag, "payload": payload, "headers": [] })).unwrap();
+    }
+
+    async fn close(self) {
+        drop(self.requests);
+        self.task.await.unwrap();
+    }
+}
+
+/// Records a session of this server for `fixtures/native` (not a test: it
+/// writes `DOMOVOI_RECORD_NATIVE`, a file, and checks only that the turns end).
+/// One socket subscribes as the client core does at a start (configuration,
+/// lifecycle, the thread list, then each thread as it is opened) and is
+/// recorded; a second one, not recorded, drives the turns:
+///
+/// - thread `t1` on the scripted Codex: every kind of item and request,
+///   each request answered;
+/// - thread `t2` on the scripted Claude: a reply with thinking, then a
+///   20,000-character reply streamed over about ten seconds;
+/// - each thread subscribed to once more at the end, for its whole snapshot.
+///
+/// ```sh
+/// DOMOVOI_RECORD_NATIVE=$PWD/rec.ndjson cargo test -p domovoi-server --test provider_turns record_a_native_session -- --ignored
+/// scripts/scrub_recording.py --tap rec.ndjson --home "$HOME" --redact "$(hostname -s)=host" --out fixtures/native/session1
+/// scripts/check_fixtures.py fixtures
+/// ```
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "writes a recording; needs DOMOVOI_RECORD_NATIVE"]
+async fn record_a_native_session() {
+    let Ok(out) = std::env::var("DOMOVOI_RECORD_NATIVE") else {
+        println!("no recording: DOMOVOI_RECORD_NATIVE names no file");
+        return;
+    };
+    let server = start_scripted("record");
+    let token = signed_in(&server).await;
+    let tap = Tap::open(socket(&server, &token).await, PathBuf::from(out));
+    let mut ws = socket(&server, &token).await;
+    let workspace = workspace_repository(&server);
+    tap.send("subscribeServerConfig", json!({}));
+    tap.send("subscribeServerLifecycle", json!({}));
+    tap.send("orchestration.subscribeShell", json!({ "requestCompletionMarker": true }));
+
+    launched(&mut ws, &workspace, "codex", "gpt-6-luna", "ALL of it").await;
+    tap.send("orchestration.subscribeThread", json!({ "threadId": "t1", "requestCompletionMarker": true }));
+    until(&mut ws, "t1", "the first approval", |all| all.iter().any(|e| e["type"] == "runtime-request.updated" && e["payload"]["status"] == "pending")).await;
+    std::fs::write(workspace.join("b.txt"), "new\n").unwrap();
+    let answers = [
+        json!({ "decision": "accept" }),
+        json!({ "decision": "acceptForSession" }),
+        json!({ "decision": "decline" }),
+        json!({ "answers": { "db": ["Postgres"], "question-2": "free text" } }),
+        json!({ "decision": "accept" }),
+        json!({ "decision": "cancel" }),
+    ];
+    answering(&mut ws, &answers, 1, "completed").await;
+
+    let r = call(&mut ws, "l2", "orchestration.launchThread", json!({ "commandId": "c-t2", "creationSource": "web", "threadId": "t2", "projectId": "p1",
+        "title": "Streamed", "generateTitle": false, "modelSelection": { "instanceId": "claudeAgent", "model": "claude-haiku-5-5" },
+        "runtimeMode": "full-access", "interactionMode": "default", "workspaceStrategy": { "type": "root" },
+        "initialMessage": { "messageId": "m-t2-1", "text": "THINKING completed", "attachments": [] } })).await;
+    assert_eq!(r["exit"]["_tag"], "Success", "{r}");
+    tap.send("orchestration.subscribeThread", json!({ "threadId": "t2", "requestCompletionMarker": true }));
+    let ended = |ordinal: u64| move |all: &[Value]| all.iter().any(|e| e["type"] == "run.updated" && e["payload"]["id"] == format!("run:thread:t2:ordinal:{ordinal}") && e["payload"]["status"] == "completed");
+    until(&mut ws, "t2", "the thinking run", ended(1)).await;
+    let r = call(&mut ws, "s2", "orchestration.dispatchCommand", json!({ "type": "message.dispatch", "commandId": "c-t2-2", "threadId": "t2", "messageId": "m-t2-2",
+        "text": "LOADTEST", "attachments": [], "createdBy": "user", "creationSource": "web", "dispatchMode": { "type": "queue_after_active" } })).await;
+    assert_eq!(r["exit"]["_tag"], "Success", "{r}");
+    until_within(Duration::from_secs(60), &mut ws, "t2", "the streamed run", ended(2)).await;
+
+    for thread in ["t1", "t2"] {
+        tap.send("orchestration.subscribeThread", json!({ "threadId": thread, "requestCompletionMarker": true }));
+    }
+    tap.close().await;
+}
+
+/// Sends a subscription and waits for its first chunk.
+async fn first_chunk(ws: &mut Ws, id: &str, tag: &str, payload: Value) {
+    let request = json!({ "_tag": "Request", "id": id, "tag": tag, "payload": payload, "headers": [] });
+    ws.send(Message::Text(request.to_string().into())).await.unwrap();
+    loop {
+        match ws.next().await {
+            Some(Ok(Message::Text(t))) => {
+                let v: Value = serde_json::from_str(&t).unwrap();
+                if v["requestId"] == id && v["_tag"] == "Chunk" {
+                    return;
+                }
+            }
+            Some(Ok(_)) => {}
+            _ => panic!("socket closed before the first {tag} item"),
+        }
+    }
+}
+
+/// What a client waits for when it connects (a measurement): a signed-in
+/// device opens its socket, gets the shell snapshot and a thread's snapshot;
+/// then one small call, there and back.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "measurement; run with --ignored --nocapture"]
+async fn perf_connecting_and_one_call() {
+    let server = start("connect");
+    let token = signed_in(&server).await;
+    let mut ws = socket(&server, &token).await;
+    let workspace = server.dir.join("w").canonicalize().unwrap();
+    let r = call(&mut ws, "1", "projects.mutate", json!({ "type": "project.create", "commandId": "c1", "projectId": "p1", "title": "w",
+        "workspaceRoot": workspace, "createWorkspaceRootIfMissing": false, "defaultModelSelection": null })).await;
+    assert_eq!(r["exit"]["_tag"], "Success", "{r}");
+    let r = call(&mut ws, "2", "orchestration.launchThread", json!({ "commandId": "c2", "creationSource": "web", "threadId": "t1", "projectId": "p1",
+        "title": "Connect", "generateTitle": false, "modelSelection": { "instanceId": "claudeAgent", "model": "claude-haiku-5-5" },
+        "runtimeMode": "full-access", "interactionMode": "default", "workspaceStrategy": { "type": "root" },
+        "initialMessage": { "messageId": "m1", "text": "DONE", "attachments": [] } })).await;
+    assert_eq!(r["exit"]["_tag"], "Success", "{r}");
+    until(&mut ws, "t1", "the first run", |all| last(all, "run.updated").is_some_and(|r| r["status"] == "completed")).await;
+
+    let median = |times: &mut Vec<Duration>| -> f64 {
+        times.sort();
+        times[times.len() / 2].as_secs_f64() * 1e6
+    };
+    let (mut opened, mut shell, mut thread) = (vec![], vec![], vec![]);
+    for _ in 0..30 {
+        let started = std::time::Instant::now();
+        let mut ws = socket(&server, &token).await;
+        opened.push(started.elapsed());
+        first_chunk(&mut ws, "shell", "orchestration.subscribeShell", json!({})).await;
+        shell.push(started.elapsed());
+        first_chunk(&mut ws, "thread", "orchestration.subscribeThread", json!({ "threadId": "t1", "requestCompletionMarker": true })).await;
+        thread.push(started.elapsed());
+    }
+    let mut calls = vec![];
+    for i in 0..300 {
+        let started = std::time::Instant::now();
+        let r = call(&mut ws, &format!("a{i}"), "orchestration.getArchivedShellSnapshot", json!({})).await;
+        calls.push(started.elapsed());
+        assert_eq!(r["exit"]["_tag"], "Success", "{r}");
+    }
+    let (opened, shell, thread, calls) = (median(&mut opened), median(&mut shell), median(&mut thread), median(&mut calls));
+    println!("perf connect (medians): socket open {:.2} ms, shell snapshot at {:.2} ms, thread snapshot at {:.2} ms; one small call {:.0} µs", opened / 1e3, shell / 1e3, thread / 1e3, calls);
+    println!("PERF connect.socket_open.p50 {opened:.4} us");
+    println!("PERF connect.shell_snapshot.p50 {shell:.4} us");
+    println!("PERF connect.thread_snapshot.p50 {thread:.4} us");
+    println!("PERF call.small_unary_round_trip.p50 {calls:.4} us");
 }
 
 /// Whether a `caffeinate` holds the machine awake for this server.

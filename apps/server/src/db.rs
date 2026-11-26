@@ -38,6 +38,19 @@ pub struct Db {
     readers: Option<Arc<Readers>>,
 }
 
+/// Why a database did not open.
+#[derive(Debug, thiserror::Error)]
+pub enum OpenError {
+    #[error(transparent)]
+    Sqlite(#[from] rusqlite::Error),
+    /// A newer server wrote this database. Reading it with this build would
+    /// skip the records it cannot decode and write back less than it found.
+    #[error(
+        "the database is at schema {found} and this build of domovoi-server knows schema {known}: it was written by a newer version. Start that version, or restore a backup made before the update"
+    )]
+    Newer { found: i64, known: usize },
+}
+
 /// Idle read-only connections to the database file.
 struct Readers {
     path: std::path::PathBuf,
@@ -230,7 +243,7 @@ impl Db {
     /// Opens the database at `path`, making it when missing. The file, its
     /// write-ahead log and its shared-memory file are this user's alone:
     /// SQLite gives the two it makes the mode of the database.
-    pub fn open(path: &Path) -> rusqlite::Result<Self> {
+    pub fn open(path: &Path) -> Result<Self, OpenError> {
         make_private(path);
         let conn = Connection::open(path)?;
         // NORMAL is safe with WAL: a crash of the server loses nothing; only a
@@ -247,7 +260,7 @@ impl Db {
     }
 
     #[cfg(test)]
-    pub fn open_in_memory() -> rusqlite::Result<Self> {
+    pub fn open_in_memory() -> Result<Self, OpenError> {
         let db = Db { writer: Arc::new(ReentrantMutex::new(Writer::new(Connection::open_in_memory()?))), readers: None };
         db.migrate()?;
         Ok(db)
@@ -290,10 +303,13 @@ impl Db {
         result
     }
 
-    fn migrate(&self) -> rusqlite::Result<()> {
+    fn migrate(&self) -> Result<(), OpenError> {
         let guard = self.writer.lock();
         let mut conn = guard.conn.borrow_mut();
         let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        if version > MIGRATIONS.len() as i64 {
+            return Err(OpenError::Newer { found: version, known: MIGRATIONS.len() });
+        }
         for (i, sql) in MIGRATIONS.iter().enumerate().skip(version as usize) {
             let tx = conn.transaction()?;
             tx.execute_batch(sql)?;
@@ -358,6 +374,21 @@ impl Db {
             }
         }
         f();
+    }
+
+    /// Writes a compact copy of the whole database to `to` (`VACUUM INTO`):
+    /// consistent as of one moment, without the write-ahead log, and readable
+    /// by this user only. `to` must not exist. Other writers wait meanwhile.
+    pub fn backup_to(&self, to: &Path) -> rusqlite::Result<()> {
+        if to.exists() {
+            return Err(rusqlite::Error::InvalidPath(to.to_owned()));
+        }
+        let Some(target) = to.to_str() else { return Err(rusqlite::Error::InvalidPath(to.to_owned())) };
+        self.with(|c| c.execute("VACUUM INTO ?1", params![target]).map(|_| ()))?;
+        if let Err(e) = crate::util::tighten(to) {
+            tracing::warn!("{} could not be made private: {e}", to.display());
+        }
+        Ok(())
     }
 
     pub fn meta_get(&self, key: &str) -> rusqlite::Result<Option<String>> {
@@ -461,6 +492,43 @@ mod tests {
 
     fn meta(db: &Db) -> Option<String> {
         db.read(|c| c.query_row("SELECT value FROM meta WHERE key = 'k'", [], |r| r.get(0)).optional()).unwrap()
+    }
+
+    #[test]
+    fn a_database_from_a_newer_server_does_not_open() {
+        let dir = std::env::temp_dir().join(format!("domovoi-db-newer-{}", crate::util::new_uuid()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("domovoi.sqlite");
+        drop(Db::open(&path).unwrap());
+        let newer = MIGRATIONS.len() as i64 + 1;
+        Connection::open(&path).unwrap().execute_batch(&format!("PRAGMA user_version = {newer}")).unwrap();
+        match Db::open(&path) {
+            Err(OpenError::Newer { found, known }) => assert_eq!((found, known), (newer, MIGRATIONS.len())),
+            other => panic!("opened a newer database: {:?}", other.err()),
+        }
+        // Nothing was changed: the version is still the newer one.
+        let version: i64 = Connection::open(&path).unwrap().query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+        assert_eq!(version, newer);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_backup_is_a_whole_private_copy_and_never_replaces_a_file() {
+        let dir = std::env::temp_dir().join(format!("domovoi-db-backup-{}", crate::util::new_uuid()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = Db::open(&dir.join("domovoi.sqlite")).unwrap();
+        db.meta_set("k", "v").unwrap();
+        let copy = dir.join("copy.sqlite");
+        db.backup_to(&copy).unwrap();
+        db.meta_set("k", "later").unwrap();
+        assert_eq!(meta(&Db::open(&copy).unwrap()).as_deref(), Some("v"), "the copy is as of the backup");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&copy).unwrap().permissions().mode() & 0o777, 0o600);
+        }
+        assert!(db.backup_to(&copy).is_err(), "an existing file is not written over");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

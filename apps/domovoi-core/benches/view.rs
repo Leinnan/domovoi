@@ -121,10 +121,17 @@ fn stream_token(model: &mut Model, id: &str, text: &mut String, k: u64) {
     model.changes.wide();
 }
 
+/// The recorded session. `DOMOVOI_FIXTURES` names another `fixtures` folder: a
+/// build kept by `tools/perf.py` reads the recording it was saved with.
+fn recording() -> std::path::PathBuf {
+    let fixtures = std::env::var_os("DOMOVOI_FIXTURES").map_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures"), Into::into);
+    fixtures.join("golden/ts-session1/wire.ndjson")
+}
+
 /// From the recorded TypeScript-server session: the config snapshot item,
 /// the shell stream's items, and one thread shell to copy.
 fn recorded_boot() -> (Value, Vec<Value>, Value) {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/golden/ts-session1/wire.ndjson");
+    let path = recording();
     let text = std::fs::read_to_string(path).expect("fixture");
     let mut tags: std::collections::HashMap<(i64, String), String> = Default::default();
     let (mut config, mut shell, mut template) = (None, vec![], Value::Null);
@@ -321,6 +328,23 @@ fn socket_token(b: divan::Bencher, n: usize) {
 #[divan::bench(args = [2000])]
 fn socket_token_long_reply(b: divan::Bencher, n: usize) {
     socket_flushes(b, n, &"more words ".repeat(1818));
+}
+
+/// Opening a thread as a shell pays for it: the snapshot's socket frame, as
+/// the server writes it for this thread, through `update` (decoded, the
+/// thread built from it), `FfiApp::view`, the delta's encoding.
+#[divan::bench(args = [500, 2000])]
+fn socket_snapshot(b: divan::Bencher, n: usize) {
+    let (mut model, request) = connected_thread(n);
+    let app = FfiApp::default();
+    let _ = render_delta(&app, &model);
+    let projection = serde_json::to_value(model.thread.as_ref().expect("thread").projection()).expect("a projection is plain data");
+    let frame = chunk(&request, &[json!({ "kind": "snapshot", "snapshotSequence": 3_000_000, "projection": projection })]);
+    eprintln!("PERF view.socket_snapshot.{n}.frame_bytes {} bytes", frame.len());
+    b.with_inputs(|| frame.clone()).bench_local_values(|frame| {
+        feed(&mut model, frame);
+        render_delta(&app, &model)
+    });
 }
 
 /// Decoding that frame alone (`RpcClient::receive`), 20,000 characters in.

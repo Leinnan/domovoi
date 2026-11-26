@@ -20,6 +20,7 @@ mod command_differential;
 mod config_failure;
 mod connections;
 mod control;
+mod data_format;
 mod db;
 mod diagrams;
 mod doctor;
@@ -210,6 +211,13 @@ enum Cmd {
         /// Print the checks as JSON.
         #[arg(long)]
         json: bool,
+        /// Also read every stored thread, record and project, and say which
+        /// this version cannot decode (a large database takes a while).
+        #[arg(long)]
+        records: bool,
+        /// With `--records`: read the logged events as well.
+        #[arg(long, requires = "records")]
+        events: bool,
     },
     /// Domovoi's agent tools over stdio, for an ACP agent that starts MCP
     /// servers only as commands (started by the server, not by hand).
@@ -326,6 +334,7 @@ fn base(args: &Args, paths: &state::Paths) -> Fallible<Base> {
     std::thread::spawn(|| drop(managed::scratch_root()));
     let _ = vcs_ops::WORKTREES_DIR.set(paths.home.join("worktrees"));
     let db = db::Db::open(&paths.userdata.join("domovoi.sqlite"))?;
+    data_format::refuse_newer(&db)?;
     let environment_id = match db.meta_get("environment_id")? {
         Some(id) => id,
         None => {
@@ -392,10 +401,11 @@ fn run() -> Fallible {
         return Ok(());
     }
     // Before the home directory is touched: doctor changes nothing.
-    if let Some(Cmd::Doctor { json }) = &args.command {
+    if let Some(Cmd::Doctor { json, records, events }) = &args.command {
         let _log = logging::init(None);
         shell_env::hydrate();
-        return runtime()?.block_on(doctor::run(&args.home_dir, &args.host, args.port, &args.relays, *json));
+        let records = records.then_some(doctor::Records { events: *events });
+        return runtime()?.block_on(doctor::run(&args.home_dir, &args.host, args.port, &args.relays, *json, records));
     }
     let paths = state::Paths::new(args.home_dir.clone())?;
     match &args.command {
@@ -575,6 +585,10 @@ async fn serve(args: &Args, paths: state::Paths, base: Base, shutdown: tokio_uti
     );
     let apns = push::Apns::new(&push_config)?;
     let (provider_updates, _) = tokio::sync::broadcast::channel(16);
+    // Before anything reads a record: they are brought to this build's format.
+    if let Some(upgraded) = data_format::upgrade(&db, &paths.userdata.join("backups"))? {
+        tracing::info!("{upgraded}");
+    }
     let store = store::Store::new(db);
     let (orchestrator, effects) = orchestration::commands::Orchestrator::new(store.clone());
     let orchestrator = Arc::new(orchestrator);

@@ -13,12 +13,19 @@
 //! the descriptor apps on this machine sign in by; whether a server already
 //! answers on the port, and whether it is this home's and ready.
 //!
+//! `--records` also reads every stored thread, record and project the way the
+//! server does (`orchestration/audit.rs`), and with `--events` the logged
+//! events: the rows this version cannot decode are counted by table and kind
+//! and the first few named. The server leaves such a row out, so they are a
+//! warning, not a failure.
+//!
 //! Limits: no database compaction or legacy-database report (t3code's
 //! `--fix`); the iroh relays are not dialled (that needs the network and a
 //! started endpoint); provider sign-in is not probed (the server's provider
 //! list shows it); provider instances from the settings are not checked
 //! one by one, only the CLIs the built-in drivers run.
 
+use crate::orchestration::audit::Group;
 use crate::providers::Tool;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -66,11 +73,41 @@ pub struct Report {
     /// No check failed.
     pub ok: bool,
     pub checks: Vec<Check>,
+    /// With `--records`: the stored records by table and kind.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub records: Option<Vec<Group>>,
+}
+
+/// `doctor --records`: what is read beside the threads, their records and
+/// the projects.
+#[derive(Debug, Clone, Copy)]
+pub struct Records {
+    pub events: bool,
 }
 
 impl Report {
     pub fn new(checks: Vec<Check>) -> Self {
-        Report { ok: checks.iter().all(|c| c.status != Status::Fail), checks }
+        Report { ok: checks.iter().all(|c| c.status != Status::Fail), checks, records: None }
+    }
+
+    /// The report with the stored records read: a row that does not decode
+    /// is a warning (the server leaves it out and serves the rest).
+    fn with_records(mut self, read: Result<Vec<Group>, String>) -> Self {
+        let name = "records";
+        match read {
+            Ok(groups) => {
+                let (rows, unread): (u64, u64) = groups.iter().fold((0, 0), |(rows, unread), g| (rows + g.rows, unread + g.unread));
+                let status = if unread == 0 { Status::Ok } else { Status::Warn };
+                let detail = if unread == 0 { format!("{rows} stored records decode") } else { format!("{unread} of {rows} stored records do not decode") };
+                self.checks.push(Check::new(name, status, detail));
+                self.records = Some(groups);
+            }
+            Err(e) => {
+                self.checks.push(Check::new(name, Status::Fail, format!("the stored records could not be read: {e}")));
+                self.ok = false;
+            }
+        }
+        self
     }
 
     /// One aligned line per check, then a summary.
@@ -87,6 +124,16 @@ impl Report {
             (0, w) => format!("No failures; {w} warning(s)."),
             (f, w) => format!("{f} check(s) failed; {w} warning(s)."),
         });
+        if let Some(groups) = &self.records {
+            let kind = groups.iter().map(|g| g.kind.len()).max().unwrap_or(0);
+            out.push_str("\n\nStored records:\n");
+            for g in groups {
+                out.push_str(&format!("  {:<15}  {:<kind$}  {:>8} rows  {:>9.1} MB  {} unread\n", g.table, g.kind, g.rows, g.bytes as f64 / 1_048_576.0, g.unread));
+                for sample in &g.samples {
+                    out.push_str(&format!("      {}\n", one_line(sample)));
+                }
+            }
+        }
         out
     }
 }
@@ -110,8 +157,13 @@ fn one_line(text: &str) -> String {
 }
 
 /// `doctor`: prints the report; `Err(Failed)` when a check failed.
-pub async fn run(home: &Path, host: &str, port: u16, relays: &[String], json: bool) -> crate::Fallible {
-    let report = Report::new(checks(home, host, port, relays).await);
+pub async fn run(home: &Path, host: &str, port: u16, relays: &[String], json: bool, records: Option<Records>) -> crate::Fallible {
+    let mut report = Report::new(checks(home, host, port, relays).await);
+    if let Some(records) = records {
+        let database = home.join("userdata").join("domovoi.sqlite");
+        let read = tokio::task::spawn_blocking(move || read_records(&database, records)).await.unwrap_or_else(|e| Err(e.to_string()));
+        report = report.with_records(read);
+    }
     if json {
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else {
@@ -208,6 +260,15 @@ fn check_database(path: &Path) -> (Check, Option<String>) {
     };
     let environment_id = conn.query_row("SELECT value FROM meta WHERE key = 'environment_id'", [], |row| row.get::<_, String>(0)).ok();
     (check, environment_id)
+}
+
+/// Every stored record read as the server reads it, on a read-only connection.
+fn read_records(path: &Path, records: Records) -> Result<Vec<Group>, String> {
+    use rusqlite::OpenFlags;
+    let conn = rusqlite::Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX)
+        .map_err(|e| format!("{} does not open: {e}", path.display()))?;
+    let _ = conn.busy_timeout(Duration::from_secs(5));
+    crate::orchestration::audit::records(&conn, records.events).map_err(|e| e.to_string())
 }
 
 /// Runs `cmd` with the probe timeout: its trimmed output (stdout, else

@@ -94,6 +94,29 @@ live provider filter="":
     fi
     exit $status
 
+# Build this checkout's measurements (benches, `perf_*` tests, the server) and keep them
+# under .reference/perf/<label>, so they can be run again after the code has changed
+perf-save label:
+    {{python}} tools/perf.py save {{label}}
+
+# Run a kept build's measurements once (`--only bench|store|load|real` runs one group)
+perf-run label *args:
+    {{python}} tools/perf.py run {{label}} {{args}}
+
+# Keep this checkout's measurements under <label> and run them once
+perf label: (perf-save label) (perf-run label)
+
+# Run two kept builds in alternation (`-n 3` pairs by default), then compare them:
+# the way to measure a change on a machine that is busy with other work
+perf-pairs before after *args:
+    {{python}} tools/perf.py pairs {{before}} {{after}} {{args}}
+    {{python}} tools/perf.py compare {{before}} {{after}}
+
+# The table of two kept builds' medians (`just perf-compare --self <label>`: one build
+# against itself, which shows the noise; `--changed` leaves out what is the same)
+perf-compare *args:
+    {{python}} tools/perf.py compare {{args}}
+
 # Every client uses every core event and view field, bar tools/parity-allowlist.toml (`--matrix` prints counts)
 parity *args:
     {{python}} tools/parity.py {{args}}

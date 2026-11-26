@@ -30,13 +30,20 @@ const SIZES: [usize; 3] = [100, 1000, 5000];
 /// every kind. The numbers the benches' history was measured on.
 const GROWN: [(usize, usize, usize); 3] = [(100, 100, 225), (1000, 1000, 2025), (5000, 5000, 10025)];
 
+/// The recorded session. `DOMOVOI_FIXTURES` names another `fixtures` folder: a
+/// build kept by `tools/perf.py` reads the recording it was saved with.
+fn recording() -> std::path::PathBuf {
+    let fixtures = std::env::var_os("DOMOVOI_FIXTURES").map_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures"), Into::into);
+    fixtures.join("golden/ts-session1/wire.ndjson")
+}
+
 struct Recorded {
     snapshot: Value,
     events: Vec<Value>,
 }
 
 static RECORDED: LazyLock<Recorded> = LazyLock::new(|| {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/golden/ts-session1/wire.ndjson");
+    let path = recording();
     let text = std::fs::read_to_string(path).expect("fixture");
     let mut requests: BTreeMap<(i64, String), Value> = BTreeMap::new();
     let mut snapshot = None;

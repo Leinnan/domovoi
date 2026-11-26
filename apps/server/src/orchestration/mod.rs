@@ -1,6 +1,7 @@
 //! Orchestration v2: commands decide domain events; the store persists them and
 //! their projection atomically; subscribers stream them.
 
+pub mod audit;
 pub mod checkpoints;
 pub mod commands;
 pub mod context;
