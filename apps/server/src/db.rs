@@ -228,7 +228,7 @@ const MIGRATIONS: &[&str] = &[
         byte_length INTEGER NOT NULL, created_at TEXT NOT NULL,
         PRIMARY KEY (artifact_id, version));",
     // 15: which standalone issue tracker scope (Linear team) each project
-    // reads beside its git host's issues (t3code `issue_tracker_bindings`).
+    // reads beside its git host's issues.
     "CREATE TABLE IF NOT EXISTS issue_tracker_bindings (
         project_id TEXT PRIMARY KEY, tracker TEXT NOT NULL, scope TEXT NOT NULL, updated_at TEXT NOT NULL);",
     // 16: interactive terminal descriptors survive a server restart.

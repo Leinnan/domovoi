@@ -363,7 +363,7 @@ fn parse(text: &str) -> Option<roxmltree::Document<'_>> {
     roxmltree::Document::parse_with_options(text, roxmltree::ParsingOptions { allow_dtd: false, nodes_limit: MAX_NODES, ..Default::default() }).ok()
 }
 
-/// Parts the document never shows (t3code's `HIDDEN`).
+/// Parts the document never shows.
 const HIDDEN: [&str; 12] = ["rPh", "delText", "moveFrom", "instrText", "delInstrText", "pPr", "positionH", "positionV", "sizeRelH", "sizeRelV", "fldData", "del"];
 
 fn name<'a>(n: &Node<'a, '_>) -> &'a str {

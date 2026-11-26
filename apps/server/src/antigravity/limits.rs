@@ -1,4 +1,4 @@
-//! An Antigravity account's usage limits (t3code `antigravityUsageLimits.ts`),
+//! An Antigravity account's usage limits,
 //! as Gemini and shared Claude & GPT windows, five-hourly and weekly.
 //!
 //! Only the agent reads them: each running `agy acp` serves its language

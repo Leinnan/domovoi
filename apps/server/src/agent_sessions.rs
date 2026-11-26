@@ -219,7 +219,7 @@ impl ScanEnv {
                 .unwrap_or_else(|| home.join(default_dir));
             homes.push((source, id.to_owned(), dir));
         }
-        // Pi's sessions folder (t3code `resolvePiSessionsDir`): `--session-dir`
+        // Pi's sessions folder: `--session-dir`
         // in Domovoi's pi arguments, else PI_CODING_AGENT_SESSION_DIR, else
         // `sessions` in PI_CODING_AGENT_DIR (default `~/.pi/agent`).
         let pi_instance = pi_instance.unwrap_or_default();
@@ -1807,7 +1807,6 @@ fn is_claude_session_id(id: &str) -> bool {
     regex!(r"(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$").is_match(id)
 }
 
-/// t3code's `DEFAULT_MODEL_BY_PROVIDER`.
 fn default_model(source: Source) -> &'static str {
     match source {
         Source::Claude => "claude-opus-5-5",
@@ -2314,7 +2313,7 @@ mod tests {
     }
 
     #[test]
-    fn failures_are_written_as_the_tagged_errors_of_t3code() {
+    fn failures_are_written_as_tagged_errors() {
         let scan = Failure::read_projects("no such table: agent_session_imports");
         assert_eq!(json!(scan), json!({ "_tag": "AgentSessionScanError", "operation": "read-projects", "cause": "no such table: agent_session_imports" }));
         assert_eq!(scan.to_string(), "Failed to scan agent sessions during read-projects.");

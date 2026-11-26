@@ -1,4 +1,4 @@
-//! WebSocket RPC handlers (t3code `WsRpcGroup` subset).
+//! WebSocket RPC handlers.
 
 mod access;
 pub(crate) mod admin_failure;
@@ -31,7 +31,7 @@ pub fn router() -> Router<ConnCtx> {
     let r = Router::new().guard(|ctx: &ConnCtx, meta, payload| {
         crate::permissions::check(&meta.tag, payload, &ctx.session.permissions).map_err(|refused| domovoi_rpc::Failure::fail(&refused))
     });
-    // Reading the diagnostics would otherwise trace itself (t3code's `RPC_METHODS_WITH_TRACING_DISABLED`).
+    // Reading the diagnostics would otherwise trace itself.
     let r = r.untraced(&["server.getTraceDiagnostics", "server.getProcessDiagnostics", "server.getProcessResourceHistory", "server.signalProcess"]);
     let r = server::register(r);
     let r = shell::register(r);

@@ -4495,7 +4495,7 @@ async fn steered(ws: &mut Ws, reply: &str) -> Vec<Value> {
     all
 }
 
-/// xAI's Grok CLI (t3code `provider-grok`): probed with `--version`,
+/// xAI's Grok CLI: probed with `--version`,
 /// `grok models` and `initialize` (models with reasoning levels, slash
 /// commands); a turn launched in full access with the model and its level set
 /// on `session/set_model`, Grok's question answered as a form and its plan
@@ -4539,7 +4539,7 @@ async fn a_grok_agent_runs_turns() {
     assert_eq!((interject["params"]["sessionId"].as_str(), interject["params"]["text"].as_str()), (Some("grok-session"), Some("use tabs")));
 }
 
-/// Kiro's CLI (t3code `provider-kiro`): probed with `--version`, `whoami`,
+/// Kiro's CLI: probed with `--version`, `whoami`,
 /// `chat --list-models` and `_kiro/config/template` (its agents offered on
 /// every model); a turn's agent, model, effort and autopilot set as config
 /// options in that order; a read asked about since Kiro offers only a
@@ -4581,7 +4581,7 @@ async fn a_kiro_agent_runs_turns() {
     assert_eq!(steer["params"], json!({ "sessionId": "kiro-cli-session", "message": "use tabs" }));
 }
 
-/// Vercel's fx (t3code `provider-fx`): probed with `--version` and each
+/// Vercel's fx: probed with `--version` and each
 /// backend's `status --json` and `models --json`; an Auto turn writes the
 /// mode fx already reports (fx enforces its own until a client does), the
 /// model on its backend and the default effort, asks about a read (Auto asks

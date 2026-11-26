@@ -89,7 +89,7 @@ fn capabilities(option: Option<&Value>, observed: bool) -> ModelCapabilities {
     ModelCapabilities { option_descriptors: Some(descriptor.into_iter().collect()) }
 }
 
-/// The models a session lists (t3code `buildAntigravityModelsFromSession`):
+/// The models a session lists:
 /// its model select, else its `models` list. The current one is the
 /// account's default (and answers to [`super::DEFAULT_MODEL`]); each has the
 /// thinking levels it showed when selected, else the current model's, unselected.
@@ -144,7 +144,7 @@ pub fn models_from_session(session: &Value, thinking: &BTreeMap<String, Value>) 
     out
 }
 
-/// What setting the model takes (t3code `applyAntigravityAcpModelSelection`).
+/// What setting the model takes.
 #[derive(Debug, PartialEq, Eq)]
 pub enum ModelChoice {
     /// Leave the session's model.
@@ -481,7 +481,7 @@ mod tests {
     }
 
     #[test]
-    fn the_model_is_chosen_as_t3code_does() {
+    fn the_model_is_chosen() {
         let options = &session()["configOptions"];
         assert_eq!(choose_model(options, "gemini-3.8-flash", None), ModelChoice::Set("gemini-3.8-flash".into()));
         assert_eq!(choose_model(options, "gemini-4-neon", None), ModelChoice::Keep);

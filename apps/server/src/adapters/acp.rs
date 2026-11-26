@@ -357,7 +357,7 @@ impl AcpSession {
             let answer = match open("session/new", params.clone()).await {
                 Ok(a) => a,
                 Err(e) if auth_required(&e) => {
-                    // A CLI's own method goes even when the agent doesn't list it (t3code `authenticateAfterRequired`).
+                    // A CLI's own method goes even when the agent doesn't list it.
                     let method = pick_auth(&init["authMethods"], configured.as_deref())
                         .or_else(|| configured.clone().filter(|_| cli.is_some()))
                         .ok_or("The ACP agent needs signing in, and offers no way Domovoi can do it here.")?;
@@ -773,7 +773,7 @@ impl AcpSession {
         Ok(())
     }
 
-    /// fx's session mode for the runtime mode (t3code `withFxSessionMode`):
+    /// fx's session mode for the runtime mode:
     /// the first write after a session opens always goes out.
     async fn apply_fx_mode(&self, runtime_mode: &str) -> Result<(), String> {
         use crate::acp_cli::fx;
@@ -802,7 +802,7 @@ impl AcpSession {
         Ok(())
     }
 
-    /// fx's backend and model (t3code `applyFxModelSelection`): the backend
+    /// fx's backend and model: the backend
     /// first, as its models change with it; put back if the model fails.
     async fn apply_fx_model(&self, input: &TurnInput) -> Result<(), String> {
         use crate::acp_cli::fx;
@@ -863,7 +863,7 @@ impl AcpSession {
         if self.antigravity.is_some() {
             blocks = crate::antigravity::protocol::attachment_blocks(&input.images, &input.files, &self.prompt_caps);
         } else if self.prompt_caps["image"] == true || self.cli == Some(crate::acp_cli::Kind::Grok) {
-            // Grok takes images though it says it doesn't (t3code `supportsImagePrompts`).
+            // Grok takes images though it says it doesn't.
             for (mime, path) in &input.images {
                 if let Ok(bytes) = std::fs::read(path) {
                     blocks.push(json!({ "type": "image", "mimeType": mime, "data": base64::engine::general_purpose::STANDARD.encode(bytes) }));
@@ -1016,7 +1016,7 @@ impl AcpSession {
                             (TurnEnd::Failed, Some(crate::antigravity::SIGN_IN_REQUIRED.to_owned()))
                         }
                         Ok(Err(e)) if antigravity => (TurnEnd::Failed, Some(format!("Antigravity failed the turn: {}", crate::antigravity::launch::explain(&e)))),
-                        // Grok's and Kiro's prompt errors carry a message meant for the user (t3code `promptFailure`).
+                        // Grok's and Kiro's prompt errors carry a message meant for the user.
                         Ok(Err(crate::jsonrpc::RpcError::Remote(e))) if self.cli.is_some() && e["message"].as_str().is_some_and(|m| !m.trim().is_empty()) => {
                             if self.cli == Some(crate::acp_cli::Kind::Grok) && e["code"] == crate::acp_cli::grok::RATE_LIMITED {
                                 turn.usage_limited(None);
@@ -1156,7 +1156,7 @@ impl AcpSession {
                         Some(Incoming::Notification { method, params })
                             if self.cli == Some(crate::acp_cli::Kind::Grok) && crate::acp_cli::grok::is_prompt_complete(&method) && params["sessionId"] == self.session_id.as_str() && !prompt_done =>
                         {
-                            // Grok can say a prompt is done without answering it (t3code `makeXAiPromptCompletionRuntime`).
+                            // Grok can say a prompt is done without answering it.
                             break match params["stopReason"].as_str() {
                                 Some("cancelled") => (TurnEnd::Interrupted, None),
                                 Some("refusal") => (TurnEnd::Failed, Some("The agent refused to go on.".to_owned())),
@@ -1487,8 +1487,8 @@ impl AcpSession {
     }
 }
 
-/// Grok's `session/load`, which can stay unanswered once its replay ends
-/// (t3code `sessionLoadReplayIdleReadiness`): loaded when it answers, or a
+/// Grok's `session/load`, which can stay unanswered once its replay ends:
+/// loaded when it answers, or a
 /// second after the replay's last update; given up after a minute.
 async fn replay_settled(load: impl std::future::Future<Output = Result<Value, crate::jsonrpc::RpcError>>, events: &mut mpsc::UnboundedReceiver<Incoming>) -> Result<Value, crate::jsonrpc::RpcError> {
     tokio::pin!(load);
@@ -1518,7 +1518,7 @@ fn bounded(text: &str, max: usize) -> String {
     text.chars().take(max).collect()
 }
 
-/// An `http(s)` URL with a host, as the agent wrote it (t3code `normalizeAcpRegistryWebUrl`).
+/// An `http(s)` URL with a host, as the agent wrote it.
 fn web_url(url: &str) -> Option<String> {
     let parsed = url::Url::parse(url.trim()).ok()?;
     (matches!(parsed.scheme(), "http" | "https") && parsed.host_str().is_some_and(|h| !h.is_empty()) && url.len() <= 2048).then(|| parsed.to_string())

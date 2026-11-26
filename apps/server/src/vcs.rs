@@ -560,7 +560,7 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn discovered_tools_are_written_as_t3code_writes_them() {
+    fn discovered_tools_are_written_as_recorded() {
         let none = json!({ "_tag": "None" });
         let git = DiscoveredVcs { tool: DiscoveredTool::found("git", "Git", "git", Some("git version 2.50.1".into()), "Install Git."), implemented: true };
         assert_eq!(

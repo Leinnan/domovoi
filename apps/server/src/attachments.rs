@@ -503,7 +503,7 @@ mod tests {
     }
 
     #[test]
-    fn segments_and_extensions_follow_t3code() {
+    fn segments_and_extensions_are_read() {
         assert_eq!(thread_segment("pending").as_deref(), Some("_pending"));
         assert_eq!(thread_segment("  ").as_deref(), None);
         assert_eq!(file_extension("x.part"), ".bin");

@@ -1,4 +1,4 @@
-//! The server's headless browser (t3code `ServerBrowser.ts`): it runs every
+//! The server's headless browser: it runs every
 //! preview tab opened with `runtime: "server"` in a Chrome page it drives
 //! over the DevTools protocol, reports the page's status to the manager
 //! (`serverControlled`), streams it to viewers (`stream.rs`) and runs the
@@ -11,7 +11,7 @@
 //!   clearing and hard reload. A page that closes itself closes its tab.
 //! - Pages are drawn at device scale 2 (zoom multiplies it); a `fill` tab
 //!   takes the latest viewer's size, else 1280x800.
-//! - Control (t3code `SessionControl`): a tab an agent opened is that agent's;
+//! - Control: a tab an agent opened is that agent's;
 //!   one a client opened is unclaimed. A viewer with `preview:operate` takes
 //!   control of an unclaimed tab on attach, and with `takeControl` of any tab
 //!   nobody else controls; while a human controls a tab agents may only read
@@ -237,7 +237,7 @@ impl ViewerLink {
     }
 }
 
-/// A viewer of one tab (t3code `ServerBrowserViewer`).
+/// A viewer of one tab.
 pub struct Viewer {
     pub output: mpsc::Receiver<Output>,
     link: Arc<ViewerLink>,
@@ -624,7 +624,7 @@ impl ServerBrowser {
         }
     }
 
-    /// Follows the manager (t3code `mirrorManagerEvent`).
+    /// Follows the manager.
     async fn mirror(self: Arc<Self>, event: crate::rpc::preview::Event) {
         match event.change {
             Change::Opened { snapshot } if snapshot.runtime == Some(Runtime::Server) && snapshot.automation_owner.is_none() => {
@@ -877,7 +877,7 @@ impl ServerBrowser {
         self.report(tab, NavStatus::Success { url: clip_url(&url), title }).await;
     }
 
-    /// Reports the tab's status to the manager (t3code `report`), once per change.
+    /// Reports the tab's status to the manager, once per change.
     async fn report(&self, tab: &Tab, nav_status: NavStatus) {
         let (can_go_back, can_go_forward, _) = self.history(tab).await;
         let input = ReportStatusInput { thread_id: tab.thread_id.clone(), tab_id: tab.tab_id.clone(), nav_status, can_go_back, can_go_forward };
@@ -1126,7 +1126,7 @@ impl ServerBrowser {
         }
     }
 
-    /// Runs one agent operation (t3code `runOperation`), within its timeout.
+    /// Runs one agent operation, within its timeout.
     pub async fn invoke(self: &Arc<Self>, request: Request) -> Result<Value, OpError> {
         let deadline = tokio::time::Instant::now() + request.timeout;
         let ms = request.timeout.as_millis();
@@ -2280,7 +2280,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn viewports_resolve_like_t3code() {
+    fn viewports_resolve() {
         assert_eq!(resize_setting(&json!({ "mode": "fill" })).unwrap(), Viewport::Fill);
         let preset = resize_setting(&json!({ "mode": "preset", "preset": "iphone-se", "orientation": "landscape" })).unwrap();
         assert_eq!(json!(preset), json!({ "_tag": "preset", "width": 667, "height": 375, "presetId": "iphone-se" }));

@@ -114,7 +114,7 @@ pub fn rules(runtime_mode: &str, mcp: Option<&str>) -> Value {
     Value::Array(rules)
 }
 
-/// The thread's MCP server name (t3code `t3McpServerName`). OpenCode hides
+/// The thread's MCP server name. OpenCode hides
 /// tools whose names pass 64 characters, so long thread ids are hashed.
 pub fn mcp_server_name(thread_id: &str) -> String {
     let safe: String = thread_id.encode_utf16().map(|unit| match char::from_u32(u32::from(unit)) {
@@ -253,7 +253,7 @@ impl Form {
         Some(Self { id: id.into(), session: session.into(), questions })
     }
 
-    /// The answer as OpenCode takes it (t3code `formAnswer`): a multiselect's
+    /// The answer as OpenCode takes it: a multiselect's
     /// values, any other field's joined; blank values and fields left out.
     fn reply(&self, answers: &super::Answers) -> Value {
         let answer = self.questions.iter().filter_map(|question| {
@@ -281,7 +281,7 @@ fn session_of_event(event: &Value) -> Option<&str> {
 }
 
 /// The prompt message id of a turn: OpenCode takes it as given, so it is
-/// known before the prompt is (t3code `turnPromptId`). Kept to characters a
+/// known before the prompt is. Kept to characters a
 /// URL path takes as they are.
 fn prompt_id(session: &str, attempt: &str) -> String {
     let attempt: String = attempt.chars().map(|c| if c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | ':' | '.') { c } else { '_' }).collect();
@@ -329,8 +329,8 @@ fn needs_console_providers(body: &Value) -> bool {
     body["data"]["budgets"].as_array().into_iter().flatten().any(|budget| budget["coverage"] == "all" && budget["per"] == "set")
 }
 
-/// A workspace's usage limits as `/api/experimental/usage/limits` answers
-/// (t3code `readServerUsageLimits`): Go's rolling, weekly and monthly meters
+/// A workspace's usage limits as `/api/experimental/usage/limits` answers:
+/// Go's rolling, weekly and monthly meters
 /// and each spend limit. `console_providers`: the providers an all-spend
 /// limit covers. `None` for an answer of another shape.
 pub fn usage_limits_from(body: &Value, console_providers: &[String], checked_at: Timestamp) -> Option<ServerProviderUsageLimits> {
@@ -927,7 +927,7 @@ impl<'a> Live<'a> {
                     return Some((TurnEnd::Interrupted, None));
                 }
                 let _ = self.post(&format!("/api/session/{}/interrupt", self.session), None).await;
-                // Its subagents' sessions stop with it (t3code `stopStrays`).
+                // Its subagents' sessions stop with it.
                 for session in self.sessions_of(|_| true) {
                     let _ = self.post(&format!("/api/session/{session}/interrupt"), None).await;
                 }

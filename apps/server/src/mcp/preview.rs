@@ -1,4 +1,4 @@
-//! Browser tools (t3code `mcp/toolkits/preview` and `previewControls`): the
+//! Browser tools: the
 //! agent shares the server's headless browser with the user
 //! (`crate::preview::host`), opening, reading and driving server tabs of its
 //! own thread. `preview_snapshot` results are bounded as t3code's
@@ -269,7 +269,7 @@ fn request(c: &Call<'_>, operation: &'static str, input: Value, timeout: Duratio
     Request { thread_id: c.caller.thread_id.clone(), agent: c.caller.thread_id.clone(), tab_id: c.str("tabId"), operation, input, timeout }
 }
 
-/// Runs an operation; an action's result gains the page's `toolIcon` (t3code `invoke`).
+/// Runs an operation; an action's result gains the page's `toolIcon`.
 async fn invoke(c: &Call<'_>, operation: &'static str, input: Value, timeout: Duration) -> Result<Value, String> {
     let result = host::invoke(c.state, request(c, operation, input, timeout + GRACE)).await.map_err(failed)?;
     if ["status", "open", "navigate", "snapshot"].contains(&operation) {
@@ -349,7 +349,7 @@ async fn close(c: &Call<'_>) -> Result<Value, String> {
     Ok(json!({}))
 }
 
-// ---- preview_snapshot (t3code `registerPreviewSnapshot`) ----
+// ---- preview_snapshot ----
 
 fn cut(text: &str, max: usize) -> String {
     if text.chars().count() <= max { text.to_owned() } else { format!("{}…", text.chars().take(max).collect::<String>()) }
@@ -537,7 +537,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn act_inputs_are_checked_like_t3code_schemas() {
+    fn act_inputs_are_checked() {
         assert!(check("click", &json!({ "locator": "aria-ref=e1" })).is_ok());
         assert!(check("click", &json!({ "x": 1 })).is_err());
         assert!(check("click", &json!({ "x": 1, "y": 2, "locator": "a" })).is_err());

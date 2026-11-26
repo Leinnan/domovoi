@@ -1,4 +1,4 @@
-//! HTTP routes (t3code `EnvironmentHttpApi` subset) and the RPC WebSocket.
+//! HTTP routes and the RPC WebSocket.
 //!
 //! Domovoi's own, not t3code's: `/health` (the process serves HTTP) and
 //! `/ready` (the database answers and startup recovery has run), both
@@ -320,7 +320,7 @@ fn hooks_route() -> axum::routing::MethodRouter<SharedState> {
     axum::routing::any(webhook).layer(axum::extract::DefaultBodyLimit::max(crate::webhooks::MAX_BODY_BYTES))
 }
 
-/// A webhook task's URL (t3code `webhookRoute`): the body is read raw, so the
+/// A webhook task's URL: the body is read raw, so the
 /// signature is checked over the exact bytes.
 async fn webhook(
     State(state): State<SharedState>,
@@ -777,20 +777,20 @@ struct RevokedOthers {
     revoked_count: usize,
 }
 
-/// The body of `POST /api/domovoi/session/end` (Domovoi only).
+/// The body of `POST /api/domovoi/session/end`.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SignedOut {
     signed_out: bool,
 }
 
-/// The body of `POST /api/domovoi/server/stop` (Domovoi only).
+/// The body of `POST /api/domovoi/server/stop`.
 #[derive(Serialize)]
 struct Stopping {
     stopping: bool,
 }
 
-/// The body of the push and Live Activity registration routes (Domovoi only):
+/// The body of the push and Live Activity registration routes:
 /// whether the device is registered now, and after registering whether this
 /// server can send pushes at all.
 #[derive(Serialize)]

@@ -1,4 +1,4 @@
-//! Worktree tools (t3code `worktree` toolkit): the caller's worktree, the
+//! Worktree tools: the caller's worktree, the
 //! project's branches, and handing the caller's thread off to a new
 //! worktree.
 //!

@@ -245,7 +245,7 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn answers_are_written_as_t3code_records() {
+    fn answers_are_written_as_records() {
         let idle = |installed_version: Option<String>, source| InstallState {
             driver: CODEX, operation_id: None, phase: InstallPhase::Idle, downloaded_bytes: 0, total_bytes: None, version: None,
             installed_version, source, can_remove: false, message: None,

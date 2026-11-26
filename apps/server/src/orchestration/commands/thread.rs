@@ -228,7 +228,7 @@ impl Orchestrator {
     }
 
     /// `thread.issue.link`: adds the issue to the thread's links, unless the
-    /// same issue (t3code `threadIssueKeysEqual`) is linked already.
+    /// same issue is linked already.
     pub(super) fn issue_link(&self, c: &ThreadIssueLinkCommand) -> Result<DispatchResult, Refusal> {
         let mut thread = self.thread(&c.thread_id)?;
         let key = ThreadIssueKey { tracker: c.tracker.clone(), host: c.host.trim().to_lowercase(), scope: c.scope.trim().to_owned(), key: c.key.trim().to_owned() };

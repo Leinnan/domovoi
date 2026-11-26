@@ -128,7 +128,7 @@ mod tests {
     }
 
     #[test]
-    fn denials_match_t3code() {
+    fn denials_are_the_expected_ones() {
         let read_only = vec!["orchestration:read".to_owned()];
         let none = Value::Null;
         assert!(check("orchestration.subscribeShell", &none, &read_only).is_ok());

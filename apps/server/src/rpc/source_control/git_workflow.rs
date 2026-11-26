@@ -225,7 +225,6 @@ fn terms(kind: Option<&str>) -> (&'static str, &'static str, &'static str) {
     }
 }
 
-/// t3code's `normalizePullRequestReference`.
 fn normalize_reference(reference: &str) -> String {
     let t = reference.trim();
     match t.strip_prefix('#') {
@@ -334,7 +333,6 @@ pub fn sanitize_branch_fragment(raw: &str) -> String {
     if out.is_empty() { "update".into() } else { out }
 }
 
-/// t3code's `resolvePullRequestWorktreeLocalBranchName`.
 fn worktree_local_branch(number: u64, head_branch: &str, cross_repository: bool, local: &[String]) -> String {
     if !cross_repository {
         return head_branch.to_owned();
@@ -481,7 +479,6 @@ fn is_commit_action(action: &str) -> bool {
     matches!(action, "commit" | "commit_push" | "commit_push_pr")
 }
 
-/// t3code's `parseCustomCommitMessage`.
 fn parse_commit_message(raw: &str) -> Option<(String, String)> {
     let normalized = raw.replace("\r\n", "\n");
     let normalized = normalized.trim();
@@ -575,7 +572,6 @@ fn sanitize_feature_branch(raw: &str) -> String {
     if s.contains('/') { s } else { format!("feature/{s}") }
 }
 
-/// t3code's `resolveAutoFeatureBranchName`.
 fn resolve_feature_branch(existing: &[String], preferred: &str) -> String {
     let base = sanitize_feature_branch(if preferred.trim().is_empty() { "feature/update" } else { preferred });
     let names: Vec<String> = existing.iter().map(|b| b.to_lowercase()).collect();
@@ -903,7 +899,7 @@ mod tests {
     }
 
     #[test]
-    fn sanitizes_branch_names_like_t3code() {
+    fn sanitizes_branch_names() {
         assert_eq!(sanitize_branch_fragment("  Fix the 'Login' bug!  "), "fix-the-login-bug");
         assert_eq!(sanitize_branch_fragment("..."), "update");
         assert_eq!(sanitize_feature_branch("Add tests"), "feature/add-tests");
@@ -926,7 +922,7 @@ mod tests {
     }
 
     #[test]
-    fn failures_are_written_as_the_tagged_errors_of_t3code() {
+    fn failures_are_written_as_tagged_errors() {
         assert_eq!(
             json!(manager_error("runStackedAction", "/repo", "Cannot push from detached HEAD.")),
             json!({ "_tag": "GitManagerError", "operation": "runStackedAction", "cwd": "/repo", "detail": "Cannot push from detached HEAD." })

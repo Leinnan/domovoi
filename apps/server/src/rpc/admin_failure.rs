@@ -129,7 +129,6 @@ pub enum Failure {
     #[serde(rename = "PreviewControlRequiredError", rename_all = "camelCase")]
     PreviewControlRequired { tab_id: String },
 
-    /// t3code `PreviewClearProfileError`.
     #[error("The environment could not delete this browser profile's data.")]
     #[serde(rename = "PreviewClearProfileError", rename_all = "camelCase")]
     PreviewClearProfile { profile_id: String, cause: Cause },
@@ -203,7 +202,7 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn failures_are_written_as_the_tagged_errors_of_t3code() {
+    fn failures_are_written_as_tagged_errors() {
         assert_eq!(json!(Failure::no_session("t1", "tab_1")), json!({ "_tag": "PreviewSessionLookupError", "threadId": "t1", "tabId": "tab_1" }));
         let cause = UrlCause { name: "PreviewUrlNormalizationError", message: "Invalid".into() };
         assert_eq!(

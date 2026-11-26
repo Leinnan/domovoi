@@ -272,7 +272,7 @@ pub enum CloneStage {
     Checkout,
 }
 
-/// One line of `git clone --progress` stderr (t3code's `parseGitCloneProgressLine`).
+/// One line of `git clone --progress` stderr.
 pub fn parse_clone_progress(line: &str) -> Option<(CloneStage, Option<u64>, Option<String>)> {
     let t = line.trim();
     const STAGES: [(&str, CloneStage); 7] = [
@@ -410,7 +410,7 @@ fn is_ssh_url(url: &str) -> bool {
     url.starts_with("ssh://") || (!url.contains("://") && url.contains('@') && url.contains(':'))
 }
 
-/// The HTTPS form of an SSH clone URL, when SSH may fall back (t3code's `httpsFallbackUrl`).
+/// The HTTPS form of an SSH clone URL, when SSH may fall back.
 fn https_fallback(protocol: Option<CloneProtocol>, prepared: &PreparedClone) -> Option<String> {
     if protocol == Some(CloneProtocol::Ssh) || !is_ssh_url(&prepared.clone_url) {
         return None;
@@ -738,7 +738,7 @@ fn finish(project_id: &str, phase: ClonePhase, error: Option<String>) {
     }
 }
 
-/// Re-reads the cloned project's repository identity (t3code's `onCloned`).
+/// Re-reads the cloned project's repository identity.
 async fn on_cloned(state: &AppState, project_id: &str, root: &str) {
     let Ok(Some(mut project)) = state.store.get_project(project_id) else { return };
     project.repository_identity = crate::vcs::repository_identity(root).await;
@@ -1033,7 +1033,7 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn failures_are_written_as_the_tagged_errors_of_t3code() {
+    fn failures_are_written_as_tagged_errors() {
         let operations = [
             (Operation::LookupRepository, "lookupRepository"),
             (Operation::CloneRepository, "cloneRepository"),
@@ -1064,7 +1064,7 @@ mod tests {
     }
 
     #[test]
-    fn answers_are_written_as_the_records_of_t3code() {
+    fn answers_are_written_as_the_records_clients_read() {
         let repository = RepositoryInfo { provider: "github".into(), name_with_owner: "o/r".into(), url: "https://github.com/o/r".into(), ssh_url: "git@github.com:o/r.git".into() };
         let repository_json = json!({ "provider": "github", "nameWithOwner": "o/r", "url": "https://github.com/o/r", "sshUrl": "git@github.com:o/r.git" });
         assert_eq!(json!(repository), repository_json);
@@ -1153,7 +1153,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_clone_progress_like_t3code() {
+    fn parses_clone_progress() {
         assert_eq!(
             parse_clone_progress("Receiving objects:  45% (450/1000), 1.20 MiB | 2.00 MiB/s"),
             Some((CloneStage::Receiving, Some(45), Some("1.20 MiB | 2.00 MiB/s".into())))

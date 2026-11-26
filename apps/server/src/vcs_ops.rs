@@ -1,4 +1,4 @@
-//! Git write operations and review diffs (t3code `GitVcsDriverCore`):
+//! Git write operations and review diffs:
 //! refs, worktrees, init, pull, the merged status snapshot, diff previews and
 //! diff file expansion. Failures carry t3code's `GitCommandError` shape.
 
@@ -384,7 +384,7 @@ fn truncate_output(mut s: String, max: usize) -> (String, bool) {
 }
 
 /// A temporary index where untracked files are intent-to-add, so `git diff`
-/// shows them as new files (t3code `prepareReviewIndex`).
+/// shows them as new files.
 struct ReviewIndex {
     path: PathBuf,
 }
@@ -747,7 +747,7 @@ mod tests {
     }
 
     #[test]
-    fn failures_are_written_as_the_tagged_errors_of_t3code() {
+    fn failures_are_written_as_tagged_errors() {
         assert_eq!(
             json!(command_error("GitVcsDriver.createRef", "git branch", "/repo", "fatal: a branch named 'x' already exists", Some(128))),
             json!({ "_tag": "GitCommandError", "operation": "GitVcsDriver.createRef", "command": "git branch", "cwd": "/repo",
@@ -872,8 +872,8 @@ mod tests {
     }
 }
 
-/// Why a project's checkout isn't pulled automatically, if it isn't
-/// (t3code `autoPullProjects`): not a repository, not on its default
+/// Why a project's checkout isn't pulled automatically, if it isn't:
+/// not a repository, not on its default
 /// branch, no upstream, local changes, or local commits.
 pub async fn auto_pull_blocker(cwd: &str) -> Option<&'static str> {
     let status = crate::vcs::local_status(cwd).await;

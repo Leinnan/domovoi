@@ -1,4 +1,4 @@
-//! Text generation (t3code `textGeneration`): one-shot prompts answered
+//! Text generation: one-shot prompts answered
 //! as JSON by the local Claude, Codex or Pi CLI, with no tools (an
 //! investigation, such as a review guide, may read the checkout). Titles,
 //! branch names, commit messages, pull request text and review guides come
@@ -573,7 +573,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_failed_generation_is_written_as_the_tagged_error_of_t3code() {
+    fn a_failed_generation_is_written_as_a_tagged_error() {
         assert_eq!(
             json!(error("generateCommitMessage", "Codex gave no answer.")),
             json!({ "_tag": "TextGenerationError", "operation": "generateCommitMessage", "detail": "Codex gave no answer." })
@@ -675,7 +675,7 @@ fn only_runtime_folders(root: &std::path::Path) -> bool {
     true
 }
 
-/// Antigravity's writer (t3code `AntigravityTextGeneration`): a fresh agent
+/// Antigravity's writer: a fresh agent
 /// in an empty folder, told to use only its input; any tool call, request
 /// or file it writes fails the answer.
 async fn run_antigravity(req: &Run<'_>, instance: &str, timeout: Duration) -> Result<Value, TextGenerationError> {

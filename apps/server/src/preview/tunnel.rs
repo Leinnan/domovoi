@@ -1,4 +1,4 @@
-//! `/api/preview/tunnel?port=<n>` (t3code `PreviewTunnel.ts`): carries a
+//! `/api/preview/tunnel?port=<n>`: carries a
 //! client's preview traffic to this machine's loopback ports, one TCP
 //! connection per WebSocket, as raw bytes (so pages keep their own origin,
 //! HMR sockets and TLS). It works over iroh as over TCP: the iroh bridge

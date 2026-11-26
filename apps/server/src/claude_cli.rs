@@ -338,7 +338,7 @@ impl ClaudeCli {
     }
 }
 
-/// What "Allow for Session" grants (t3code `toSessionPermissionUpdates`):
+/// What "Allow for Session" grants:
 /// the request's own suggestions, kept for the session, else an allow rule
 /// for the tool.
 pub fn session_permission_updates(request: &Value) -> Vec<Value> {

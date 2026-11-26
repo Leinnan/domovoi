@@ -312,7 +312,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_toolkit_has_t3codes_names_and_hints() {
+    fn the_toolkit_has_its_names_and_hints() {
         let tools = tools();
         let names: Vec<&str> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
         assert_eq!(names, ["list_issues", "read_issue", "create_issue", "comment_on_issue", "set_issue_state", "link_issue", "unlink_issue", "list_thread_issues"]);

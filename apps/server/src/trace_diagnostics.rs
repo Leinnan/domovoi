@@ -1,4 +1,4 @@
-//! `server.getTraceDiagnostics` (t3code `diagnostics/TraceDiagnostics.ts`):
+//! `server.getTraceDiagnostics`:
 //! a summary of the trace file `crate::trace_writer` writes, read with its
 //! rotated files oldest first (`server.trace.ndjson.10` ... `.1`, then the
 //! file itself).

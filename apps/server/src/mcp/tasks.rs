@@ -1,4 +1,4 @@
-//! Delegation and scheduling tools (t3code `orchestrator` toolkit): what
+//! Delegation and scheduling tools: what
 //! providers and models a child can use, delegated tasks and their status,
 //! several new threads at once, stopping a subagent, scheduled tasks, and
 //! the caller's project.
@@ -250,7 +250,7 @@ async fn workflow_stop(c: &Call<'_>) -> Result<Value, String> {
     Ok(json!({}))
 }
 
-/// A task as the tools answer it (t3code `OrchestratorMcpScheduledTask`).
+/// A task as the tools answer it.
 fn task_view(t: &ScheduledTask) -> Value {
     let v = serde_json::to_value(t).unwrap_or(Value::Null);
     json!({ "scheduledTaskId": v["id"], "title": v["title"], "prompt": v["prompt"], "enabled": v["enabled"], "projectId": v["projectId"],
@@ -272,7 +272,7 @@ fn tri(c: &Call<'_>, keys: &[&str]) -> Option<bool> {
     keys.iter().find_map(|k| c.args[*k].as_bool())
 }
 
-/// Where an agent's task works (t3code `scheduledTaskWorkspaceStrategy`): a
+/// Where an agent's task works: a
 /// task in a thread uses that thread's folder; one starting new threads gets
 /// a worktree of the default branch each run, so runs do not share the
 /// project's checkout (the project folder when it is no repository).

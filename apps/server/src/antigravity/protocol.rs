@@ -90,13 +90,13 @@ fn sanitize(value: &Value, budget: &mut Budget, depth: u32) -> Option<Value> {
     }
 }
 
-/// A tool payload with its text bounded (t3code `sanitizeAntigravityToolPayload`).
+/// A tool payload with its text bounded.
 pub fn sanitize_payload(payload: &Value) -> Value {
     sanitize(payload, &mut Budget { nodes: 512, text: 64_000 }, 0).unwrap_or(Value::Null)
 }
 
-/// A `tool_call` or `tool_call_update` with every part bounded
-/// (t3code `normalizeAntigravitySessionUpdate`). Other updates are left as they are.
+/// A `tool_call` or `tool_call_update` with every part bounded.
+/// Other updates are left as they are.
 pub fn normalize_update(u: &mut Value) {
     if !matches!(u["sessionUpdate"].as_str(), Some("tool_call" | "tool_call_update")) {
         return;
@@ -370,7 +370,7 @@ pub fn read_pre_edit_file(path: &str) -> Option<String> {
     (meta.is_file() && meta.len() <= PRE_EDIT_FILE_LIMIT).then(|| std::fs::read_to_string(path).ok()).flatten()
 }
 
-/// An edit's patch (t3code `antigravityEditPatch`). `pre_edit` is the
+/// An edit's patch. `pre_edit` is the
 /// file's text while the edit is pending (it still holds the old text).
 /// `None` when the call is no edit the agent describes this way.
 pub fn edit_patch(path: &str, raw_input: &Value, locations: &Value, pre_edit: Option<&str>) -> Option<EditPatch> {
@@ -485,8 +485,7 @@ pub fn patch_for(call: &Value) -> Option<EditPatch> {
 
 /// Reads of the client's files the agent announces (`client_view_file`) and
 /// never completes: one Domovoi served is reported as done, and the
-/// unrelated error the agent later fails it with is dropped
-/// (t3code `makeAntigravityReadRepair`).
+/// unrelated error the agent later fails it with is dropped.
 #[derive(Default)]
 pub struct ReadRepair {
     /// Open reads by tool call: (path, served?).
@@ -546,7 +545,7 @@ impl ReadRepair {
 }
 
 /// Why a `/goal` message can't go to Antigravity: it takes `/goal` with an
-/// objective only (t3code `ensureGoalCommandSupported`); a bare `/goal`,
+/// objective only; a bare `/goal`,
 /// `edit`, `clear`, `pause` or `resume` would become an objective.
 pub fn goal_control(text: &str, attachments: bool) -> Option<&'static str> {
     let rest = text.trim().strip_prefix("/goal")?;
@@ -742,8 +741,7 @@ fn reset_at(text: &str, now_ms: i64) -> Option<String> {
     Some(crate::time_fmt::iso_from_millis(now_ms + ms as i64))
 }
 
-/// The failure a turn's last step (and the answer's stop reason) shows
-/// (t3code `turnFailure`).
+/// The failure a turn's last step (and the answer's stop reason) shows.
 pub fn failure(stop_reason: Option<&str>, step: Option<(i64, &[u8])>, now_ms: i64) -> Option<Failure> {
     let error = step.filter(|(t, _)| *t == ERROR_STEP).map(|(_, p)| String::from_utf8_lossy(p).into_owned());
     let refusal = stop_reason == Some("refusal");

@@ -21,7 +21,7 @@ use tokio::process::{Child, ChildStdin};
 use tokio::sync::{Mutex, mpsc, oneshot};
 
 pub const PI_TOOL: crate::providers::Tool = crate::providers::Tool { program: "pi", label: "Pi", env: "DOMOVOI_PI_BINARY" };
-/// Extra arguments for every `pi --mode rpc` Domovoi starts (t3code's `launchArgs`).
+/// Extra arguments for every `pi --mode rpc` Domovoi starts.
 pub const PI_ARGS_ENV: &str = "DOMOVOI_PI_ARGS";
 /// What the bundled extension reads (see `adapters/pi_extension.ts`).
 pub const RUNTIME_MODE_ENV: &str = "DOMOVOI_PI_RUNTIME_MODE";

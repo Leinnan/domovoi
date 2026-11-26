@@ -120,8 +120,8 @@ impl Failure {
         Failure::Operation { operation: operation.to_owned(), detail: detail.into(), reason: Some(OperationReason::NotFound), list_result: None }
     }
 
-    /// A failed `gh` or `glab` of `provider`'s host under `operation`
-    /// (t3code's `toPullRequestErrorWith`): without the tool or a credential
+    /// A failed `gh` or `glab` of `provider`'s host under `operation`:
+    /// without the tool or a credential
     /// the host is unavailable, anything else is this operation's failure.
     pub fn from_cli(operation: &str, provider: Provider, e: &GhError) -> Self {
         let unavailable = |reason, requirement| Failure::Unavailable { reason, provider: Some(provider.kind()), requirement: Some(requirement), list_result: None };
@@ -162,7 +162,7 @@ mod tests {
     }
 
     #[test]
-    fn failures_are_written_as_the_tagged_errors_of_t3code() {
+    fn failures_are_written_as_tagged_errors() {
         assert_eq!(json!(Failure::unsupported()), json!({ "_tag": "PullRequestUnavailableError", "reason": "provider-unsupported" }));
         assert_eq!(
             json!(Failure::from_cli("detail", Provider::GitHub, &gh_error(GhReason::MissingTool))),

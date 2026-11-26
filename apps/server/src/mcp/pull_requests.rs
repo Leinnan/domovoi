@@ -1,4 +1,4 @@
-//! Pull request tools (t3code `pullRequests` toolkit): link pull requests
+//! Pull request tools: link pull requests
 //! to a thread of this project (`thread.pull-request.link`), unlink them,
 //! list them, watch them, and read one's state and checks from its host.
 //!

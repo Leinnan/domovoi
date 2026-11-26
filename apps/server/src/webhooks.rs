@@ -86,12 +86,12 @@ fn credential_name(name: &str) -> bool {
 
 const REDACTED: &str = "[redacted]";
 
-/// Headers with credentials blanked (t3code `redactHeaders`).
+/// Headers with credentials blanked.
 pub fn redact_headers(headers: &BTreeMap<String, String>) -> BTreeMap<String, String> {
     headers.iter().map(|(k, v)| (k.clone(), if credential_name(k) { REDACTED.to_owned() } else { v.clone() })).collect()
 }
 
-/// A query with credential parameters blanked (t3code `redactQuery`).
+/// A query with credential parameters blanked.
 pub fn redact_query(query: &str) -> String {
     if query.is_empty() {
         return String::new();
@@ -155,7 +155,7 @@ fn wildcard(segment: &str) -> Option<&str> {
 }
 
 /// Walks `segments` from `root`; `name[]` maps the rest of the path over an
-/// array (t3code `lookup`). `None` for a path that isn't there.
+/// array. `None` for a path that isn't there.
 fn lookup(root: &Value, segments: &[&str]) -> Option<Value> {
     let mut current = root;
     for (index, segment) in segments.iter().enumerate() {
@@ -238,8 +238,8 @@ fn stringify(value: &Value) -> String {
     }
 }
 
-/// Breaks what agent CLIs would read as a mention or command in copied text
-/// (t3code `MENTION`): currency signs, `@`, a word-initial `/command`,
+/// Breaks what agent CLIs would read as a mention or command in copied text:
+/// currency signs, `@`, a word-initial `/command`,
 /// `t3-context:` and the frame tag's own name, each followed by a word joiner.
 fn break_mentions(text: &str) -> String {
     const JOINER: char = '\u{2060}';
@@ -291,7 +291,7 @@ pub struct Rendered {
     pub missing: Vec<String>,
 }
 
-/// Fills in `{{expression}}` placeholders (t3code `renderWebhookPrompt`).
+/// Fills in `{{expression}}` placeholders.
 /// Values are framed in `<webhook-data-<frame>>` tags, with mentions broken,
 /// and the prompt ends by saying the framed text is untrusted. `raw` gives
 /// the values as they are (a dedupe key), where an empty value is missing.
@@ -304,7 +304,7 @@ pub fn render(template: &str, request: &WebhookRequest, frame: &str, raw: bool) 
     let mut rest = template;
     while let Some(start) = rest.find("{{") {
         let after = &rest[start + 2..];
-        // The placeholder's text holds no brace (t3code `/\{\{([^{}]*)\}\}/`).
+        // The placeholder's text holds no brace.
         let Some(end) = after.find(|c| c == '{' || c == '}').filter(|&e| after[e..].starts_with("}}")) else {
             prompt.push_str(&rest[..start + 2]);
             rest = after;
@@ -1052,7 +1052,7 @@ mod tests {
     }
 
     #[test]
-    fn filters_match_as_t3code_does() {
+    fn filters_match_rows() {
         let r = request(r#"{"ref":"refs/heads/main","n":3,"draft":false,"labels":[{"name":"bug"},{"name":"ui"}],"none":null}"#, &[("x-event", "push")], "");
         let f = |v: Value| -> Vec<WebhookFilter> { serde_json::from_value(v).unwrap() };
         assert_eq!(failed_filter(&f(json!([{ "path": "body.ref", "op": "equals", "value": "refs/heads/main" }, { "path": "headers.x-event", "op": "in", "value": ["push", "tag"] }])), &r), None);

@@ -119,7 +119,7 @@ pub(crate) enum TrackerReason {
     Failed,
 }
 
-/// The one failure shape every tracker reports (t3code `IssueTrackerError`).
+/// The one failure shape every tracker reports.
 #[derive(Debug, Clone)]
 pub(crate) struct TrackerError {
     pub tracker: &'static str,

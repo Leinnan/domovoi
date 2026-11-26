@@ -6,14 +6,14 @@
 //! written; Domovoi has no secret providers to read one from yet.
 //!
 //! [`requests`] keeps what the user answers an agent's `request_secret`
-//! card with (t3code `SecretRequests`), apart from the settings' secrets.
+//! card with, apart from the settings' secrets.
 
 #![expect(clippy::disallowed_types, reason = "a provider instance's `config`, an open record whose credential fields are moved here")]
 
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
-/// What settings show for a saved credential (t3code's `SECRET_REDACTED`).
+/// What settings show for a saved credential.
 pub const REDACTED: &str = "\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}\u{2022}";
 
 /// Credential fields of each driver's `config`.
@@ -104,7 +104,7 @@ pub fn stash(userdata: &Path, settings: crate::settings::Settings) -> crate::set
     }
 }
 
-/// Answers to `request_secret` cards (t3code `SecretRequests`). A saved
+/// Answers to `request_secret` cards. A saved
 /// value lives in `<userdata>/secret-requests/<hex>.bin` (owner-only), named
 /// by the one-use `secret-ref:<hex>` an HMAC of the thread and card ids
 /// gives, so only this server can name it. Orchestration records only the
@@ -120,7 +120,7 @@ pub mod requests {
     const REF_PREFIX: &str = "secret-ref:";
     const TTL_MS: i64 = 24 * 60 * 60 * 1000;
 
-    /// Why an answer, a ref or a file was refused (t3code `SecretRequestFailureReason`).
+    /// Why an answer, a ref or a file was refused.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum Refused {
         StoreFailed,
@@ -376,20 +376,20 @@ pub mod requests {
     }
 }
 
-/// Where the server's own credentials are kept (t3code `ServerSecretStore`):
+/// Where the server's own credentials are kept:
 /// apart from `secrets/`, whose entries follow the provider instances.
 fn server_secrets(userdata: &Path) -> PathBuf {
     userdata.join("server-secrets")
 }
 
-/// A standalone issue tracker's secret name (t3code `issueTrackerSecretName`),
+/// A standalone issue tracker's secret name,
 /// stable across releases so a saved key survives upgrades.
 fn tracker_secret(tracker: &str) -> String {
     use base64::Engine;
     format!("issue-tracker-{}-token", base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(tracker))
 }
 
-/// A server secret by its name (t3code `ServerSecretStore.get`), if one is stored.
+/// A server secret by its name, if one is stored.
 pub fn server_secret(userdata: &Path, name: &str) -> std::io::Result<Option<String>> {
     match std::fs::read_to_string(server_secrets(userdata).join(name)) {
         Ok(value) => Ok(Some(value.trim().to_owned()).filter(|v| !v.is_empty())),

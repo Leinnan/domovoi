@@ -133,7 +133,7 @@ pub fn waiting_secret_card(threads: Result<Option<ThreadItems>, String>, turn_it
     Ok((**card).clone())
 }
 
-/// `secrets.answerRequest` (t3code `SecretRequests.answer`): the value is
+/// `secrets.answerRequest`: the value is
 /// stored before the card is marked saved, so no card shows saved without
 /// it, and is removed again when the card can no longer hand it to the agent.
 async fn answer_secret(state: &AppState, input: SecretAnswer) -> Result<(), Failure> {

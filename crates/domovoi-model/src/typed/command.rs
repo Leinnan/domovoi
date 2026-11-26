@@ -111,7 +111,7 @@ macro_rules! commands {
                 }
             }
 
-            /// The thread the command acts on (t3code's `commandThreadId`):
+            /// The thread the command acts on:
             /// for a fork or a merge back the thread that receives the
             /// context, for a delegated task its parent. `None` only for a
             /// command of an unknown type that names no `threadId`.

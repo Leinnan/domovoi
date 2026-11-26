@@ -26,7 +26,7 @@ const LAUNCH_TIMEOUT: Duration = Duration::from_secs(20);
 /// Overrides where the browser is found; a path that does not exist makes it unavailable.
 pub const BINARY_ENV: &str = "DOMOVOI_PREVIEW_BROWSER_BINARY";
 
-/// `T3CODE_SERVER_BROWSER_SANDBOX=0` turns Chrome's sandbox off (t3code `sandboxDisabled`).
+/// `T3CODE_SERVER_BROWSER_SANDBOX=0` turns Chrome's sandbox off.
 const SANDBOX_ENV: &str = "DOMOVOI_SERVER_BROWSER_SANDBOX";
 /// What the variable was called.
 const OLD_SANDBOX_ENV: &str = "T3CODE_SERVER_BROWSER_SANDBOX";
@@ -41,7 +41,6 @@ pub enum LaunchError {
     #[cfg_attr(feature = "preview-browser", expect(dead_code, reason = "only a build without the browser says so"))]
     #[error("This Domovoi server was built without its headless browser (the `preview-browser` feature).")]
     NotBuilt,
-    /// t3code `ServerBrowserLaunchError`.
     #[error("The server preview browser could not start: {0}")]
     Failed(String),
 }

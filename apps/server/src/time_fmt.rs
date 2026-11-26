@@ -40,7 +40,7 @@ mod tests {
     }
 
     #[test]
-    fn formats_like_t3code() {
+    fn formats_values() {
         assert_eq!(super::iso_from_millis(1794583650705), "2026-11-13T15:27:30.705Z");
         assert_eq!(super::iso_from_millis(1794583650000), "2026-11-13T15:27:30.000Z");
         assert_eq!(super::millis_from_iso("2026-11-13T15:27:30.705Z"), Some(1794583650705));

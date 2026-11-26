@@ -143,7 +143,7 @@ fn claude_period(rate_limit_type: &str) -> Option<(ServerProviderUsageWindowKind
 }
 
 /// The windows a Claude `rate_limit_info` reports (utilization 0-1), for its
-/// five-hour and weekly limits (t3code `claudeRateLimitEventToUpdate`). Claude
+/// five-hour and weekly limits. Claude
 /// Code sends the top-level `utilization` only past a warning threshold; every
 /// event names its windows' use in `unifiedWindows`.
 pub fn claude_windows(info: &Value) -> Vec<ServerProviderUsageWindow> {
@@ -254,7 +254,7 @@ pub fn claude_reset_at(info: &Value) -> Option<Timestamp> {
     iso_from_epoch_seconds(&info["resetsAt"])
 }
 
-/// The windows of a Codex rate limit snapshot (t3code `codexRateLimitsToWindows`):
+/// The windows of a Codex rate limit snapshot:
 /// `primary` and `secondary` positions, and a monthly credit limit.
 pub fn codex_windows(snapshot: &Value) -> Vec<ServerProviderUsageWindow> {
     if snapshot["limitId"].as_str().is_some_and(|id| id != "codex") {

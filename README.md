@@ -105,7 +105,7 @@ account or port forwarding.
 | `apps/server/tests/cases/` | The RPC test cases: every method called for the answers and failures it can give |
 | `fixtures/` | A recorded session of the server (`native/`) and of provider CLIs (`provider/`), for tests and benchmarks |
 | `tools/` | Icon generator, binary size report, performance comparison (`perf.py`), cross-build and Linux deployment scripts |
-| `docs/` | [Remote access and deployment](docs/remote-access.md), [verification](docs/verification.md), [performance](docs/performance.md) |
+| `docs/` | [Remote access and deployment](docs/remote-access.md), [upgrading from a server that spoke T3 Code's protocol](docs/upgrading.md), [verification](docs/verification.md), [performance](docs/performance.md) |
 
 ## Getting started
 

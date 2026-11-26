@@ -160,7 +160,7 @@ async fn checked_out_branch(cwd: &str) -> Option<String> {
 }
 
 /// Creates a thread's worktree on a new branch from `base`, reporting
-/// progress to the worktree setup tracker (t3code `ThreadLaunchService`).
+/// progress to the worktree setup tracker.
 /// `requested` is the branch to make; without one a temporary name is used.
 /// Returns the worktree's path and its branch.
 async fn provision_worktree(cwd: &str, thread_id: &str, base: &str, requested: Option<&str>, setup: Option<&crate::project_scripts::Script>) -> Result<(String, String), String> {

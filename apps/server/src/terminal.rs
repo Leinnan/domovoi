@@ -1138,7 +1138,7 @@ mod tests {
     /// What the streams send, as JSON: a terminal that ran, was resized,
     /// cleared, ended and was closed, and the lists that followed it.
     #[tokio::test]
-    async fn events_and_failures_are_written_as_t3code_reads_them() {
+    async fn events_and_failures_are_written_as_clients_read_them() {
         use serde_json::json;
         let t = Terminals::default();
         let mut listed = t.metadata_updates();

@@ -587,7 +587,7 @@ mod tests {
     }
 
     #[test]
-    fn patch_operations_follow_t3code() {
+    fn patch_operations_are_applied() {
         let current = fields(json!({ "enableAssistantStreaming": false, "favorites": [{ "provider": "codex", "model": "a" }],
             "secretProviders": { "x": { "kind": "env" }, "y": { "kind": "env" } }, "nested": { "a": 1, "b": 2 },
             "worktreesDirectory": "/old", "previousWorktreesDirectories": [] }));

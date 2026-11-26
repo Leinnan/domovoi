@@ -45,14 +45,11 @@ use std::time::Duration;
 const UPDATE_TIMEOUT_MINUTES: u64 = 30;
 /// t3code `UPDATE_OUTPUT_MAX_BYTES`, per stream.
 const OUTPUT_MAX_BYTES: usize = 10_000;
-/// t3code `UPDATE_PROGRESS_INTERVAL`.
 const PROGRESS_INTERVAL: Duration = Duration::from_secs(1);
-/// t3code `UPDATE_PROGRESS_MAX_LENGTH`.
 const PROGRESS_MAX_CHARS: usize = 200;
-/// t3code `UPDATE_PARTIAL_LINE_MAX_LENGTH`.
 const PARTIAL_LINE_MAX_CHARS: usize = 4_096;
 
-/// A provider's own updater (t3code `PackageManagedProviderMaintenanceDefinition.nativeUpdate`).
+/// A provider's own updater.
 struct Native {
     args: &'static [&'static str],
     /// The paths its installer puts the CLI at; `None`: anywhere.
@@ -63,7 +60,7 @@ struct Native {
     env: fn(&Path, &Path) -> Vec<(String, String)>,
 }
 
-/// How a driver's CLI is distributed (t3code `PackageManagedProviderMaintenanceDefinition`).
+/// How a driver's CLI is distributed.
 struct Definition {
     tool: Tool,
     npm_package: &'static str,
@@ -102,7 +99,6 @@ fn is_opencode_native(path: &str) -> bool {
     p.ends_with("/.opencode/bin/opencode") || p.ends_with("/.opencode/bin/opencode.exe")
 }
 
-/// t3code `openCodeNativeHome`.
 fn opencode_native_home(path: &str) -> Option<String> {
     let slashed = path.replace('\\', "/");
     let lower = slashed.to_lowercase();
@@ -144,7 +140,7 @@ fn definition(driver: &str) -> Option<Definition> {
     })
 }
 
-/// A command that updates a CLI (t3code `ProviderMaintenanceCommandAction`).
+/// A command that updates a CLI.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Action {
     pub executable: String,
@@ -155,14 +151,12 @@ pub struct Action {
 }
 
 impl Action {
-    /// t3code `describeCommand`.
     fn describe(&self) -> String {
         let name = self.executable.rsplit(['/', '\\']).next().filter(|n| !n.is_empty()).unwrap_or(&self.executable);
         std::iter::once(name.to_owned()).chain(self.args.iter().cloned()).collect::<Vec<_>>().join(" ")
     }
 }
 
-/// t3code `npmGlobalPrefixFromCommandPath`.
 pub fn npm_global_prefix(real: &str, package: &str) -> Option<String> {
     let slashed = real.replace('\\', "/");
     let lower = slashed.to_lowercase();
@@ -380,7 +374,7 @@ static TARGETS: Mutex<Option<HashSet<String>>> = Mutex::new(None);
 static LOCKS: Mutex<Option<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> = Mutex::new(None);
 
 /// Holds an instance's target for as long as its update runs; marks a run
-/// that is dropped before it finished as failed (t3code's `onInterrupt`).
+/// that is dropped before it finished as failed.
 struct Running {
     instance: String,
     started_at: Option<domovoi_model::typed::Timestamp>,
@@ -402,14 +396,13 @@ impl Drop for Running {
 // Running the command
 // ---------------------------------------------------------------------------
 
-/// t3code `ProviderMaintenanceCommandResult`.
 #[derive(Debug, Default)]
 struct CommandResult {
     stdout: String,
     stderr: String,
     exit_code: Option<i32>,
     timed_out: bool,
-    /// The command did not start (t3code's `ProviderMaintenanceCommandError`).
+    /// The command did not start.
     spawn_error: Option<String>,
 }
 
@@ -561,7 +554,6 @@ async fn run_command(action: &Action, on_progress: impl Fn(String)) -> CommandRe
     }
 }
 
-/// t3code `commandOutput`.
 fn command_output(result: &CommandResult) -> Option<String> {
     let joined = [result.stderr.as_str(), result.stdout.as_str()].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join("\n\n");
     let trimmed = joined.trim();
@@ -584,7 +576,6 @@ fn failure_reason(result: &CommandResult) -> Option<String> {
         .or_else(|| streams.iter().find_map(|lines| lines.last().cloned()))
 }
 
-/// t3code `failureMessage`.
 fn failure_message(result: &CommandResult) -> String {
     if result.timed_out {
         return format!("Update timed out after {UPDATE_TIMEOUT_MINUTES} minutes.");
@@ -599,8 +590,7 @@ fn failure_message(result: &CommandResult) -> String {
     }
 }
 
-/// The probe after the command says the CLI may not have been updated
-/// (t3code's `couldNotVerify`).
+/// The probe after the command says the CLI may not have been updated.
 fn could_not_verify(provider: Option<&ServerProvider>, target_version: Option<&str>) -> bool {
     let Some(p) = provider else { return true };
     // `installedVersion` when the snapshot has the key, else `version`.
@@ -740,7 +730,7 @@ mod tests {
     }
 
     #[test]
-    fn package_paths_are_read_as_t3code_reads_them() {
+    fn package_paths_are_read() {
         assert_eq!(npm_global_prefix("/usr/local/lib/node_modules/@openai/codex/bin/codex.js", "@openai/codex").as_deref(), Some("/usr/local"));
         assert_eq!(npm_global_prefix("/lib/node_modules/@openai/codex/x", "@openai/codex").as_deref(), Some("/"));
         assert_eq!(npm_global_prefix("/a/node_modules/b/lib/node_modules/@openai/codex/x", "@openai/codex"), None, "nested in a package");
@@ -752,7 +742,7 @@ mod tests {
     }
 
     #[test]
-    fn progress_lines_and_failures_read_as_t3codes() {
+    fn progress_lines_and_failures_are_read() {
         let (lines, partial) = split_output_lines("dow", "nloading\r\n50%\r75%\x1b[1Gdone\npart");
         assert_eq!(lines, ["downloading", "50%", "75%", "done"]);
         assert_eq!(partial, "part");
@@ -770,7 +760,7 @@ mod tests {
     }
 
     #[test]
-    fn the_state_is_written_as_t3codes() {
+    fn the_state_is_written() {
         let started = domovoi_model::typed::Timestamp::from("2026-01-01T00:00:00.000Z");
         let state = update_state(ServerProviderUpdateStatus::Running, Some(&started), false, "Running npm install", None);
         assert_eq!(

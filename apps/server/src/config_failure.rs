@@ -131,7 +131,7 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn failures_are_written_as_the_tagged_errors_of_t3code() {
+    fn failures_are_written_as_tagged_errors() {
         assert_eq!(
             json!(Failure::Settings { settings_path: "/u/settings.json".into(), operation: SettingsOperation::WriteFile, cause: "Is a directory (os error 21)".into() }),
             json!({ "_tag": "ServerSettingsError", "settingsPath": "/u/settings.json", "operation": "write-file", "cause": "Is a directory (os error 21)" })

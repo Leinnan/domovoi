@@ -34,14 +34,13 @@ use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-/// `--version`'s limit (t3code `VERSION_PROBE_TIMEOUT_MS`).
+/// `--version`'s limit.
 const VERSION_TIMEOUT: Duration = Duration::from_secs(10);
-/// A sign-in or model listing's limit (t3code `AUTH_PROBE_TIMEOUT_MS`).
+/// A sign-in or model listing's limit.
 const AUTH_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long a probe is kept.
 const PROBE_FRESH: Duration = Duration::from_secs(15 * 60);
 
-/// t3code's `COMPACT_SLASH_COMMAND`.
 pub fn compact_command() -> ServerProviderSlashCommand {
     ServerProviderSlashCommand { name: "compact".into(), description: Some("Summarize the conversation and reduce context usage".into()), input: None }
 }
@@ -107,7 +106,7 @@ impl Kind {
         let mut params = crate::adapters::acp::initialize_params();
         params["clientInfo"]["name"] = json!(client_name);
         match self {
-            // The generic client type silently denies Auto refusals (t3code `GROK_ACP_INITIALIZE_META`).
+            // The generic client type silently denies Auto refusals.
             Kind::Grok => params["_meta"] = json!({ "clientType": "extension" }),
             // Kiro V3 runs the user's hooks itself only when the client opts in.
             Kind::Kiro => params["clientCapabilities"]["_meta"] = json!({ "kiro": { "hooks": { "enabled": true, "v2": true } } }),
@@ -149,7 +148,7 @@ pub fn kind_of(id: &str) -> Option<Kind> {
 /// An instance's settings (t3code `GrokSettings`, `KiroSettings`, `FxSettings`).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Config {
-    /// Off unless settings turn it on (t3code `DEFAULT_DISABLED_PROVIDER_DRIVERS`).
+    /// Off unless settings turn it on.
     pub enabled: bool,
     pub display_name: Option<String>,
     pub binary_path: Option<String>,
@@ -262,7 +261,7 @@ pub(crate) async fn run(exe: &Path, args: &[&str], env: &[(String, String)], cwd
     }
 }
 
-/// The environment probes run with (t3code `providerProbeEnvironment`):
+/// The environment probes run with:
 /// the instance's, offline version managers, and no Grok self-update.
 pub(crate) fn probe_env(kind: Kind, config: &Config) -> Vec<(String, String)> {
     let mut env = config.env.clone();
@@ -336,7 +335,7 @@ pub(crate) fn model(slug: &str, name: &str, capabilities: Option<ModelCapabiliti
 }
 
 /// `models` with the instance's custom models: a custom name renames a
-/// listed model, the rest follow (t3code `providerModelsFromSettings`).
+/// listed model, the rest follow.
 pub(crate) fn with_custom_models(mut models: Vec<ServerProviderModel>, config: &Config, capabilities: Option<ModelCapabilities>) -> Vec<ServerProviderModel> {
     for (slug, name) in &config.custom_models {
         match models.iter_mut().find(|m| &m.slug == slug) {
@@ -533,7 +532,7 @@ mod tests {
     }
 
     #[test]
-    fn the_permission_policy_is_t3codes() {
+    fn the_permission_policy_is_as_listed() {
         use Disposition::*;
         for (mode, kind, want) in [
             ("approval-required", "read", Allow),

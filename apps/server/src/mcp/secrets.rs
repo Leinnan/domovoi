@@ -1,4 +1,4 @@
-//! `request_secret` (t3code `OrchestratorMcpService.requestSecret`): the
+//! `request_secret`: the
 //! agent asks the user for one secret through a card in its thread, and
 //! waits for the answer. The user's value goes to `crate::secrets::requests`
 //! (`secrets.answerRequest`); the card (`secret_request.record`) and this
@@ -26,7 +26,7 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const MAX_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 const POLL: Duration = Duration::from_millis(500);
 
-/// What the agent reads when its card ends without a secret (t3code `SECRET_REQUEST_UNSAVED_NOTE`).
+/// What the agent reads when its card ends without a secret.
 fn unsaved_note(status: &str) -> &'static str {
     match status {
         "declined" => "The user declined. Don't ask for it in chat or another way; say what's blocked and go on without it.",

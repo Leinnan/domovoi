@@ -1,4 +1,4 @@
-//! Token usage from the providers' local session logs (t3code `usage/`):
+//! Token usage from the providers' local session logs:
 //! Claude Code's `projects/**/*.jsonl` assistant `usage` records, Codex's
 //! `sessions/**/rollout-*.jsonl` `token_count` events, Pi's session files
 //! (assistant messages' `usage`, and `usage` entries for work outside one)

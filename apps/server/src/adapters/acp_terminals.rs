@@ -359,8 +359,7 @@ impl Terminals {
         state.prune();
     }
 
-    /// A tool call's `terminal` content as the text the terminal printed
-    /// (t3code `resolveEmbeddedTerminalContent`).
+    /// A tool call's `terminal` content as the text the terminal printed.
     pub fn embed(&self, session_id: &str, update: &mut Value) {
         if !matches!(update["sessionUpdate"].as_str(), Some("tool_call" | "tool_call_update")) {
             return;

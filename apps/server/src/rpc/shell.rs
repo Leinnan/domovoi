@@ -593,7 +593,7 @@ async fn mutate(ctx: Arc<ConnCtx>, m: ProjectMutation) -> Result<ProjectRecord, 
     }
 }
 
-/// Commands only the server dispatches (t3code `OrchestrationV2InternalCommand`)
+/// Commands only the server dispatches
 /// that Domovoi carries out, so a client must not reach them.
 const SERVER_ONLY_COMMANDS: [&str; 2] = ["secret_request.record", "link_request.record"];
 
@@ -731,7 +731,7 @@ mod tests {
     }
 
     #[test]
-    fn a_refused_mutation_is_written_as_the_tagged_error_of_t3code() {
+    fn a_refused_mutation_is_written_as_a_tagged_error() {
         assert_eq!(
             serde_json::json!(mutation_error("c1", "Unknown project.")),
             serde_json::json!({ "_tag": "ProjectMutationError", "commandId": "c1", "message": "Unknown project." })

@@ -1,4 +1,4 @@
-//! Attachment tools (t3code `attachment` toolkit): an agent stages a file
+//! Attachment tools: an agent stages a file
 //! or image through a signed upload URL (`crate::attachments`), then sends
 //! it as a message to a thread of this project.
 //!

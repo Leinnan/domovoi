@@ -1308,7 +1308,7 @@ pub async fn files_viewed(p: &Supported, number: u64) -> Result<FilesViewed, GhE
     Ok(FilesViewed { files, truncated: pull_request.files.has_more() })
 }
 
-/// What a changed file is, judged from its path (t3code's `classifyChangedFile`).
+/// What a changed file is, judged from its path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FileKind {
     Code,
@@ -1395,8 +1395,7 @@ fn to_breakdown(files: &Rows<GhFile>) -> ChangeBreakdown {
     breakdown(rows(files).map(|f| (f.path.as_deref().unwrap_or(""), f.additions.unwrap_or(0), f.deletions.unwrap_or(0))))
 }
 
-/// The lines of a change by what its files are, from each file's `(path, additions, deletions)`
-/// (t3code's `toChangeBreakdown`).
+/// The lines of a change by what its files are, from each file's `(path, additions, deletions)`.
 pub fn breakdown<'a>(files: impl Iterator<Item = (&'a str, u64, u64)>) -> ChangeBreakdown {
     let mut breakdown = ChangeBreakdown::default();
     for (path, additions, deletions) in files {
@@ -1632,7 +1631,7 @@ mod tests {
     }
 
     #[test]
-    fn the_capabilities_are_those_of_t3code() {
+    fn the_capabilities_are_the_bundled_ones() {
         assert_eq!(
             json!(capabilities()),
             json!({
@@ -1681,7 +1680,7 @@ mod tests {
     }
 
     #[test]
-    fn classifies_changed_files_like_t3code() {
+    fn classifies_changed_files() {
         for (path, kind) in [
             ("Cargo.lock", FileKind::Generated),
             ("src/__generated__/x.ts", FileKind::Generated),

@@ -890,7 +890,7 @@ mod tests {
     }
 
     #[test]
-    fn failures_are_written_as_the_tagged_errors_of_t3code() {
+    fn failures_are_written_as_tagged_errors() {
         let entries = [
             (EntriesFailure::WorkspaceRootNotFound, "workspace_root_not_found"),
             (EntriesFailure::WorkspaceRootStatFailed, "workspace_root_stat_failed"),

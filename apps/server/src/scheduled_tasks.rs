@@ -164,8 +164,8 @@ pub fn time_zone_name() -> Option<String> {
 
 // ---- failures ----
 
-/// Why a call of the scheduled-task group failed, as the client is told
-/// (t3code's `ScheduledTaskError`): what to show, the task it was about when
+/// Why a call of the scheduled-task group failed, as the client is told:
+/// what to show, the task it was about when
 /// there was one, and what the storage said when it was the storage that failed.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error, Serialize)]
 #[error("{message}")]
@@ -1698,7 +1698,7 @@ mod tests {
     }
 
     #[test]
-    fn failures_are_written_as_the_tagged_error_of_t3code() {
+    fn failures_are_written_as_a_tagged_error() {
         assert_eq!(json!(task_error("Could not list.", None)), json!({ "_tag": "ScheduledTaskError", "message": "Could not list." }));
         assert_eq!(
             json!(task_error("Schedule task not found.", Some("task-1"))),

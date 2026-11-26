@@ -602,7 +602,7 @@ mod tests {
     use serde_json::{Value, json};
 
     #[test]
-    fn normalizes_like_t3code() {
+    fn normalizes_values() {
         assert_eq!(normalize_preview_url("localhost:5173").unwrap(), "http://localhost:5173/");
         assert_eq!(normalize_preview_url("  127.0.0.1:3000/app ").unwrap(), "http://127.0.0.1:3000/app");
         assert_eq!(normalize_preview_url("[::1]:8080").unwrap(), "http://[::1]:8080/");

@@ -91,7 +91,7 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn failures_are_written_as_the_tagged_errors_of_t3code() {
+    fn failures_are_written_as_tagged_errors() {
         assert_eq!(json!(Failure::shell("no disk")), json!({ "_tag": "OrchestrationV2GetShellSnapshotError", "message": "no disk" }));
         assert_eq!(
             json!(Failure::projection("t1", "Unknown thread t1")),

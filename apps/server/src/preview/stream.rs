@@ -1,4 +1,4 @@
-//! `/api/preview-stream/*` (t3code `ServerBrowserStream.ts`): a server tab's
+//! `/api/preview-stream/*`: a server tab's
 //! live view.
 //!
 //! `GET /api/preview-stream/ws?threadId&tabId[&maxWidth=1280][&maxHeight=800][&quality=70][&interactive=false][&wsTicket]`

@@ -173,6 +173,87 @@ What the codec measurements say, which decided M4: the recorded session is
 once compressed; MessagePack encodes faster (0.25 ms against 0.39 ms for the
 session) and decodes no faster (1.85 ms against 1.69 ms).
 
+### M3 and M4: methods defined once; answers written once, large frames packed (`09713dc` → `4894477`)
+
+M3's first part moved the list of methods and changed no data path; it was
+not measured by itself, and this entry covers both.
+
+Expected of M4: fewer bytes per frame, less encoding with many subscribers,
+a faster snapshot decode on the client, a faster connect. The first held.
+The second shows in the encoding itself and not in the server's CPU under
+load. The last two did not happen, because what would bring them (binary
+frames through every shell, a hello in place of the ticket request) was not
+done.
+
+| Measure | M2 | M4 | |
+|---|---|---|---|
+| Encoding a thread's snapshot at 100 / 1000 / 5000 items | 0.23 / 1.69 / 9.29 ms | 0.09 / 0.85 / 5.14 ms | -45% to -59% |
+| The real home's shell snapshot with its frames | 7.08 ms | 2.68 ms | -62% |
+| Decoding the recorded session's client frames | 83.5 µs | 52.7 µs | -37% |
+| Live latency with 50 clients, p99 | 7.5 ms | 5.7 ms | -24%, at the edge of the noise |
+| Server CPU while 1 / 10 / 50 clients watch a reply | 0.6 / 0.7 / 0.8 s | 0.6 / 0.6 / 0.8 s | within the noise: not the improvement expected |
+| Connecting, one small call, a flush, every client measure | | | within the noise |
+
+What packing does (new measures; a client on the same machine does not ask
+for it):
+
+| What is sent | As JSON | Packed, as text |
+|---|---|---|
+| The recorded session's server frames | 457 kB | 185 kB |
+| Every thread of the real home, opened once (1,027 snapshots) | 232.8 MB | 77.2 MB |
+| The real home's shell snapshot | 1.98 MB | 0.18 MB |
+| The largest real thread, which is mostly images | 8.32 MB | 7.86 MB |
+
+Packing the session's frames takes 1.58 ms where encoding them takes
+0.39 ms, and unpacking 0.62 ms where decoding takes 1.62 ms. Packing all
+1,027 snapshots takes 1.87 s. The level is deflate 3: on the same threads
+level 1 leaves 99 MB in 1.1 s and level 6 leaves 75 MB in 3.8 s.
+
+Worse, and why it is kept:
+
+- A thread that is mostly images costs 181 ms more to send and 38 ms more to
+  read for 5% fewer bytes: base64 inside the JSON deflates by a quarter, and
+  the base64 of a packed text frame puts that back. It goes when frames are
+  bytes (M6 does that for the desktop apps) or when images leave the records.
+- `real.largest_thread.snapshot.build_again` 12 µs → 34 µs: the second build
+  of a cached thread's snapshot, now measured after the same test packed and
+  unpacked its 8 MB frame. 22 µs, and an effect of the order in the test.
+
+The codec. The owner's choice was a binary wire end to end. Measured on the
+recorded session, MessagePack is 12% smaller than JSON and no smaller once
+both are compressed, encodes faster and decodes no faster, and every shell
+hands a frame to the core as text. Compression is what makes frames smaller,
+so that is what was built; MessagePack was not adopted.
+
+### M5: no node per turn item, dead fields out (`4894477` → `1204694`)
+
+Expected: less written per item, a smaller database, records read faster.
+
+| Measure | M4 | M5 | |
+|---|---|---|---|
+| The real home's database | 418.0 MB | 388.2 MB | -7.1% |
+| Events per flush of a streamed reply | 1.05 | 1 | |
+| What a 20,000-character reply leaves in the event log | 43.2 kB | 41.5 kB | -4% |
+| … and in the records | 41.6 kB | 41.0 kB | -1.5% |
+| Reading every thread of the real home | 505 ms | 463 ms | -8%, within the noise |
+| One flush of a streamed reply | 0.37 to 0.40 ms | 0.35 to 0.39 ms | within the noise |
+| Server binary | 61.35 MB | 61.07 MB | -0.5% |
+
+The data migration (format 2 to 3) deletes 21,170 of the real home's 21,946
+execution nodes in 1.29 s; the whole upgrade from format 1 is 5.99 s (the
+budget was a minute), and the 116,052 records left all decode
+(`doctor --records`).
+
+Worse: `migration.total` by that step, and `command.thread_visit.5000.p50`
+51 µs → 75 µs, the measure that jumps between those two values (see M0 and
+M2, where it was the 1000-item one).
+
+What the stored records are made of, measured to decide what to do next
+(the real home, 250 MB of records): turn items 189 MB, of which commands'
+output 85 MB and tool calls 40 MB (four screenshots are the largest thread);
+conversation messages 35 MB, each a copy of the text of the turn item that
+shows it; the nodes deleted here 20 MB; explicit `null`s 4%.
+
 ## History
 
 Measured before the ledger above, with single runs on a quieter machine. The

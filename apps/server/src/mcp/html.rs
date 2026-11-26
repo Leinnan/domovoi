@@ -1,4 +1,4 @@
-//! `html_preview` and `html_render` (t3code `html` toolkit). `html_preview`
+//! `html_preview` and `html_render`. `html_preview`
 //! loads the page in the server's headless browser (`crate::preview::host`)
 //! at a private origin, in a fresh browser context, and answers its PNG
 //! (image content), content height, captured height (at most 4,000 px) and

@@ -234,7 +234,7 @@ mod tests {
     }
 
     #[test]
-    fn diffs_into_t3code_change_events() {
+    fn diffs_into_change_events() {
         let before = access(&[("a", "1"), ("b", "2")], &[("s1", true, "t1")]);
         let after = access(&[("b", "2"), ("c", "3")], &[("s1", true, "t2"), ("s2", false, "")]);
         let changes = diff(&before, &after);

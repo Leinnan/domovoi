@@ -202,7 +202,7 @@ async fn remote_devices_pair_and_stay_bound_to_their_key() {
     let thief_base = format!("http://127.0.0.1:{}", thief.port());
     assert_eq!(http_client().get(format!("{thief_base}/api/orchestration/shell")).bearer_auth(&token).send().await.unwrap().status(), 401);
 
-    // Remote status (Domovoi only) for a device with access:read.
+    // Remote status for a device with access:read.
     let status: Value = http_client().get(format!("{base}/api/domovoi/remote")).bearer_auth(&token).send().await.unwrap().json().await.unwrap();
     assert_eq!(status["running"], true);
     assert_eq!(status["endpointId"].as_str().unwrap(), domovoi_remote::parse_ticket(&ticket).unwrap().endpoint_addr().id.to_string());

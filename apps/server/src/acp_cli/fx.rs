@@ -1,4 +1,4 @@
-//! Vercel's fx (t3code `provider-fx`): `fx acp`, its sessions asked to
+//! Vercel's fx: `fx acp`, its sessions asked to
 //! bring the user's `~/.fx/mcp.json` servers.
 //!
 //! - Probe: `fx status --json` names the sign-in, the default backend and
@@ -52,7 +52,7 @@ pub struct Backend {
 }
 
 /// "Default" (named after fx's default model), then each backend's models
-/// unless it is signed out (t3code `fxModels`).
+/// unless it is signed out.
 pub fn models(default_model: Option<&str>, backends: &[Backend]) -> Vec<ServerProviderModel> {
     let caps = Some(model_capabilities());
     let mut default = super::model(DEFAULT_MODEL, &default_model.map_or_else(|| "Default".to_owned(), |m| format!("Default ({m})")), caps.clone());
@@ -69,7 +69,7 @@ pub fn models(default_model: Option<&str>, backends: &[Backend]) -> Vec<ServerPr
     out
 }
 
-/// The session mode for a runtime mode (t3code `fxSessionModeForPolicy`).
+/// The session mode for a runtime mode.
 pub fn session_mode(runtime_mode: &str) -> &'static str {
     match runtime_mode {
         "auto" => "auto",
@@ -89,7 +89,6 @@ pub fn mode_id<'a>(requested: &str, advertised: &[&'a str]) -> Option<&'a str> {
     candidates.iter().find_map(|c| advertised.iter().copied().find(|a| a == c))
 }
 
-/// t3code `fxPermissionDisposition`.
 pub fn disposition(runtime_mode: &str, tool_kind: &str) -> Disposition {
     match session_mode(runtime_mode) {
         "auto" => Disposition::Ask,
@@ -162,7 +161,7 @@ async fn probe_backend(exe: &Path, env: &[(String, String)], id: &str, name: &st
     Backend { id: id.into(), name: name.into(), signed_in, models }
 }
 
-/// What a probe reads after `--version` (t3code `checkFxProviderStatus`).
+/// What a probe reads after `--version`.
 pub async fn probe(exe: &Path, config: &Config, v: &mut ServerProvider) {
     let env = super::probe_env(super::Kind::Fx, config);
     let status = read(exe, &["status", "--json"], &env, None).await.and_then(|o| status(&o));

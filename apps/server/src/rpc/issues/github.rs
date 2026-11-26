@@ -531,7 +531,6 @@ fn reason_of(error: &GhError) -> TrackerReason {
     }
 }
 
-/// t3code's `FAILURE_DETAIL`.
 fn failure_detail(reason: TrackerReason) -> &'static str {
     match reason {
         TrackerReason::MissingTool => "GitHub CLI is not installed.",

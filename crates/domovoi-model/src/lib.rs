@@ -41,7 +41,7 @@ pub enum ProviderDriver {
     /// An agent speaking the Agent Client Protocol (t3code's `acpRegistry`
     /// driver): from the ACP registry, or a local command.
     AcpRegistry,
-    /// Google's Antigravity CLI over ACP (t3code's `antigravity` driver).
+    /// Google's Antigravity CLI over ACP.
     Antigravity,
     /// xAI's Grok CLI over ACP (`grok agent stdio`, t3code's `grok` driver).
     Grok,

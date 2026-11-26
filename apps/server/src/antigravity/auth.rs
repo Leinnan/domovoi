@@ -81,7 +81,7 @@ fn count(url: &url::Url, key: &str) -> usize {
     url.query_pairs().filter(|(k, _)| k == key).count()
 }
 
-/// Checks a sign-in link the agent gave (t3code `parseAntigravityAuthorizationUrl`):
+/// Checks a sign-in link the agent gave:
 /// Google's authorization endpoint (`/o/oauth2/v2/auth`, or `/o/oauth2/auth`
 /// as the native CLI uses), a code flow, one state, and a redirect to an
 /// unprivileged loopback port (`127.0.0.1`, or `localhost` with the CLI's
@@ -468,7 +468,7 @@ async fn sign_in(c: &Arc<Controller>, flow_id: &str, method: AuthMethod) -> Resu
 
 /// The account's models, each with its thinking levels: those are listed
 /// only for the selected model, so each is selected once, then the
-/// session's own again (t3code `publishCatalog`).
+/// session's own again.
 async fn publish_catalog(instance: &str, l: &launch::Launch, session: &Value) {
     super::session_started(instance, l.method(), l.exe.version.as_deref(), session, None);
     let options = &session["configOptions"];

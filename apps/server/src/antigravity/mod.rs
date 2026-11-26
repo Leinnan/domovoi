@@ -1,4 +1,4 @@
-//! Google Antigravity (t3code's `antigravity` driver): Google's `agy` CLI,
+//! Google Antigravity: Google's `agy` CLI,
 //! driven over ACP (`agy acp`, see [`crate::adapters::acp`]), each provider
 //! instance in a profile of its own.
 //!
@@ -43,7 +43,7 @@ pub const BUILT_IN: &str = "antigravity";
 pub const DISPLAY_NAME: &str = "Antigravity";
 /// The model that leaves the choice to the account's default; never sent to the agent.
 pub const DEFAULT_MODEL: &str = "antigravity-default";
-/// The catalog's default chat model (t3code `model-manifest.json`).
+/// The catalog's default chat model.
 pub const DEFAULT_CHAT_MODEL: &str = "gemini-3.8-flash-high";
 pub const TOOL: Tool = Tool { program: "agy", label: "Antigravity", env: "DOMOVOI_ANTIGRAVITY_BINARY" };
 /// The agent's own name of its executable on older installs.
@@ -60,7 +60,7 @@ const SIGN_IN_MESSAGE: &str = "Sign in with Google to use Antigravity.";
 const AUTH_UNCHECKED_MESSAGE: &str = "Antigravity is installed. Google account access is not checked yet.";
 const MISSING_MESSAGE: &str = "Antigravity ACP runtime is not installed or its executable could not be found.";
 
-/// Inherited variables the agent must not see (t3code `removedEnvironmentKeys`):
+/// Inherited variables the agent must not see:
 /// Google credentials of the server's environment, and what Domovoi sets itself.
 pub const REMOVED_ENV: [&str; 18] = [
     "GEMINI_API_KEY",
@@ -156,7 +156,7 @@ pub const SHARED_LOGIN: &str = "Antigravity keeps one Google sign-in for this us
 pub const SIGN_OUT_ELSEWHERE: &str = "Antigravity uses this machine's agy sign-in, which the agy command and the Antigravity IDE share, so Domovoi doesn't sign it out of Google. To change accounts, run `agy` on the server's machine and use /logout there, then sign in again.";
 
 impl Config {
-    /// Why the instance can't start with these settings (t3code `antigravityAuthConfigIssue`).
+    /// Why the instance can't start with these settings.
     pub fn issue(&self) -> Option<String> {
         if let Some(provider) = &self.api_key_unresolved {
             return Some(format!("Could not read the credential from the secret provider \"{provider}\". Unlock or fix it in Settings, then try again."));
@@ -877,8 +877,8 @@ fn default_model() -> ServerProviderModel {
     }
 }
 
-/// A select option of the agent's (`configOptions` entry) as a model option
-/// (t3code `acpProviderOptionDescriptors`); `with_current` keeps its value.
+/// A select option of the agent's (`configOptions` entry) as a model option;
+/// `with_current` keeps its value.
 pub fn select_descriptor(option: &Value, with_current: bool) -> Option<ProviderOptionDescriptor> {
     let id = option["id"].as_str().filter(|id| !id.is_empty() && id.trim() == *id && id.len() <= 256)?;
     let mut seen = std::collections::HashSet::new();

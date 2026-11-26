@@ -1,4 +1,4 @@
-//! Antigravity's skills (t3code `Drivers/AntigravitySkills.ts`): folders
+//! Antigravity's skills: folders
 //! with a `SKILL.md` in the user's `~/.gemini/config/skills` and
 //! `~/.gemini/antigravity-cli/skills`, and a project's `.gemini/skills`,
 //! `.agents/skills` and legacy `.agent/skills`. The first skill of a name

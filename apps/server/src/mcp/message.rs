@@ -1,4 +1,4 @@
-//! `send_to_user` (t3code `message` toolkit) and `tool_search` (t3code
+//! `send_to_user` and `tool_search` (t3code
 //! `toolSearch` toolkit).
 //!
 //! `send_to_user` shows a Markdown message mid-turn: the tool call itself,
@@ -12,7 +12,6 @@
 use super::{Call, s, tool};
 use serde_json::{Value, json};
 
-/// t3code `SEND_TO_USER_MAX_LENGTH`.
 const MAX_MESSAGE_CHARS: usize = 4_000;
 const MAX_QUERY_CHARS: usize = 500;
 const MAX_MATCHES: usize = 20;

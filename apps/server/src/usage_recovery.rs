@@ -1,4 +1,4 @@
-//! Threads a usage limit stopped (t3code `UsageLimitRecoveryWorker`).
+//! Threads a usage limit stopped.
 //!
 //! A thread whose latest run failed on a usage limit can be told what to do
 //! when the limit resets (`thread.metadata.update` `limitRecovery`): resume

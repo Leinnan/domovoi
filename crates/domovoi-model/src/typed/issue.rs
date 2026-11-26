@@ -38,7 +38,7 @@ pub struct ThreadIssueKey {
 }
 
 impl ThreadIssueKey {
-    /// Whether two keys name the same issue (t3code `threadIssueKeysEqual`):
+    /// Whether two keys name the same issue:
     /// host and scope compare trimmed and case-insensitively, the key trimmed.
     pub fn same_issue(&self, other: &ThreadIssueKey) -> bool {
         self.tracker == other.tracker
@@ -146,9 +146,9 @@ impl IssueReactionContent {
     ];
 }
 
-/// `IssueActor` (t3code's `PullRequestActor`).
+/// `IssueActor`.
 pub type IssueActor = PullRequestActor;
-/// `IssueLabel` (t3code's `PullRequestLabel`).
+/// `IssueLabel`.
 pub type IssueLabel = PullRequestLabel;
 
 // ---------------------------------------------------------------------------

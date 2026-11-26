@@ -1,4 +1,4 @@
-//! Review guides (t3code `PullRequestReviewGuideService`): a guided tour
+//! Review guides: a guided tour
 //! of a pull request, written by the review guide model after reading the
 //! change read-only in a scratch worktree at its head. A guide is kept per
 //! pull request (the latest head it was written for), as JSON under

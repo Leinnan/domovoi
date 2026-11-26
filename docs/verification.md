@@ -313,9 +313,10 @@ test -n "$requirement" && codesign --verify --deep --strict -R "=$requirement" .
 - **Workspace lifecycle** (third phase of the t3code gap plan):
   - Setup scripts: a new worktree runs the project's `runOnWorktreeCreate`
     script (resolved as t3code does: per-project override, the project's
-    scripts, `defaultProjectScripts`, else `t3.json` in the project root) in
-    the thread terminal `setup-<id>`, with `T3CODE_PROJECT_ROOT` and
-    `T3CODE_WORKTREE_PATH`. Settling a thread closes `stopOnSettle` script
+    scripts, `defaultProjectScripts`, else `domovoi.json` in the project root, or
+    `t3.json` where there is none) in
+    the thread terminal `setup-<id>`, with `DOMOVOI_PROJECT_ROOT` and
+    `DOMOVOI_WORKTREE_PATH` (and, for one release, the `T3CODE_…` names). Settling a thread closes `stopOnSettle` script
     terminals and runs the `runOnSettle` script.
   - Auto-pull at startup: projects marked for it (`autoPull`,
     `defaultAutoPull`, `projectAutoPullOverrides`) fast-forward when on
@@ -331,7 +332,8 @@ test -n "$requirement" && codesign --verify --deep --strict -R "=$requirement" .
     is on, the server holds `caffeinate -i -w <pid>` (macOS) or
     `systemd-inhibit` (Linux).
   - Verified: `provider_turns.rs` launches a worktree thread whose
-    `t3.json` setup script writes a file with t3code's environment;
+    `domovoi.json` setup script writes a file with the project's root, read
+    under both names of its variable;
     unit tests against real git repositories for every cleanup rule and
     each auto-pull condition; script resolution. Keep-awake is unit-tested
     for its decision only. The live steer test sees the `caffeinate` held
@@ -425,11 +427,11 @@ test -n "$requirement" && codesign --verify --deep --strict -R "=$requirement" .
   bearer token naming its thread. Claude gets it through `--mcp-config`
   (read-only tools pre-allowed with `--allowedTools`), Codex through
   `mcp_servers.t3` in its thread config. `DOMOVOI_NO_AGENT_TOOLS=1` turns it off.
-  - Tools, all within the caller's project: `t3_thread_list`,
-    `t3_thread_read`, `t3_thread_send`, `t3_thread_wait`, `delegate_task`
+  - Tools, all within the caller's project: `thread_list`,
+    `thread_read`, `thread_send`, `thread_wait`, `delegate_task`
     (a child thread with `delegatedFrom`, sharing the folder or in a new
     worktree), `task_status`, `task_cancel`, `schedule_task`,
-    `t3_project_info`. When a delegated task's work settles, the thread that
+    `project_info`. When a delegated task's work settles, the thread that
     delegated it gets a system message with its outcome and last reply.
   - Since then (see "Agent tools and instructions", "Secret requests, pull
     request links and other agent toolkits" and "Issues" below): 50 tools,
@@ -442,8 +444,8 @@ test -n "$requirement" && codesign --verify --deep --strict -R "=$requirement" .
     a token and outside the project), delegates a task that runs in a child
     thread, and sees the completion message arrive in the parent; 77
     frames pass `wire-check.ts`. Live (2026-11-19): real Claude and Codex
-    call `t3_project_info`, and delegate a task with `delegate_task` and
-    `t3_thread_wait`.
+    call `project_info`, and delegate a task with `delegate_task` and
+    `thread_wait`.
 - **OpenCode** (ninth phase of the t3code gap plan): `adapters/opencode.rs`
   drives `opencode serve` (the v2 HTTP API, OpenCode 2.0.18 or newer;
   `DOMOVOI_OPENCODE_BINARY` names the executable). One server per Domovoi, on
@@ -462,7 +464,7 @@ test -n "$requirement" && codesign --verify --deep --strict -R "=$requirement" .
     and a form Domovoi can't show is cancelled with a note to ask in chat. A
     declined permission is `reject` with a message and a steer note, so the
     agent goes on; cancel stops it.
-  - Each prompt carries its own message id (`msg_t3_turn_<session>:<attempt>`,
+  - Each prompt carries its own message id (`msg_domovoi_turn_<session>:<attempt>`,
     t3code `turnPromptId`), the provider turn's native ref. OpenCode forks
     natively: a forked thread's first turn calls `/fork` with `before` the
     source's next run's prompt (none at the latest), sets its rules and moves
@@ -524,7 +526,7 @@ test -n "$requirement" && codesign --verify --deep --strict -R "=$requirement" .
     `tool_call` hook asks through `ctx.ui.confirm`, following the runtime
     mode: reads are allowed, edits too under Auto-accept edits, everything
     under full access. The extension also registers Domovoi's agent MCP tools
-    (`mcp__t3__*`) and handles `$skill` chips and the service tier. Its
+    (`mcp__domovoi__*`) and handles `$skill` chips and the service tier. Its
     `select`, `input` and `editor` dialogs become questions.
   - Each turn applies the model, thinking level and service tier, then sends
     a `prompt`. Text, thinking, bash, edit and write, other tools,
@@ -600,7 +602,7 @@ What the live runs found:
 
 ## Scheduled tasks: fresh sessions and webhooks
 
-- `freshContext` (a scheduled task's "fresh session", `t3_thread_send`):
+- `freshContext` (a scheduled task's "fresh session", `thread_send`):
   the run gets a provider thread of its own and no handoff; later messages
   continue it, and a provider switch hands over only the runs since. A
   scheduled task's fresh-session run is a side conversation: the user's next
@@ -628,15 +630,15 @@ What the live runs found:
 
 ## Agent tools and instructions
 
-- `apps/server/src/mcp/` serves 50 tools (the newer ones in the sections below): threads (`t3_thread_list`,
+- `apps/server/src/mcp/` serves 50 tools (the newer ones in the sections below): threads (`thread_list`,
   `_read` with an `activity` view, `_search`, `_send` with modes and
   `freshContext`, `_wait` for a run, `_launch`, `_configure`, `_interrupt`,
-  `_update`, `_organize`, `_transfer`, `t3_queue`, `t3_pending_request`),
+  `_update`, `_organize`, `_transfer`, `queue`, `pending_request`),
   delegation (`orchestrator_capabilities`, `delegate_task` with a `target`
   and `mode: "wait"`, `task_status`, `task_cancel`, `create_threads`,
-  `t3_workflow_stop`), schedules (`schedule_task` that also changes a task,
+  `workflow_stop`), schedules (`schedule_task` that also changes a task,
   `list_scheduled_tasks`, `delete_scheduled_task`, `run_scheduled_task_now`),
-  `t3_project_info`, and worktrees (`t3_worktree_status`, `_list`,
+  `project_info`, and worktrees (`worktree_status`, `_list`,
   `_handoff`). Inputs follow t3code's contracts and still take the earlier
   names (`name`, `thisThread`); `clientRequestId` makes a retried call one
   change. Claude's `--allowedTools` lists every tool annotated read-only.
@@ -648,17 +650,17 @@ What the live runs found:
   naming only tools the server has, which a unit test checks) go to Claude as
   `--append-system-prompt`, to Codex as `turn/start` `additionalContext`, and
   to Pi through its extension's system prompt, and to OpenCode as the
-  session's `t3-code` instruction entry
-  (`PUT /api/experimental/session/{id}/instructions/entries/t3-code`). OpenCode
+  session's `domovoi` instruction entry
+  (`PUT /api/experimental/session/{id}/instructions/entries/domovoi`). OpenCode
   gets the tools as a remote MCP server added to the location of the thread's
-  folder (`PUT /api/experimental/mcp/t3-code-<thread>`, the session's bearer
+  folder (`PUT /api/experimental/mcp/domovoi-<thread>`, the session's bearer
   token; t3code `t3McpServerName`), with the session's rules denying
-  `t3-code-*` but its own `t3-code-<thread>_*`; a thread whose server
+  `domovoi-*` but its own `domovoi-<thread>_*`; a thread whose server
   OpenCode refused gets neither.
 - Verified: `provider_turns.rs` `agents_organize_threads_schedule_and_hand_off_to_a_worktree`
   (every new tool over HTTP, as the scripted Claude's session) and
   `a_handoff_in_the_first_turn_takes_the_conversation_along` (fails without
-  the queue's catch-up); live, real Claude and Codex call `t3_project_info`
+  the queue's catch-up); live, real Claude and Codex call `project_info`
   and hand themselves off to a worktree, where the continuation remembers a
   codeword and runs `pwd` in the worktree. The live run found the first-turn
   case.
@@ -1015,8 +1017,8 @@ What the live runs found:
   `pull_request_read`) read summary and checks through `rpc/source_control`
   (`gh`). Not done: no watcher polls hosts or wakes threads; no derived stacks;
   no guides, create, update, review, merge or CI tools.
-- Attachments (`t3_attachment_prepare_upload`, `t3_attachment_discard`,
-  `t3_thread_send_attachments`) go through signed upload URLs; only the
+- Attachments (`attachment_prepare_upload`, `attachment_discard`,
+  `thread_send_attachments`) go through signed upload URLs; only the
   preparing thread can send or discard a pending upload (kept in memory, so
   not across a restart). `html_render` publishes an `html` artifact (no
   `html_preview`: no headless browser). `send_to_user` and `tool_search` as
@@ -1104,9 +1106,9 @@ What the live runs found:
   `settings:write` and `source-control:write`). The peer lists the link as a
   client (`Domovoi · <label>`) and can revoke it, after which it lists as
   `expired` with `lastError`; unlinking signs the session out there too. Agents
-  get `t3_environment_links`, `t3_environment_unlink`, and `t3_thread_list` with
+  get `environment_links`, `environment_unlink`, and `thread_list` with
   `environmentId`, which reads the peer's shell through the link.
-- Not done: link request cards (`t3_environment_link`; `answerRequest` only
+- Not done: link request cards (`environment_link`; `answerRequest` only
   checks the card), forwarding the other thread tools, `delegated_task.remote.*`
   delegation, the middle access levels, http(s) addresses.
 - Verified: `apps/server/tests/peer_links.rs` with two servers on `--remote
@@ -1159,9 +1161,9 @@ What the live runs found:
   raw TCP from an authenticated client to this machine's loopback ports, one
   connection per WebSocket, over TCP or iroh. As t3code's: `terminal:operate`
   (ticket, bearer or cookie); 400 for a bad port or a non-upgrade; 403 with
-  `x-t3-tunnel-disabled: 1` while `enablePreviewTunnel` is off or the managed
+  `x-domovoi-tunnel-disabled: 1` while `enablePreviewTunnel` is off or the managed
   policy sets `limits.previewTunnel: false`; 403 with
-  `x-t3-tunnel-port-refused: 1` for the server's own port; 502 with it when
+  `x-domovoi-tunnel-port-refused: 1` for the server's own port; 502 with it when
   nothing accepts on 127.0.0.1 or ::1 within 5 s. Only a port is read, never a
   host. A tunnel closes with its session and when the tunnel is switched off.
 - The server's headless browser (`preview/browser.rs` over a minimal DevTools
@@ -1187,7 +1189,7 @@ What the live runs found:
   `preview_navigate`, `preview_resize`, `preview_set_appearance`,
   `preview_snapshot` (bounded as t3code's; image content or a PNG under
   `<userdata>/browser-artifacts/`), `preview_act`, `preview_evaluate`,
-  `preview_wait_for`, `t3_preview_list`, `t3_preview_close`, gated by "Agent
+  `preview_wait_for`, `preview_list`, `preview_close`, gated by "Agent
   browser access"; `html_preview` (PNG, content height, console).
 - Not done: browser download/install; Linux sandbox and library diagnosis
   (4503); recording; popups as tabs; file chooser interception (upload by

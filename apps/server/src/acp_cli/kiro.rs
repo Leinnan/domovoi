@@ -1,4 +1,4 @@
-//! Kiro's CLI (t3code `provider-kiro`): `kiro-cli acp --agent-engine=v3
+//! Kiro's CLI: `kiro-cli acp --agent-engine=v3
 //! --auth-method=cli`, whose access tokens stay inside Kiro.
 //!
 //! - Probe: `kiro-cli whoami --format json` says who is signed in
@@ -43,7 +43,7 @@ pub const EFFORT: &str = "effortLevel";
 pub const AGENT: &str = "mode";
 pub const STEER: &str = "_session/steer";
 
-/// `autopilot`: on only for full access (t3code `kiroAutopilotValue`).
+/// `autopilot`: on only for full access.
 pub fn autopilot_value(runtime_mode: &str) -> &'static str {
     if runtime_mode == "full-access" { "on" } else { "off" }
 }
@@ -52,7 +52,7 @@ pub fn built_in_models() -> Vec<ServerProviderModel> {
     vec![super::model(DEFAULT_MODEL, "Kiro default", None)]
 }
 
-/// The sign-in `whoami --format json` reports (t3code `kiroAuthFromWhoami`).
+/// The sign-in `whoami --format json` reports.
 pub fn auth_from_whoami(code: Option<i32>, stdout: &str, api_key: bool) -> Option<domovoi_model::typed::ServerProviderAuth> {
     if code != Some(0) {
         return stdout.contains("\"account\":null").then(|| super::auth(ServerProviderAuthStatus::Unauthenticated, None, None));
@@ -103,7 +103,7 @@ fn model_capabilities(model: &str) -> ModelCapabilities {
 }
 
 /// The account's models from `chat --list-models --format json`: Kiro's
-/// default listed as "Kiro default" with its id as its alias (t3code `kiroModelsFromList`).
+/// default listed as "Kiro default" with its id as its alias.
 pub fn models_from_list(stdout: &str) -> Option<Vec<ServerProviderModel>> {
     let list: Value = serde_json::from_str(stdout.trim()).ok()?;
     let models = list["models"].as_array().filter(|m| !m.is_empty())?;
@@ -140,7 +140,7 @@ pub fn default_model_id(id: &str) -> String {
         .unwrap_or_else(|| FALLBACK_DEFAULT_MODEL.to_owned())
 }
 
-/// The agent picker from `_kiro/config/template` (t3code `kiroAgentDescriptor`): none for one agent.
+/// The agent picker from `_kiro/config/template`: none for one agent.
 pub fn agent_descriptor(template: &Value) -> Option<ProviderOptionDescriptor> {
     let mode = template["configOptions"].as_array()?.iter().find(|o| o["id"] == AGENT && o["type"] == "select")?;
     let default = mode["currentValue"].as_str();
@@ -176,7 +176,7 @@ fn with_agents(models: Vec<ServerProviderModel>, agents: Option<&ProviderOptionD
         .collect()
 }
 
-/// What a probe reads after `--version` (t3code `checkKiroProviderStatus`).
+/// What a probe reads after `--version`.
 pub async fn probe(exe: &Path, config: &Config, v: &mut ServerProvider) {
     let env = super::probe_env(super::Kind::Kiro, config);
     let whoami = super::run(exe, &["whoami", "--format", "json"], &env, None, super::AUTH_TIMEOUT).await;
@@ -210,7 +210,7 @@ pub async fn probe(exe: &Path, config: &Config, v: &mut ServerProvider) {
     }
 }
 
-/// The choices a Kiro approval offers (t3code `kiroApprovalOptions`):
+/// The choices a Kiro approval offers:
 /// "Always allow" only where Kiro offers no one-time choice.
 pub fn approval_options(params: &Value) -> Vec<ApprovalOption> {
     let option = |decision, label: &str| ApprovalOption { decision, label: label.into(), warning: None };
@@ -244,8 +244,7 @@ pub fn steering_info(update: &Value) -> Option<(&str, Option<&str>)> {
 const STEERING_NOTE: &str = "[STEERING steer-";
 
 /// Leaves out the `[STEERING steer-…: …]` note Kiro's model ends a reply
-/// with after a steer, holding back a chunk's end that may begin one
-/// (t3code `makeKiroSteeringNoteFilter`).
+/// with after a steer, holding back a chunk's end that may begin one.
 #[derive(Default)]
 pub struct SteeringNotes {
     /// After `steering_injected`, until `steering_cleared`.

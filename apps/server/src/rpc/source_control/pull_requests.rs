@@ -248,7 +248,6 @@ async fn workspace_projects(
     Ok(ws)
 }
 
-/// t3code's `requireProject`.
 async fn require_project(state: &AppState, r: &PrRef) -> Result<Supported, Failure> {
     let ws = workspace_projects(state, Some(&r.project_id), None, None).await?;
     let own = ws.supported.first().cloned();
@@ -340,7 +339,7 @@ pub(crate) async fn read_for_agent(
     Ok((summary, checks))
 }
 
-/// The web address of a pull request on `host` (t3code's `changeRequestUrl`):
+/// The web address of a pull request on `host`:
 /// GitLab's `/-/merge_requests/N` on a host whose name says it is GitLab, else GitHub's `/pull/N`.
 pub(crate) fn change_request_url(host: &str, repository: &str, number: u64) -> String {
     if crate::glab::recognizes_host(host) {
@@ -406,7 +405,7 @@ fn counter_stream(tx: &'static watch::Sender<u64>) -> BoxStream<'static, Result<
     .boxed()
 }
 
-/// Visible pull request keys of a thread record (t3code's `linkedKeys`).
+/// Visible pull request keys of a thread record.
 fn linked_keys(thread: &AppThread) -> Vec<String> {
     if thread.deleted_at.is_some() || thread.lineage.side_chat == Some(true) {
         return vec![];
@@ -437,7 +436,6 @@ enum LinkedChange {
     Reordered,
 }
 
-/// t3code's `makeLinkedThreadsChangeDetector`.
 #[derive(Default)]
 struct LinkedDetector {
     views: HashMap<String, Option<String>>,
@@ -628,7 +626,6 @@ fn narrowing(f: &ListFilters) -> gitlab::Narrowing<'_> {
     }
 }
 
-/// t3code's `matchesRowFilters`.
 fn matches_filters(row: &ListRow, f: &ListFilters, viewer: &str) -> bool {
     let e = &row.entry;
     let names: HashSet<String> = e.labels.iter().map(|l| l.name.trim().to_lowercase()).collect();
@@ -796,7 +793,6 @@ async fn list_stats(state: &AppState, input: ListStatsInput) -> Result<ListStats
 
 const FILTER_OPTIONS_LIMIT: usize = 100;
 
-/// t3code's `rankFilterOptions`.
 fn rank_filter_options<T>(items: Vec<T>, query: Option<&str>, key_of: fn(&T) -> String, texts_of: fn(&T) -> Vec<String>, host_order: bool, pages_truncated: bool) -> (Vec<T>, bool) {
     let query = query.unwrap_or("").trim().to_lowercase();
     let mut unique: Vec<T> = vec![];
@@ -1719,7 +1715,7 @@ mod tests {
     }
 
     #[test]
-    fn linked_thread_detector_follows_t3code() {
+    fn linked_threads_are_detected() {
         let mut d = LinkedDetector::default();
         // A thread unseen since start counts as changed on its first full event.
         assert_eq!(observe(&mut d, &thread_event("thread.pinned", json!([]), "1")), Some(LinkedChange::Changed));
@@ -1765,7 +1761,7 @@ mod tests {
     }
 
     #[test]
-    fn filters_rows_like_t3code() {
+    fn filters_rows() {
         let item = row(&["Bug"], true, Some("approved"), "Me");
         assert!(matches_filters(&item, &filters(json!({ "draft": "only", "author": "@me", "labels": [["bug", "x"]] })), "me"));
         assert!(!matches_filters(&item, &filters(json!({ "draft": "hide" })), "me"));

@@ -212,7 +212,7 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn failures_are_written_as_the_tagged_errors_of_t3code() {
+    fn failures_are_written_as_tagged_errors() {
         let failure = DispatchFailure { command_id: Some("c1".into()), command_type: Some("thread.visit".into()), refusal: Refusal::UnknownThread("t9".into()) };
         assert_eq!(
             json!(failure),

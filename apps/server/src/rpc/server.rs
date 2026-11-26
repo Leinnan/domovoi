@@ -150,7 +150,7 @@ mod tests {
 
     /// The events after the snapshot, as t3code's `ServerConfigStreamEvent` spells them.
     #[test]
-    fn config_events_are_written_as_t3code_stream_events() {
+    fn config_events_are_written_as_stream_events() {
         assert_eq!(json!(no_sources_event()), json!({ "type": "usageLimitSourcesUpdated", "version": 1, "payload": { "sources": [] } }));
         assert_eq!(json!(no_themes_event()), json!({ "type": "environmentThemesUpdated", "version": 1, "payload": { "themes": [] } }));
         assert_eq!(json!(providers_event(vec![])), json!({ "type": "providerStatuses", "version": 1, "payload": { "providers": [] } }));

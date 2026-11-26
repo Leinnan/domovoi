@@ -734,7 +734,7 @@ impl ProviderHost for Host {
                 store.append_event(thread_id, pt.updated(), &o).map_err(|e| e.to_string())?;
             }
             // OpenCode reverts its session to before the first undone turn's
-            // prompt (t3code `OpenCode2Adapter.rollbackThread`); files are the checkpoint's.
+            // prompt; files are the checkpoint's.
             Some("opencode") => {
                 let Some(provider_thread) = provider_thread else { return Ok(()) };
                 let Some(session) = provider_thread.native_thread_ref.as_ref().and_then(|n| n.native_id.clone()) else { return Ok(()) };

@@ -1,4 +1,4 @@
-//! xAI's Grok CLI (t3code `provider-grok`): `grok agent stdio`, launched in
+//! xAI's Grok CLI: `grok agent stdio`, launched in
 //! the permission mode the thread's runtime mode asks for (Grok has no
 //! auto-accept-edits mode), signing in with `XAI_API_KEY` when set, else
 //! the CLI's cached `grok login` token.
@@ -29,7 +29,7 @@ use std::time::Duration;
 pub const DEFAULT_MODEL: &str = "grok-build";
 pub const RUNTIME_MODES: [RuntimeMode; 3] = [RuntimeMode::ApprovalRequired, RuntimeMode::Auto, RuntimeMode::FullAccess];
 /// `grok agent stdio` answers `initialize` after its startup work, 9-14 s
-/// from a home folder (t3code `GROK_ACP_INITIALIZE_TIMEOUT_MS`).
+/// from a home folder.
 const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(20);
 /// The interjection method (`_x.ai/interject`).
 pub const INTERJECT: &str = "_x.ai/interject";
@@ -37,7 +37,7 @@ pub const INTERJECT: &str = "_x.ai/interject";
 pub const RATE_LIMITED: i64 = -32003;
 
 /// The arguments for a runtime mode: argv overrides Grok's config, so
-/// Supervised cannot inherit always-approve (t3code `grokAcpSpawnArgs`).
+/// Supervised cannot inherit always-approve.
 pub fn spawn_args(runtime_mode: Option<&str>) -> &'static [&'static str] {
     match runtime_mode {
         None => &["agent", "stdio"],
@@ -75,7 +75,7 @@ fn valid_effort(v: &str) -> bool {
 }
 
 /// A model's reasoning levels from its `_meta` (lowest first) and the
-/// current one (t3code `grokReasoningOptionsFromModel`).
+/// current one.
 pub fn reasoning_levels(model: &Value) -> (Vec<(String, String, Option<String>, bool)>, Option<String>) {
     let meta = &model["_meta"];
     if !meta.is_object() || meta["supportsReasoningEffort"] == false {
@@ -184,7 +184,7 @@ pub fn slash_commands(init: &Value) -> Vec<ServerProviderSlashCommand> {
     out
 }
 
-/// What a probe reads after `--version` (t3code `checkGrokProviderStatus`).
+/// What a probe reads after `--version`.
 pub async fn probe(exe: &Path, config: &Config, v: &mut ServerProvider) {
     let env = super::probe_env(super::Kind::Grok, config);
     let api_key = config.var("XAI_API_KEY").is_some();
@@ -233,7 +233,7 @@ pub async fn probe(exe: &Path, config: &Config, v: &mut ServerProvider) {
     v.message = incomplete.map(str::to_owned);
 }
 
-/// The choices a Grok approval offers (t3code `grokApprovalOptions`): only
+/// The choices a Grok approval offers: only
 /// `allow-edits-session` is for the session; Grok's other allow-always
 /// choices save grants for the project, so they are not offered.
 pub fn approval_options(params: &Value) -> Vec<ApprovalOption> {
@@ -274,7 +274,7 @@ pub fn is_prompt_complete(method: &str) -> bool {
     matches!(method, "x.ai/session/prompt_complete" | "_x.ai/session/prompt_complete")
 }
 
-/// Grok's question as a form, and the tool call it belongs to (t3code `extractXAiAskUserQuestions`).
+/// Grok's question as a form, and the tool call it belongs to.
 pub fn questions(params: &Value) -> Option<(String, Vec<UserInputQuestion>)> {
     let p = unwrapped(params);
     let call = p["toolCallId"].as_str()?.to_owned();
@@ -310,7 +310,7 @@ pub fn questions(params: &Value) -> Option<(String, Vec<UserInputQuestion>)> {
     (!questions.is_empty()).then_some((call, questions))
 }
 
-/// The answer Grok is sent (t3code `makeXAiAskUserQuestionResponse`): the
+/// The answer Grok is sent: the
 /// labels chosen by question text, free text as notes; none, cancelled.
 pub fn question_answer(params: &Value, answers: Option<&Map<String, Value>>) -> Value {
     let Some(answers) = answers else { return json!({ "outcome": "cancelled" }) };
@@ -349,7 +349,7 @@ pub fn question_answer(params: &Value, answers: Option<&Map<String, Value>>) -> 
     answer
 }
 
-/// The plan of `exit_plan_mode` (t3code `extractXAiExitPlanMarkdown`).
+/// The plan of `exit_plan_mode`.
 pub fn plan_markdown(params: &Value, fallback: Option<&str>) -> String {
     let from = |s: Option<&str>| s.map(str::trim).filter(|s| !s.is_empty()).map(str::to_owned);
     from(unwrapped(params)["planContent"].as_str())
@@ -385,7 +385,7 @@ pub fn offered_efforts(session: &Value, model: &str) -> Vec<String> {
 }
 
 /// What `session/set_model` is sent for a selection, or nothing when the
-/// session already runs it (t3code `applyGrokAcpModelSelection`).
+/// session already runs it.
 pub fn set_model_params(session_id: &str, session: &Value, model: &str, effort: Option<&str>) -> Option<Value> {
     let (current, current_effort) = current(session);
     let requested = Some(model_id(model)).filter(|m| *m != DEFAULT_MODEL);

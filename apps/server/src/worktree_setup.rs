@@ -1,4 +1,4 @@
-//! Worktree setup progress per thread (t3code `WorktreeSetupTracker`): the
+//! Worktree setup progress per thread: the
 //! stages of provisioning a thread's worktree, streamed to
 //! `subscribeWorktreeSetup`, and cancellation while it runs.
 

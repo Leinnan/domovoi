@@ -1,14 +1,13 @@
-//! The preview browser and the preview tunnel (t3code `apps/server/src/preview`).
+//! The preview browser and the preview tunnel.
 //!
 //! - `tunnel`: `/api/preview/tunnel`, raw TCP from a client to this
-//!   machine's loopback ports (t3code `PreviewTunnel.ts`).
+//!   machine's loopback ports.
 //! - `host`: what the rest of the server asks of the headless browser; with
-//!   the `preview-browser` feature it is `browser` (t3code `ServerBrowser.ts`)
+//!   the `preview-browser` feature it is `browser`
 //!   over `cdp`, launched by `chrome`, with page scripts in `page`.
-//! - `stream`: `/api/preview-stream/*`, a server tab's screencast and input
-//!   (t3code `ServerBrowserStream.ts`).
+//! - `stream`: `/api/preview-stream/*`, a server tab's screencast and input.
 //!
-//! The tab records themselves are `crate::rpc::preview` (t3code `Manager.ts`).
+//! The tab records themselves are `crate::rpc::preview`.
 
 #[cfg_attr(not(feature = "preview-browser"), expect(dead_code, reason = "without the browser nothing is launched"))]
 pub mod chrome;

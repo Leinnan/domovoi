@@ -1,7 +1,7 @@
 //! What the rest of the server asks of the headless browser: the RPC
 //! handlers (`preview.open`, `reportProfiles`, `clearProfile`), the preview
 //! stream, the agent tools (t3code's `PreviewAutomationBroker` with the
-//! server host as its only host) and `html_preview` (t3code `HtmlRender.preview`).
+//! server host as its only host) and `html_preview`.
 //!
 //! With the `preview-browser` feature each call goes to `super::browser`;
 //! without it the browser is unavailable and every call says so.
@@ -123,7 +123,7 @@ pub enum AttachError {
     Launch(String),
 }
 
-/// What `html_preview` captured (t3code `HtmlPreview`).
+/// What `html_preview` captured.
 #[derive(Debug, Clone)]
 pub struct HtmlShot {
     /// Base64 PNG.

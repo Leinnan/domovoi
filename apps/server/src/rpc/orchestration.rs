@@ -667,7 +667,7 @@ struct NativeChildWork {
     children: Vec<crate::antigravity::child_work::Child>,
 }
 
-/// The children of the batch whose thread `child` is (t3code `NativeChildWorkQuery`):
+/// The children of the batch whose thread `child` is:
 /// a provider-native Antigravity subagent of its parent, read from the
 /// parent session's log with its sibling batches of that session.
 fn native_child_work(state: &crate::state::AppState, child: &str) -> Vec<crate::antigravity::child_work::Child> {
@@ -804,7 +804,7 @@ mod tests {
     }
 
     #[test]
-    fn occurrence_folding_matches_t3code() {
+    fn occurrences_are_folded() {
         assert_eq!(occurrences("Don’t DON'T don't", "don't").len(), 3);
         assert_eq!(occurrences("aaaa", "aa").len(), 2, "non-overlapping");
         assert_eq!(occurrences("ΟΔΟΣ", "οδοσ").len(), 1);

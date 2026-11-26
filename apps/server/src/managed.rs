@@ -1,4 +1,4 @@
-//! Server-managed project folders (t3code `ManagedProjectFolders`): the
+//! Server-managed project folders: the
 //! "No project" scratch project with one folder per thread, and new named
 //! projects scaffolded as git repositories under `<home>/projects`.
 
@@ -197,7 +197,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn names_follow_t3code() {
+    fn names_are_derived() {
         assert_eq!(folder_words("Fix the Login bug, please now and later!"), "fix-the-login-bug-please");
         assert_eq!(project_folder_name("  Café Été  "), "cafe-ete");
         assert_eq!(project_folder_name("!!!"), "project");

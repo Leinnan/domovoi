@@ -1,4 +1,4 @@
-//! The ACP registry (t3code `provider-acp-registry`): the agents published at
+//! The ACP registry: the agents published at
 //! `https://cdn.agentclientprotocol.com/registry/v1/latest/registry.json`,
 //! and installing them under `<home>/acp-registry/` for instances that name
 //! them (`agentId`).

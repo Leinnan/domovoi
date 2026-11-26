@@ -37,7 +37,7 @@
 //! Limits: the access levels between read-only and full access
 //! (`approval-required`, `auto-accept-edits`, `auto`) are refused as
 //! `incompatible`, since a Domovoi peer cannot hold a linked agent to a
-//! runtime-mode ceiling (t3code's `mcpModeLimitHeader` and `linkFence`); no
+//! runtime-mode ceiling; no
 //! link request cards (`environment_link`, so `peerLinks.answerRequest`
 //! only checks the card); no other forwarded tool (t3code forwards every
 //! thread tool to the peer's `/mcp`, which serves only its own agents here)

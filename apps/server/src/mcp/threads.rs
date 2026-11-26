@@ -1,4 +1,4 @@
-//! Thread tools (t3code `orchestrator` and `thread` toolkits): list, read,
+//! Thread tools: list, read,
 //! search, message, wait for, launch, configure, interrupt, rename, organize,
 //! fork and merge back threads of the caller's project, and manage their
 //! queues and pending requests.

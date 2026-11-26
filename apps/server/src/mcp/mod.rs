@@ -1,4 +1,4 @@
-//! The agent MCP server (t3code `mcp/McpHttpServer` and its core toolkits):
+//! The agent MCP server:
 //! the agents Domovoi runs reach this server back over Streamable HTTP at
 //! `/mcp`, to read and message other threads of their project, delegate
 //! tasks to child agents, schedule tasks, look up their project, ask the

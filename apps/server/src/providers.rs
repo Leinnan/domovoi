@@ -877,7 +877,7 @@ fn acp_model(slug: &str, name: &str) -> ServerProviderModel {
         is_default: None, is_legacy: None, supports_text_generation: None, capabilities: None }
 }
 
-/// An ACP instance (t3code `acpRegistry` probe): its agent started in a
+/// An ACP instance: its agent started in a
 /// scratch folder, `initialize`, then `session/new` for its models; then
 /// stopped. `force` probes again within the 15 minutes.
 pub async fn probe_acp(id: &str, config: &domovoi_model::typed::ProviderInstanceConfig, force: bool) -> ServerProvider {
@@ -1047,7 +1047,7 @@ mod tests {
 
     /// The entries as clients are sent them: the keys of each state, no more.
     #[test]
-    fn entries_are_written_as_t3code_provider_statuses() {
+    fn entries_are_written_as_provider_statuses() {
         let missing = finish(base_entry(CODEX), None, auth(ServerProviderAuthStatus::Unknown, None, None), "", "Codex CLI is not installed.");
         let sent = json!(missing);
         let bundled: Value = serde_json::from_str(include_str!("../defaults/providers.json")).unwrap();

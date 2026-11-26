@@ -159,7 +159,7 @@ pub(super) fn context_boundary(store: &Store, thread_id: &str, outline: &Outline
 }
 
 /// A scheduled task's fresh-session occurrence: a side conversation, which
-/// the thread's own conversation continues past (t3code `isScheduledFreshRun`).
+/// the thread's own conversation continues past.
 fn scheduled_fresh_run(store: &Store, thread_id: &str, run: &Run) -> bool {
     run.fresh_context == Some(true)
         && store.record::<ConversationMessage>(thread_id, run.user_message_id.as_str()).ok().flatten().is_some_and(|m| m.scheduled_task_id.is_some())

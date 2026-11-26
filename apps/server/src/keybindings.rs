@@ -1,4 +1,4 @@
-//! Keybindings (t3code `keybindings.ts` and `@t3tools/shared/keybindings`):
+//! Keybindings:
 //! `<userdata>/keybindings.json` holds rules like
 //! `{ "key": "mod+shift+k", "command": "...", "when": "a && !b" }`, seeded
 //! with t3code's defaults; clients get them compiled to shortcut objects and
@@ -417,7 +417,7 @@ mod tests {
     }
 
     #[test]
-    fn compiled_defaults_match_t3code_resolved_defaults() {
+    fn compiled_defaults_match_the_bundled_resolved_defaults() {
         assert_eq!(compiled_defaults(), crate::defaults::keybindings());
         let bundled: Value = serde_json::from_str(crate::defaults::KEYBINDING_RULES).unwrap();
         assert_eq!(json!(default_rules()), bundled, "a default rule is written to the file as it is bundled");

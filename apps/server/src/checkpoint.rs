@@ -1,4 +1,4 @@
-//! Workspace checkpoints as hidden Git refs (t3code `CheckpointStore`).
+//! Workspace checkpoints as hidden Git refs.
 //!
 //! Capture stages the whole working tree (tracked + untracked, respecting
 //! .gitignore) into a temporary index, writes a tree and a commit parented on

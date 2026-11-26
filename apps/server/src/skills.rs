@@ -189,7 +189,7 @@ pub fn codex() -> Vec<ServerProviderSkill> {
     out
 }
 
-/// A `$name` mention (t3code `SKILL_MENTION_PATTERN`): after a space or the
+/// A `$name` mention: after a space or the
 /// start, a currency sign, then a name of letters, digits, `:`, `_` and `-`
 /// with at least one letter, not a price, ending at a space or the end.
 fn mentions(prompt: &str) -> Vec<(usize, usize, String)> {
@@ -227,7 +227,7 @@ fn is_currency(c: char) -> bool {
 }
 
 /// The text blocks a Claude message is sent as, when it mentions a skill
-/// Claude has; `None` otherwise (t3code `planClaudeSkillDispatch`).
+/// Claude has; `None` otherwise.
 pub fn claude_dispatch(prompt: &str, skills: &[ServerProviderSkill]) -> Option<Vec<String>> {
     let found: Vec<(usize, usize, &ServerProviderSkill)> =
         mentions(prompt).into_iter().filter_map(|(s, e, name)| skills.iter().find(|k| k.name == name).map(|k| (s, e, k))).collect();

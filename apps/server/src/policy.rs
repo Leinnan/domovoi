@@ -65,12 +65,12 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-/// The exit code of a server that will not start under its policy (t3code `SERVER_EXIT_CODE_MANAGED_POLICY`).
+/// The exit code of a server that will not start under its policy.
 pub const EXIT_CODE: u8 = 77;
 /// The variable a debug build reads the policy path from.
 pub const DEV_PATH_ENV: &str = "DOMOVOI_DEV_MANAGED_POLICY_PATH";
 
-/// Why the policy stops the server (t3code `ManagedPolicyFileError`).
+/// Why the policy stops the server.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 #[error("Domovoi cannot use the managed policy at {path}: {reason}. It will not start until an administrator fixes this.")]
 pub struct PolicyFileError {
@@ -78,7 +78,7 @@ pub struct PolicyFileError {
     pub reason: String,
 }
 
-/// A request the policy refuses (t3code `ManagedPolicyRefusedError`).
+/// A request the policy refuses.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 #[error("{organization}'s policy does not allow {action}{}.", detail.as_ref().map(|d| format!(", {d}")).unwrap_or_default())]
 pub struct Refused {
@@ -315,7 +315,7 @@ struct Entry {
     value: Value,
 }
 
-/// The policy this server runs under (t3code's `ManagedPolicy` service).
+/// The policy this server runs under.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Policy {
     document: Option<Document>,
@@ -376,7 +376,7 @@ const PROJECT_OVERRIDE_KEYS: [&str; 29] = [
     "idleCompaction",
 ];
 
-/// Drivers a policy may name, with the labels users see (t3code `KNOWN_DRIVERS`); any other is refused.
+/// Drivers a policy may name, with the labels users see; any other is refused.
 const KNOWN_DRIVERS: [(&str, &str); 11] = [
     ("codex", "Codex"),
     ("claudeAgent", "Claude"),
@@ -769,7 +769,7 @@ fn vet_settings(settings: Option<&BTreeMap<String, Setting>>) -> Result<(Vec<Ent
 }
 
 /// Whether settings hold a credential the server would move to the secret
-/// store (t3code `mapSettingsSecrets`): built-in defaults hold none, so any
+/// store: built-in defaults hold none, so any
 /// found is the policy's.
 fn holds_credential(settings: &Value) -> bool {
     let secret = |v: Option<&Value>| v.and_then(Value::as_str).is_some_and(|s| !s.is_empty() && s != crate::secrets::REDACTED);
@@ -961,7 +961,7 @@ mod tests {
     }
 
     #[test]
-    fn settings_entries_are_vetted_as_t3code_vets_them() {
+    fn settings_entries_are_vetted() {
         let settings = |entries: Value| reason(&json!({ "schemaVersion": 1, "organization": "Acme", "settings": entries }).to_string());
         assert_eq!(settings(json!({ "noSuchSetting": { "value": 1, "locked": true } })), "\"noSuchSetting\" is not a setting this version can manage");
         assert_eq!(settings(json!({ "a..b": { "value": 1, "locked": true } })), "\"a..b\" is not a settings path");
