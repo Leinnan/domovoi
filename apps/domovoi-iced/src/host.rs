@@ -7,13 +7,14 @@ use domovoi_desktop_host::{HostConfig, HostEvent, Identity, SecureStore};
 use iced::Subscription;
 use iced::futures::SinkExt;
 
-pub use domovoi_desktop_host::{HostHandle, device_label, device_os, local_timezone};
+pub use domovoi_desktop_host::{HostHandle, TerminalProbe, device_label, device_os, local_timezone};
 
 /// This app's data folder, keychain service and Windows app id.
 pub const IDENTITY: Identity = Identity::ICED;
 
 #[derive(Clone)]
 pub enum HostMsg {
+    TerminalDetails { environment_id: String, outcome: TerminalProbe },
     Ready(HostHandle),
     Delta(Box<domovoi_core::delta::ViewDelta>),
     ImageLoaded { url: String, handle: iced::widget::image::Handle },
@@ -29,6 +30,7 @@ pub enum HostMsg {
 impl std::fmt::Debug for HostMsg {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            HostMsg::TerminalDetails { environment_id, .. } => write!(f, "TerminalDetails({environment_id})"),
             HostMsg::Ready(_) => f.write_str("Ready"),
             HostMsg::Delta(_) => f.write_str("Delta(..)"),
             HostMsg::ImageLoaded { url, .. } => write!(f, "ImageLoaded({url})"),
@@ -42,6 +44,7 @@ impl std::fmt::Debug for HostMsg {
 impl From<HostEvent> for HostMsg {
     fn from(event: HostEvent) -> Self {
         match event {
+            HostEvent::TerminalDetails { environment_id, outcome } => HostMsg::TerminalDetails { environment_id, outcome },
             HostEvent::Delta(delta) => HostMsg::Delta(delta),
             HostEvent::ImageLoaded { url, bytes } => HostMsg::ImageLoaded { url, handle: iced::widget::image::Handle::from_bytes(bytes) },
             HostEvent::ImageFailed { url } => HostMsg::ImageFailed { url },

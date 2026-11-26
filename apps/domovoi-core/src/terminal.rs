@@ -10,6 +10,16 @@ use domovoi_model::typed::TerminalAttachEvent;
 pub const DEFAULT_ROWS: u16 = 24;
 pub const DEFAULT_COLS: u16 = 100;
 
+pub const SPLIT_KEY: &str = "terminalSplits";
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct SplitPreference {
+    pub environment: String,
+    pub thread: String,
+    pub stacked: bool,
+    pub percent: u32,
+}
+
 fn nz(n: u16) -> NonZeroU16 {
     NonZeroU16::new(n).unwrap_or(NonZeroU16::MIN)
 }
@@ -17,11 +27,14 @@ fn nz(n: u16) -> NonZeroU16 {
 pub struct Session {
     pub id: String,
     pub label: String,
+    pub cwd: String,
     parser: vt100::Parser,
     /// The screen as last drawn for the view; cleared by anything that changes it.
     drawn: std::sync::Mutex<Option<TerminalScreenView>>,
     pub status: String,
     pub last_sequence: u64,
+    pub watching: bool,
+    pub requested_size: Option<(u16, u16)>,
     /// How many rows of history there are above the screen.
     history: usize,
     /// A command to type once the terminal is up (a project script).
@@ -33,10 +46,13 @@ impl Session {
         Session {
             id: id.into(),
             label: label.into(),
+            cwd: String::new(),
             parser: vt100::Parser::new(nz(DEFAULT_ROWS), nz(DEFAULT_COLS), 2_000),
             drawn: std::sync::Mutex::default(),
             status: "starting".into(),
             last_sequence: 0,
+            watching: false,
+            requested_size: None,
             history: 0,
             pending_input: None,
         }
@@ -47,22 +63,23 @@ impl Session {
         self.parser.screen()
     }
 
-    fn changed(&mut self) {
+    pub fn invalidate_view(&mut self) {
         *self.drawn.get_mut().unwrap_or_else(std::sync::PoisonError::into_inner) = None;
     }
 
     /// Applies one `terminal.attach` stream event.
     pub fn apply(&mut self, event: &TerminalAttachEvent) {
-        self.changed();
+        self.invalidate_view();
         match event {
-            TerminalAttachEvent::Snapshot { snapshot } => {
+            TerminalAttachEvent::Snapshot { snapshot } | TerminalAttachEvent::Restarted { snapshot, .. } => {
                 // The server's size, held to what a resize allows: the
                 // emulator allocates every cell up front.
-                let rows = snapshot.rows.unwrap_or(DEFAULT_ROWS as u64).clamp(2, 500) as u16;
-                let cols = snapshot.cols.unwrap_or(DEFAULT_COLS as u64).clamp(10, 1000) as u16;
+                let rows = snapshot.rows.unwrap_or(DEFAULT_ROWS as u64).clamp(1, 500) as u16;
+                let cols = snapshot.cols.unwrap_or(DEFAULT_COLS as u64).clamp(1, 1000) as u16;
                 self.parser = vt100::Parser::new(nz(rows), nz(cols), 2_000);
                 self.parser.process(snapshot.history.as_bytes());
                 self.status = snapshot.status.as_str().to_owned();
+                self.cwd.clone_from(&snapshot.cwd);
                 self.last_sequence = snapshot.sequence.unwrap_or(0);
             }
             TerminalAttachEvent::Output { sequence, data, .. } => {
@@ -77,9 +94,15 @@ impl Session {
             }
             TerminalAttachEvent::Exited { .. } => self.status = "exited".into(),
             TerminalAttachEvent::Closed { .. } => self.status = "closed".into(),
-            TerminalAttachEvent::Cleared { .. } => self.parser.process(b"\x1b[H\x1b[2J"),
+            TerminalAttachEvent::Cleared { .. } => {
+                self.parser.screen_mut().clear_scrollback();
+                self.parser.process(b"\x1b[H\x1b[2J");
+            }
             TerminalAttachEvent::Error { .. } => self.status = "error".into(),
-            TerminalAttachEvent::Restarted { .. } | TerminalAttachEvent::Activity { .. } | TerminalAttachEvent::Other(_) => {}
+            TerminalAttachEvent::Activity { rows: Some(rows), cols: Some(cols), .. } => {
+                self.resize((*rows).clamp(1, 500) as u16, (*cols).clamp(1, 1000) as u16);
+            }
+            TerminalAttachEvent::Activity { .. } | TerminalAttachEvent::Other(_) => {}
         }
         // Output while looking back doesn't pull the view down (a command
         // still printing would make reading impossible); a key or a paste
@@ -99,7 +122,7 @@ impl Session {
     /// Moves the view `lines` rows back into the history (negative: towards
     /// the live screen), within what there is.
     pub fn scroll(&mut self, lines: i32) {
-        self.changed();
+        self.invalidate_view();
         let at = self.parser.screen().scrollback() as i64;
         let to = (at + lines as i64).clamp(0, self.history as i64) as usize;
         self.parser.screen_mut().set_scrollback(to);
@@ -107,16 +130,17 @@ impl Session {
 
     /// Back to the live screen (a key, a paste).
     pub fn scroll_to_bottom(&mut self) {
-        self.changed();
+        self.invalidate_view();
         self.parser.screen_mut().set_scrollback(0);
     }
 
     pub fn resize(&mut self, rows: u16, cols: u16) {
-        self.changed();
+        self.invalidate_view();
         self.parser.screen_mut().set_size(nz(rows.max(2)), nz(cols.max(10)));
         self.measure_history();
     }
 
+    #[cfg(test)]
     pub fn size(&self) -> (u16, u16) {
         let (r, c) = self.parser.screen().size();
         (r.get(), c.get())
@@ -173,6 +197,9 @@ impl Session {
         let back = screen.scrollback();
         TerminalScreenView {
             id: self.id.clone(),
+            watching: self.watching,
+            restored: false,
+            has_saved_screen: false,
             rows: rows as u32,
             cols: cols as u32,
             lines,
@@ -270,7 +297,7 @@ mod tests {
         s.apply(&event(json!({ "type": "snapshot", "snapshot": { "rows": 70_000, "cols": 70_000, "history": "", "status": "running", "sequence": 1 } })));
         assert_eq!(s.size(), (500, 1000));
         s.apply(&event(json!({ "type": "snapshot", "snapshot": { "rows": 0, "cols": 0, "history": "", "status": "running", "sequence": 2 } })));
-        assert_eq!(s.size(), (2, 10));
+        assert_eq!(s.size(), (1, 1));
     }
 
     #[test]

@@ -558,6 +558,37 @@ async fn serve(args: &Args, paths: state::Paths, base: Base, shutdown: tokio_uti
     if replayed > 0 {
         tracing::info!(replayed, "queued effects a stopped server left undone");
     }
+    let terminals = terminal::Terminals::load(store.db().clone(), initial_settings.save_terminal_screens.unwrap_or(false))?;
+    #[cfg(unix)]
+    {
+        let activity = terminals.clone();
+        let stopped = shutdown.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                tokio::select! {
+                    () = stopped.cancelled() => break,
+                    _ = interval.tick() => activity.sample_activity().await,
+                }
+            }
+        });
+    }
+    let terminal_screens = terminals.clone();
+    let shutdown_terminals = shutdown.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+        interval.tick().await;
+        loop {
+            tokio::select! {
+                () = shutdown_terminals.cancelled() => break,
+                _ = interval.tick() => {
+                    let terminals = terminal_screens.clone();
+                    let _ = tokio::task::spawn_blocking(move || terminals.capture_screens()).await;
+                }
+            }
+        }
+    });
     let pulse = Arc::new(tokio::sync::Notify::new());
     let state = Arc::new(state::AppState {
         paths,
@@ -569,7 +600,7 @@ async fn serve(args: &Args, paths: state::Paths, base: Base, shutdown: tokio_uti
         cwd: std::env::current_dir()?.to_string_lossy().into_owned(),
         server_epoch: util::new_uuid(),
         provider_updates,
-        terminals: terminal::Terminals::default(),
+        terminals,
         orchestrator,
         connections: connections::Connections::new(pulse.clone()),
         remote: remote.clone(),

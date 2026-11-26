@@ -69,6 +69,7 @@ pub type SharedState = Arc<AppState>;
 /// Per-WebSocket context handed to RPC handlers.
 pub struct ConnCtx {
     pub state: SharedState,
+    pub connection_id: u64,
     /// The authenticated session; its permissions gate every RPC.
     pub session: Session,
 }
@@ -87,6 +88,7 @@ impl AppState {
             available_editors: crate::rpc::available_editors().into(),
             remote_open_targets: None,
             direct_endpoints: None,
+            terminal_details: Some(true),
             observability: ServerObservability {
                 logs_directory_path: self.paths.logs.to_string_lossy().into_owned(),
                 local_tracing_enabled: crate::trace_writer::enabled(),

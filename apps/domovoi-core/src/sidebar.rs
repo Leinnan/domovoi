@@ -313,6 +313,14 @@ pub fn sidebar(model: &Model) -> SidebarView {
     let title_of = |id: &str| model.thread_shell(id).map(|t| t.title.clone()).unwrap_or_default();
     let mut view = SidebarView {
         grouping: model.sidebar_layout.grouping.as_str().into(),
+        terminal_attention: model.panel.terminal_details.iter().filter(|terminal| {
+            terminal.agent.as_ref().is_some_and(|agent| match agent.activity.as_str() {
+                "finished" => model.panel.terminal_seen.get(&terminal.instance_id) != Some(&agent.revision),
+                "working" => !model.unread_only,
+                "needsInput" => true,
+                _ => false,
+            }) && (q.is_empty() || terminal.title.as_deref().unwrap_or(&terminal.label).to_lowercase().contains(&q))
+        }).cloned().collect(),
         surface_threads: surface_threads(model, &labels, &all_live),
         unread_only: model.unread_only,
         selected_thread_id: model.selected_thread.clone(),

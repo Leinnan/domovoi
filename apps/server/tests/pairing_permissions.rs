@@ -110,6 +110,9 @@ async fn pair_command_and_permission_enforcement() {
     let denied = call(&mut ws, "3", "projects.mutate", json!({ "type": "project.delete", "commandId": "c", "projectId": "p" })).await;
     assert_eq!(denied["exit"]["cause"][0]["error"]["requiredPermission"], "orchestration:operate");
 
+    let no_details = call(&mut ws, "4", "domovoi.terminals.subscribe", json!({})).await;
+    assert_eq!(no_details["exit"]["cause"][0]["error"]["requiredPermission"], "terminal:read");
+
     // The default code grants full access, and each code works only once.
     let full = pair_code(&server, &[]);
     let mut ws = connect(&server, &full).await;
@@ -117,6 +120,24 @@ async fn pair_command_and_permission_enforcement() {
     let root = if cfg!(windows) { std::env::temp_dir().ancestors().last().map(|r| r.to_string_lossy().into_owned()).unwrap_or_default() } else { "/".to_owned() };
     let browse = call(&mut ws, "1", "filesystem.browse", json!({ "partialPath": root })).await;
     assert_eq!(browse["exit"]["_tag"], "Success", "{browse}");
+    // A separately paired observer can read the live PTY without changing
+    // its grid or sending input. The desktop remains the sole size owner.
+    let terminal = json!({ "threadId": "t", "terminalId": "watch", "cwd": std::env::temp_dir(), "cols": 101, "rows": 41 });
+    let desktop = call(&mut ws, "2", "terminal.attach", terminal).await;
+    let read_code = pair_code(&server, &["terminal:read"]);
+    let mut observer = connect(&server, &read_code).await;
+    let reference = json!({ "threadId": "t", "terminalId": "watch" });
+    let watched = call(&mut observer, "1", "terminal.observe", reference.clone()).await;
+    assert_eq!(desktop["values"][0]["snapshot"]["pid"], watched["values"][0]["snapshot"]["pid"]);
+    assert_eq!(watched["values"][0]["snapshot"]["cols"], 101);
+    let written = call(&mut observer, "2", "terminal.write", json!({ "threadId": "t", "terminalId": "watch", "data": "pwd" })).await;
+    assert_eq!(written["exit"]["cause"][0]["error"]["requiredPermission"], "terminal:operate");
+    let details = call(&mut observer, "3", "domovoi.terminals.subscribe", json!({})).await;
+    assert_eq!(details["values"][0][0]["terminalId"], "watch");
+    assert!(details["values"][0][0].get("history").is_none());
+    let closed = call(&mut ws, "3", "terminal.close", reference).await;
+    assert_eq!(closed["exit"]["_tag"], "Success");
+
     let again = http_client()
         .post(format!("http://127.0.0.1:{}/api/auth/browser-session", server.port))
         .json(&json!({ "credential": full }))

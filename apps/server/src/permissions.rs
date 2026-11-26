@@ -37,6 +37,8 @@ pub fn required_permissions(method: &str, payload: &Value) -> Option<Vec<&'stati
         "server.retryResourceTelemetry" => return Some(vec!["environment:maintain", "diagnostics:read"]),
         // Domovoi's own method, beside t3code's table: a scheduled task's runs.
         "scheduledTasks.listRuns" => return Some(vec!["orchestration:read"]),
+        "domovoi.terminals.subscribe" => return Some(vec!["terminal:read"]),
+        "domovoi.terminals.reopen" | "domovoi.terminals.rename" => return Some(vec!["terminal:operate"]),
         "artifacts.list" | "artifacts.read" => return Some(vec!["orchestration:read"]),
         // Domovoi's own: git-lfs fetches with the repository's remote and
         // credentials, and writes its object cache.

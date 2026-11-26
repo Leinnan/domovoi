@@ -35,10 +35,20 @@ pub struct BridgeStatus {
     pub listening: bool,
 }
 
+/// A device endpoint that can dial several paired servers at once.
+pub struct ClientEndpoint(Endpoint);
+
+impl ClientEndpoint {
+    pub async fn bind(secret: SecretKey, network: Network) -> Result<Self, Error> {
+        bind(secret, &network, Vec::new()).await.map(Self)
+    }
+}
+
 pub struct Bridge {
     shared: Arc<Shared>,
     port: u16,
     cancel: CancellationToken,
+    owns_endpoint: bool,
 }
 
 struct Shared {
@@ -59,6 +69,14 @@ impl Bridge {
     /// a bad ticket fails here, then forwards every accepted connection.
     pub async fn start(secret: SecretKey, network: Network, ticket: EndpointTicket, port: u16) -> Result<Self, Error> {
         let endpoint = bind(secret, &network, Vec::new()).await?;
+        Self::listen(endpoint, ticket, port, true).await
+    }
+
+    pub async fn start_on(endpoint: &ClientEndpoint, ticket: EndpointTicket, port: u16) -> Result<Self, Error> {
+        Self::listen(endpoint.0.clone(), ticket, port, false).await
+    }
+
+    async fn listen(endpoint: Endpoint, ticket: EndpointTicket, port: u16, owns_endpoint: bool) -> Result<Self, Error> {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, port)).await.map_err(|e| Error::msg("binding the loopback port", e))?;
         let port = listener.local_addr().map_err(|e| Error::msg("reading the loopback port", e))?.port();
         let shared = Arc::new(Shared {
@@ -72,12 +90,12 @@ impl Bridge {
             listening: std::sync::atomic::AtomicBool::new(true),
         });
         if let Err(e) = shared.connection(true).await {
-            close(&shared.endpoint).await;
+            if owns_endpoint { close(&shared.endpoint).await; }
             return Err(e);
         }
         let cancel = CancellationToken::new();
         tokio::spawn(accept_loop(listener, shared.clone(), cancel.clone()));
-        Ok(Self { shared, port, cancel })
+        Ok(Self { shared, port, cancel, owns_endpoint })
     }
 
     pub fn port(&self) -> u16 {
@@ -110,7 +128,7 @@ impl Bridge {
 
     pub async fn stop(self) {
         self.cancel.cancel();
-        close(&self.shared.endpoint).await;
+        if self.owns_endpoint { close(&self.shared.endpoint).await; }
     }
 }
 
@@ -121,7 +139,7 @@ impl Drop for Bridge {
             return;
         }
         self.cancel.cancel();
-        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+        if self.owns_endpoint && let Ok(runtime) = tokio::runtime::Handle::try_current() {
             let endpoint = self.shared.endpoint.clone();
             runtime.spawn(async move { close(&endpoint).await });
         }

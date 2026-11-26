@@ -2146,6 +2146,24 @@ fn panel(model: &Model, collected_artifacts: &[crate::artifacts::CollectedArtifa
     let local = p.git.local.as_ref();
     let remote = p.git.remote.as_ref();
     let tree = local.map(|local| &local.working_tree);
+    let detail = |id: &str| p.terminal_details.iter().find(|terminal| terminal.terminal_id == id && Some(terminal.thread_id.as_str()) == p.terminal_owner.as_deref());
+    let screen = |session: &crate::terminal::Session| {
+        let mut view = session.screen_view();
+        if let Some(info) = detail(&session.id) {
+            view.restored = info.restored;
+            view.has_saved_screen = info.has_saved_screen;
+        }
+        view
+    };
+    let split = p.terminal_splits.iter().find(|split| Some(split.environment.as_str()) == model.active_env.as_deref()
+        && Some(split.thread.as_str()) == model.selected_thread.as_deref()).and_then(|split| {
+        let active = p.active_terminal.as_ref()?;
+        let mut pair = p.terminals.iter().enumerate().filter(|(_, terminal)| terminal.id != *active);
+        let (other_at, other) = pair.next()?;
+        let (active_at, active) = p.terminals.iter().enumerate().find(|(_, terminal)| terminal.id == *active)?;
+        let (left, right) = if active_at < other_at { (active, other) } else { (other, active) };
+        Some(TerminalSplitView { stacked: split.stacked, percent: split.percent, left: screen(left), right: screen(right) })
+    });
     PanelView {
         open: p.open,
         tab: if p.tab.is_empty() { "diff".into() } else { p.tab.clone() },
@@ -2158,8 +2176,13 @@ fn panel(model: &Model, collected_artifacts: &[crate::artifacts::CollectedArtifa
             truncated: p.diff.truncated,
         },
         terminal: TerminalPanelView {
-            tabs: p.terminals.iter().map(|t| TerminalTabView { id: t.id.clone(), label: t.label.clone(), running: t.running(), active: p.active_terminal.as_deref() == Some(t.id.as_str()) }).collect(),
-            active: p.active_terminal.as_deref().and_then(|id| p.terminals.iter().find(|t| t.id == id)).map(|t| t.screen_view()),
+            can_rename: p.terminal_details_available,
+            split,
+            tabs: p.terminals.iter().map(|t| TerminalTabView { id: t.id.clone(), label: detail(&t.id).map(|info| {
+                let generated = format!("Terminal {}", t.id.trim_start_matches("term-"));
+                if info.label != generated { info.label.clone() } else { info.title.clone().unwrap_or_else(|| info.label.clone()) }
+            }).unwrap_or_else(|| t.label.clone()), running: t.running(), active: p.active_terminal.as_deref() == Some(t.id.as_str()) }).collect(),
+            active: p.active_terminal.as_deref().and_then(|id| p.terminals.iter().find(|t| t.id == id)).map(screen),
         },
         files: FilesPanelView {
             root: p.files.root.clone(),
@@ -2403,7 +2426,7 @@ fn setting_groups(model: &Model) -> Vec<SettingGroupView> {
     if model.settings.is_none() {
         return vec![];
     }
-    vec![
+    let mut groups = vec![
         SettingGroupView {
             title: "New threads".into(),
             fields: vec![
@@ -2457,7 +2480,15 @@ fn setting_groups(model: &Model) -> Vec<SettingGroupView> {
                 field_bool(model, "reviewGuidesEnabled", "Review guides", "Generate a guide for reviewing pull requests."),
             ],
         },
-    ]
+    ];
+    if model.panel.terminal_details_available {
+        groups.push(SettingGroupView {
+            title: "Terminal".into(),
+            fields: vec![field_bool(model, "saveTerminalScreens", "Save the last terminal screen",
+                "Stores the last visible screen on the server, where it can be viewed after a restart.")],
+        });
+    }
+    groups
 }
 
 pub fn pr_key(e: &PullRequestListEntry) -> String {

@@ -199,6 +199,8 @@ pub struct ToastView {
 
 #[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
 pub struct SidebarView {
+    #[serde(default)]
+    pub terminal_attention: Vec<TerminalDetailView>,
     /// `status` (by what each thread needs: `sections`) | `project`
     /// (under project headers: `projects`, `settled`, `snoozed`).
     pub grouping: String,
@@ -1100,8 +1102,48 @@ pub struct DiffLineView {
 
 #[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
 pub struct TerminalPanelView {
+    #[serde(default)]
+    pub can_rename: bool,
+    #[serde(default)]
+    pub split: Option<TerminalSplitView>,
     pub tabs: Vec<TerminalTabView>,
     pub active: Option<TerminalScreenView>,
+}
+
+#[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct TerminalSplitView {
+    pub stacked: bool,
+    pub percent: u32,
+    pub left: TerminalScreenView,
+    pub right: TerminalScreenView,
+}
+
+#[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalDetailView {
+    pub thread_id: String,
+    pub terminal_id: String,
+    pub instance_id: String,
+    pub cwd: String,
+    pub reported_cwd: Option<String>,
+    pub label: String,
+    pub title: Option<String>,
+    pub running: bool,
+    #[serde(default)]
+    pub exit_code: Option<i32>,
+    pub restored: bool,
+    pub has_saved_screen: bool,
+    pub agent: Option<TerminalAgentView>,
+    #[serde(default)]
+    pub agent_thread_id: Option<String>,
+    pub updated_at: String,
+}
+
+#[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct TerminalAgentView {
+    pub agent: String,
+    pub activity: String,
+    pub revision: u64,
 }
 
 #[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
@@ -1115,6 +1157,12 @@ pub struct TerminalTabView {
 #[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
 pub struct TerminalScreenView {
     pub id: String,
+    #[serde(default)]
+    pub watching: bool,
+    #[serde(default)]
+    pub restored: bool,
+    #[serde(default)]
+    pub has_saved_screen: bool,
     pub rows: u32,
     pub cols: u32,
     pub lines: Vec<TerminalLineView>,

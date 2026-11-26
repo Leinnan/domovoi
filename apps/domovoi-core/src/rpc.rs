@@ -23,7 +23,9 @@ pub enum Route {
     Thread(String),
     VcsStatus(String),
     Terminal { thread_id: String, terminal_id: String },
+    TerminalResize { thread_id: String, terminal_id: String, rows: u16, cols: u16 },
     TerminalMetadata,
+    TerminalDetails,
     ScheduledTasks,
     /// A provider instance's sign-in (`provider.auth.subscribe`) and managed
     /// install (`provider.install.subscribe`), by instance id.

@@ -999,6 +999,9 @@ pub struct ServerConfigOf<S> {
     pub remote_open_targets: Option<ForwardList<RemoteOpenTarget>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub direct_endpoints: Option<ForwardList<ServerDirectEndpoint>>,
+    /// Domovoi's live and saved terminal metadata.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal_details: Option<bool>,
     pub observability: ServerObservability,
     pub settings: S,
     /// Present when an administrator's policy manages the server.

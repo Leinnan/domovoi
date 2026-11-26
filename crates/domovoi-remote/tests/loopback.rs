@@ -6,7 +6,7 @@ use axum::routing::get;
 use axum::{Extension, Router};
 use futures::{SinkExt, StreamExt};
 use std::time::Duration;
-use domovoi_remote::{Bridge, Network, PathKind, RemotePeer, RemoteServer, SecretKey};
+use domovoi_remote::{Bridge, ClientEndpoint, Network, PathKind, RemotePeer, RemoteServer, SecretKey};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
@@ -34,6 +34,25 @@ async fn get_body(port: u16, path: &str) -> String {
     tcp.read_to_string(&mut response).await.unwrap();
     assert!(response.starts_with("HTTP/1.1 200"), "{response}");
     response.split("\r\n\r\n").nth(1).unwrap_or_default().to_owned()
+}
+
+#[tokio::test]
+async fn closing_one_server_bridge_keeps_the_other_server_reachable() {
+    let host_a = RemoteServer::start(SecretKey::generate(), Network::Direct { port: 0 }, router()).await.unwrap();
+    let host_b = RemoteServer::start(SecretKey::generate(), Network::Direct { port: 0 }, router()).await.unwrap();
+    let key = SecretKey::generate();
+    let expected_peer = key.public().to_string();
+    let endpoint = ClientEndpoint::bind(key, Network::Direct { port: 0 }).await.unwrap();
+    let active = Bridge::start_on(&endpoint, host_a.loopback_ticket(), 0).await.unwrap();
+    let observer = Bridge::start_on(&endpoint, host_b.loopback_ticket(), 0).await.unwrap();
+
+    assert_eq!(get_body(observer.port(), "/peer").await, expected_peer);
+    observer.stop().await;
+    assert_eq!(get_body(active.port(), "/peer").await, expected_peer);
+
+    active.stop().await;
+    host_a.shutdown().await;
+    host_b.shutdown().await;
 }
 
 #[tokio::test]

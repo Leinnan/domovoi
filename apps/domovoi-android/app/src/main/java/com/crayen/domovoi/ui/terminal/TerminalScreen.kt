@@ -167,9 +167,9 @@ fun TerminalScreen(core: Core, onBack: (() -> Unit)?) {
     val cellHeight by rememberUpdatedState(cell.height)
 
     LaunchedEffect(Unit) { core.update(Event.ShowPanel("terminal")) }
-    LaunchedEffect(viewport, cell, screen?.id) {
+    LaunchedEffect(viewport, cell, screen?.id, screen?.watching) {
         val s = screen ?: return@LaunchedEffect
-        if (viewport.width == 0 || cell.width == 0) return@LaunchedEffect
+        if (s.watching || viewport.width == 0 || cell.width == 0) return@LaunchedEffect
         val pad = with(density) { 12.dp.roundToPx() }
         val cols = maxOf(20, (viewport.width - pad) / cell.width).toUInt()
         val rows = maxOf(4, (viewport.height - pad) / cell.height).toUInt()
@@ -177,12 +177,24 @@ fun TerminalScreen(core: Core, onBack: (() -> Unit)?) {
     }
 
     ToolScaffold("Terminal", onBack, actions = {
-        IconButton(onClick = { input?.showKeyboard() }) { Icon(Icons.Outlined.Keyboard, "Keyboard") }
+        IconButton(enabled = screen?.watching == false, onClick = { input?.showKeyboard() }) { Icon(Icons.Outlined.Keyboard, "Keyboard") }
         IconButton(onClick = { core.update(Event.NewTerminal) }) { Icon(Icons.Outlined.Add, "New terminal") }
         Box {
             IconButton(onClick = { menu = true }) { Icon(Icons.Outlined.MoreVert, "Terminal actions") }
             DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                DropdownMenuItem(text = { Text("Clear") }, onClick = { menu = false; core.update(Event.ClearTerminal) })
+                screen?.takeUnless { it.exited }?.let { active ->
+                    DropdownMenuItem(text = { Text(if (active.watching) "Interact" else "Watch") }, onClick = {
+                        menu = false
+                        core.update(Event.SetTerminalWatch(!active.watching))
+                    })
+                }
+                if (screen?.exited == true) {
+                    DropdownMenuItem(text = { Text("Open fresh shell") }, onClick = {
+                        menu = false
+                        core.update(Event.ReopenTerminal)
+                    })
+                }
+                DropdownMenuItem(text = { Text("Clear") }, enabled = screen?.let { !it.watching && !it.exited } == true, onClick = { menu = false; core.update(Event.ClearTerminal) })
                 DropdownMenuItem(text = { Text("Larger text") }, enabled = scale < 2f, onClick = { scale = (scale + 0.1f).coerceAtMost(2f) })
                 DropdownMenuItem(text = { Text("Smaller text") }, enabled = scale > 0.6f, onClick = { scale = (scale - 0.1f).coerceAtLeast(0.6f) })
                 if (scale != 1f) DropdownMenuItem(text = { Text("Default size") }, onClick = { scale = 1f })
@@ -260,12 +272,17 @@ fun TerminalScreen(core: Core, onBack: (() -> Unit)?) {
                     }
                     if (screen.exited) {
                         Surface(color = MaterialTheme.colorScheme.surfaceContainerHigh, shape = MaterialTheme.shapes.small, modifier = Modifier.align(Alignment.BottomCenter).padding(Space.m)) {
-                            Text(screen.status.ifEmpty { "Exited" }, modifier = Modifier.padding(horizontal = Space.m, vertical = Space.xs))
+                            val status = when {
+                                screen.hasSavedScreen -> "Last saved screen"
+                                screen.restored -> "Ended after server restart"
+                                else -> "Process exited"
+                            }
+                            Text(status, modifier = Modifier.padding(horizontal = Space.m, vertical = Space.xs))
                         }
                     }
                 }
                 // The keyboard target: taps show the keyboard; keys go to the terminal.
-                AndroidView(
+                if (screen?.let { !it.watching && !it.exited } == true) AndroidView(
                     factory = { ctx ->
                         TerminalInputView(ctx) { key, text -> currentSend(key, text) }.also {
                             it.sendWith = { text, c, a -> core.update(Event.TerminalKey("char", text, c, a)) }

@@ -441,9 +441,13 @@ fn chunk(model: &mut Model, route: &Route, v: Value) -> Vec<Cmd> {
             match read(model, "the server's settings", v) {
                 Some(ServerConfigStreamEvent::Snapshot(snapshot)) => {
                     let config = snapshot.config;
+                    let terminal_details = config.terminal_details == Some(true);
                     model.set_settings(Some(config.settings));
                     model.providers = listed(model, "a provider", config.providers);
                     model.keybindings = listed(model, "a keyboard shortcut", config.keybindings);
+                    if terminal_details {
+                        return vec![update::subscribe(model, crate::requests::subscribe_terminal_details(), Route::TerminalDetails)];
+                    }
                 }
                 Some(ServerConfigStreamEvent::ProviderStatuses(event)) => model.providers = listed(model, "a provider", event.payload.providers),
                 Some(ServerConfigStreamEvent::SettingsUpdated(event)) => model.set_settings(Some(event.payload.settings)),
@@ -487,6 +491,40 @@ fn chunk(model: &mut Model, route: &Route, v: Value) -> Vec<Cmd> {
                     let request = crate::requests::terminal_write(&thread_id.as_str().into(), terminal_id, &input);
                     return vec![update::call(model, request, Route::Command("Run script".into()))];
                 }
+            }
+            vec![]
+        }
+        Route::TerminalDetails => {
+            if let Ok(details) = serde_json::from_value::<Vec<crate::view::TerminalDetailView>>(v) {
+                if model.panel.terminal_details_available {
+                    let attention = details.iter().find_map(|terminal| {
+                        let agent = terminal.agent.as_ref()?;
+                        let previous = model.panel.terminal_details.iter().find(|old| old.instance_id == terminal.instance_id)
+                            .and_then(|old| old.agent.as_ref()).map(|old| old.revision);
+                        let visible = model.focused && model.panel.open && model.panel.tab == "terminal"
+                            && model.panel.terminal_owner.as_deref() == Some(terminal.thread_id.as_str())
+                            && model.panel.active_terminal.as_deref() == Some(terminal.terminal_id.as_str());
+                        if visible || previous == Some(agent.revision) { return None }
+                        let title = terminal.title.as_deref().unwrap_or(&terminal.label);
+                        match agent.activity.as_str() {
+                            "needsInput" => Some(format!("{title} needs input.")),
+                            "finished" => Some(format!("{title} finished.")),
+                            _ => None,
+                        }
+                    });
+                    if let Some(message) = attention {
+                        model.toast("info", message);
+                    }
+                }
+                model.panel.terminal_seen.retain(|instance, _| details.iter().any(|terminal| terminal.instance_id == *instance));
+                model.panel.terminal_details = details;
+                model.panel.terminal_details_available = true;
+            }
+            if let Some((_, thread_id, terminal_id)) = model.pending_terminal_target.clone().filter(|(environment, _, _)| model.active_env.as_ref() == Some(environment))
+                && model.panel.terminal_details.iter().any(|terminal| terminal.thread_id == thread_id && terminal.terminal_id == terminal_id)
+            {
+                model.pending_terminal_target = None;
+                return vec![update::update(crate::app::Event::OpenTerminalAttention { thread_id, terminal_id }, model)];
             }
             vec![]
         }
@@ -1290,6 +1328,9 @@ pub fn handle(model: &mut Model, reply: Reply) -> Cmd {
                 cmds.push(send(RpcClient::ack(&id)));
             }
             Command::all(cmds)
+        }
+        Reply::Exit { route: Route::TerminalResize { thread_id, terminal_id, rows, cols }, ok, .. } => {
+            update::terminal_resize_finished(model, thread_id, &terminal_id, (rows, cols), ok)
         }
         Reply::Exit { route, ok, value } => {
             model.changes.frame_is_wide();

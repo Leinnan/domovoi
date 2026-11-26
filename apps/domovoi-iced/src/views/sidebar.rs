@@ -86,6 +86,60 @@ pub fn view(app: &App) -> Element<'_, Message> {
     }
 
     let mut listed_any = !sb.search_results.is_empty();
+    if app.all_terminal_servers {
+        listed_any = true;
+        list = list.push(w::section("All Servers"));
+        for environment in &app.vm.connection.environments {
+            let server = app.terminal_servers.get(&environment.id);
+            let state = match server {
+                Some(server) if server.stale => " · Stale",
+                Some(server) if server.loaded => "",
+                _ => " · Loading",
+            };
+            list = list.push(w::muted(format!("{}{state}", environment.label), TEXT_SMALL));
+            if let Some(server) = server {
+                for terminal in &server.terminals {
+                    let status = match terminal.agent.as_ref().map(|agent| agent.activity.as_str()) {
+                        Some("needsInput") => "Needs input",
+                        Some("working") => "Working",
+                        Some("finished") => "Finished",
+                        _ if terminal.exit_code.is_some_and(|code| code != 0) => "Process failed",
+                        _ => continue,
+                    };
+                    list = list.push(w::small_button(
+                        format!("{} · {status}", terminal.title.as_deref().unwrap_or(&terminal.label)),
+                        w::ghost_style,
+                        (!server.stale).then(|| core(Event::OpenTerminalOnEnvironment {
+                            environment_id: environment.id.clone(), thread_id: terminal.thread_id.clone(), terminal_id: terminal.terminal_id.clone(),
+                        })),
+                    ));
+                }
+            }
+        }
+    }
+    if !app.all_terminal_servers && !sb.terminal_attention.is_empty() {
+        listed_any = true;
+        list = list.push(w::section("Terminal activity"));
+        for terminal in &sb.terminal_attention {
+            let status = match terminal.agent.as_ref().map(|agent| agent.activity.as_str()) {
+                Some("needsInput") => "Needs input",
+                Some("finished") => "Finished",
+                _ => "Working",
+            };
+            list = list.push(w::list_row(
+                column![
+                    text(terminal.title.as_deref().unwrap_or(&terminal.label)).size(TEXT_UI),
+                    w::muted(status, TEXT_SMALL),
+                ].width(Length::Fill),
+                false,
+                true,
+            ).on_press(core(Event::OpenTerminalAttention { thread_id: terminal.thread_id.clone(), terminal_id: terminal.terminal_id.clone() })));
+            if let Some(thread_id) = &terminal.agent_thread_id {
+                list = list.push(w::small_button("Open conversation", w::ghost_style,
+                    Some(core(Event::SelectThread { thread_id: thread_id.clone() }))));
+            }
+        }
+    }
 
     if by_status {
         for sec in &sb.sections {
@@ -124,6 +178,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
                 w::ghost_style,
                 Some(Message::Overlay(Some(Overlay::NewProject { name: String::new(), path: String::new() }))),
             ),
+            w::small_button(if app.all_terminal_servers { "This Server" } else { "All Servers" }, w::ghost_style, Some(Message::ToggleAllTerminalServers)),
             w::small_button("Browse", w::ghost_style, Some(Message::Overlay(Some(Overlay::FolderBrowser)))),
             w::small_button(
                 "Import",

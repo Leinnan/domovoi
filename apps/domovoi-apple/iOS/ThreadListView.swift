@@ -96,6 +96,24 @@ struct ThreadListView: View {
                     }
                 }
             }
+            if !sidebar.terminalAttention.isEmpty {
+                Section("Terminal activity") {
+                    ForEach(sidebar.terminalAttention, id: \.instanceId) { terminal in
+                        Button {
+                            core.update(.openTerminalAttention(threadId: terminal.threadId, terminalId: terminal.terminalId))
+                            let navigate = sidebarOpen ?? open
+                            navigate(.thread(terminal.threadId))
+                            navigate(.terminal)
+                        } label: {
+                            VStack(alignment: .leading) {
+                                Text(terminal.title ?? terminal.label).lineLimit(1)
+                                Text(terminal.agent?.activity == "needsInput" ? "Needs input" : terminal.agent?.activity == "finished" ? "Finished" : "Working")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+            }
             ForEach(byStatus ? sidebar.sections : [], id: \.kind) { section in
                 // The core leaves a collapsed section's rows out; the header
                 // (a button: an inset list has no disclosure of its own) toggles it.

@@ -19,7 +19,7 @@ use domovoi_core::store::{StoreOperation, StoreOutput};
 use domovoi_core::tunnel::{TunnelOperation, TunnelOutput};
 use domovoi_core::view::ViewModel;
 use domovoi_core::{DomovoiApp, Effect, Event};
-use domovoi_remote::{Bridge, Network, RelayUrl};
+use domovoi_remote::{Bridge, ClientEndpoint, Network, RelayUrl};
 use futures::{SinkExt, StreamExt};
 use tokio::sync::{Mutex, Notify, mpsc};
 use tokio::task::JoinHandle;
@@ -63,9 +63,17 @@ impl HostConfig {
     }
 }
 
+#[derive(Clone, Debug)]
+pub enum TerminalProbe {
+    Current(Vec<domovoi_core::view::TerminalDetailView>),
+    Unavailable,
+    Unauthorized,
+}
+
 /// What the host tells the UI, in order.
 #[derive(Clone)]
 pub enum HostEvent {
+    TerminalDetails { environment_id: String, outcome: TerminalProbe },
     /// A change to the view. The first is the whole view.
     Delta(Box<ViewDelta>),
     /// The bytes of an image the UI asked for with [`HostHandle::fetch_image`].
@@ -82,6 +90,7 @@ impl std::fmt::Debug for HostEvent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             HostEvent::Delta(_) => f.write_str("Delta(..)"),
+            HostEvent::TerminalDetails { environment_id, .. } => write!(f, "TerminalDetails({environment_id})"),
             HostEvent::ImageLoaded { url, .. } => write!(f, "ImageLoaded({url})"),
             HostEvent::ImageFailed { url } => write!(f, "ImageFailed({url})"),
             HostEvent::OpenThreadFromNotification { thread_id, .. } => write!(f, "OpenThreadFromNotification({thread_id})"),
@@ -102,6 +111,10 @@ impl HostHandle {
         let _ = self.tx.try_send(HostCmd::Event(Box::new(event)));
     }
 
+    pub fn probe_terminals(&self, environment_id: String) -> bool {
+        self.tx.try_send(HostCmd::ProbeTerminals { environment_id }).is_ok()
+    }
+
     pub fn fetch_image(&self, url: String) {
         let _ = self.tx.try_send(HostCmd::FetchImage { url });
     }
@@ -116,6 +129,7 @@ impl HostHandle {
 }
 
 enum HostCmd {
+    ProbeTerminals { environment_id: String },
     Event(Box<Event>),
     FetchImage { url: String },
     FocusContext { focused: bool, thread_id: Option<String> },
@@ -148,6 +162,7 @@ struct Engine {
     socket: Mutex<Option<ActiveSocket>>,
     socket_gen: AtomicU64,
     tunnel: Mutex<Option<ActiveTunnel>>,
+    client_endpoint: tokio::sync::OnceCell<ClientEndpoint>,
     tunnel_gen: AtomicU64,
     focus: Mutex<FocusContext>,
     /// Images being fetched now. Only in-flight ones: the UI keeps what has
@@ -173,6 +188,7 @@ impl Engine {
             socket: Mutex::new(None),
             socket_gen: AtomicU64::new(0),
             tunnel: Mutex::new(None),
+            client_endpoint: tokio::sync::OnceCell::new(),
             tunnel_gen: AtomicU64::new(0),
             focus: Mutex::new(FocusContext { focused: true, thread_id: None }),
             fetching_images: Arc::new(Mutex::new(HashSet::new())),
@@ -403,13 +419,6 @@ impl Engine {
             TunnelOperation::Start { ticket } => {
                 let gen_id = self.tunnel_gen.fetch_add(1, Ordering::AcqRel) + 1;
                 self.stop_tunnel().await;
-                let key = match self.store.device_key() {
-                    Ok(k) => k,
-                    Err(reason) => {
-                        self.resolve(&mut req, TunnelOutput::Failed { reason });
-                        return;
-                    }
-                };
                 let parsed_ticket = match domovoi_remote::parse_ticket(&ticket) {
                     Ok(t) => t,
                     Err(err) => {
@@ -417,8 +426,14 @@ impl Engine {
                         return;
                     }
                 };
-                let relays = parse_relays_env();
-                let bridge = match Bridge::start(key, Network::Internet { relays }, parsed_ticket, 0).await {
+                let endpoint = match self.client_endpoint().await {
+                    Ok(endpoint) => endpoint,
+                    Err(reason) => {
+                        self.resolve(&mut req, TunnelOutput::Failed { reason });
+                        return;
+                    }
+                };
+                let bridge = match Bridge::start_on(endpoint, parsed_ticket, 0).await {
                     Ok(b) => Arc::new(b),
                     Err(err) => {
                         if self.tunnel_gen.load(Ordering::Acquire) == gen_id {
@@ -550,6 +565,57 @@ impl Engine {
         }
     }
 
+    async fn client_endpoint(&self) -> Result<&ClientEndpoint, String> {
+        self.client_endpoint.get_or_try_init(|| async {
+            let key = self.store.device_key()?;
+            ClientEndpoint::bind(key, Network::Internet { relays: parse_relays_env() }).await.map_err(|error| error.to_string())
+        }).await
+    }
+
+    fn probe_terminals(self: &Arc<Self>, environment_id: String) {
+        let engine = Arc::clone(self);
+        tokio::spawn(async move {
+            let outcome = tokio::time::timeout(Duration::from_secs(8), engine.fetch_terminals(&environment_id))
+                .await.unwrap_or(TerminalProbe::Unavailable);
+            let _ = engine.ui_tx.send(HostEvent::TerminalDetails { environment_id, outcome }).await;
+        });
+    }
+
+    async fn fetch_terminals(&self, environment_id: &str) -> TerminalProbe {
+        let Some(token) = self.store.load(&domovoi_core::store::token_key(environment_id)) else { return TerminalProbe::Unauthorized };
+        let Some(environments) = self.store.load(domovoi_core::store::KEY_ENVIRONMENTS)
+            .and_then(|json| serde_json::from_str::<Vec<serde_json::Value>>(&json).ok()) else { return TerminalProbe::Unavailable };
+        let Some(environment) = environments.iter().find(|value| value["id"].as_str() == Some(environment_id)) else { return TerminalProbe::Unauthorized };
+        let _bridge;
+        let url = if let Some(ticket) = environment["ticket"].as_str().filter(|ticket| !ticket.is_empty()) {
+            let Ok(ticket) = domovoi_remote::parse_ticket(ticket) else { return TerminalProbe::Unavailable };
+            let Ok(endpoint) = self.client_endpoint().await else { return TerminalProbe::Unavailable };
+            let Ok(remote) = Bridge::start_on(endpoint, ticket, 0).await else { return TerminalProbe::Unavailable };
+            let port = remote.port();
+            _bridge = remote;
+            format!("http://127.0.0.1:{port}")
+        } else {
+            let Some(url) = environment["url"].as_str().filter(|url| !url.is_empty()) else { return TerminalProbe::Unavailable };
+            url.trim_end_matches('/').to_owned()
+        };
+        let Ok(client) = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).build() else { return TerminalProbe::Unavailable };
+        let Ok(mut response) = client.get(format!("{url}/api/domovoi/terminals")).bearer_auth(token).send().await else { return TerminalProbe::Unavailable };
+        match response.status().as_u16() {
+            200 => {}
+            401 | 403 | 404 => return TerminalProbe::Unauthorized,
+            _ => return TerminalProbe::Unavailable,
+        }
+        let mut body = Vec::new();
+        loop {
+            match response.chunk().await {
+                Ok(Some(chunk)) if body.len().saturating_add(chunk.len()) <= 512 * 1024 => body.extend_from_slice(&chunk),
+                Ok(None) => break,
+                _ => return TerminalProbe::Unavailable,
+            }
+        }
+        serde_json::from_slice(&body).map(TerminalProbe::Current).unwrap_or(TerminalProbe::Unavailable)
+    }
+
     async fn fetch_image(self: &Arc<Self>, url: String) {
         if url.is_empty() || !self.fetching_images.lock().await.insert(url.clone()) {
             return;
@@ -672,6 +738,7 @@ pub fn start(store: Arc<SecureStore>, config: HostConfig) -> (HostHandle, mpsc::
         while let Some(cmd) = cmd_rx.recv().await {
             match cmd {
                 HostCmd::Event(ev) => engine.process_event(*ev),
+                HostCmd::ProbeTerminals { environment_id } => engine.probe_terminals(environment_id),
                 HostCmd::FetchImage { url } => engine.fetch_image(url).await,
                 HostCmd::FocusContext { focused, thread_id } => {
                     let mut ctx = engine.focus.lock().await;

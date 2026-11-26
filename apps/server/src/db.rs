@@ -195,6 +195,12 @@ const MIGRATIONS: &[&str] = &[
     // reads beside its git host's issues (t3code `issue_tracker_bindings`).
     "CREATE TABLE IF NOT EXISTS issue_tracker_bindings (
         project_id TEXT PRIMARY KEY, tracker TEXT NOT NULL, scope TEXT NOT NULL, updated_at TEXT NOT NULL);",
+    // 16: interactive terminal descriptors survive a server restart.
+    "CREATE TABLE terminal_descriptors (
+        thread_id TEXT NOT NULL, terminal_id TEXT NOT NULL,
+        cwd TEXT NOT NULL, reported_cwd TEXT, shell TEXT NOT NULL, label TEXT NOT NULL, cols INTEGER NOT NULL, rows INTEGER NOT NULL,
+        exit_code INTEGER, updated_at TEXT NOT NULL, screen TEXT,
+        PRIMARY KEY (thread_id, terminal_id));",
 ];
 
 impl Db {

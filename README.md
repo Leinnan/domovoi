@@ -24,6 +24,12 @@ account or port forwarding.
 - **Projects and threads** for each agent, with approvals, diffs, checkpoints,
   terminals, worktrees, custom project icons, and source control helpers for
   git, GitHub pull requests (`gh`) and GitLab merge requests (`glab`).
+- **Interactive terminals** stay live when clients disconnect and recover their
+  screen when a stream falls behind. Watch from another device without resizing
+  the shell. Iced supports split panes and an All Servers terminal activity view.
+  On Unix hosts, recognized Claude Code and Codex terminal prompts appear in the
+  sidebar. To retain the last visible screen across a server restart, turn on
+  **Save the last terminal screen** in server settings.
 - **Issues** from GitHub, GitLab and Linear beside each project, linked to the
   threads that work on them.
 - **Your existing sessions**: folders you have worked in with Claude Code

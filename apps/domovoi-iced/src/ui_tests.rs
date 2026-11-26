@@ -294,8 +294,13 @@ fn sample_connected_vm() -> ViewModel {
                 ..Default::default()
             },
             terminal: TerminalPanelView {
+                can_rename: false,
+                split: None,
                 tabs: vec![TerminalTabView { id: "term1".into(), label: "zsh".into(), running: true, active: true }],
                 active: Some(TerminalScreenView {
+                    watching: false,
+                    restored: false,
+                    has_saved_screen: false,
                     id: "term1".into(),
                     rows: 24,
                     cols: 80,

@@ -28,7 +28,7 @@ mod bridge;
 mod server;
 
 #[cfg(feature = "bridge")]
-pub use bridge::{Bridge, BridgeStatus};
+pub use bridge::{Bridge, BridgeStatus, ClientEndpoint};
 #[cfg(feature = "server")]
 pub use server::{RemotePeer, RemoteServer, ServerStatus};
 

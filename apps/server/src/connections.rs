@@ -28,7 +28,7 @@ pub struct Live {
     pub cancel: CancellationToken,
     conns: Connections,
     token_hash: String,
-    id: u64,
+    pub id: u64,
 }
 
 impl Connections {

@@ -58,6 +58,9 @@ pub struct ServerSettings {
     /// Defaults to `true`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub continue_threads_after_server_update: Option<bool>,
+    /// Domovoi's off-by-default retention of an inert terminal screen across restarts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub save_terminal_screens: Option<bool>,
     /// Defaults to `true`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub keep_awake_while_agents_work: Option<bool>,

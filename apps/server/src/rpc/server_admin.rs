@@ -69,6 +69,11 @@ async fn update_settings(ctx: Arc<ConnCtx>, input: UpdateSettingsInput) -> Resul
     let next = crate::secrets::stash(&ctx.state.paths.userdata, next);
     let launches = crate::antigravity::launch_keys();
     crate::settings::save(&ctx.state.paths.userdata, &next)?;
+    if next.save_terminal_screens.unwrap_or(false) != settings.save_terminal_screens.unwrap_or(false)
+        && let Err(error) = ctx.state.terminals.configure_screen_saving(next.save_terminal_screens.unwrap_or(false))
+    {
+        tracing::warn!(%error, "Could not update terminal screen storage");
+    }
     *settings = next.clone();
     drop(settings);
     // Sessions started with an instance's old sign-in settings stop now (t3code's do).

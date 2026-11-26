@@ -498,18 +498,100 @@ fn new_terminal(model: &mut Model) -> Cmd {
         return render();
     };
     let cwd = model.active_cwd().unwrap_or_default();
+    new_terminal_in(model, &thread, &cwd)
+}
+
+fn new_terminal_in(model: &mut Model, thread: &str, cwd: &str) -> Cmd {
     model.panel.terminal_counter += 1;
     let n = model.panel.terminal_counter;
     let id = format!("term-{n}");
+    let preference = terminal_preference_key(model, thread, &id);
+    model.panel.interactive_terminals.insert(preference);
     model.panel.terminals.push(Session::new(&id, &format!("Terminal {n}")));
-    model.panel.terminal_owner = Some(thread.clone());
+    model.panel.terminal_owner = Some(thread.to_owned());
     model.panel.active_terminal = Some(id.clone());
-    attach_terminal(model, &thread, &id, &cwd)
+    attach_terminal(model, thread, &id, cwd)
+}
+
+fn save_terminal_splits(model: &Model) -> Cmd {
+    crate::environments::store(crate::store::StoreOperation::Save {
+        key: terminal::SPLIT_KEY.into(),
+        value: serde_json::to_string(&model.panel.terminal_splits).expect("terminal split preferences serialize"),
+    }).and(render())
+}
+
+fn resize_terminal_pane(model: &mut Model, id: &str, rows: u32, cols: u32) -> Cmd {
+    let Some(thread) = model.panel.terminal_owner.clone() else { return Command::done() };
+    let (rows, cols) = (rows.clamp(1, 500) as u16, cols.clamp(1, 1000) as u16);
+    let Some(session) = model.panel.terminals.iter_mut().find(|session| session.id == id) else { return Command::done() };
+    if session.watching || !session.running() || session.requested_size == Some((rows, cols)) {
+        return Command::done();
+    }
+    session.requested_size = Some((rows, cols));
+    let resizing = model.rpc_routes().iter().any(|route| matches!(route,
+        Route::TerminalResize { thread_id, terminal_id, .. } if thread_id == &thread && terminal_id == id));
+    if resizing {
+        return Command::done();
+    }
+    send_terminal_size(model, thread, id, rows, cols)
+}
+
+fn send_terminal_size(model: &mut Model, thread_id: String, id: &str, rows: u16, cols: u16) -> Cmd {
+    let request = requests::terminal_resize(&ThreadId::from(thread_id.as_str()), id, cols, rows);
+    call(model, request, Route::TerminalResize { thread_id, terminal_id: id.to_owned(), rows, cols })
+}
+
+pub fn terminal_resize_finished(model: &mut Model, thread_id: String, id: &str, sent: (u16, u16), ok: bool) -> Cmd {
+    if model.panel.terminal_owner.as_deref() != Some(thread_id.as_str()) {
+        return Command::done();
+    }
+    let Some(session) = model.panel.terminals.iter_mut().find(|terminal| terminal.id == id && !terminal.watching) else { return Command::done() };
+    let Some(requested) = session.requested_size else { return Command::done() };
+    if requested != sent {
+        send_terminal_size(model, thread_id, id, requested.0, requested.1)
+    } else {
+        if !ok { session.requested_size = None; }
+        Command::done()
+    }
+}
+
+fn terminal_preference_key(model: &Model, thread: &str, id: &str) -> (String, String, String) {
+    (model.active_env.clone().unwrap_or_default(), thread.to_owned(), id.to_owned())
 }
 
 fn attach_terminal(model: &mut Model, thread: &str, id: &str, cwd: &str) -> Cmd {
     let route = Route::Terminal { thread_id: thread.to_owned(), terminal_id: id.to_owned() };
-    subscribe(model, requests::terminal_attach(&thread.into(), id, cwd, terminal::DEFAULT_COLS, terminal::DEFAULT_ROWS), route)
+    let watch = !model.panel.interactive_terminals.contains(&terminal_preference_key(model, thread, id));
+    let thread = ThreadId::from(thread);
+    let request = if watch {
+        requests::terminal_observe(&thread, id)
+    } else {
+        let (rows, cols) = model.panel.terminals.iter().find(|terminal| terminal.id == id)
+            .and_then(|terminal| terminal.requested_size)
+            .unwrap_or((terminal::DEFAULT_ROWS, terminal::DEFAULT_COLS));
+        requests::terminal_attach(&thread, id, cwd, cols, rows)
+    };
+    subscribe(model, request, route)
+}
+
+fn set_terminal_watch(model: &mut Model, id: &str, watching: bool) -> Cmd {
+    let Some(thread) = model.panel.terminal_owner.clone() else { return Command::done() };
+    let key = terminal_preference_key(model, &thread, id);
+    let Some(session) = model.panel.terminals.iter_mut().find(|terminal| terminal.id == id) else { return Command::done() };
+    if session.watching == watching || !session.running() {
+        return Command::done();
+    }
+    session.watching = watching;
+    session.invalidate_view();
+    if watching {
+        model.panel.interactive_terminals.remove(&key);
+    } else {
+        model.panel.interactive_terminals.insert(key);
+    }
+    let route = Route::Terminal { thread_id: thread.clone(), terminal_id: id.to_owned() };
+    let stop = unsubscribe(model, &route);
+    let cwd = model.active_cwd().unwrap_or_default();
+    stop.and(attach_terminal(model, &thread, id, &cwd)).and(render())
 }
 
 /// Detaches the current thread's terminals (they keep running on the server).
@@ -518,6 +600,7 @@ fn detach_terminals(model: &mut Model) -> Cmd {
     model.panel.terminals.clear();
     model.panel.active_terminal = None;
     model.panel.terminal_owner = None;
+    model.panel.focus_terminal = None;
     Command::all(routes.iter().map(|r| unsubscribe(model, r)).collect::<Vec<_>>())
 }
 
@@ -532,12 +615,19 @@ pub fn adopt_terminals(model: &mut Model) -> Cmd {
             continue;
         }
         let label = if label.is_empty() { id.clone() } else { label };
-        model.panel.terminals.push(Session::new(&id, &label));
+        let mut session = Session::new(&id, &label);
+        session.watching = !model.panel.interactive_terminals.contains(&terminal_preference_key(model, &thread, &id));
+        model.panel.terminals.push(session);
         if let Some(n) = id.strip_prefix("term-").and_then(|n| n.parse::<u32>().ok()) {
             model.panel.terminal_counter = model.panel.terminal_counter.max(n);
         }
         model.panel.terminal_owner = Some(thread.clone());
-        model.panel.active_terminal.get_or_insert(id.clone());
+        if model.panel.focus_terminal.as_deref() == Some(id.as_str()) {
+            model.panel.active_terminal = Some(id.clone());
+            model.panel.focus_terminal = None;
+        } else {
+            model.panel.active_terminal.get_or_insert(id.clone());
+        }
         cmds.push(attach_terminal(model, &thread, &id, &cwd));
     }
     Command::all(cmds)
@@ -1468,6 +1558,7 @@ pub fn update(event: Event, model: &mut Model) -> Cmd {
         Event::Connect { server_url, pairing_code } => crate::environments::connect_local(model, server_url, pairing_code),
         Event::ConnectRemote { link } => crate::environments::connect_remote(model, link),
         Event::SelectEnvironment { id } => {
+            model.pending_terminal_target = None;
             if model.active_env.as_deref() == Some(id.as_str()) && model.connection == Connection::Connected {
                 return Command::done();
             }
@@ -1589,6 +1680,8 @@ pub fn update(event: Event, model: &mut Model) -> Cmd {
             // Terminals reattach through the metadata stream.
             model.panel.terminals.clear();
             model.panel.active_terminal = None;
+            model.panel.terminal_details.clear();
+            model.panel.terminal_details_available = false;
             model.panel.git.cwd.clear();
             model.composer.branches_cwd.clear();
             model.refusals = 0;
@@ -2440,6 +2533,105 @@ pub fn update(event: Event, model: &mut Model) -> Cmd {
             load_diff(model).and(render())
         }
         Event::NewTerminal => new_terminal(model).and(render()),
+        Event::TerminalSplitsLoaded { value } => {
+            if let Some(splits) = value.and_then(|value| serde_json::from_str(&value).ok()) {
+                model.panel.terminal_splits = splits;
+            }
+            render()
+        }
+        Event::SetTerminalSplit { mode } => {
+            let (Some(thread), Some(environment)) = (model.selected_thread.clone(), model.active_env.clone()) else { return Command::done() };
+            let at = model.panel.terminal_splits.iter().position(|split| split.thread == thread && split.environment == environment);
+            if mode == "single" {
+                let Some(at) = at else { return Command::done() };
+                model.panel.terminal_splits.remove(at);
+                let hidden = model.panel.terminals.iter().find(|terminal| Some(terminal.id.as_str()) != model.panel.active_terminal.as_deref())
+                    .map(|terminal| terminal.id.clone());
+                let detach = hidden.map_or_else(Command::done, |id| set_terminal_watch(model, &id, true));
+                return detach.and(save_terminal_splits(model));
+            }
+            let stacked = match mode.as_str() {
+                "stacked" => true,
+                "sideBySide" => false,
+                _ => return Command::done(),
+            };
+            if let Some(at) = at {
+                model.panel.terminal_splits[at].stacked = stacked;
+            } else {
+                model.panel.terminal_splits.push(terminal::SplitPreference { environment, thread, stacked, percent: 50 });
+            }
+            if model.panel.terminals.len() < 2 {
+                new_terminal(model).and(save_terminal_splits(model))
+            } else {
+                save_terminal_splits(model)
+            }
+        }
+        Event::ResizeTerminalSplit { percent } => {
+            let (Some(thread), Some(environment)) = (model.selected_thread.as_deref(), model.active_env.as_deref()) else { return Command::done() };
+            let Some(split) = model.panel.terminal_splits.iter_mut().find(|split| split.thread == thread && split.environment == environment) else { return Command::done() };
+            let percent = percent.clamp(15, 85);
+            if split.percent == percent { return Command::done() }
+            split.percent = percent;
+            save_terminal_splits(model)
+        }
+        Event::ReopenTerminal => {
+            let (Some(thread), Some(id)) = (model.panel.terminal_owner.clone(), model.panel.active_terminal.as_deref()) else { return Command::done() };
+            let Some(cwd) = model.panel.terminals.iter().find(|session| session.id == id && !session.running())
+                .map(|session| session.cwd.clone()).filter(|cwd| !cwd.is_empty()) else { return Command::done() };
+            if model.panel.terminal_details_available {
+                let new_id = format!("term-{}", uuid());
+                let preference = terminal_preference_key(model, &thread, &new_id);
+                let request = requests::terminal_reopen(&thread.into(), id, &new_id);
+                model.panel.interactive_terminals.insert(preference);
+                model.panel.focus_terminal = Some(new_id);
+                return call(model, request, Route::Command("Open fresh shell".into()));
+            }
+            new_terminal_in(model, &thread, &cwd).and(render())
+        }
+        Event::RenameTerminal { label } => {
+            if !model.panel.terminal_details_available { return Command::done(); }
+            let (Some(thread), Some(id)) = (model.panel.terminal_owner.clone(), model.panel.active_terminal.clone()) else { return Command::done() };
+            call(model, requests::terminal_rename(&thread.into(), &id, &label), Route::Command("Rename terminal".into()))
+        }
+        Event::OpenTerminalOnEnvironment { environment_id, thread_id, terminal_id } => {
+            if !model.environments.iter().any(|environment| environment.id == environment_id) {
+                return Command::done();
+            }
+            if model.active_env.as_ref() == Some(&environment_id) && model.connection == Connection::Connected {
+                if model.panel.terminal_details.iter().any(|terminal| terminal.thread_id == thread_id && terminal.terminal_id == terminal_id) {
+                    return update(Event::OpenTerminalAttention { thread_id, terminal_id }, model);
+                }
+                model.pending_terminal_target = Some((environment_id, thread_id, terminal_id));
+                return Command::done();
+            }
+            let select = crate::environments::select(model, environment_id.clone(), None);
+            model.pending_terminal_target = Some((environment_id, thread_id, terminal_id));
+            select
+        }
+        Event::OpenTerminalAttention { thread_id, terminal_id } => {
+            let Some(detail) = model.panel.terminal_details.iter().find(|terminal| terminal.thread_id == thread_id && terminal.terminal_id == terminal_id) else { return Command::done() };
+            if let Some(agent) = &detail.agent {
+                model.panel.terminal_seen.insert(detail.instance_id.clone(), agent.revision);
+            }
+            let key = terminal_preference_key(model, &thread_id, &terminal_id);
+            model.panel.interactive_terminals.remove(&key);
+            let selected = select_thread(model, thread_id.clone());
+            model.panel.open = true;
+            model.panel.tab = "terminal".into();
+            model.panel.focus_terminal = Some(terminal_id.clone());
+            if let Some(session) = model.panel.terminals.iter_mut().find(|session| session.id == terminal_id) {
+                model.panel.active_terminal = Some(terminal_id.clone());
+                model.panel.focus_terminal = None;
+                if !session.watching {
+                    return selected.and(update(Event::SetTerminalWatch { watching: true }, model));
+                }
+            }
+            selected.and(render())
+        }
+        Event::SetTerminalWatch { watching } => {
+            let Some(id) = model.panel.active_terminal.clone() else { return Command::done() };
+            set_terminal_watch(model, &id, watching)
+        }
         Event::SelectTerminal { terminal_id } => {
             model.panel.active_terminal = Some(terminal_id);
             render()
@@ -2447,6 +2639,8 @@ pub fn update(event: Event, model: &mut Model) -> Cmd {
         Event::CloseTerminal { terminal_id } => {
             let Some(thread) = model.panel.terminal_owner.clone() else { return Command::done() };
             let route = Route::Terminal { thread_id: thread.clone(), terminal_id: terminal_id.clone() };
+            let key = terminal_preference_key(model, &thread, &terminal_id);
+            model.panel.interactive_terminals.remove(&key);
             let u = unsubscribe(model, &route);
             model.panel.terminals.retain(|t| t.id != terminal_id);
             if model.panel.active_terminal.as_deref() == Some(terminal_id.as_str()) {
@@ -2462,6 +2656,9 @@ pub fn update(event: Event, model: &mut Model) -> Cmd {
         }
         Event::TerminalKey { key, text, ctrl, alt } => {
             let (Some(thread), Some(id)) = (model.panel.terminal_owner.clone(), model.panel.active_terminal.clone()) else { return Command::done() };
+            if model.panel.terminals.iter().any(|terminal| terminal.id == id && (terminal.watching || !terminal.running())) {
+                return Command::done();
+            }
             // Typing shows the live screen, where it lands.
             if let Some(t) = model.panel.terminals.iter_mut().find(|t| t.id == id) { t.scroll_to_bottom(); }
             let app_cursor = model.panel.terminals.iter().find(|t| t.id == id).is_some_and(|t| t.screen().application_cursor());
@@ -2474,6 +2671,9 @@ pub fn update(event: Event, model: &mut Model) -> Cmd {
         }
         Event::ClearTerminal => {
             let (Some(thread), Some(id)) = (model.panel.terminal_owner.clone(), model.panel.active_terminal.clone()) else { return Command::done() };
+            if model.panel.terminals.iter().any(|terminal| terminal.id == id && (terminal.watching || !terminal.running())) {
+                return Command::done();
+            }
             let thread = ThreadId::from(thread);
             let clear = call(model, requests::terminal_clear(&thread, &id), Route::Command("Clear terminal".into()));
             // Ctrl-L: the shell draws its prompt again on the empty screen.
@@ -2482,21 +2682,19 @@ pub fn update(event: Event, model: &mut Model) -> Cmd {
         }
         Event::TerminalPaste { text } => {
             let (Some(thread), Some(id)) = (model.panel.terminal_owner.clone(), model.panel.active_terminal.clone()) else { return Command::done() };
+            if model.panel.terminals.iter().any(|terminal| terminal.id == id && (terminal.watching || !terminal.running())) {
+                return Command::done();
+            }
             if let Some(t) = model.panel.terminals.iter_mut().find(|t| t.id == id) { t.scroll_to_bottom(); }
             let bracketed = model.panel.terminals.iter().find(|t| t.id == id).is_some_and(|t| t.screen().bracketed_paste());
             let data = if bracketed { format!("\x1b[200~{text}\x1b[201~") } else { text };
             call(model, requests::terminal_write(&thread.into(), &id, &data), Route::Command("Terminal".into()))
         }
         Event::TerminalResize { rows, cols } => {
-            let (Some(thread), Some(id)) = (model.panel.terminal_owner.clone(), model.panel.active_terminal.clone()) else { return Command::done() };
-            let (rows, cols) = (rows.clamp(2, 500) as u16, cols.clamp(10, 1000) as u16);
-            let Some(t) = model.panel.terminals.iter_mut().find(|t| t.id == id) else { return Command::done() };
-            if t.size() == (rows, cols) {
-                return Command::done();
-            }
-            t.resize(rows, cols);
-            call(model, requests::terminal_resize(&thread.into(), &id, cols, rows), Route::Command("Terminal".into())).and(render())
+            let Some(id) = model.panel.active_terminal.clone() else { return Command::done() };
+            resize_terminal_pane(model, &id, rows, cols)
         }
+        Event::TerminalPaneResize { terminal_id, rows, cols } => resize_terminal_pane(model, &terminal_id, rows, cols),
         Event::ToggleDirectory { path } => {
             if model.panel.files.expanded.remove(&path) {
                 return render();

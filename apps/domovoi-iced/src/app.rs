@@ -195,6 +195,32 @@ pub struct PrReviewDraft {
     pub merge_method: String,
 }
 
+#[derive(Default)]
+pub struct TerminalServerSummary {
+    pub terminals: Vec<domovoi_core::view::TerminalDetailView>,
+    pub stale: bool,
+    pub loaded: bool,
+    busy: bool,
+    next_poll_ms: i64,
+    failures: u32,
+}
+
+pub struct TerminalSplitGrid {
+    pub panes: iced::widget::pane_grid::State<bool>,
+    split: iced::widget::pane_grid::Split,
+    stacked: bool,
+}
+
+impl TerminalSplitGrid {
+    fn new(stacked: bool) -> Self {
+        use iced::widget::pane_grid::{Axis, State};
+        let (mut panes, first) = State::new(false);
+        let axis = if stacked { Axis::Horizontal } else { Axis::Vertical };
+        let (_, split) = panes.split(axis, first, true).expect("the first pane can be split");
+        Self { panes, split, stacked }
+    }
+}
+
 pub struct App {
     pub host: Option<HostHandle>,
     pub vm: ViewModel,
@@ -254,6 +280,10 @@ pub struct App {
 
     // Side panel local state
     pub terminal_focused: bool,
+    pub terminal_grid: TerminalSplitGrid,
+    pub terminal_rename: Option<(String, String)>,
+    pub all_terminal_servers: bool,
+    pub terminal_servers: HashMap<String, TerminalServerSummary>,
     pub collapsed_diffs: HashSet<String>,
     pub git_commit_msg: String,
     pub git_branch_name: String,
@@ -372,8 +402,15 @@ pub enum Message {
     // Side panel: Diff / Terminal / Files / Git / Artifacts
     ToggleDiffFile(String),
     TerminalFocus(bool),
+    FocusTerminalPane(String),
+    ResizeTerminalDivider(f32),
+    ToggleAllTerminalServers,
+    EditTerminalName(String, String),
+    TerminalNameChanged(String),
+    SaveTerminalName,
+    CancelTerminalName,
     TerminalKey { key: String, text: String, ctrl: bool, alt: bool },
-    TerminalResize { rows: u32, cols: u32 },
+    TerminalResize { terminal_id: String, rows: u32, cols: u32 },
     TerminalScroll(i32),
     TerminalPasteClipboard,
     TerminalCopyScreen,
@@ -472,6 +509,10 @@ impl App {
             composer_popover: None,
             attachment_error: None,
             terminal_focused: false,
+            terminal_grid: TerminalSplitGrid::new(false),
+            terminal_rename: None,
+            all_terminal_servers: false,
+            terminal_servers: HashMap::new(),
             collapsed_diffs: HashSet::new(),
             git_commit_msg: String::new(),
             git_branch_name: String::new(),
@@ -551,6 +592,23 @@ impl App {
         Subscription::batch(subs)
     }
 
+    fn poll_terminal_servers(&mut self) {
+        let Some(host) = &self.host else { return };
+        self.terminal_servers.retain(|id, _| self.vm.connection.environments.iter().any(|environment| environment.id == *id));
+        if !self.all_terminal_servers {
+            return;
+        }
+        let mut available = 4usize.saturating_sub(self.terminal_servers.values().filter(|server| server.busy).count());
+        for environment in &self.vm.connection.environments {
+            if available == 0 { break; }
+            let server = self.terminal_servers.entry(environment.id.clone()).or_default();
+            if !server.busy && self.clock_ms >= server.next_poll_ms && host.probe_terminals(environment.id.clone()) {
+                server.busy = true;
+                available -= 1;
+            }
+        }
+    }
+
     pub fn update(&mut self, msg: Message) -> Task<Message> {
         match msg {
             Message::Host(host_msg) => return self.handle_host(host_msg),
@@ -596,6 +654,7 @@ impl App {
                 self.clock_ms = now;
                 self.tick_phase = (self.tick_phase + 1.0) % 1000.0;
                 self.send_core(Event::Tick { now_ms: now });
+                self.poll_terminal_servers();
                 let probe = Task::perform(probe_route(), Message::NetworkProbed);
                 if slept {
                     // The socket died with the sleep; drop it now instead of
@@ -961,14 +1020,36 @@ impl App {
             Message::TerminalFocus(f) => {
                 self.terminal_focused = f;
             }
+            Message::FocusTerminalPane(terminal_id) => {
+                self.terminal_focused = true;
+                self.send_core(Event::SelectTerminal { terminal_id });
+            }
+            Message::EditTerminalName(id, label) => self.terminal_rename = Some((id, label)),
+            Message::TerminalNameChanged(label) => {
+                if let Some((_, draft)) = &mut self.terminal_rename { *draft = label; }
+            }
+            Message::SaveTerminalName => {
+                if let Some((id, label)) = self.terminal_rename.take()
+                    && self.vm.panel.terminal.active.as_ref().is_some_and(|screen| screen.id == id)
+                {
+                    self.send_core(Event::RenameTerminal { label });
+                }
+            }
+            Message::CancelTerminalName => self.terminal_rename = None,
+            Message::ToggleAllTerminalServers => {
+                self.all_terminal_servers = !self.all_terminal_servers;
+                self.poll_terminal_servers();
+            }
+            Message::ResizeTerminalDivider(ratio) => {
+                let ratio = ratio.clamp(0.15, 0.85);
+                self.terminal_grid.panes.resize(self.terminal_grid.split, ratio);
+                self.send_core(Event::ResizeTerminalSplit { percent: (ratio * 100.0).round() as u32 });
+            }
             Message::TerminalKey { key, text, ctrl, alt } => {
                 self.send_core(Event::TerminalKey { key, text, ctrl, alt });
             }
-            Message::TerminalResize { rows, cols } => {
-                if let Some(screen) = &self.vm.panel.terminal.active
-                    && (screen.rows != rows || screen.cols != cols) {
-                        self.send_core(Event::TerminalResize { rows, cols });
-                    }
+            Message::TerminalResize { terminal_id, rows, cols } => {
+                self.send_core(Event::TerminalPaneResize { terminal_id, rows, cols });
             }
             Message::TerminalScroll(lines) => {
                 self.send_core(Event::TerminalScroll { lines });
@@ -1297,6 +1378,12 @@ impl App {
             HostMsg::Delta(delta) => {
                 let prev_state = self.vm.connection.state.clone();
                 delta.apply(&mut self.vm);
+                if let Some(split) = &self.vm.panel.terminal.split {
+                    if self.terminal_grid.stacked != split.stacked {
+                        self.terminal_grid = TerminalSplitGrid::new(split.stacked);
+                    }
+                    self.terminal_grid.panes.resize(self.terminal_grid.split, split.percent as f32 / 100.0);
+                }
                 // A card answered or gone (another thread, another device) keeps nothing typed.
                 let asked = self.vm.thread.as_ref().map(|t| &t.secret_requests);
                 self.secret_drafts.retain(|id, _| asked.is_some_and(|asked| asked.iter().any(|r| r.item_id == *id)));
@@ -1374,6 +1461,32 @@ impl App {
                     self.images.retain(|u, _| wanted.contains(u));
                     self.failed_images.retain(|u| wanted.contains(u));
                 }
+            }
+            HostMsg::TerminalDetails { environment_id, outcome } => {
+                if let Some(server) = self.terminal_servers.get_mut(&environment_id) {
+                    server.busy = false;
+                    server.loaded = true;
+                    match outcome {
+                        host::TerminalProbe::Current(terminals) => {
+                            server.terminals = terminals;
+                            server.stale = false;
+                            server.failures = 0;
+                            server.next_poll_ms = self.clock_ms + 15_000;
+                        }
+                        host::TerminalProbe::Unauthorized => {
+                            server.terminals.clear();
+                            server.stale = false;
+                            server.failures = 0;
+                            server.next_poll_ms = self.clock_ms + 60_000;
+                        }
+                        host::TerminalProbe::Unavailable => {
+                            server.stale = true;
+                            server.failures = server.failures.saturating_add(1);
+                            server.next_poll_ms = self.clock_ms + (5_000_i64 << server.failures.min(4));
+                        }
+                    }
+                }
+                self.poll_terminal_servers();
             }
             HostMsg::ImageFailed { url } => {
                 self.failed_images.insert(url);

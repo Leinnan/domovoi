@@ -2,14 +2,12 @@
 //! and rendered via a custom Iced Canvas with exact cell alignment, 256-color
 //! and truecolor support, keyboard input, scrollback, and automatic resize.
 
-use std::cell::Cell;
-
 use domovoi_core::Event;
 use domovoi_core::view::TerminalScreenView;
 use iced::keyboard::{self, Key, key};
 use iced::mouse;
 use iced::widget::canvas::{self, Canvas, Geometry, Path, Text as CanvasText};
-use iced::widget::{Space, button, column, container, row, stack, text};
+use iced::widget::{Space, button, column, container, pane_grid, row, stack, text};
 use iced::{Alignment, Element, Length, Point, Rectangle, Renderer, Size, Theme};
 
 use crate::app::{App, Message};
@@ -55,22 +53,56 @@ pub fn view(app: &App) -> Element<'_, Message> {
         );
     }
 
+    if let Some(screen) = term.active.as_ref().filter(|screen| !screen.exited) {
+        let label = if screen.watching { "Interact" } else { "Watch" };
+        tab_row = tab_row.push(w::small_button(label, w::secondary_style, Some(core(Event::SetTerminalWatch { watching: !screen.watching }))));
+    }
+    if term.active.as_ref().is_some_and(|screen| screen.exited) {
+        tab_row = tab_row.push(w::small_button("Open fresh shell", w::secondary_style, Some(core(Event::ReopenTerminal))));
+    }
+    if term.active.is_some() {
+        for (label, mode) in [("Side by side", "sideBySide"), ("Stacked", "stacked"), ("Single pane", "single")] {
+            let already = match (&term.split, mode) {
+                (None, "single") => true,
+                (Some(split), "sideBySide") => !split.stacked,
+                (Some(split), "stacked") => split.stacked,
+                _ => false,
+            };
+            if !already {
+                tab_row = tab_row.push(w::small_button(label, w::ghost_style, Some(core(Event::SetTerminalSplit { mode: mode.into() }))));
+            }
+        }
+    }
+    if term.can_rename && let Some(tab) = term.tabs.iter().find(|tab| tab.active) {
+        if let Some((_, draft)) = app.terminal_rename.as_ref().filter(|(id, _)| *id == tab.id) {
+            tab_row = tab_row
+                .push(w::input("Terminal name", draft).on_input(Message::TerminalNameChanged).on_submit(Message::SaveTerminalName).width(140))
+                .push(w::small_button("Cancel", w::ghost_style, Some(Message::CancelTerminalName)));
+        } else {
+            tab_row = tab_row.push(w::small_button("Rename", w::ghost_style,
+                Some(Message::EditTerminalName(tab.id.clone(), tab.label.clone()))));
+        }
+    }
+    let writable = term.active.as_ref().filter(|screen| !screen.watching && !screen.exited);
     tab_row = tab_row
         .push(Space::new().width(Length::Fill))
         .push(w::icon_button(Icon::Copy, "Copy screen", term.active.as_ref().map(|_| Message::TerminalCopyScreen)))
-        .push(w::icon_button(Icon::ClipboardList, "Paste", term.active.as_ref().map(|_| Message::TerminalPasteClipboard)))
-        .push(w::icon_button(Icon::Eraser, "Clear terminal", term.active.as_ref().map(|_| core(Event::ClearTerminal))))
+        .push(w::icon_button(Icon::ClipboardList, "Paste", writable.map(|_| Message::TerminalPasteClipboard)))
+        .push(w::icon_button(Icon::Eraser, "Clear terminal", writable.map(|_| core(Event::ClearTerminal))))
         .push(w::icon_button(Icon::Plus, "New terminal", Some(core(Event::NewTerminal))));
 
-    let body: Element<'_, Message> = if let Some(screen) = &term.active {
-        let canvas_el: Element<'_, Message> = Canvas::new(TerminalCanvas {
-            screen: screen.clone(),
-            focused: app.terminal_focused,
-            last_size: Cell::new((screen.rows, screen.cols)),
+    let body: Element<'_, Message> = if let Some(split) = &term.split {
+        let active = term.active.as_ref().map(|screen| screen.id.as_str());
+        pane_grid::PaneGrid::new(&app.terminal_grid.panes, |_, second, _| {
+            let screen = if *second { &split.right } else { &split.left };
+            let focused = app.terminal_focused && active == Some(screen.id.as_str());
+            pane_grid::Content::new(terminal_canvas(screen, focused, true))
         })
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .into();
+        .spacing(6)
+        .on_resize(5, |event| Message::ResizeTerminalDivider(event.ratio))
+        .into()
+    } else if let Some(screen) = &term.active {
+        let canvas_el = terminal_canvas(screen, app.terminal_focused, false);
 
         let mut layers = vec![canvas_el];
         if screen.scrollback_offset > 0 {
@@ -91,7 +123,10 @@ pub fn view(app: &App) -> Element<'_, Message> {
         }
         if screen.exited {
             layers.push(
-                container(w::badge_capsule("Process exited", Some(|c| c.muted)))
+                container(w::badge_capsule(
+                    if screen.has_saved_screen { "Last saved screen" } else if screen.restored { "Ended after server restart" } else { "Process exited" },
+                    Some(|c| c.muted),
+                ))
                     .align_right(Length::Fill)
                     .align_bottom(Length::Fill)
                     .padding(S)
@@ -115,6 +150,14 @@ pub fn view(app: &App) -> Element<'_, Message> {
     column![container(tab_row).padding([TIGHT, S]), w::divider(), body].height(Length::Fill).into()
 }
 
+fn terminal_canvas(screen: &TerminalScreenView, focused: bool, split: bool) -> Element<'_, Message> {
+    Canvas::new(TerminalCanvas {
+        screen: screen.clone(),
+        focused,
+        split,
+    }).width(Length::Fill).height(Length::Fill).into()
+}
+
 pub fn plain_text(screen: &TerminalScreenView) -> String {
     let mut rows: Vec<String> = screen
         .lines
@@ -133,29 +176,44 @@ pub fn plain_text(screen: &TerminalScreenView) -> String {
 struct TerminalCanvas {
     screen: TerminalScreenView,
     focused: bool,
-    last_size: Cell<(u32, u32)>,
+    split: bool,
+}
+
+#[derive(Default)]
+struct TerminalCanvasState {
+    terminal_id: String,
+    last_size: Option<(u32, u32)>,
 }
 
 impl canvas::Program<Message> for TerminalCanvas {
-    type State = ();
+    type State = TerminalCanvasState;
 
-    fn update(&self, _state: &mut Self::State, event: &iced::Event, bounds: Rectangle, cursor: mouse::Cursor) -> Option<canvas::Action<Message>> {
+    fn update(&self, state: &mut Self::State, event: &iced::Event, bounds: Rectangle, cursor: mouse::Cursor) -> Option<canvas::Action<Message>> {
         // Resize check when bounds change.
         let cols = (((bounds.width - PAD * 2.0) / CELL_W).floor() as i32).clamp(10, 1000) as u32;
         let rows = (((bounds.height - PAD * 2.0) / CELL_H).floor() as i32).clamp(2, 500) as u32;
-        if (rows, cols) != self.last_size.get() && (rows != self.screen.rows || cols != self.screen.cols) {
-            self.last_size.set((rows, cols));
-            return Some(canvas::Action::publish(Message::TerminalResize { rows, cols }));
+        if state.terminal_id != self.screen.id {
+            state.terminal_id.clone_from(&self.screen.id);
+            state.last_size = None;
+        }
+        if self.screen.watching || self.screen.exited {
+            state.last_size = None;
+        } else if state.last_size != Some((rows, cols)) {
+            state.last_size = Some((rows, cols));
+            return Some(canvas::Action::publish(Message::TerminalResize { terminal_id: self.screen.id.clone(), rows, cols }));
         }
 
         match event {
             iced::Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) => {
                 let inside = cursor.is_over(bounds);
-                if inside != self.focused {
+                if self.split && inside && !self.focused {
+                    return Some(canvas::Action::publish(Message::FocusTerminalPane(self.screen.id.clone())).and_capture());
+                }
+                if !self.split && inside != self.focused {
                     return Some(canvas::Action::publish(Message::TerminalFocus(inside)));
                 }
             }
-            iced::Event::Mouse(mouse::Event::WheelScrolled { delta }) if cursor.is_over(bounds) => {
+            iced::Event::Mouse(mouse::Event::WheelScrolled { delta }) if cursor.is_over(bounds) && (!self.split || self.focused) => {
                 let lines = match delta {
                     mouse::ScrollDelta::Lines { y, .. } => (*y * 3.0).round() as i32,
                     mouse::ScrollDelta::Pixels { y, .. } => (*y / CELL_H).round() as i32,

@@ -89,6 +89,7 @@ pub struct Model {
 
     pub environments: Vec<Environment>,
     pub active_env: Option<String>,
+    pub pending_terminal_target: Option<(String, String, String)>,
     /// The active environment's bearer token.
     pub token: Option<String>,
     /// A pairing code waiting for the tunnel to come up.
@@ -529,9 +530,15 @@ pub struct Panel {
     pub terminals: Vec<Session>,
     pub terminal_owner: Option<String>,
     pub active_terminal: Option<String>,
+    pub focus_terminal: Option<String>,
     pub terminal_counter: u32,
+    pub terminal_splits: Vec<crate::terminal::SplitPreference>,
+    pub interactive_terminals: std::collections::HashSet<(String, String, String)>,
     /// Every terminal the server runs (`subscribeTerminalMetadata`).
     pub terminal_summaries: Vec<TerminalSummary>,
+    pub terminal_details: Vec<crate::view::TerminalDetailView>,
+    pub terminal_details_available: bool,
+    pub terminal_seen: HashMap<String, u64>,
     pub files: FilesState,
     pub git: GitState,
     pub artifacts: ArtifactsState,
@@ -878,6 +885,12 @@ impl Model {
             device_os: std::mem::take(&mut self.device_os),
             environments: std::mem::take(&mut self.environments),
             active_env: self.active_env.take(),
+            pending_terminal_target: self.pending_terminal_target.take(),
+            panel: Panel {
+                terminal_splits: std::mem::take(&mut self.panel.terminal_splits),
+                interactive_terminals: std::mem::take(&mut self.panel.interactive_terminals),
+                ..Default::default()
+            },
             token: self.token.take(),
             tunnel: std::mem::take(&mut self.tunnel),
             push_token: self.push_token.take(),

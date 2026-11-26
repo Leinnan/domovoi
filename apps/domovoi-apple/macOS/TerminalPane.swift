@@ -30,11 +30,21 @@ struct TerminalPane: View {
                         }
                     }
                 }
+                if let screen = terminal.active, !screen.exited {
+                    Button(screen.watching ? "Interact" : "Watch") {
+                        core.update(.setTerminalWatch(watching: !screen.watching))
+                    }
+                    .buttonStyle(.borderless)
+                }
+                if terminal.active?.exited == true {
+                    Button("Open fresh shell") { core.update(.reopenTerminal) }
+                        .buttonStyle(.borderless)
+                }
                 Button { core.update(.clearTerminal) } label: { Image(systemName: "eraser") }
                     .buttonStyle(.borderless)
                     .help("Clear the terminal and its scrollback")
                     .accessibilityLabel("Clear terminal")
-                    .disabled(terminal.active == nil)
+                    .disabled(terminal.active?.watching != false || terminal.active?.exited != false)
                 Button {
                     TerminalFocus.requested = true
                     core.update(.newTerminal)
@@ -100,7 +110,7 @@ struct TerminalScreen: View {
                     .help("Back to the live screen")
                 }
                 if screen.exited {
-                    Text("Process exited").font(.caption).padding(Space.tight).background(.regularMaterial, in: Capsule()).padding(Space.s)
+                    Text(screen.hasSavedScreen ? "Last saved screen" : screen.restored ? "Ended after server restart" : "Process exited").font(.caption).padding(Space.tight).background(.regularMaterial, in: Capsule()).padding(Space.s)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
                 }
             }
@@ -108,6 +118,7 @@ struct TerminalScreen: View {
             .onAppear { resize(geo.size) }
             .onChange(of: geo.size) { _, size in resize(size) }
             .onChange(of: screen.id) { _, _ in resize(geo.size) }
+            .onChange(of: screen.watching) { _, _ in resize(geo.size) }
         }
     }
 

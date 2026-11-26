@@ -72,7 +72,7 @@ struct TerminalScreenIOS: View {
                                 .frame(width: cell.width, height: cell.height)
                                 .offset(x: inset + CGFloat(screen.cursorCol) * cell.width, y: inset + CGFloat(screen.cursorRow) * cell.height)
                         }
-                        TerminalKeyInput(active: $typing, cellHeight: cell.height) { key, text, ctrl, alt in
+                        TerminalKeyInput(active: $typing, cellHeight: cell.height, readOnly: screen.watching || screen.exited) { key, text, ctrl, alt in
                             core.update(.terminalKey(key: key, text: text, ctrl: ctrl, alt: alt))
                         } paste: { text in
                             core.update(.terminalPaste(text: text))
@@ -99,7 +99,7 @@ struct TerminalScreenIOS: View {
                         if screen.exited {
                             // A chip like the tabs and the way back down.
                             HStack(spacing: Space.s) {
-                                Text("Process exited").font(TypeRole.meta)
+                                Text(screen.hasSavedScreen ? "Last saved screen" : screen.restored ? "Ended after server restart" : "Process exited").font(TypeRole.meta)
                                 Button("New Terminal") { core.update(.newTerminal) }
                                     .font(TypeRole.meta.weight(.semibold))
                                     .buttonStyle(.borderless)
@@ -115,6 +115,7 @@ struct TerminalScreenIOS: View {
                     .onAppear { resize(geo.size, screen) }
                     .onChange(of: geo.size) { _, size in resize(size, screen) }
                     .onChange(of: screen.id) { _, _ in resize(geo.size, screen) }
+                    .onChange(of: screen.watching) { _, _ in resize(geo.size, screen) }
                     .onChange(of: fontSize) { _, _ in resize(geo.size, screen) }
                 }
             } else {
@@ -129,10 +130,20 @@ struct TerminalScreenIOS: View {
             if let id = terminal.active?.id {
                 Menu {
                     if let screen = terminal.active {
+                        if !screen.exited {
+                            Button(screen.watching ? "Interact" : "Watch") {
+                                typing = false
+                                core.update(.setTerminalWatch(watching: !screen.watching))
+                            }
+                        }
                         Button("Copy Screen", systemImage: "doc.on.doc") { Platform.copy(screen.plainText) }
                         Button("Select Text…", systemImage: "selection.pin.in.out") { selecting = screen.plainText }
                     }
+                    if terminal.active?.exited == true {
+                        Button("Open fresh shell", systemImage: "terminal") { core.update(.reopenTerminal) }
+                    }
                     Button("Clear", systemImage: "eraser") { core.update(.clearTerminal) }
+                        .disabled(terminal.active?.watching != false || terminal.active?.exited != false)
                     Section("Text Size") {
                         Button("Larger", systemImage: "textformat.size.larger") { textScale = min(2, textScale + 0.15) }
                             .disabled(textScale >= 2)
@@ -185,6 +196,7 @@ struct TerminalKeyInput: UIViewRepresentable {
     @Binding var active: Bool
     /// One row's height: a drag moves through the history a row at a time.
     var cellHeight: CGFloat = 14
+    var readOnly = false
     /// (key, text, ctrl, alt)
     let key: (String, String, Bool, Bool) -> Void
     let paste: (String) -> Void
@@ -197,6 +209,7 @@ struct TerminalKeyInput: UIViewRepresentable {
         view.onPaste = paste
         view.onScroll = scroll
         view.cellHeight = cellHeight
+        view.readOnly = readOnly
         view.onActive = { active in DispatchQueue.main.async { self.active = active } }
         return view
     }
@@ -206,6 +219,8 @@ struct TerminalKeyInput: UIViewRepresentable {
         view.onPaste = paste
         view.onScroll = scroll
         view.cellHeight = cellHeight
+        view.readOnly = readOnly
+        if readOnly && view.isFirstResponder { _ = view.resignFirstResponder() }
     }
 
     final class KeyView: UIView, UIKeyInput {
@@ -214,6 +229,7 @@ struct TerminalKeyInput: UIViewRepresentable {
         var onActive: (Bool) -> Void = { _ in }
         var onScroll: (Int) -> Void = { _ in }
         var cellHeight: CGFloat = 14
+        var readOnly = false
         /// The drag's rows already sent.
         private var scrolledRows = 0
         private var ctrl = false
@@ -248,7 +264,7 @@ struct TerminalKeyInput: UIViewRepresentable {
             if isFirstResponder { _ = resignFirstResponder() } else { _ = becomeFirstResponder() }
         }
 
-        override var canBecomeFirstResponder: Bool { true }
+        override var canBecomeFirstResponder: Bool { !readOnly }
 
         // ⌘V on a hardware keyboard, and Paste from the edit menu.
         override func paste(_ sender: Any?) {

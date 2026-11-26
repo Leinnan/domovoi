@@ -18,7 +18,7 @@ mod store;
 #[cfg(windows)]
 pub mod windows;
 
-pub use engine::{HostConfig, HostEvent, HostHandle, start};
+pub use engine::{HostConfig, HostEvent, HostHandle, TerminalProbe, start};
 pub use store::{SecureStore, default_data_dir, parse_secret_key};
 
 /// What tells one desktop client's data, keychain entries, single-instance

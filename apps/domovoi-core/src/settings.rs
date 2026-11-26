@@ -71,6 +71,7 @@ plain_settings! {
         "enableAgentBrowserAccess" => enable_agent_browser_access,
         "enableProviderUpdateChecks" => enable_provider_update_checks,
         "continueThreadsAfterServerUpdate" => continue_threads_after_server_update,
+        "saveTerminalScreens" => save_terminal_screens,
         "removeAgentCreditsOnMerge" => remove_agent_credits_on_merge,
         "reviewGuidesEnabled" => review_guides_enabled,
         "autoResumeLimitedThreads" => auto_resume_limited_threads,

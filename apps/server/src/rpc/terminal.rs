@@ -2,16 +2,15 @@
 
 use super::Never;
 use crate::state::ConnCtx;
-use crate::terminal::Failure;
+use crate::terminal::{Attachment, Failure, Grid, InteractiveViewer, Terminals};
 use effect_rpc::Router;
 use futures::StreamExt;
 use futures::stream::BoxStream;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde::de::IgnoredAny;
 use std::collections::HashMap;
 use std::sync::Arc;
-use domovoi_model::typed::{TerminalAttachEvent, TerminalMetadataEvent, TerminalSessionSnapshot};
-use tokio::sync::broadcast;
+use domovoi_model::typed::{TerminalAttachEvent, TerminalMetadataEvent};
 use tokio::sync::broadcast::error::RecvError;
 
 #[derive(Deserialize)]
@@ -20,6 +19,8 @@ struct OpenInput {
     thread_id: String,
     terminal_id: String,
     cwd: String,
+    cols: Option<u16>,
+    rows: Option<u16>,
     #[serde(default)]
     env: HashMap<String, String>,
 }
@@ -48,6 +49,28 @@ struct ResizeInput {
     rows: u16,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ReopenInput {
+    thread_id: String,
+    terminal_id: String,
+    new_terminal_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RenameInput {
+    thread_id: String,
+    terminal_id: String,
+    label: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TerminalActionError {
+    message: String,
+}
+
 fn lookup_error(thread_id: &str, terminal_id: &str) -> Failure {
     Failure::SessionLookup { thread_id: thread_id.to_owned(), terminal_id: terminal_id.to_owned() }
 }
@@ -58,9 +81,11 @@ fn open_error(input: &OpenInput, e: crate::terminal::TerminalError) -> Failure {
 }
 
 /// The terminal as it is, then what happens to it after that, until it is closed.
-fn follow(snapshot: TerminalSessionSnapshot, mut rx: broadcast::Receiver<TerminalAttachEvent>) -> BoxStream<'static, Result<TerminalAttachEvent, Failure>> {
+fn follow(terminals: Terminals, (snapshot, mut rx): Attachment, viewer: Option<InteractiveViewer>) -> BoxStream<'static, Result<TerminalAttachEvent, Failure>> {
     async_stream::stream! {
-        let after = snapshot.sequence.unwrap_or(0);
+        let _viewer = viewer;
+        let key = (snapshot.thread_id.clone(), snapshot.terminal_id.clone());
+        let mut after = snapshot.sequence.unwrap_or(0);
         yield Ok(TerminalAttachEvent::Snapshot { snapshot: Box::new(snapshot) });
         loop {
             match rx.recv().await {
@@ -70,7 +95,12 @@ fn follow(snapshot: TerminalSessionSnapshot, mut rx: broadcast::Receiver<Termina
                     yield Ok(ev);
                     if closed { return; }
                 }
-                Err(RecvError::Lagged(_)) => continue,
+                Err(RecvError::Lagged(_)) => {
+                    let Some((snapshot, receiver)) = terminals.recover(&key, &rx) else { return };
+                    after = snapshot.sequence.unwrap_or(0);
+                    rx = receiver;
+                    yield Ok(TerminalAttachEvent::Snapshot { snapshot: Box::new(snapshot) });
+                }
                 Err(RecvError::Closed) => return,
             }
         }
@@ -85,9 +115,15 @@ fn once_read<T: Send + 'static>(open: impl FnOnce() -> BoxStream<'static, T> + S
 
 fn attach(ctx: Arc<ConnCtx>, input: OpenInput) -> BoxStream<'static, Result<TerminalAttachEvent, Failure>> {
     let terminals = ctx.state.terminals.clone();
-    once_read(move || match terminals.open(&input.thread_id, &input.terminal_id, &input.cwd, &input.env) {
-        Ok((snapshot, rx)) => follow(snapshot, rx),
-        Err(e) => futures::stream::iter([Err(open_error(&input, e))]).boxed(),
+    once_read(move || {
+        let attached = Grid::new(input.cols, input.rows).and_then(|grid| {
+            let attachment = terminals.open_sized(&input.thread_id, &input.terminal_id, &input.cwd, &input.env, grid)?;
+            terminals.attach_viewer(attachment, ctx.connection_id, grid)
+        });
+        match attached {
+            Ok((attachment, viewer)) => follow(terminals, attachment, Some(viewer)),
+            Err(e) => futures::stream::iter([Err(open_error(&input, e))]).boxed(),
+        }
     })
 }
 
@@ -95,7 +131,7 @@ fn attach(ctx: Arc<ConnCtx>, input: OpenInput) -> BoxStream<'static, Result<Term
 fn observe(ctx: Arc<ConnCtx>, input: TerminalRef) -> BoxStream<'static, Result<TerminalAttachEvent, Failure>> {
     let terminals = ctx.state.terminals.clone();
     once_read(move || match terminals.observe(&input.thread_id, &input.terminal_id) {
-        Some((snapshot, rx)) => follow(snapshot, rx),
+        Some(attachment) => follow(terminals, attachment, None),
         None => futures::stream::iter([Err(lookup_error(&input.thread_id, &input.terminal_id))]).boxed(),
     })
 }
@@ -116,12 +152,35 @@ fn metadata(ctx: Arc<ConnCtx>) -> BoxStream<'static, Result<TerminalMetadataEven
     .boxed()
 }
 
+fn details(ctx: Arc<ConnCtx>) -> BoxStream<'static, Result<Vec<crate::terminal::TerminalDetail>, Never>> {
+    let terminals = ctx.state.terminals.clone();
+    async_stream::stream! {
+        let mut changes = terminals.details_updates();
+        yield Ok(terminals.details());
+        while changes.recv().await != Err(RecvError::Closed) {
+            yield Ok(terminals.details());
+        }
+    }
+    .boxed()
+}
+
 pub fn register(r: Router<ConnCtx>) -> Router<ConnCtx> {
     r.unary("terminal.open", |ctx: Arc<ConnCtx>, i: OpenInput| async move {
-        ctx.state.terminals.open(&i.thread_id, &i.terminal_id, &i.cwd, &i.env).map(|(snapshot, _)| snapshot).map_err(|e| open_error(&i, e))
+        Grid::new(i.cols, i.rows)
+            .and_then(|grid| ctx.state.terminals.open_sized(&i.thread_id, &i.terminal_id, &i.cwd, &i.env, grid))
+            .map(|(snapshot, _)| snapshot).map_err(|e| open_error(&i, e))
     })
     .stream("terminal.attach", attach)
     .stream("terminal.observe", observe)
+    .unary("domovoi.terminals.reopen", |ctx: Arc<ConnCtx>, input: ReopenInput| async move {
+        ctx.state.terminals.reopen(&input.thread_id, &input.terminal_id, &input.new_terminal_id)
+            .map_err(|error| TerminalActionError { message: error.0 })
+    })
+    .unary("domovoi.terminals.rename", |ctx: Arc<ConnCtx>, input: RenameInput| async move {
+        ctx.state.terminals.rename(&input.thread_id, &input.terminal_id, &input.label)
+            .map_err(|error| TerminalActionError { message: error.0 })
+    })
+    .stream("domovoi.terminals.subscribe", |ctx, _: IgnoredAny| details(ctx))
     .stream("subscribeTerminalMetadata", |ctx, _: IgnoredAny| metadata(ctx))
     // Writes and resizes run in the handler's synchronous part, which the
     // connection calls in arrival order; inside the spawned future, two writes
@@ -131,7 +190,7 @@ pub fn register(r: Router<ConnCtx>) -> Router<ConnCtx> {
         async move { r }
     })
     .unary("terminal.resize", |ctx: Arc<ConnCtx>, i: ResizeInput| {
-        let r = ctx.state.terminals.resize(&i.thread_id, &i.terminal_id, i.cols, i.rows).map_err(|_| lookup_error(&i.thread_id, &i.terminal_id));
+        let r = ctx.state.terminals.resize_viewer(&i.thread_id, &i.terminal_id, i.cols, i.rows, Some(ctx.connection_id)).map_err(|_| lookup_error(&i.thread_id, &i.terminal_id));
         async move { r }
     })
     .unary("terminal.clear", |ctx: Arc<ConnCtx>, i: TerminalRef| async move {
@@ -140,4 +199,39 @@ pub fn register(r: Router<ConnCtx>) -> Router<ConnCtx> {
     .unary("terminal.close", |ctx: Arc<ConnCtx>, i: TerminalRef| async move {
         ctx.state.terminals.close(&i.thread_id, &i.terminal_id).map_err(|_| lookup_error(&i.thread_id, &i.terminal_id))
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn lag_recovers_with_a_new_snapshot_and_does_not_follow_a_replacement() {
+        let terminals = Terminals::default();
+        let dir = std::env::temp_dir();
+        let open = || terminals.open("thread", "terminal", dir.to_str().unwrap(), &HashMap::new()).unwrap();
+        let mut stream = follow(terminals.clone(), open(), None);
+        let Some(Ok(TerminalAttachEvent::Snapshot { snapshot })) = stream.next().await else {
+            panic!("expected first snapshot");
+        };
+        // Generate enough ordered events to overrun the broadcast window
+        // without relying on how a PTY splits writes into chunks.
+        for _ in 0..1100 {
+            terminals.clear("thread", "terminal").unwrap();
+        }
+        let Some(Ok(TerminalAttachEvent::Snapshot { snapshot: recovered })) = stream.next().await else {
+            panic!("expected replacement snapshot");
+        };
+        assert!(recovered.sequence > snapshot.sequence);
+        terminals.clear("thread", "terminal").unwrap();
+        let event = stream.next().await.unwrap().unwrap();
+        assert!(event.sequence() > recovered.sequence);
+        for _ in 0..1100 {
+            terminals.clear("thread", "terminal").unwrap();
+        }
+        terminals.close("thread", "terminal").unwrap();
+        let _replacement = open();
+        assert!(stream.next().await.is_none());
+        terminals.shutdown();
+    }
 }

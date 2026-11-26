@@ -81,7 +81,7 @@ impl MainWindow {
                     core.send(Event::RespondFromNotification { environment_id, thread_id, request_id, decision });
                 }
                 // Images are not drawn yet; nothing asks for them.
-                HostEvent::ImageLoaded { .. } | HostEvent::ImageFailed { .. } => {}
+                HostEvent::ImageLoaded { .. } | HostEvent::ImageFailed { .. } | HostEvent::TerminalDetails { .. } => {}
             }
         }
         let connection = Rc::clone(&self.store.connection);

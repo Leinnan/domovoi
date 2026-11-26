@@ -62,6 +62,7 @@ pub fn router(state: SharedState) -> Router {
         .route("/api/auth/clients/revoke", post(revoke_client))
         .route("/api/auth/clients/revoke-others", post(revoke_other_clients))
         .route("/api/domovoi/remote", get(remote_status))
+        .route("/api/domovoi/terminals", get(terminal_details))
         .route("/api/domovoi/remote/pairing", post(remote_pairing))
         .route("/api/domovoi/remote/configure", post(remote_configure))
         .route("/api/domovoi/server/stop", post(server_stop))
@@ -640,6 +641,13 @@ async fn revoke_other_clients(State(state): State<SharedState>, headers: HeaderM
     }
 }
 
+async fn terminal_details(State(state): State<SharedState>, headers: HeaderMap, peer: Peer) -> Response {
+    if let Err(response) = require_permission(&state, &headers, &peer, "terminal:read") {
+        return response;
+    }
+    Json(state.terminals.attention_summaries()).into_response()
+}
+
 /// Domovoi only: remote access status.
 async fn remote_status(State(state): State<SharedState>, headers: HeaderMap, peer: Peer) -> Response {
     if let Err(r) = require_permission(&state, &headers, &peer, "access:read") {
@@ -921,7 +929,7 @@ async fn ws(
         Ok(None) => return unauthorized("invalid_credential"),
         Err(e) => return internal(e),
     }
-    let ctx = Arc::new(ConnCtx { state, session });
+    let ctx = Arc::new(ConnCtx { state, session, connection_id: live.id });
     upgrade.on_upgrade(move |socket| async move {
         // Revoking the session (or stopping the server) cancels `live`: the
         // client gets a Close frame. Handlers that do not stop within a few

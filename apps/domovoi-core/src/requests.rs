@@ -605,6 +605,10 @@ pub fn pull_requests_comment(pull_request: &PullRequestListEntry, body: &str) ->
 
 // ---- terminals ----
 
+pub fn subscribe_terminal_details() -> Request {
+    bare("domovoi.terminals.subscribe")
+}
+
 pub fn subscribe_terminal_metadata() -> Request {
     bare("subscribeTerminalMetadata")
 }
@@ -612,6 +616,18 @@ pub fn subscribe_terminal_metadata() -> Request {
 /// The terminal `terminal` of a thread, started in `cwd` if it is not running.
 pub fn terminal_attach(thread: &ThreadId, terminal: &str, cwd: &str, cols: u16, rows: u16) -> Request {
     built("terminal.attach", json!({ "threadId": thread, "terminalId": terminal, "cwd": cwd, "cols": cols, "rows": rows }))
+}
+
+pub fn terminal_reopen(thread: &ThreadId, terminal: &str, new_terminal: &str) -> Request {
+    built("domovoi.terminals.reopen", json!({ "threadId": thread, "terminalId": terminal, "newTerminalId": new_terminal }))
+}
+
+pub fn terminal_rename(thread: &ThreadId, terminal: &str, label: &str) -> Request {
+    built("domovoi.terminals.rename", json!({ "threadId": thread, "terminalId": terminal, "label": label }))
+}
+
+pub fn terminal_observe(thread: &ThreadId, terminal: &str) -> Request {
+    built("terminal.observe", json!({ "threadId": thread, "terminalId": terminal }))
 }
 
 pub fn terminal_write(thread: &ThreadId, terminal: &str, data: &str) -> Request {

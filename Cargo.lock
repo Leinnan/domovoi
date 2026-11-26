@@ -2417,6 +2417,7 @@ dependencies = [
  "unicode-normalization",
  "url",
  "uuid",
+ "vt100",
  "windows-sys 0.61.2",
  "winit",
  "winresource",

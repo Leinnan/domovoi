@@ -226,6 +226,25 @@ fun ThreadListPane(core: Core, nav: Navigator, snackbars: SnackbarHostState, sel
                 if (search.isNotEmpty() && !sidebar.searching && sidebar.searchResults.isEmpty() && nothingListed) {
                     item("no-results") { EmptyState(Icons.Outlined.Search, "No results for “$search”") }
                 }
+                if (sidebar.terminalAttention.isNotEmpty()) {
+                    item("terminal-attention") { SectionHeader("Terminal activity") }
+                    items(sidebar.terminalAttention, key = { "terminal/${it.instanceId}" }) { terminal ->
+                        val status = when (terminal.agent?.activity) {
+                            "needsInput" -> "Needs input"
+                            "finished" -> "Finished"
+                            else -> "Working"
+                        }
+                        ListItem(
+                            headlineContent = { Text(terminal.title ?: terminal.label) },
+                            supportingContent = { Text(status) },
+                            modifier = Modifier.combinedClickable(onClick = {
+                                core.update(Event.OpenTerminalAttention(terminal.threadId, terminal.terminalId))
+                                nav.show(Screen.Thread(terminal.threadId))
+                                nav.open(Screen.Terminal)
+                            }),
+                        )
+                    }
+                }
                 for (section in if (byStatus) sidebar.sections else emptyList()) {
                     item("s/${section.kind}") { StatusSectionHeader(section) { core.update(Event.ToggleSection(section.kind)) } }
                     section.rows.forEach { row(it, section.kind) }

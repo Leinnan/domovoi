@@ -51,6 +51,22 @@ struct SidebarPane: View {
                     }
                 }
             }
+            if !sidebar.terminalAttention.isEmpty {
+                Section("Terminal activity") {
+                    ForEach(sidebar.terminalAttention, id: \.instanceId) { terminal in
+                        Button {
+                            core.update(.openTerminalAttention(threadId: terminal.threadId, terminalId: terminal.terminalId))
+                        } label: {
+                            VStack(alignment: .leading) {
+                                Text(terminal.title ?? terminal.label).lineLimit(1)
+                                Text(terminal.agent?.activity == "needsInput" ? "Needs input" : terminal.agent?.activity == "finished" ? "Finished" : "Working")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
             if byStatus {
                 ForEach(sidebar.sections, id: \.kind) { section in
                     Section {

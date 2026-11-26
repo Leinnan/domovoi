@@ -147,6 +147,8 @@ pub fn launch(model: &mut Model, surface: String, device_label: String, device_o
     Command::request_from_shell(StoreOperation::Load { key: KEY_ENVIRONMENTS.into() })
         .then_send(|out| Event::EnvironmentsLoaded { value: value_of(out) })
         .and(layout)
+        .and(Command::request_from_shell(StoreOperation::Load { key: crate::terminal::SPLIT_KEY.into() })
+            .then_send(|out| Event::TerminalSplitsLoaded { value: value_of(out) }))
 }
 
 pub fn environments_loaded(model: &mut Model, value: Option<String>) -> Cmd {
