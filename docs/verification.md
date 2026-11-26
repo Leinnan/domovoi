@@ -1063,6 +1063,46 @@ What the live runs found:
   schemas; unit tests in `rpc::issues`, `rpc::issues::{github,linear}`,
   `mcp::issues` and `secrets`.
 
+## Issue threads
+
+A thread started to work on an issue, from picking the issue to its pull
+request merging. What is here is built stage by stage; a stage that is not
+listed is not done.
+
+- Launch (`ThreadLaunchInput.issue`, `rpc/shell.rs` `launch_thread_for_client`,
+  `rpc/issues/snapshot.rs`): the server reads the issue before any worktree is
+  made, names the thread for it (`#12 Title`, nothing generated), links it
+  with `role: focus` (`ThreadIssueLink.role`; a link an agent makes has none),
+  and puts it before the agent with the first message: `MessageIssue` on the
+  message (`agentText`, the framed text) and `MessageIssueCard` on its turn
+  item (what a client shows). The provider's input is the issue's frame, then
+  the user's words (`Adapters::input_for`); a transcript handed to another
+  provider keeps the frame (`context::transcript`). With no words the message
+  says "Work on this issue.". A launch whose issue cannot be read is refused
+  and leaves nothing; one sent again is answered from its receipt without a
+  second read. `assignToMe` assigns the issue afterwards, best effort.
+- Untrusted text (`untrusted.rs`, shared with webhooks): one frame
+  `<issue-data-<random>>` around everything copied, mentions, currency signs,
+  slash commands and the frame's own name broken, HTML comments removed. Cut
+  at 16 KB of description and the newest 10 comments (2 KB each, 12 KB in
+  all); the text says what was cut and that `read_issue` has the rest. A
+  client cannot send one: `decode_command` discards `issue` on a
+  `message.dispatch`.
+- `issues.resolve`: an issue as a person names it (`#7`, `7`, `ENG-4`, a URL)
+  through a project; a number goes to the git host, a key with letters to the
+  bound standalone tracker.
+- Not done: comments past the first read of the tracker are not paged in;
+  images in an issue stay URLs.
+- Verified: RPC group `issues-launch` (resolve by number, URL, another
+  repository, no tracker; a launch with no words, the same launch again with
+  the tracker down, a launch refused with the tracker down and carried out
+  once it answers, no such issue, the assignment in the stand-in's log);
+  unit tests in `untrusted`, `rpc::issues::snapshot`, `rpc::shell`,
+  `orchestration::commands` (`a_thread_started_on_an_issue_…`,
+  `a_launch_on_an_issue_…`) and `adapters`
+  (`the_issue_a_thread_was_started_on_stands_before_the_users_words`);
+  `command_round_trip.rs` examples.
+
 ## Managed policy
 
 - An administrator's policy file (t3code `ManagedPolicyDocument`, `policy/*.ts`;

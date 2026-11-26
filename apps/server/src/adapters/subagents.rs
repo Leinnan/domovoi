@@ -264,6 +264,7 @@ impl Subagents {
             role,
             text: text.to_owned(),
             context: None,
+            issue: None,
             attachments: Vec::new(),
             streaming: false,
             created_at: ts.clone(),
@@ -286,6 +287,7 @@ impl Subagents {
                 text: text.to_owned(),
                 text_omitted: None,
                 context: None,
+                issue: None,
                 attachments: Vec::new(),
                 model_switch: None,
             })

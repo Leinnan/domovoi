@@ -599,6 +599,7 @@ command! {
         display_key: String,
         title: String,
         source: super::issue::ThreadIssueLinkSource,
+        role?: super::issue::ThreadIssueRole,
     }
 }
 
@@ -772,6 +773,9 @@ command! {
         message_id: MessageId,
         text: String,
         context?: MessageContext,
+        /// The issue the message is sent with. Only the server writes it: one
+        /// a client sends is discarded.
+        issue?: super::issue::MessageIssue,
         attachments: Vec<ChatAttachment>,
         title_seed?: String,
         model_selection?: ModelSelection,
@@ -814,6 +818,7 @@ impl MessageDispatch {
             message_id: message_id.into(),
             text: text.into(),
             context: None,
+            issue: None,
             attachments: Vec::new(),
             title_seed: None,
             model_selection: None,
@@ -1324,6 +1329,10 @@ pub struct ThreadLaunchInput {
     pub workspace_strategy: WorkspaceStrategy,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub initial_message: Option<InitialMessage>,
+    /// The issue the thread is started to work on: the server reads it and
+    /// puts it before the agent with the first message.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub issue: Option<super::issue::ThreadLaunchIssue>,
     /// Not in t3code's schema: who starts the thread, when not the user.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_by: Option<Actor>,

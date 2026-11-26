@@ -14,7 +14,7 @@ use domovoi_model::typed::command::MessageDispatch;
 use domovoi_model::typed::{
     Actor, AppThread, ChatAttachment, CheckpointScope, CheckpointScopeKind, CommandId, ContextHandoff, ContextTransfer, ContextTransferId,
     ContextTransferResolution, ContextTransferStatus, ContextTransferType, ConversationMessage, CreationSource, DispatchMode, EventBody,
-    ExecutionNode, HandoffStatus, HandoffStrategy, InputIntent, InteractionMode, MessageId, MessageRole, NodeKind, NodeStatus, PlanArtifact, PlanStatus,
+    ExecutionNode, HandoffStatus, HandoffStrategy, InputIntent, InteractionMode, MessageId, MessageIssue, MessageRole, NodeKind, NodeStatus, PlanArtifact, PlanStatus,
     ProviderInstanceId, ProviderThread, ProviderThreadFork, ProviderThreadId, ProviderTurn, ProviderTurnStatus, Run, RunAttempt, RunAttemptReason,
     RunAttemptStatus, RunId, RunOrdinalRange, RunStatus, ScheduledTaskId, Thread, ThreadChange, ThreadId, Timestamp, TitleRegeneration, TurnItem, TurnItemStatus,
 };
@@ -32,6 +32,8 @@ pub(super) struct Steered<'a> {
     pub scheduled_task_id: Option<&'a ScheduledTaskId>,
     /// The run starts a new provider session (`freshContext`).
     pub fresh_context: bool,
+    /// The issue the message was sent with (a thread started on one).
+    pub issue: Option<&'a MessageIssue>,
 }
 
 /// The user's message as a record of the conversation, belonging to run `run_id`.
@@ -52,6 +54,7 @@ fn user_message(thread_id: &ThreadId, run_id: &str, node_id: &str, sent: &Steere
         role: MessageRole::User,
         text: sent.text.to_owned(),
         context: None,
+        issue: sent.issue.cloned(),
         attachments: sent.attachments.to_vec(),
         streaming: false,
         created_at: at.clone(),
@@ -101,6 +104,7 @@ pub(super) fn user_turn_item(
         text: sent.text.to_owned(),
         text_omitted: None,
         context: None,
+        issue: sent.issue.map(|issue| issue.card.clone()),
         attachments: sent.attachments.to_vec(),
         model_switch: None,
     })
@@ -343,6 +347,7 @@ impl Orchestrator {
             intent,
             scheduled_task_id: c.scheduled_task_id.as_ref(),
             fresh_context: fresh,
+            issue: c.issue.as_ref(),
         };
         if let (DispatchMode::SteerActive { target_run_id }, None, false) = (&c.dispatch_mode, &source_plan, fresh)
             && let Some(target) = steerable_run(&outline, target_run_id)

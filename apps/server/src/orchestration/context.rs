@@ -95,7 +95,9 @@ pub fn transcript(thread: &Thread, from: u64, to: u64) -> Option<(String, u64, u
             if text.is_empty() {
                 continue;
             }
-            lines.push(format!("{}: {text}", if message.role == MessageRole::User { "User" } else { "Assistant" }));
+            // The issue a message was sent with goes along, still in its frame.
+            let issue = message.issue.as_ref().map(|issue| format!("{}\n\n", issue.agent_text)).unwrap_or_default();
+            lines.push(format!("{}: {issue}{text}", if message.role == MessageRole::User { "User" } else { "Assistant" }));
         }
         let mut files: Vec<&str> = thread
             .turn_items

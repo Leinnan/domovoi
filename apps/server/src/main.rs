@@ -84,6 +84,7 @@ mod trace_diagnostics;
 mod trace_writer;
 #[cfg(feature = "tray")]
 mod tray;
+mod untrusted;
 mod usage;
 mod usage_pricing;
 mod usage_limits;

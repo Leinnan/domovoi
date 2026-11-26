@@ -238,51 +238,8 @@ fn stringify(value: &Value) -> String {
     }
 }
 
-/// Breaks what agent CLIs would read as a mention or command in copied text:
-/// currency signs, `@`, a word-initial `/command`,
-/// `t3-context:` and the frame tag's own name, each followed by a word joiner.
-fn break_mentions(text: &str) -> String {
-    const JOINER: char = '\u{2060}';
-    let chars: Vec<char> = text.chars().collect();
-    let mut out = String::with_capacity(text.len());
-    let mut i = 0;
-    while i < chars.len() {
-        let c = chars[i];
-        let at_word_start = i == 0 || chars[i - 1].is_whitespace();
-        let rest: String = chars[i..].iter().take(16).collect();
-        if c == '@' || is_currency(c) {
-            out.push(c);
-            out.push(JOINER);
-        } else if c == '/' && at_word_start && slash_command(&chars[i + 1..]) {
-            out.push(c);
-            out.push(JOINER);
-        } else if rest.to_ascii_lowercase().starts_with("t3-context:") {
-            out.push_str(&rest[..10]);
-            out.push(JOINER);
-            i += 10;
-            continue;
-        } else if rest.to_ascii_lowercase().starts_with("webhook-data") {
-            out.push_str(&rest[..7]);
-            out.push(JOINER);
-            i += 7;
-            continue;
-        } else {
-            out.push(c);
-        }
-        i += 1;
-    }
-    out
-}
-
-/// After a `/`: one or more characters that are neither space nor `/`, then a space or the end.
-fn slash_command(after: &[char]) -> bool {
-    let word: Vec<&char> = after.iter().take_while(|c| !c.is_whitespace()).collect();
-    !word.is_empty() && !word.iter().any(|c| **c == '/')
-}
-
-fn is_currency(c: char) -> bool {
-    matches!(c, '$' | '¢' | '£' | '¤' | '¥' | '֏' | '؋' | '৲' | '৳' | '฿' | '៛' | '₠'..='₿' | '﷼' | '﹩' | '＄' | '￠' | '￡' | '￥' | '￦')
-}
+/// The kind of frame a request's values are put in (`crate::untrusted`).
+const FRAME_KIND: &str = "webhook-data";
 
 /// A template filled in from a request, and the placeholders the request lacked.
 #[derive(Debug, PartialEq)]
@@ -297,7 +254,7 @@ pub struct Rendered {
 /// the values as they are (a dedupe key), where an empty value is missing.
 pub fn render(template: &str, request: &WebhookRequest, frame: &str, raw: bool) -> Rendered {
     let resolver = Resolver::new(request);
-    let tag = format!("webhook-data-{frame}");
+    let tag = crate::untrusted::tag(FRAME_KIND, frame);
     let mut missing: Vec<String> = vec![];
     let mut framed = false;
     let mut prompt = String::with_capacity(template.len());
@@ -327,7 +284,7 @@ pub fn render(template: &str, request: &WebhookRequest, frame: &str, raw: bool) 
             Some(t) if raw => prompt.push_str(&t),
             Some(t) => {
                 framed = true;
-                prompt.push_str(&format!("<{tag}>{}</{tag}>", break_mentions(&t)));
+                prompt.push_str(&crate::untrusted::framed(FRAME_KIND, frame, &t));
             }
         }
         rest = &after[end + 2..];
@@ -736,10 +693,6 @@ fn pending_count(store: &Store, task: &str) -> usize {
         .max(0) as usize
 }
 
-fn frame_id() -> String {
-    crate::util::random_bytes::<6>().iter().map(|b| format!("{b:02x}")).collect()
-}
-
 /// `triggerWebhook`: what a request to `/api/hooks/<task_id>/<token>` does.
 pub async fn trigger(service: Arc<ScheduledTasks>, task_id: &str, token: &str, request: WebhookRequest) -> Answer {
     // Refused before any lookup or log, so a blocked hook neither runs nor records a delivery.
@@ -880,7 +833,7 @@ pub async fn trigger(service: Arc<ScheduledTasks>, task_id: &str, token: &str, r
         return Answer::Accepted { delivery_id, outcome: "accepted" };
     }
 
-    let rendered = render(&task.prompt, &request, &frame_id(), false);
+    let rendered = render(&task.prompt, &request, &crate::untrusted::frame_id(), false);
     // Providers trim the prompt before they measure it.
     if rendered.prompt.trim().chars().count() > MAX_PROMPT_CHARS {
         log("dispatch_failed", verified, &rendered.missing, Some(&rendered.prompt), Some(PROMPT_TOO_LONG), false);
@@ -997,7 +950,7 @@ pub fn run_closed_windows(service: &Arc<ScheduledTasks>) {
                 done(&store);
                 return;
             }
-            let rendered = render(&task.prompt, &request, &frame_id(), false);
+            let rendered = render(&task.prompt, &request, &crate::untrusted::frame_id(), false);
             let _ = store.db().with(|c| {
                 c.execute(
                     "UPDATE scheduled_task_webhook_deliveries SET rendered_prompt = ?2, missing_json = ?3, pending_window = NULL WHERE delivery_id = ?1",

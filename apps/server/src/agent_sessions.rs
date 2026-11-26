@@ -1857,6 +1857,7 @@ fn message_events(thread_id: &str, index: usize, m: &ThreadMessage) -> [EventBod
             text: m.text.clone(),
             text_omitted: None,
             context: None,
+            issue: None,
             attachments: vec![],
             model_switch: None,
         })
@@ -1886,6 +1887,7 @@ fn message_events(thread_id: &str, index: usize, m: &ThreadMessage) -> [EventBod
         role: spelled(&m.role).unwrap_or(MessageRole::Assistant),
         text: m.text.clone(),
         context: None,
+        issue: None,
         attachments: vec![],
         streaming: false,
         created_at: at.clone(),

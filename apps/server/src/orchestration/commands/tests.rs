@@ -51,6 +51,7 @@ fn launch(id: &str) -> ThreadLaunchInput {
         interaction_mode: InteractionMode::Default,
         workspace_strategy: WorkspaceStrategy::Root { branch: None },
         initial_message: Some(InitialMessage { message_id: Some("m1".into()), text: "hello".into(), context: None, attachments: vec![] }),
+        issue: None,
         created_by: None,
         delegated_from: None,
     }
@@ -465,6 +466,7 @@ fn finish_run(o: &Orchestrator, tid: &str, reply: &str) -> Run {
         role: MessageRole::Assistant,
         text: reply.into(),
         context: None,
+        issue: None,
         attachments: vec![],
         streaming: false,
         created_at: "z".into(),
@@ -728,6 +730,89 @@ async fn a_scheduled_fresh_session_is_a_side_conversation() {
     assert_eq!(run3, first.provider_thread_id);
 }
 
+/// An issue as `rpc::issues::snapshot` hands it to a launch.
+fn read_issue(key: &str) -> domovoi_model::typed::MessageIssue {
+    use domovoi_model::typed::{IssueState, IssueStateCategory, MessageIssue, MessageIssueCard, ThreadIssueKey};
+    MessageIssue {
+        card: MessageIssueCard {
+            key: ThreadIssueKey { tracker: "github".into(), host: "github.com".into(), scope: "o/r".into(), key: key.into() },
+            display_key: format!("#{key}"),
+            title: "Login crashes".into(),
+            url: format!("https://github.com/o/r/issues/{key}"),
+            state: IssueState { category: IssueStateCategory::Open, name: "open".into(), close_reason: None },
+            comments_included: 0,
+            comment_count: 0,
+            truncated: false,
+            fetched_at: "2026-01-01T00:00:00.000Z".into(),
+        },
+        agent_text: "<issue-data-f00>#12 Login crashes</issue-data-f00>".into(),
+    }
+}
+
+fn launch_on_issue(id: &str, text: &str) -> ThreadLaunchInput {
+    use domovoi_model::typed::{IssueRef, ThreadLaunchIssue};
+    let mut input = launch(id);
+    input.title = "whatever the client called it".into();
+    input.generate_title = Some(true);
+    input.initial_message = Some(InitialMessage { message_id: Some("m1".into()), text: text.into(), context: None, attachments: vec![] });
+    input.issue = Some(ThreadLaunchIssue { issue: IssueRef { project_id: "p".into(), tracker: "github".into(), host: None, scope: "o/r".into(), key: "12".into() }, assign_to_me: None });
+    input
+}
+
+#[tokio::test]
+async fn a_thread_started_on_an_issue_is_named_for_it_linked_to_it_and_carries_it() {
+    use domovoi_model::typed::{ISSUE_DEFAULT_PROMPT, ThreadIssueLinkSource, ThreadIssueRole};
+    let (o, mut fx) = setup();
+    o.launch_thread_on_issue(launch_on_issue("t1", "  "), Some(read_issue("12"))).await.unwrap();
+    let thread = o.store.app_thread("t1").unwrap().unwrap();
+    assert_eq!(thread.title, "#12 Login crashes", "the issue names the thread");
+    assert_eq!(thread.title_regeneration, None, "and no title is generated over it");
+    let links = thread.issues.unwrap();
+    assert_eq!(links.len(), 1);
+    assert_eq!((links[0].role.clone(), links[0].source.clone(), links[0].key.key.as_str(), links[0].project_id.as_str()), (Some(ThreadIssueRole::Focus), ThreadIssueLinkSource::Manual, "12", "p"));
+    assert!(links[0].is_focus());
+    let mut effects = vec![];
+    while let Ok(effect) = fx.try_recv() {
+        effects.push(effect);
+    }
+    assert!(!effects.iter().any(|e| matches!(e, Effect::GenerateTitle { .. })), "{effects:?}");
+    assert!(effects.iter().any(|e| matches!(e, Effect::StartTurn { .. })), "{effects:?}");
+    // The message keeps the user's words (none: the default) and the issue beside them.
+    let held = held(&o, "t1");
+    let said = held.messages.iter().find(|m| m.id.as_str() == "m1").unwrap();
+    assert_eq!(said.text, ISSUE_DEFAULT_PROMPT);
+    assert_eq!(said.issue.as_ref().map(|i| i.agent_text.as_str()), Some("<issue-data-f00>#12 Login crashes</issue-data-f00>"));
+    let shown = held.turn_items.iter().find_map(|item| match item {
+        TurnItem::UserMessage(m) => Some(m.clone()),
+        _ => None,
+    });
+    let shown = shown.unwrap();
+    assert_eq!(shown.text, ISSUE_DEFAULT_PROMPT);
+    assert_eq!(shown.issue.as_ref().map(|card| card.display_key.as_str()), Some("#12"), "the timeline shows the card, not the framed text");
+    // What is handed to another provider keeps the issue in its frame.
+    let (text, _, _) = crate::orchestration::context::transcript(&held, 1, 1).unwrap();
+    assert!(text.contains("User: <issue-data-f00>#12 Login crashes</issue-data-f00>\n\nWork on this issue."), "{text}");
+}
+
+#[tokio::test]
+async fn a_launch_on_an_issue_keeps_the_users_words_and_is_refused_unread() {
+    let (o, _fx) = setup();
+    o.launch_thread_on_issue(launch_on_issue("t1", "Only the crash, not the styling."), Some(read_issue("12"))).await.unwrap();
+    assert_eq!(held(&o, "t1").messages.iter().find(|m| m.id.as_str() == "m1").unwrap().text, "Only the crash, not the styling.");
+    // No thread starts on an issue its agent was not shown.
+    let refused = o.launch_thread(launch_on_issue("t2", "x")).await.unwrap_err();
+    assert!(matches!(refused.refusal, LaunchRefusal::Issue(_)), "{refused}");
+    assert!(o.store.app_thread("t2").unwrap().is_none());
+    // A launch sent again is found answered, before anything would be read for it.
+    assert!(o.launch_answered("c-t1").unwrap().is_some());
+    assert!(o.launch_answered("c-t2").unwrap().is_none());
+    // A message that queues behind the run keeps its issue until it starts.
+    let mut queued = send("c-m2", "t1", "m2", "again", DispatchMode::QueueAfterActive);
+    queued.issue = Some(read_issue("13"));
+    o.dispatch(queued.into()).await.unwrap();
+    assert_eq!(held(&o, "t1").messages.iter().find(|m| m.id.as_str() == "m2").unwrap().issue.as_ref().map(|i| i.card.key.key.as_str()), Some("13"));
+}
+
 #[tokio::test]
 async fn issues_link_once_and_unlink_by_tracker_level_key() {
     use domovoi_model::typed::ThreadIssueLinkSource;
@@ -748,6 +833,7 @@ async fn issues_link_once_and_unlink_by_tracker_level_key() {
             display_key: format!("#{key}"),
             title: "A bug".into(),
             source: ThreadIssueLinkSource::Agent,
+            role: None,
         }
         .into()
     };

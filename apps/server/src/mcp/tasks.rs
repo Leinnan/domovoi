@@ -165,6 +165,7 @@ async fn delegate(c: &Call<'_>) -> Result<Value, String> {
         interaction_mode: mode::<InteractionMode>(&c.args["interactionMode"], InteractionMode::Default),
         workspace_strategy: strategy,
         initial_message: Some(InitialMessage { message_id: None, text: task, context: None, attachments: vec![] }),
+        issue: None,
         created_by: Some(Actor::Agent),
         delegated_from: Some(LinkedThread {
             environment_id: c.state.environment.environment_id.as_str().into(),

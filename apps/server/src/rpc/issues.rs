@@ -24,6 +24,7 @@
 mod github;
 mod gitlab;
 mod linear;
+pub(crate) mod snapshot;
 pub(crate) mod trackers;
 
 use crate::state::{AppState, ConnCtx};
@@ -32,7 +33,7 @@ use domovoi_model::typed::{
     IssueInvolvement, IssueLinkedThread, IssueLinkedThreadsResult, IssueListEntry, IssueListInput, IssueListProjectError, IssueListResult, IssueListSort,
     IssueListState, IssueReactionInput, IssueRef, IssueScopeRef, IssueSetStateInput, IssueState, IssueSummary, IssueTemplateList, IssueTrackerProjectBinding,
     IssueTrackerSummary, IssueUpdateInput, IssueViewerPermissions, RepositoryIdentity, SettledOverride, ThreadIssueKey, IssueComment, IssueEvent,
-    IssueLinkedPullRequest, IssueReaction,
+    IssueLinkedPullRequest, IssueReaction, IssueResolveInput, IssueResolveResult,
 };
 use domovoi_rpc::Router;
 use futures::StreamExt;
@@ -88,6 +89,14 @@ impl std::fmt::Display for IssueFailure {
 impl std::error::Error for IssueFailure {}
 
 impl IssueFailure {
+    /// The failure in words for a person, without the operation's name.
+    pub(crate) fn in_words(&self) -> String {
+        match self {
+            IssueFailure::Operation { detail, .. } => detail.clone(),
+            unavailable => unavailable.to_string(),
+        }
+    }
+
     pub(crate) fn unsupported() -> Self {
         IssueFailure::Unavailable { reason: "tracker-unsupported", tracker: None }
     }
@@ -834,6 +843,47 @@ pub(crate) async fn resolve_url(state: &AppState, value: &str, preferred: Option
     Ok(Resolved { r, issue: Some(served.into_detail(issue, writable)) })
 }
 
+/// `issues.resolve`: an issue as a person names it (its URL, `#123`, `123`,
+/// `ENG-123`), read through `project_id`. A bare number is the git host's
+/// issue; a key with letters is the bound standalone tracker's.
+pub(crate) async fn resolve(state: &AppState, input: &IssueResolveInput) -> Result<IssueResolveResult, IssueFailure> {
+    let reference = input.reference.trim();
+    let project_id = input.project_id.as_str();
+    let (r, read) = if reference.contains("://") {
+        let resolved = resolve_url(state, reference, Some(project_id)).await?;
+        (resolved.r, resolved.issue)
+    } else {
+        let key = reference.strip_prefix('#').unwrap_or(reference);
+        if key.is_empty() || key.chars().count() > 64 || !key.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+            return Err(IssueFailure::with_reason("resolve", "not-found", "This is not an issue number, key or URL."));
+        }
+        let ws = list_projects(state, ProjectFilter { project_id: Some(project_id), ..Default::default() }).await?;
+        let numbered = key.chars().all(|c| c.is_ascii_digit());
+        let fits = |served: &&Served| (served.kind == Kind::Linear) != numbered;
+        let own = ws.supported.iter().find(fits).or(ws.supported.first()).ok_or_else(IssueFailure::unsupported)?;
+        (IssueRef { project_id: project_id.into(), tracker: own.tracker.clone(), host: Some(own.host.clone()), scope: own.scope.clone(), key: key.to_owned() }, None)
+    };
+    let read = match read {
+        Some(read) => read,
+        None => detail(state, &r).await?,
+    };
+    Ok(IssueResolveResult { issue: r, summary: read.summary, writable: read.writable })
+}
+
+/// Assigns an issue to the signed-in account, beside whoever has it. On a
+/// tracker where an issue has one assignee (Linear), only when nobody has it.
+pub(crate) async fn assign_to_viewer(state: &AppState, r: &IssueRef, read: &IssueDetail) -> Result<(), IssueFailure> {
+    let Some(viewer) = read.viewer.clone() else {
+        return Err(IssueFailure::operation("assign", "The signed-in account is not known."));
+    };
+    let mut assignees: Vec<String> = read.summary.assignees.iter().map(|a| a.login.clone()).collect();
+    if assignees.iter().any(|login| login.eq_ignore_ascii_case(&viewer)) || (read.summary.tracker == linear::KIND && !assignees.is_empty()) {
+        return Ok(());
+    }
+    assignees.push(viewer);
+    update(state, &IssueUpdateInput { issue: r.clone(), title: None, body: None, labels: None, assignees: Some(assignees) }).await
+}
+
 /// `issues.linkedThreads` (`listLinkedIssueThreads`): the threads whose links
 /// name the issue, most recently active first.
 pub(crate) fn linked_threads(state: &AppState, key: &ThreadIssueKey) -> Result<IssueLinkedThreadsResult, IssueFailure> {
@@ -903,6 +953,7 @@ pub fn register(r: Router<ConnCtx>) -> Router<ConnCtx> {
         .unary("issues.update", |ctx: Arc<ConnCtx>, input: IssueUpdateInput| async move { update(&ctx.state, &input).await })
         .unary("issues.setState", |ctx: Arc<ConnCtx>, input: IssueSetStateInput| async move { set_state(&ctx.state, &input).await })
         .unary("issues.react", |ctx: Arc<ConnCtx>, input: IssueReactionInput| async move { react(&ctx.state, &input).await })
+        .unary("issues.resolve", |ctx: Arc<ConnCtx>, input: IssueResolveInput| async move { resolve(&ctx.state, &input).await })
         .unary("issues.linkedThreads", |ctx: Arc<ConnCtx>, input: ThreadIssueKey| async move { linked_threads(&ctx.state, &input) });
     trackers::register(r)
 }

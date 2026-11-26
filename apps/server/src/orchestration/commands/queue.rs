@@ -184,6 +184,7 @@ impl Orchestrator {
             intent: InputIntent::PromotedQueuedToSteer,
             scheduled_task_id: message.scheduled_task_id.as_ref(),
             fresh_context: false,
+            issue: message.issue.as_ref(),
         };
         self.steer_into(&c.command_id, &c.thread_id, steered, &outline, &target)
     }
@@ -260,6 +261,7 @@ impl Orchestrator {
             intent: InputIntent::QueuedTurn,
             scheduled_task_id: message.scheduled_task_id.as_ref(),
             fresh_context: fresh,
+            issue: message.issue.as_ref(),
         };
         let item = user_turn_item(thread_id, run_id, &root_node_id(run_id), Some(&provider_thread_id), ordinal, sent, &at);
         self.store.append_event(thread_id, EventBody::TurnItemUpdated(item), &origin)?;

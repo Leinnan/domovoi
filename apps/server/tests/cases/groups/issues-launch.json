@@ -1,0 +1,296 @@
+{
+ "fixture": true,
+ "env": {
+  "GIT_ALLOW_PROTOCOL": "file",
+  "GIT_TERMINAL_PROMPT": "0"
+ },
+ "normalize": [],
+ "cases": [
+  {
+   "tag": "projects.mutate",
+   "payload": {
+    "type": "project.create",
+    "commandId": "create-plain",
+    "projectId": "plain",
+    "title": "No remote",
+    "workspaceRoot": "$DIR/repos/plain",
+    "createWorkspaceRootIfMissing": false,
+    "defaultModelSelection": null
+   }
+  },
+  {
+   "tag": "issues.resolve",
+   "payload": {
+    "projectId": "$PROJECT",
+    "reference": "#7"
+   },
+   "note": "as a person writes it in the project"
+  },
+  {
+   "tag": "issues.resolve",
+   "payload": {
+    "projectId": "$PROJECT",
+    "reference": " 8 "
+   }
+  },
+  {
+   "tag": "issues.resolve",
+   "payload": {
+    "projectId": "$PROJECT",
+    "reference": "https://github.com/acme/calc/issues/8"
+   },
+   "note": "a pasted URL"
+  },
+  {
+   "tag": "issues.resolve",
+   "payload": {
+    "projectId": "$PROJECT",
+    "reference": "https://github.com/other/lib/issues/3"
+   },
+   "note": "another repository on the host: read-only"
+  },
+  {
+   "tag": "issues.resolve",
+   "payload": {
+    "projectId": "$PROJECT",
+    "reference": "999"
+   },
+   "expect": "failure",
+   "error": "IssueOperationError",
+   "note": "not-found"
+  },
+  {
+   "tag": "issues.resolve",
+   "payload": {
+    "projectId": "$PROJECT",
+    "reference": "fix the login"
+   },
+   "expect": "failure",
+   "error": "IssueOperationError",
+   "note": "not a reference at all"
+  },
+  {
+   "tag": "issues.resolve",
+   "payload": {
+    "projectId": "$PROJECT",
+    "reference": "https://example.com/acme/calc/issues/8"
+   },
+   "expect": "failure",
+   "error": "IssueOperationError"
+  },
+  {
+   "tag": "issues.resolve",
+   "payload": {
+    "projectId": "plain",
+    "reference": "#7"
+   },
+   "expect": "failure",
+   "error": "IssueUnavailableError",
+   "note": "a project with no tracker"
+  },
+  {
+   "tag": "orchestration.launchThread",
+   "payload": {
+    "commandId": "launch-7",
+    "creationSource": "web",
+    "threadId": "it7",
+    "projectId": "$PROJECT",
+    "title": "",
+    "generateTitle": true,
+    "modelSelection": {
+     "instanceId": "claudeAgent",
+     "model": "claude-haiku-5-5"
+    },
+    "runtimeMode": "approval-required",
+    "interactionMode": "default",
+    "workspaceStrategy": {
+     "type": "root"
+    },
+    "initialMessage": {
+     "messageId": "m-it7",
+     "text": "",
+     "attachments": []
+    },
+    "issue": {
+     "issue": {
+      "projectId": "$PROJECT",
+      "tracker": "github",
+      "host": "github.com",
+      "scope": "acme/calc",
+      "key": "7"
+     }
+    }
+   },
+   "note": "a thread on issue 7 with no words: named for the issue, linked as its focus, the issue with the first message"
+  },
+  {
+   "sh": "gh-rule err 'graphql' 'HTTP 502: Bad Gateway'",
+   "tag": "orchestration.launchThread",
+   "payload": {
+    "commandId": "launch-7",
+    "creationSource": "web",
+    "threadId": "it7",
+    "projectId": "$PROJECT",
+    "title": "",
+    "generateTitle": true,
+    "modelSelection": {
+     "instanceId": "claudeAgent",
+     "model": "claude-haiku-5-5"
+    },
+    "runtimeMode": "approval-required",
+    "interactionMode": "default",
+    "workspaceStrategy": {
+     "type": "root"
+    },
+    "initialMessage": {
+     "messageId": "m-it7",
+     "text": "",
+     "attachments": []
+    },
+    "issue": {
+     "issue": {
+      "projectId": "$PROJECT",
+      "tracker": "github",
+      "host": "github.com",
+      "scope": "acme/calc",
+      "key": "7"
+     }
+    }
+   },
+   "note": "sent again while the tracker is down: answered as it was, nothing read"
+  },
+  {
+   "tag": "orchestration.launchThread",
+   "payload": {
+    "commandId": "launch-8",
+    "creationSource": "web",
+    "threadId": "it8",
+    "projectId": "$PROJECT",
+    "title": "",
+    "generateTitle": true,
+    "modelSelection": {
+     "instanceId": "claudeAgent",
+     "model": "claude-haiku-5-5"
+    },
+    "runtimeMode": "approval-required",
+    "interactionMode": "default",
+    "workspaceStrategy": {
+     "type": "root"
+    },
+    "initialMessage": {
+     "messageId": "m-it8",
+     "text": "Only the parser.",
+     "attachments": []
+    },
+    "issue": {
+     "issue": {
+      "projectId": "$PROJECT",
+      "tracker": "github",
+      "host": "github.com",
+      "scope": "acme/calc",
+      "key": "8"
+     }
+    }
+   },
+   "expect": "failure",
+   "error": "OrchestrationV2ThreadLaunchError",
+   "note": "the tracker is down: no thread"
+  },
+  {
+   "sh": "gh-rule clear",
+   "tag": "orchestration.launchThread",
+   "payload": {
+    "commandId": "launch-8",
+    "creationSource": "web",
+    "threadId": "it8",
+    "projectId": "$PROJECT",
+    "title": "",
+    "generateTitle": true,
+    "modelSelection": {
+     "instanceId": "claudeAgent",
+     "model": "claude-haiku-5-5"
+    },
+    "runtimeMode": "approval-required",
+    "interactionMode": "default",
+    "workspaceStrategy": {
+     "type": "root"
+    },
+    "initialMessage": {
+     "messageId": "m-it8",
+     "text": "Only the parser.",
+     "attachments": []
+    },
+    "issue": {
+     "issue": {
+      "projectId": "$PROJECT",
+      "tracker": "github",
+      "host": "github.com",
+      "scope": "acme/calc",
+      "key": "8"
+     },
+     "assignToMe": true
+    }
+   },
+   "note": "the same launch once the tracker answers; the issue is assigned afterwards"
+  },
+  {
+   "tag": "orchestration.launchThread",
+   "payload": {
+    "commandId": "launch-999",
+    "creationSource": "web",
+    "threadId": "it999",
+    "projectId": "$PROJECT",
+    "title": "",
+    "generateTitle": true,
+    "modelSelection": {
+     "instanceId": "claudeAgent",
+     "model": "claude-haiku-5-5"
+    },
+    "runtimeMode": "approval-required",
+    "interactionMode": "default",
+    "workspaceStrategy": {
+     "type": "root"
+    },
+    "initialMessage": {
+     "messageId": "m-it999",
+     "text": "x",
+     "attachments": []
+    },
+    "issue": {
+     "issue": {
+      "projectId": "$PROJECT",
+      "tracker": "github",
+      "host": "github.com",
+      "scope": "acme/calc",
+      "key": "999"
+     }
+    }
+   },
+   "expect": "failure",
+   "error": "OrchestrationV2ThreadLaunchError",
+   "note": "no such issue"
+  },
+  {
+   "sleep_ms": 500,
+   "tag": "issues.linkedThreads",
+   "payload": {
+    "tracker": "github",
+    "host": "github.com",
+    "scope": "acme/calc",
+    "key": "7"
+   },
+   "note": "the thread started on it"
+  },
+  {
+   "sh": "grep -q 'api -X PATCH repos/acme/calc/issues/8 .*\"assignees\"' \"$DIR/gh-data/log\" || { cat \"$DIR/gh-data/log\"; exit 1; }",
+   "tag": "issues.detail",
+   "payload": {
+    "projectId": "$PROJECT",
+    "tracker": "github",
+    "scope": "acme/calc",
+    "key": "8"
+   },
+   "note": "the launch that asked for it assigned the issue to the signed-in account (the stand-in keeps no writes; its log shows the call)"
+  }
+ ]
+}

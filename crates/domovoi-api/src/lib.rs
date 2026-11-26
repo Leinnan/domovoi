@@ -122,6 +122,7 @@ methods! {
     "issues.linkedThreads" => Unary, ORCHESTRATION_READ, Kept(kept::ISSUES);
     "issues.list" => Unary, ORCHESTRATION_READ, Kept(kept::ISSUES);
     "issues.react" => Unary, SOURCE_CONTROL_WRITE, Kept(kept::ISSUES);
+    "issues.resolve" => Unary, ORCHESTRATION_READ, Kept(kept::ISSUES);
     "issues.setState" => Unary, SOURCE_CONTROL_WRITE, Kept(kept::ISSUES);
     "issues.templates" => Unary, ORCHESTRATION_READ, Kept(kept::ISSUES);
     "issues.update" => Unary, SOURCE_CONTROL_WRITE, Kept(kept::ISSUES);

@@ -23,6 +23,16 @@ string_enum! {
     }
 }
 
+string_enum! {
+    /// What an issue is to the thread that links it.
+    ThreadIssueRole {
+        /// The issue the thread was started to work on.
+        Focus = "focus",
+        /// An issue the thread's work touches or cites.
+        Mentioned = "mentioned",
+    }
+}
+
 /// Identity of an issue as a thread link sees it (`ThreadIssueKey`): tracker
 /// level, so the same issue linked through two projects compares equal.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -62,6 +72,77 @@ pub struct ThreadIssueLink {
     /// As the tracker wrote the key when it was linked: `#123`, `ENG-123`.
     pub display_key: String,
     pub title: String,
+    /// Absent on a link that only mentions the issue.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<ThreadIssueRole>,
+}
+
+impl ThreadIssueLink {
+    /// Whether the thread was started to work on this issue.
+    pub fn is_focus(&self) -> bool {
+        self.role == Some(ThreadIssueRole::Focus)
+    }
+}
+
+/// What a first message says when its thread is started on an issue with no
+/// words of the user's own.
+pub const ISSUE_DEFAULT_PROMPT: &str = "Work on this issue.";
+
+/// The issue a launched thread is started to work on (`ThreadLaunchInput.issue`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadLaunchIssue {
+    pub issue: IssueRef,
+    /// Assign the issue to the signed-in account once the thread exists.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assign_to_me: Option<bool>,
+}
+
+/// `issues.resolve`: an issue named as a person writes it, read through a project.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IssueResolveInput {
+    pub project_id: ProjectId,
+    /// An issue URL, `#123`, `123`, or a tracker key such as `ENG-123`.
+    pub reference: String,
+}
+
+/// What `issues.resolve` answers: how to address the issue, and its row.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IssueResolveResult {
+    pub issue: IssueRef,
+    pub summary: IssueSummary,
+    /// False for an issue outside the project's own scope.
+    pub writable: bool,
+}
+
+/// What a message shows of the issue it was sent with: the issue as it was
+/// when the server read it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MessageIssueCard {
+    #[serde(flatten)]
+    pub key: ThreadIssueKey,
+    pub display_key: String,
+    pub title: String,
+    pub url: String,
+    pub state: IssueState,
+    /// How many comments the agent was given, of `commentCount`.
+    pub comments_included: u64,
+    pub comment_count: u64,
+    /// The body or the comments were cut to fit.
+    pub truncated: bool,
+    pub fetched_at: Timestamp,
+}
+
+/// An issue a message carries to the agent: what clients show, and the text
+/// the server wrote for the agent (framed as untrusted data).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MessageIssue {
+    pub card: MessageIssueCard,
+    pub agent_text: String,
 }
 
 // ---------------------------------------------------------------------------

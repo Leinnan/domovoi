@@ -2,6 +2,7 @@
   { "tag": "issues.list", "payload": { "state": "open" }, "expect": "success" },
   { "tag": "issues.linkedThreads", "payload": { "tracker": "github", "host": "github.com", "scope": "o/r", "key": "1" }, "expect": "success" },
   { "tag": "issues.detail", "payload": { "projectId": "$PROJECT", "tracker": "github", "scope": "o/r", "key": "1" }, "expect": "failure", "error": "IssueUnavailableError" },
+  { "tag": "issues.resolve", "payload": { "projectId": "$PROJECT", "reference": "#1" }, "expect": "failure", "error": "IssueUnavailableError" },
   { "tag": "issueTrackers.list", "payload": {}, "expect": "success" },
   { "tag": "issueTrackers.connect", "payload": { "tracker": "linear", "token": null }, "expect": "success" },
   { "tag": "issueTrackers.connect", "payload": { "tracker": "jira", "token": "t" }, "expect": "failure", "error": "IssueTrackerConnectionError" },

@@ -623,6 +623,7 @@ fn occurrence_launch(task: &ScheduledTask, command_id: &str, message_id: &str) -
         interaction_mode: task.interaction_mode.clone(),
         workspace_strategy: task.workspace_strategy.clone(),
         initial_message: Some(InitialMessage { message_id: Some(message_id.into()), text: task.prompt.clone(), context: None, attachments: vec![] }),
+        issue: None,
         created_by: Some(task.created_by.clone()),
         delegated_from: None,
     }

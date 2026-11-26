@@ -196,6 +196,8 @@ fn examples() -> Vec<Value> {
         key("thread.pull-request.unlink", json!({})),
         on("thread.issue.link", json!({ "tracker": "github", "host": "github.com", "scope": "a/b", "key": "12", "projectId": "p1",
             "url": "https://github.com/a/b/issues/12", "displayKey": "#12", "title": "Crash on start", "source": "agent" })),
+        on("thread.issue.link", json!({ "tracker": "github", "host": "github.com", "scope": "a/b", "key": "13", "projectId": "p1",
+            "url": "https://github.com/a/b/issues/13", "displayKey": "#13", "title": "Crash on exit", "source": "manual", "role": "focus" })),
         on("thread.issue.unlink", json!({ "tracker": "linear", "host": "linear.app", "scope": "ENG", "key": "ENG-4" })),
         key("thread.pull-request-link.sync", json!({ "snapshot": snapshot, "stack": stack })),
         key("thread.pull-request.watch", json!({ "watching": true,
@@ -300,6 +302,14 @@ fn launch_examples() -> Vec<Value> {
         json!({ "commandId": "c1", "projectId": "p1", "title": "New thread", "modelSelection": { "instanceId": "claudeAgent", "model": "claude-haiku-5-5" },
             "runtimeMode": "auto", "interactionMode": "default", "workspaceStrategy": { "type": "existing_worktree", "worktreePath": "/work/tree" },
             "initialMessage": { "text": "hello", "attachments": [] } }),
+        // Started on an issue: the reference, and whether to take the issue.
+        json!({ "commandId": "c1", "projectId": "p1", "title": "", "modelSelection": { "instanceId": "claudeAgent", "model": "claude-haiku-5-5" },
+            "runtimeMode": "auto", "interactionMode": "default", "workspaceStrategy": { "type": "root" },
+            "initialMessage": { "text": "", "attachments": [] },
+            "issue": { "issue": { "projectId": "p1", "tracker": "github", "host": "github.com", "scope": "a/b", "key": "12" }, "assignToMe": true } }),
+        json!({ "commandId": "c1", "projectId": "p1", "title": "", "modelSelection": { "instanceId": "claudeAgent", "model": "claude-haiku-5-5" },
+            "runtimeMode": "auto", "interactionMode": "default", "workspaceStrategy": { "type": "root" },
+            "issue": { "issue": { "projectId": "p1", "tracker": "linear", "scope": "ENG", "key": "ENG-4" } } }),
     ]
 }
 

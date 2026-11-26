@@ -3,10 +3,10 @@
 
 use super::{Effect, LaunchFailure, LaunchRefusal, Orchestrator, now};
 use crate::orchestration::events::enc;
-use domovoi_model::typed::command::MessageDispatch;
+use domovoi_model::typed::command::{InitialMessage, MessageDispatch};
 use domovoi_model::typed::{
-    Actor, AppThread, CreationSource, EventBody, ThreadChange, ThreadId, ThreadLaunchInput, ThreadLaunchResult, ThreadLineage,
-    WorkspaceStrategy,
+    Actor, AppThread, CreationSource, EventBody, ISSUE_DEFAULT_PROMPT, MessageIssue, ThreadChange, ThreadId, ThreadIssueLink, ThreadIssueLinkSource,
+    ThreadIssueRole, ThreadLaunchInput, ThreadLaunchResult, ThreadLineage, WorkspaceStrategy,
 };
 
 /// What a thread that was launched is answered with.
@@ -15,11 +15,25 @@ pub type LaunchResult = ThreadLaunchResult;
 impl Orchestrator {
     /// `orchestration.launchThread`: create the thread, then dispatch its initial message.
     pub async fn launch_thread(&self, input: ThreadLaunchInput) -> Result<LaunchResult, LaunchFailure> {
-        let (command_id, project_id) = (input.command_id.clone(), input.project_id.clone());
-        self.launch(input).await.map_err(|refusal| LaunchFailure { command_id: Some(command_id), project_id: Some(project_id), refusal })
+        self.launch_thread_on_issue(input, None).await
     }
 
-    async fn launch(&self, input: ThreadLaunchInput) -> Result<LaunchResult, LaunchRefusal> {
+    /// A launch with the issue its thread is started on already read
+    /// (`rpc::issues::snapshot`): reading a tracker is not the orchestrator's
+    /// to do. A launch that names an issue and comes without one is refused,
+    /// so no thread starts on an issue its agent was not shown.
+    pub async fn launch_thread_on_issue(&self, input: ThreadLaunchInput, issue: Option<MessageIssue>) -> Result<LaunchResult, LaunchFailure> {
+        let (command_id, project_id) = (input.command_id.clone(), input.project_id.clone());
+        self.launch(input, issue).await.map_err(|refusal| LaunchFailure { command_id: Some(command_id), project_id: Some(project_id), refusal })
+    }
+
+    /// What a launch was answered with, if it was carried out already: a
+    /// launch sent again is answered from here, before anything is read for it.
+    pub fn launch_answered(&self, command_id: &str) -> Result<Option<LaunchResult>, LaunchRefusal> {
+        Ok(self.store.command_receipt::<LaunchResult>(command_id)?)
+    }
+
+    async fn launch(&self, input: ThreadLaunchInput, issue: Option<MessageIssue>) -> Result<LaunchResult, LaunchRefusal> {
         let command_id = input.command_id.as_str();
         // Keyed by the thread, or by the command when the id is generated
         // here: a launch sent twice still makes one thread. Provisioning a
@@ -35,7 +49,18 @@ impl Orchestrator {
         }
         let project = self.store.get_project(input.project_id.as_str())?.ok_or(LaunchRefusal::UnknownProject)?;
         let at = now();
-        let title = if input.title.trim().is_empty() { "New thread" } else { input.title.as_str() };
+        let issue = match (&input.issue, issue) {
+            (Some(named), Some(read)) => Some((named.issue.project_id.clone(), read)),
+            (Some(_), None) => return Err(LaunchRefusal::Issue("It was not read before the launch.".into())),
+            (None, _) => None,
+        };
+        // A thread started on an issue is called what the issue is.
+        let issue_title = issue.as_ref().map(|(_, read)| format!("{} {}", read.card.display_key, read.card.title));
+        let title = match &issue_title {
+            Some(title) => title.as_str(),
+            None if input.title.trim().is_empty() => "New thread",
+            None => input.title.as_str(),
+        };
         let (worktree_path, branch): (Option<String>, Option<String>) = match &input.workspace_strategy {
             WorkspaceStrategy::ExistingWorktree { worktree_path, branch } => {
                 if !std::path::Path::new(worktree_path).is_dir() {
@@ -85,7 +110,18 @@ impl Orchestrator {
             worktree_path,
             linked_pull_request: None,
             pull_requests: Some(vec![]),
-            issues: None,
+            issues: issue.as_ref().map(|(project_id, read)| {
+                vec![ThreadIssueLink {
+                    key: read.card.key.clone(),
+                    project_id: project_id.clone(),
+                    url: read.card.url.clone(),
+                    source: ThreadIssueLinkSource::Manual,
+                    linked_at: at.clone(),
+                    display_key: read.card.display_key.clone(),
+                    title: read.card.title.clone(),
+                    role: Some(ThreadIssueRole::Focus),
+                }]
+            }),
             branch_pull_request: None,
             active_provider_thread_id: None,
             history_origin: None,
@@ -119,25 +155,31 @@ impl Orchestrator {
             deleted_at: None,
         };
         // Created, first message, receipt: all or nothing, as in `dispatch`.
-        self.store.db().clone().batch(|| self.launch_records(&input, thread))
+        let issue = issue.map(|(_, read)| read);
+        self.store.db().clone().batch(|| self.launch_records(&input, thread, issue))
     }
 
     /// The writes of a launch, after the workspace is ready (inside a batch).
-    fn launch_records(&self, input: &ThreadLaunchInput, thread: AppThread) -> Result<LaunchResult, LaunchRefusal> {
+    fn launch_records(&self, input: &ThreadLaunchInput, thread: AppThread, issue: Option<MessageIssue>) -> Result<LaunchResult, LaunchRefusal> {
         let (command_id, thread_id) = (&input.command_id, thread.id.clone());
         let created_by = thread.created_by.clone();
         let creation_source = thread.creation_source.clone();
         let origin = Self::origin(command_id, Some(&thread.provider_instance_id));
         self.store.append_event(thread_id.as_str(), EventBody::Thread { change: ThreadChange::Created, thread: Box::new(thread) }, &origin)?;
         let mut sequence = None;
-        if let Some(message) = &input.initial_message {
+        // A thread started on an issue always has a first message: the issue is what it says.
+        let unworded = issue.as_ref().map(|_| InitialMessage { message_id: None, text: String::new(), context: None, attachments: vec![] });
+        if let Some(message) = input.initial_message.as_ref().or(unworded.as_ref()) {
             let message_id = match &message.message_id {
                 Some(id) => id.clone(),
                 None => format!("message:thread:{}:ordinal:1:{}", enc(thread_id.as_str()), crate::util::new_uuid()).into(),
             };
-            let mut first = MessageDispatch::new(format!("{command_id}:initial-message"), thread_id.clone(), message_id, message.text.as_str(), created_by, creation_source);
+            let text = if issue.is_some() && message.text.trim().is_empty() { ISSUE_DEFAULT_PROMPT } else { message.text.as_str() };
+            let mut first = MessageDispatch::new(format!("{command_id}:initial-message"), thread_id.clone(), message_id, text, created_by, creation_source);
             first.attachments = message.attachments.clone();
-            first.title_seed = (input.generate_title == Some(true)).then(|| input.title.clone());
+            // The issue's title is the thread's: nothing is generated over it.
+            first.title_seed = (input.generate_title == Some(true) && issue.is_none()).then(|| input.title.clone());
+            first.issue = issue;
             first.model_selection = Some(input.model_selection.clone());
             sequence = Some(self.message_dispatch(&first).map_err(LaunchRefusal::InitialMessage)?.sequence);
         }

@@ -321,6 +321,11 @@ impl Host {
         let message = store.record::<ConversationMessage>(thread_id, run.user_message_id.as_str()).map_err(|e| e.to_string())?;
         let (said, attachments) = message.as_ref().map_or(("", &[][..]), |message| (message.text.as_str(), &message.attachments[..]));
         let mut text = with_attached_files(said, &file_attachments(&self.userdata, attachments));
+        // The issue a thread was started on stands before the user's words,
+        // in the frame the server wrote for it (`rpc::issues::snapshot`).
+        if let Some(issue) = message.as_ref().and_then(|message| message.issue.as_ref()) {
+            text = format!("{}\n\n{text}", issue.agent_text);
+        }
         // A portable handoff (fork, merge-back, provider switch) goes first.
         if let Some(id) = &run.context_handoff_id
             && let Some(handoff) = store.record::<ContextHandoff>(thread_id, id.as_str()).map_err(|e| e.to_string())?
@@ -855,6 +860,32 @@ mod tests {
         turn.turn_started("pending:1");
         let host = super::Host::new(std::sync::Arc::new(orchestrator), dir.join("userdata"), dir.join("logs"));
         (host, store, run)
+    }
+
+    #[tokio::test]
+    async fn the_issue_a_thread_was_started_on_stands_before_the_users_words() {
+        use domovoi_model::typed::{ConversationMessage, IssueState, IssueStateCategory, MessageIssue, MessageIssueCard, Run, ThreadIssueKey};
+        let (host, store, run) = host_with_a_running_turn().await;
+        let run = store.record::<Run>("t1", &run).expect("read").expect("the run");
+        assert_eq!(host.input_for("t1", &run).expect("input").text, "hello");
+        let mut message = store.record::<ConversationMessage>("t1", run.user_message_id.as_str()).expect("read").expect("the message");
+        message.issue = Some(MessageIssue {
+            card: MessageIssueCard {
+                key: ThreadIssueKey { tracker: "github".into(), host: "github.com".into(), scope: "o/r".into(), key: "12".into() },
+                display_key: "#12".into(),
+                title: "Login crashes".into(),
+                url: "https://github.com/o/r/issues/12".into(),
+                state: IssueState { category: IssueStateCategory::Open, name: "open".into(), close_reason: None },
+                comments_included: 0,
+                comment_count: 0,
+                truncated: false,
+                fetched_at: "t".into(),
+            },
+            agent_text: "<issue-data-f00>#12 Login crashes</issue-data-f00>".into(),
+        });
+        let origin = crate::orchestration::events::Origin { command_id: Some("c2".into()), ..Default::default() };
+        store.append_event("t1", domovoi_model::typed::EventBody::MessageUpdated(Box::new(message)), &origin).expect("write");
+        assert_eq!(host.input_for("t1", &run).expect("input").text, "<issue-data-f00>#12 Login crashes</issue-data-f00>\n\nhello");
     }
 
     fn run_status(store: &crate::store::Store, run: &str) -> String {

@@ -94,6 +94,7 @@ pub fn launch(command_id: &str, thread_id: &str, project_id: &str, instance: &st
         interaction_mode: InteractionMode::Default,
         workspace_strategy: WorkspaceStrategy::Root { branch: None },
         initial_message: Some(InitialMessage { message_id: Some("m1".into()), text: text.into(), context: None, attachments: vec![] }),
+        issue: None,
         created_by: None,
         delegated_from: None,
     }

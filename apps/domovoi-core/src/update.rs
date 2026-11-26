@@ -1203,6 +1203,7 @@ pub fn finish_send(model: &mut Model, thread_id: &str, message_id: &str, new_thr
         interaction_mode: composer_interaction_mode(model).as_str().into(),
         workspace_strategy,
         initial_message: Some(InitialMessage { message_id: Some(message_id.into()), text: text.clone(), context: None, attachments }),
+        issue: None,
         created_by: None,
         delegated_from: None,
     };

@@ -87,6 +87,7 @@ fn message(thread: &str, id: &str, text: &str, streaming: bool) -> EventBody {
         role: MessageRole::Assistant,
         text: text.to_owned(),
         context: None,
+        issue: None,
         attachments: vec![],
         streaming,
         created_at: at(),

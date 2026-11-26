@@ -244,6 +244,7 @@ impl Orchestrator {
             linked_at: now(),
             display_key: c.display_key.clone(),
             title: c.title.clone(),
+            role: c.role.clone(),
         });
         thread.issues = Some(links);
         self.write_thread(&c.command_id, ThreadChange::IssueSynced, thread, true)

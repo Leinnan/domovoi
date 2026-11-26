@@ -33,6 +33,9 @@ pub struct ConversationMessage {
     pub text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context: Option<MessageContext>,
+    /// The issue the message was sent with, as the server read it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub issue: Option<super::issue::MessageIssue>,
     pub attachments: Vec<ChatAttachment>,
     pub streaming: bool,
     pub created_at: Timestamp,

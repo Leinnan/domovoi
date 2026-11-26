@@ -496,6 +496,9 @@ turn_item! {
         pub text_omitted: Option<bool>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub context: Option<MessageContext>,
+        /// The issue the message was sent with (what a client shows of it).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub issue: Option<super::issue::MessageIssueCard>,
         pub attachments: Vec<ChatAttachment>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub model_switch: Option<ModelSwitch>,

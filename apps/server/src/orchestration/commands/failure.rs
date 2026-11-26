@@ -168,6 +168,10 @@ pub enum LaunchRefusal {
     /// The thread's first message was refused.
     #[error(transparent)]
     InitialMessage(Refusal),
+    /// The issue the thread was to be started on could not be read; the text
+    /// is the tracker's.
+    #[error("The issue could not be read, so the thread was not started. {0}")]
+    Issue(String),
     #[error("thread vanished")]
     ThreadVanished,
 }
