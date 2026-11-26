@@ -97,6 +97,7 @@ account or port forwarding.
 | `apps/server-launcher` | `domovoi-server-launcher.exe`: starts the Windows server with no console window, and restarts it after a failure |
 | `packaging/windows` | The Windows installers (WiX MSIs) |
 | `crates/effect-rpc` | Server side of Effect's RPC wire protocol |
+| `crates/domovoi-api` | Every call the server answers, defined once: its name, kind, permission and who calls it |
 | `crates/domovoi-contracts` | The server's own wire types (sign-in, environment) and its default settings |
 | `crates/domovoi-model` | Typed records and the thread read model, shared by the server and the client core |
 | `crates/domovoi-remote` | HTTP/1.1 over iroh streams, plus a loopback bridge for clients |

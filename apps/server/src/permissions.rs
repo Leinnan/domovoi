@@ -1,7 +1,7 @@
-//! Per-RPC authorization: every method requires one permission, checked
-//! against the session before any handler runs. The table is
-//! `domovoi-contracts/defaults/rpc-permissions.json`; a few methods need
-//! another permission for some payloads.
+//! Per-RPC authorization: every method requires one permission
+//! (`domovoi_api::METHODS`), checked against the session before any handler
+//! runs. A few methods need another permission for some payloads: those
+//! rules are here.
 //!
 //! A request is checked as it arrived, before any handler decodes it, so the
 //! payload rules read the few fields they need from its JSON.
@@ -31,19 +31,10 @@ fn settings_patch_permissions(patch: &Value) -> Vec<&'static str> {
     out
 }
 
-/// Every permission `method` requires for `payload` (t3code `requiredScopesForRpcCall`).
+/// Every permission `method` requires for `payload`.
 pub fn required_permissions(method: &str, payload: &Value) -> Option<Vec<&'static str>> {
     match method {
         "server.retryResourceTelemetry" => return Some(vec!["environment:maintain", "diagnostics:read"]),
-        // Domovoi's own method, beside t3code's table: a scheduled task's runs.
-        "scheduledTasks.listRuns" => return Some(vec!["orchestration:read"]),
-        "domovoi.terminals.subscribe" => return Some(vec!["terminal:read"]),
-        "domovoi.terminals.reopen" | "domovoi.terminals.rename" => return Some(vec!["terminal:operate"]),
-        "artifacts.list" | "artifacts.read" => return Some(vec!["orchestration:read"]),
-        // Domovoi's own: git-lfs fetches with the repository's remote and
-        // credentials, and writes its object cache.
-        "projects.fetchLfsObject" => return Some(vec!["source-control:write"]),
-        "orchestration.forgetThreadPermissions" => return Some(vec!["orchestration:operate"]),
         "assets.createUrl" => {
             let r = &payload["resource"];
             let fs = matches!(r["_tag"].as_str(), Some("workspace-file" | "media-file" | "draft-workspace-file" | "artifact-bundle"))
@@ -77,13 +68,7 @@ pub fn required_permissions(method: &str, payload: &Value) -> Option<Vec<&'stati
         }
         _ => {}
     }
-    let p = domovoi_contracts::defaults::rpc_permissions().get(method)?;
-    Some(vec![intern(p)])
-}
-
-/// Permission names as `'static` (the table is loaded once and never freed).
-fn intern(p: &str) -> &'static str {
-    domovoi_contracts::defaults::rpc_permissions().values().find(|v| v.as_str() == p).map(String::as_str).unwrap_or("orchestration:operate")
+    Some(vec![domovoi_api::method(method)?.permission])
 }
 
 /// Older clients only know the original scope names (`authScopeRequiredResponse`).
@@ -178,13 +163,5 @@ mod tests {
         assert!(check("assets.createUrl", &json!({ "resource": { "_tag": "provider-icon" } }), &read).is_ok());
         let e = check("assets.createUrl", &json!({ "resource": { "_tag": "workspace-file" } }), &read).unwrap_err();
         assert_eq!(missing(e), "filesystem:read");
-    }
-
-    #[test]
-    fn the_table_names_only_methods_the_server_has() {
-        let router = crate::rpc::router();
-        let mut gone: Vec<&String> = domovoi_contracts::defaults::rpc_permissions().keys().filter(|method| !router.has(method)).collect();
-        gone.sort();
-        assert!(gone.is_empty(), "permissions for methods that are not registered: {gone:?}");
     }
 }

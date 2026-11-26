@@ -74,132 +74,9 @@ pub fn then_pending<T: Send + 'static, E: Send + 'static>(items: Vec<T>) -> BoxS
 
 pub use shell::snapshot_off_runtime as shell_snapshot;
 
-/// Methods that are registered though no client of this repository calls
-/// them: features the server implements and no app screen uses yet. Each
-/// stays until it gets a screen or is taken out; a method that is neither
-/// called by the client core nor listed here fails
-/// `every_registered_method_has_a_caller_or_is_kept_on_purpose`.
-#[cfg(test)]
-const KEPT_WITHOUT_A_CALLER: &[(&str, &[&str])] = &[
-    (
-        "issues from GitHub, GitLab and Linear (the agent tools read them through the same service)",
-        &[
-            "issueTrackers.bindProject", "issueTrackers.connect", "issueTrackers.list", "issues.candidates",
-            "issues.comment", "issues.comments", "issues.create", "issues.detail",
-            "issues.linkedThreads", "issues.list", "issues.react", "issues.setState",
-            "issues.templates", "issues.update",
-        ],
-    ),
-    (
-        "the rest of a pull request's page: detail, review threads, labels, reviewers, stacks, review guides",
-        &[
-            "pullRequests.activity", "pullRequests.changeBreakdown", "pullRequests.detail", "pullRequests.diffFileContents",
-            "pullRequests.filesViewed", "pullRequests.filterOptions", "pullRequests.generateReviewGuide", "pullRequests.invalidate",
-            "pullRequests.labelCandidates", "pullRequests.linkedThreads", "pullRequests.listStats", "pullRequests.preview",
-            "pullRequests.replyToThread", "pullRequests.reportState", "pullRequests.requestReviewers", "pullRequests.reviewGuide",
-            "pullRequests.reviewerCandidates", "pullRequests.routing", "pullRequests.routingIdentity", "pullRequests.setFilesViewed",
-            "pullRequests.setLabels", "pullRequests.setReaction", "pullRequests.setThreadResolution", "pullRequests.stack",
-            "pullRequests.subscribeLinkedThreadRefreshes", "pullRequests.subscribeRefreshes", "pullRequests.threadComments", "pullRequests.update",
-            "pullRequests.updateComment",
-        ],
-    ),
-    (
-        "repositories: sign-in to a host, lookup, clone and publish",
-        &[
-            "projectClone.cancel", "projectClone.retry", "projectClone.start", "sourceControl.appAccess",
-            "sourceControl.cloneRepository", "sourceControl.lookupRepository", "sourceControl.publishRepository", "sourceControl.signInCancel",
-            "sourceControl.signInStart", "sourceControl.signInWait", "sourceControl.star", "sourceControl.starred",
-            "subscribeProjectClones",
-        ],
-    ),
-    (
-        "the preview browser's tabs and the dev servers found on this machine (the agent tools drive the same browser)",
-        &[
-            "preview.adjust", "preview.clearProfile", "preview.close", "preview.list",
-            "preview.open", "preview.reportProfiles", "preview.reportStatus", "preview.resize",
-            "preview.stopLocalServer", "subscribeDiscoveredLocalServers", "subscribePreviewEvents",
-        ],
-    ),
-    (
-        "resource telemetry over time, and signalling a process",
-        &[
-            "server.getProcessResourceHistory", "server.getResourceTelemetryHistory", "server.retryResourceTelemetry", "server.signalProcess",
-            "subscribeResourceTelemetry",
-        ],
-    ),
-    (
-        "the trace file's diagnostics",
-        &[
-            "server.checkOtlpEndpoint", "server.getTraceDiagnostics",
-        ],
-    ),
-    (
-        "linked servers (the agent tools list them)",
-        &[
-            "peerLinks.link", "peerLinks.list", "peerLinks.unlink",
-        ],
-    ),
-    (
-        "the ACP registry: search, install, uninstall, and an agent's sign-in by URL",
-        &[
-            "server.acceptAcpRegistryUrlAuth", "server.prepareAcpRegistryAgent", "server.searchAcpRegistry", "server.uninstallAcpRegistryManagedBinary",
-        ],
-    ),
-    (
-        "workflows, native child work and a command's live output",
-        &[
-            "orchestration.getNativeChildWork", "orchestration.getWorkflowScript", "orchestration.stopWorkflow", "orchestration.subscribeCommandOutput",
-        ],
-    ),
-    (
-        "reading parts of a thread without subscribing to it",
-        &[
-            "orchestration.getThreadFamily", "orchestration.getThreadLinkMetadata", "orchestration.getThreadProjection", "orchestration.getThreadTitles",
-            "orchestration.getTurnItem", "orchestration.getWorktreeThreadIds",
-        ],
-    ),
-    (
-        "a thread's artifacts",
-        &[
-            "artifacts.list", "artifacts.read",
-        ],
-    ),
-    (
-        "a worktree's setup script",
-        &[
-            "subscribeWorktreeSetup", "worktreeSetup.cancel",
-        ],
-    ),
-    (
-        "files: ignored files, a path's metadata, and attachments uploaded over HTTP (the agent tools hand out the same upload URL)",
-        &[
-            "attachments.createUploadUrl", "attachments.delete", "filesystem.getMetadata", "projects.listIgnoredFiles",
-        ],
-    ),
-    (
-        "version control: a new repository, the branch alone, a branch's commits, a diff's files, a pull request by its URL",
-        &[
-            "git.resolvePullRequest", "review.getBranchCommits", "review.getDiffFileContents", "server.discoverSourceControl",
-            "subscribeVcsBranch", "vcs.init",
-        ],
-    ),
-    (
-        "administration: the configuration read once (the API cases read it back after a change), a keybinding added, text generator models, issue triage, usage rates, a provider CLI's update, a secret source checked",
-        &[
-            "server.checkSecretSource", "server.getConfig", "server.listTextGeneratorModels", "server.prepareTriage",
-            "server.refreshUsageRates", "server.updateProvider", "server.upsertKeybinding",
-        ],
-    ),
-    (
-        "a terminal opened by itself, one webhook delivery, signing a provider instance out",
-        &[
-            "provider.auth.logout", "scheduledTasks.getWebhookDelivery", "terminal.open",
-        ],
-    ),
-];
-
 #[cfg(test)]
 mod tests {
+    use domovoi_api::{Caller, Kind, METHODS};
     use std::collections::BTreeSet;
 
     /// The methods the client core calls, read from where it builds its
@@ -221,22 +98,26 @@ mod tests {
         methods
     }
 
+    /// The router answers exactly the methods `domovoi-api` defines, each the way it says.
     #[test]
-    fn every_method_the_client_core_calls_is_registered() {
+    fn the_registered_methods_are_the_defined_ones() {
         let router = super::router();
-        let missing: Vec<String> = called_by_the_client_core().into_iter().filter(|method| !router.has(method)).collect();
-        assert!(missing.is_empty(), "the client core calls methods the server does not have: {missing:?}");
+        let defined: BTreeSet<&str> = METHODS.iter().map(|method| method.name).collect();
+        let registered: BTreeSet<&str> = router.tags().collect();
+        assert_eq!(registered.difference(&defined).collect::<Vec<_>>(), Vec::<&&str>::new(), "registered, not defined");
+        assert_eq!(defined.difference(&registered).collect::<Vec<_>>(), Vec::<&&str>::new(), "defined, not registered");
+        let other_kind: Vec<&str> = METHODS.iter().filter(|method| router.is_stream(method.name) != (method.kind == Kind::Stream)).map(|method| method.name).collect();
+        assert!(other_kind.is_empty(), "defined as one kind of call and registered as the other: {other_kind:?}");
     }
 
+    /// The methods said to be the client core's are the ones it builds
+    /// requests for: one it calls is there, and one it stopped calling says
+    /// which feature keeps it, or goes.
     #[test]
-    fn every_registered_method_has_a_caller_or_is_kept_on_purpose() {
-        let router = super::router();
+    fn the_methods_of_the_client_core_are_the_ones_it_calls() {
         let called = called_by_the_client_core();
-        let kept: BTreeSet<&str> = super::KEPT_WITHOUT_A_CALLER.iter().flat_map(|(_, methods)| methods.iter().copied()).collect();
-        let registered: BTreeSet<&str> = router.tags().collect();
-        let unaccounted: Vec<&str> = registered.iter().copied().filter(|method| !called.contains(*method) && !kept.contains(method)).collect();
-        assert!(unaccounted.is_empty(), "registered, not called by the client core and not kept on purpose ({}): {unaccounted:?}", unaccounted.len());
-        let stale: Vec<&str> = kept.iter().copied().filter(|method| !registered.contains(method) || called.contains(*method)).collect();
-        assert!(stale.is_empty(), "kept on purpose, but gone or called by now: {stale:?}");
+        let said: BTreeSet<String> = METHODS.iter().filter(|method| method.caller == Caller::Client).map(|method| method.name.to_owned()).collect();
+        assert_eq!(called.difference(&said).collect::<Vec<_>>(), Vec::<&String>::new(), "called by the client core, not defined as its");
+        assert_eq!(said.difference(&called).collect::<Vec<_>>(), Vec::<&String>::new(), "defined as the client core's, not called by it");
     }
 }

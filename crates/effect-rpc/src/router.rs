@@ -53,6 +53,8 @@ pub struct Router<C> {
     guard: Option<GuardFn<C>>,
     /// Tags whose calls get no `ws.rpc.<tag>` span.
     untraced: std::collections::HashSet<String>,
+    /// Tags registered with [`Router::stream`].
+    streams: std::collections::HashSet<String>,
 }
 
 impl<C> Default for Router<C> {
@@ -61,6 +63,7 @@ impl<C> Default for Router<C> {
             handlers: HashMap::new(),
             guard: None,
             untraced: Default::default(),
+            streams: Default::default(),
         }
     }
 }
@@ -134,6 +137,7 @@ impl<C: Send + Sync + 'static> Router<C> {
             });
             Ok(Reply::Stream(s.boxed()))
         });
+        self.streams.insert(tag.to_owned());
         self.insert(tag, handler)
     }
 
@@ -164,6 +168,11 @@ impl<C: Send + Sync + 'static> Router<C> {
     /// Whether a call of `tag` runs in a `ws.rpc.<tag>` span.
     pub fn traced(&self, tag: &str) -> bool {
         !self.untraced.contains(tag)
+    }
+
+    /// Whether `tag` answers with a stream of items (it was registered with [`Router::stream`]).
+    pub fn is_stream(&self, tag: &str) -> bool {
+        self.streams.contains(tag)
     }
 
     pub fn has(&self, tag: &str) -> bool {

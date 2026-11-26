@@ -39,9 +39,10 @@ test -n "$requirement" && codesign --verify --deep --strict -R "=$requirement" .
   failure with a named `_tag`). The server runs with a system-only `PATH` and
   an empty agent home, so no case reaches a provider, `gh`, an editor or the
   real `~/.claude`. `DOMOVOI_CALLS=<area>` runs one file.
-- `rpc::tests` (server unit tests): every method the client core calls is
-  registered, and every registered method is either called by the client core
-  or listed, with its feature, in `KEPT_WITHOUT_A_CALLER` (`apps/server/src/rpc/mod.rs`).
+- `rpc::tests` (server unit tests): the router answers exactly the methods
+  `crates/domovoi-api` defines, each as the kind of call it says, and the
+  methods it says the client core calls are the ones the core builds requests
+  for. A method no client calls says which feature keeps it (`domovoi_api::kept`).
 - `just rpc-groups` (ignored test `every_rpc_group_answers_as_recorded`): the
   files of `apps/server/tests/cases/groups`, each on a server of its own with
   stand-ins for `gh`, `ssh` and the provider CLIs: the methods called for each

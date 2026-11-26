@@ -1,0 +1,8 @@
+[package]
+name = "domovoi-api"
+description = "Every call domovoi-server answers, defined once: its name, kind, permission and caller"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]

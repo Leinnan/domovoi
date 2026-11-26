@@ -2258,6 +2258,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "domovoi-api"
+version = "0.1.0"
+
+[[package]]
 name = "domovoi-contracts"
 version = "0.1.0"
 dependencies = [
@@ -2372,6 +2376,7 @@ dependencies = [
  "clap",
  "dark-light",
  "dirs 7.0.0",
+ "domovoi-api",
  "domovoi-contracts",
  "domovoi-local",
  "domovoi-model",
