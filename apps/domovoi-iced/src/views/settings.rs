@@ -5,7 +5,7 @@
 //! and Companion mascot customizer.
 
 use domovoi_core::Event;
-use domovoi_core::view::{ProjectSettingsView, ScheduledTaskView, ScheduledThreadChoiceView, WebhookDeliveryView};
+use domovoi_core::view::{EnvironmentView, ProjectSettingsView, ScheduledTaskView, ScheduledThreadChoiceView, WebhookDeliveryView};
 use iced::widget::{Column, Space, button, column, container, qr_code, row, slider, text};
 use iced::{Alignment, Background, Border, Color, Element, Length, Theme};
 
@@ -23,28 +23,46 @@ fn core(e: Event) -> Message {
     Message::Core(Box::new(e))
 }
 
-const SECTIONS: [(SettingsSection, Icon, &str, bool); 10] = [
-    (SettingsSection::Appearance, Icon::Sun, "Appearance", false),
-    (SettingsSection::General, Icon::Settings, "General", true),
-    (SettingsSection::Providers, Icon::Cpu, "Providers", true),
-    (SettingsSection::Keybindings, Icon::Keyboard, "Keybindings", true),
-    (SettingsSection::Scheduled, Icon::CalendarClock, "Scheduled", true),
-    (SettingsSection::Archived, Icon::Archive, "Archived", true),
-    (SettingsSection::Projects, Icon::Folder, "Projects", true),
-    (SettingsSection::Maintenance, Icon::Wrench, "Maintenance", true),
-    (SettingsSection::Access, Icon::Key, "Access & Remote", true),
-    (SettingsSection::Companion, Icon::Smile, "Companion", false),
+const CLIENT_SECTIONS: [(SettingsSection, Icon, &str); 2] = [
+    (SettingsSection::Appearance, Icon::Sun, "Appearance"),
+    (SettingsSection::Servers, Icon::Server, "Servers"),
 ];
 
-pub fn view(app: &App, active: SettingsSection) -> Element<'_, Message> {
-    let connected = matches!(app.vm.connection.state.as_str(), "connected" | "reconnecting");
+const SERVER_SECTIONS: [(SettingsSection, Icon, &str, bool); 9] = [
+    (SettingsSection::General, Icon::Settings, "General", false),
+    (SettingsSection::Providers, Icon::Cpu, "Providers", false),
+    (SettingsSection::Projects, Icon::Folder, "Projects", false),
+    (SettingsSection::Scheduled, Icon::CalendarClock, "Scheduled Tasks", false),
+    (SettingsSection::Keybindings, Icon::Keyboard, "Keybindings", false),
+    (SettingsSection::Access, Icon::Key, "Access & Remote", false),
+    (SettingsSection::Archived, Icon::Archive, "Archived Threads", false),
+    (SettingsSection::Maintenance, Icon::Wrench, "Maintenance", false),
+    (SettingsSection::Companion, Icon::Smile, "Companion", true),
+];
 
-    let mut nav = Column::new().spacing(XS).padding(M).width(Length::Fixed(192.0));
-    for (sec, ic, label, needs_conn) in SECTIONS {
-        if needs_conn && !connected {
-            continue;
-        }
-        let selected = active == sec;
+fn active_server(app: &App) -> Option<&EnvironmentView> {
+    let conn = &app.vm.connection;
+    conn.environments
+        .iter()
+        .find(|e| e.id == conn.active_environment_id)
+        .or_else(|| conn.environments.iter().find(|e| e.active))
+        .or_else(|| conn.environments.first())
+}
+
+pub fn view(app: &App, active: SettingsSection) -> Element<'_, Message> {
+    let conn = &app.vm.connection;
+    let connected = matches!(conn.state.as_str(), "connected" | "reconnecting");
+    let server = active_server(app);
+    let effective = if active.is_server_scoped() && server.is_none() {
+        SettingsSection::Servers
+    } else {
+        active
+    };
+
+    let mut nav = Column::new().spacing(XS).padding(M).width(Length::Fixed(224.0));
+    nav = nav.push(w::section("THIS DEVICE"));
+    for (sec, ic, label) in CLIENT_SECTIONS {
+        let selected = effective == sec;
         nav = nav.push(
             w::list_row(
                 row![
@@ -60,18 +78,70 @@ pub fn view(app: &App, active: SettingsSection) -> Element<'_, Message> {
         );
     }
 
-    let content: Element<'_, Message> = match active {
-        SettingsSection::Appearance => appearance_tab(app),
-        SettingsSection::General => general_tab(app),
-        SettingsSection::Providers => providers_tab(app),
-        SettingsSection::Keybindings => keybindings_tab(app),
-        SettingsSection::Scheduled => scheduled_tab(app),
-        SettingsSection::Archived => archived_tab(app),
-        SettingsSection::Projects => projects_tab(app),
-        SettingsSection::Maintenance => maintenance_tab(app),
-        SettingsSection::Access => access_tab(app),
-        SettingsSection::Companion => companion_tab(app),
+    nav = nav.push(Space::new().height(XS)).push(w::divider()).push(Space::new().height(XS));
+    nav = nav.push(w::section("SERVER"));
+
+    if let Some(srv) = server {
+        nav = nav.push(server_switcher(app, srv));
+        if app.settings_server_picker_open {
+            nav = nav.push(server_switcher_list(app, &srv.id));
+        }
+        nav = nav.push(Space::new().height(XXS));
+        for (sec, ic, label, is_local) in SERVER_SECTIONS {
+            let selected = effective == sec;
+            let mut r = row![
+                w::themed_icon(ic, ICON_SMALL, move |c| if selected { c.accent } else { c.muted }),
+                text(label).size(TEXT_UI).font(if selected { fonts::SEMIBOLD } else { fonts::INTER }).width(Length::Fill),
+            ]
+            .spacing(S)
+            .align_y(Alignment::Center);
+            if is_local {
+                r = r.push(w::faint("Local", TEXT_CAPTION));
+            }
+            nav = nav.push(w::list_row(r, selected, false).on_press(Message::OpenSettings(sec)));
+        }
+    } else {
+        nav = nav.push(
+            container(
+                column![
+                    w::muted("No servers paired yet.", TEXT_SMALL),
+                    w::small_button("Add Server…", w::primary_style, Some(Message::ShowAddServer(true))),
+                ]
+                .spacing(S),
+            )
+            .padding(S)
+            .width(Length::Fill)
+            .style(w::inset_sunken),
+        );
+    }
+
+    let content: Element<'_, Message> = if effective.requires_connection() && !connected {
+        server_connection_placeholder(app, server, effective)
+    } else {
+        match effective {
+            SettingsSection::Appearance => appearance_tab(app),
+            SettingsSection::Servers => servers_tab(app),
+            SettingsSection::General => general_tab(app),
+            SettingsSection::Providers => providers_tab(app),
+            SettingsSection::Keybindings => keybindings_tab(app),
+            SettingsSection::Scheduled => scheduled_tab(app),
+            SettingsSection::Archived => archived_tab(app),
+            SettingsSection::Projects => projects_tab(app),
+            SettingsSection::Maintenance => maintenance_tab(app),
+            SettingsSection::Access => access_tab(app),
+            SettingsSection::Companion => companion_tab(app),
+        }
     };
+
+    let pane = column![
+        detail_header(app, effective, server),
+        w::divider(),
+        container(w::scroll(container(content).padding(CONTENT_GUTTER)).height(Length::Fill))
+            .width(Length::Fill)
+            .height(Length::Fill),
+    ]
+    .width(Length::Fill)
+    .height(Length::Fill);
 
     container(
         column![
@@ -79,46 +149,358 @@ pub fn view(app: &App, active: SettingsSection) -> Element<'_, Message> {
                 .padding([M, L]),
             w::divider(),
             row![
-                container(nav).height(Length::Fill).style(w::surface),
+                container(w::scroll(nav).height(Length::Fill)).height(Length::Fill).style(w::surface),
                 w::vdivider(),
-                container(w::scroll(container(content).padding(CONTENT_GUTTER)).height(Length::Fill))
-                    .width(Length::Fill)
-                    .height(Length::Fill)
-                    .style(w::page),
+                container(pane).width(Length::Fill).height(Length::Fill).style(w::page),
             ]
             .height(Length::Fill),
         ],
     )
-    .width(880)
-    .height(640)
+    .width(920)
+    .height(660)
     .style(w::popover_style)
     .into()
 }
 
-fn appearance_tab(app: &App) -> Element<'_, Message> {
-    column![
-        w::heading("Theme"),
-        w::segmented(
-            &[
-                (Appearance::System, Some(Icon::Monitor), "System"),
-                (Appearance::Light, Some(Icon::Sun), "Hearth Light"),
-                (Appearance::Dark, Some(Icon::Moon), "Hearth Dark"),
-            ],
-            app.prefs.appearance,
-            Message::Appearance,
-        ),
-        Space::new().height(M),
-        w::heading("Transcript text size"),
-        row![
-            slider(TEXT_MIN..=TEXT_MAX, app.prefs.text_size, Message::TextSize).step(1.0_f32).width(Length::Fixed(240.0)),
-            text(format!("{} px", app.prefs.text_size.round())).size(TEXT_UI).font(fonts::MONO),
+fn server_status_tone(state: &str) -> w::Tone {
+    match state {
+        "connected" => |c| c.success,
+        "connecting" | "reconnecting" | "pairing" => |c| c.warning,
+        _ => |c| c.muted,
+    }
+}
+
+fn server_status_short(app: &App) -> String {
+    let conn = &app.vm.connection;
+    match conn.state.as_str() {
+        "connected" => {
+            if conn.remote && !conn.path.is_empty() {
+                format!("{} · {} ms", conn.path, conn.rtt_ms)
+            } else {
+                "Connected".into()
+            }
+        }
+        "connecting" | "pairing" => "Connecting…".into(),
+        "reconnecting" => "Reconnecting…".into(),
+        _ => "Offline".into(),
+    }
+}
+
+fn server_switcher<'a>(app: &'a App, srv: &'a EnvironmentView) -> Element<'a, Message> {
+    let connected = app.vm.connection.state == "connected";
+    let mood = if connected { companion::Mood::Idle } else { companion::Mood::Offline };
+    let tone = server_status_tone(&app.vm.connection.state);
+    let chevron = if app.settings_server_picker_open { Icon::ChevronUp } else { Icon::ChevronDown };
+    let body = row![
+        companion::view(srv.companion.look.clone(), mood, 22.0, app.tick_phase, false),
+        column![
+            text(&srv.label).size(TEXT_SMALL).font(fonts::SEMIBOLD),
+            row![w::dot(tone, 6.0), w::faint(server_status_short(app), TEXT_CAPTION)]
+                .spacing(XS)
+                .align_y(Alignment::Center),
         ]
-        .spacing(M)
-        .align_y(Alignment::Center),
-        w::muted("Uses Domovoi's Hearth palette with bundled Inter and JetBrains Mono fonts.", TEXT_SMALL),
+        .spacing(1.0)
+        .width(Length::Fill),
+        w::themed_icon(chevron, ICON_XS, |c| c.muted),
     ]
     .spacing(S)
+    .align_y(Alignment::Center);
+
+    container(
+        button(body)
+            .width(Length::Fill)
+            .padding([TIGHT, S])
+            .style(w::ghost_style)
+            .on_press(Message::ToggleSettingsServerPicker),
+    )
+    .width(Length::Fill)
+    .style(w::inset_surface)
     .into()
+}
+
+fn server_switcher_list<'a>(app: &'a App, current_id: &str) -> Element<'a, Message> {
+    let mut list = Column::new().spacing(XXS);
+    for env in &app.vm.connection.environments {
+        let is_current = env.id == current_id;
+        list = list.push(
+            w::list_row(
+                row![
+                    companion::view(env.companion.look.clone(), companion::Mood::Idle, 18.0, 0.0, false),
+                    text(&env.label)
+                        .size(TEXT_SMALL)
+                        .font(if is_current { fonts::SEMIBOLD } else { fonts::INTER })
+                        .width(Length::Fill),
+                    if is_current {
+                        w::themed_icon(Icon::Check, ICON_XS, |c| c.accent)
+                    } else {
+                        Space::new().into()
+                    },
+                ]
+                .spacing(S)
+                .align_y(Alignment::Center),
+                is_current,
+                false,
+            )
+            .on_press(Message::SelectSettingsServer(env.id.clone())),
+        );
+    }
+    list = list.push(w::divider()).push(
+        w::list_row(
+            row![w::themed_icon(Icon::Plus, ICON_XS, |c| c.muted), text("Add Server…").size(TEXT_SMALL)]
+                .spacing(S)
+                .align_y(Alignment::Center),
+            false,
+            false,
+        )
+        .on_press(Message::ShowAddServer(true)),
+    );
+    container(list).padding(XS).width(Length::Fill).style(w::inset_sunken).into()
+}
+
+fn detail_header<'a>(app: &'a App, sec: SettingsSection, srv: Option<&'a EnvironmentView>) -> Element<'a, Message> {
+    let conn = &app.vm.connection;
+    let connected = conn.state == "connected";
+    let (badge_label, badge_tone): (&str, Option<w::Tone>) = if !sec.is_server_scoped() {
+        ("This device", None)
+    } else if sec == SettingsSection::Companion {
+        ("Saved on this device", None)
+    } else {
+        ("Server setting", Some(|c| c.accent))
+    };
+    let subtitle = if !sec.is_server_scoped() {
+        "Saved on this device only. Applies across all servers.".to_owned()
+    } else if let Some(s) = srv {
+        if sec == SettingsSection::Companion {
+            format!("Customizes how {} looks on this device only.", s.label)
+        } else {
+            format!("Applies on {} across all connected devices.", s.label)
+        }
+    } else {
+        "No server selected.".to_owned()
+    };
+
+    let leading: Element<'a, Message> = if sec.is_server_scoped() {
+        if let Some(s) = srv {
+            companion::view(
+                s.companion.look.clone(),
+                if connected { companion::Mood::Idle } else { companion::Mood::Offline },
+                26.0,
+                app.tick_phase,
+                false,
+            )
+        } else {
+            w::themed_icon(Icon::Server, ICON_LARGE, |c| c.muted)
+        }
+    } else {
+        w::themed_icon(if sec == SettingsSection::Appearance { Icon::Sun } else { Icon::Server }, ICON_LARGE, |c| c.muted)
+    };
+
+    let mut header = row![
+        leading,
+        column![
+            row![
+                text(sec.title()).size(TEXT_BODY).font(fonts::SEMIBOLD),
+                w::badge_capsule(badge_label, badge_tone),
+            ]
+            .spacing(S)
+            .align_y(Alignment::Center),
+            w::muted(subtitle, TEXT_CAPTION),
+        ]
+        .spacing(XXS)
+        .width(Length::Fill),
+    ]
+    .spacing(M)
+    .align_y(Alignment::Center);
+
+    if sec.is_server_scoped() && srv.is_some() {
+        let state_badge: Element<'a, Message> = if connected {
+            w::badge_capsule(server_status_short(app), Some(|c| c.success))
+        } else if matches!(conn.state.as_str(), "connecting" | "reconnecting" | "pairing") {
+            w::badge_capsule(server_status_short(app), Some(|c| c.warning))
+        } else {
+            w::small_button("Reconnect", w::primary_style, Some(core(Event::Reconnect))).into()
+        };
+        header = header.push(state_badge);
+    }
+
+    container(header).padding([M, CONTENT_GUTTER]).width(Length::Fill).style(w::surface).into()
+}
+
+fn server_connection_placeholder<'a>(app: &'a App, srv: Option<&'a EnvironmentView>, sec: SettingsSection) -> Element<'a, Message> {
+    let conn = &app.vm.connection;
+    let name = srv.map_or("this server", |s| s.label.as_str());
+    let connecting = matches!(conn.state.as_str(), "connecting" | "reconnecting" | "pairing");
+    let mut inner = Column::new().spacing(S).align_x(Alignment::Center);
+    inner = inner
+        .push(w::themed_icon(if connecting { Icon::RefreshCw } else { Icon::WifiOff }, 28.0, |c| c.muted))
+        .push(
+            text(if connecting { format!("Connecting to {name}…") } else { format!("{name} is offline") })
+                .size(TEXT_BODY)
+                .font(fonts::SEMIBOLD),
+        )
+        .push(w::muted(
+            if connecting {
+                format!("Loading {} from {name}.", sec.title().to_lowercase())
+            } else if let Some(err) = conn.error.as_deref().filter(|e| !e.is_empty()) {
+                err.to_owned()
+            } else {
+                format!("{} is stored on {name}. Reconnect to view or change it.", sec.title())
+            },
+            TEXT_SMALL,
+        ));
+    if !connecting {
+        inner = inner.push(Space::new().height(XS)).push(w::small_button(
+            "Reconnect",
+            w::primary_style,
+            Some(core(Event::Reconnect)),
+        ));
+    }
+    container(inner)
+        .padding(XL)
+        .width(Length::Fill)
+        .center_x(Length::Fill)
+        .style(w::inset_sunken)
+        .into()
+}
+
+fn appearance_tab(app: &App) -> Element<'_, Message> {
+    column![
+        w::card(
+            column![
+                w::heading("Theme"),
+                w::segmented(
+                    &[
+                        (Appearance::System, Some(Icon::Monitor), "System"),
+                        (Appearance::Light, Some(Icon::Sun), "Hearth Light"),
+                        (Appearance::Dark, Some(Icon::Moon), "Hearth Dark"),
+                    ],
+                    app.prefs.appearance,
+                    Message::Appearance,
+                ),
+                Space::new().height(S),
+                w::heading("Transcript text size"),
+                row![
+                    slider(TEXT_MIN..=TEXT_MAX, app.prefs.text_size, Message::TextSize).step(1.0_f32).width(Length::Fixed(240.0)),
+                    text(format!("{} px", app.prefs.text_size.round())).size(TEXT_UI).font(fonts::MONO),
+                ]
+                .spacing(M)
+                .align_y(Alignment::Center),
+                w::muted("Uses Domovoi's Hearth palette with bundled Inter and JetBrains Mono fonts.", TEXT_SMALL),
+            ]
+            .spacing(S),
+        )
+        .width(Length::Fill),
+    ]
+    .spacing(L)
+    .into()
+}
+
+fn servers_tab(app: &App) -> Element<'_, Message> {
+    let conn = &app.vm.connection;
+    let mut col = Column::new().spacing(L);
+
+    if let Some(local) = &conn.local_server {
+        col = col.push(
+            w::card(
+                row![
+                    w::themed_icon(Icon::Monitor, ICON_LARGE, |c| c.accent),
+                    column![
+                        text(&local.label).size(TEXT_UI).font(fonts::SEMIBOLD),
+                        w::muted(format!("{} · Server on this machine (no pairing code needed)", local.url), TEXT_CAPTION),
+                    ]
+                    .spacing(XXS)
+                    .width(Length::Fill),
+                    w::small_button("Connect", w::primary_style, Some(core(Event::ConnectLocalServer))),
+                ]
+                .spacing(M)
+                .align_y(Alignment::Center),
+            )
+            .width(Length::Fill),
+        );
+    }
+
+    let mut list_col = Column::new().spacing(S).push(
+        row![
+            w::heading("Saved Servers"),
+            Space::new().width(Length::Fill),
+            w::icon_label_button(Icon::Plus, "Add Server…", w::Kind::Primary, Some(Message::ShowAddServer(true))),
+        ]
+        .align_y(Alignment::Center),
+    );
+    list_col = list_col.push(w::muted(
+        "Server names and order are saved on this device. Choose Configure to edit settings stored on a specific server.",
+        TEXT_CAPTION,
+    ));
+
+    if conn.environments.is_empty() {
+        list_col = list_col.push(w::faint("No servers paired with this device yet.", TEXT_UI));
+    }
+
+    let count = conn.environments.len();
+    for (idx, env) in conn.environments.iter().enumerate() {
+        let is_connected = env.active && conn.state == "connected";
+        let mood = if is_connected { companion::Mood::Idle } else { companion::Mood::Offline };
+        let mut title_row = row![text(&env.label).size(TEXT_UI).font(if env.active { fonts::SEMIBOLD } else { fonts::MEDIUM })]
+            .spacing(S)
+            .align_y(Alignment::Center);
+        if env.active {
+            title_row = title_row.push(w::badge_capsule(server_status_short(app), Some(server_status_tone(&conn.state))));
+        }
+
+        let mut actions = row![].spacing(XS).align_y(Alignment::Center);
+        if !env.active {
+            actions = actions.push(w::small_button("Switch", w::ghost_style, Some(Message::SelectSettingsServer(env.id.clone()))));
+        }
+        actions = actions.push(w::small_button("Configure", w::secondary_style, Some(Message::ConfigureServer(env.id.clone()))));
+        actions = actions.push(w::icon_button(
+            Icon::Pencil,
+            "Rename on this device",
+            Some(Message::Overlay(Some(Overlay::RenameEnvironment {
+                env_id: env.id.clone(),
+                value: env.label.clone(),
+            }))),
+        ));
+        if idx > 0 {
+            actions = actions.push(w::icon_button(
+                Icon::ArrowUp,
+                "Move up",
+                Some(core(Event::MoveEnvironment { id: env.id.clone(), delta: -1 })),
+            ));
+        }
+        if idx + 1 < count {
+            actions = actions.push(w::icon_button(
+                Icon::ArrowDown,
+                "Move down",
+                Some(core(Event::MoveEnvironment { id: env.id.clone(), delta: 1 })),
+            ));
+        }
+        actions = actions.push(w::icon_button(
+            Icon::Trash2,
+            "Forget server",
+            Some(Message::Overlay(Some(Overlay::ConfirmForgetServer {
+                env_id: env.id.clone(),
+                label: env.label.clone(),
+            }))),
+        ));
+
+        list_col = list_col.push(
+            container(
+                row![
+                    companion::view(env.companion.look.clone(), mood, 28.0, 0.0, false),
+                    column![title_row, w::faint(&env.detail, TEXT_CAPTION)].spacing(XXS).width(Length::Fill),
+                    actions,
+                ]
+                .spacing(M)
+                .align_y(Alignment::Center),
+            )
+            .padding(M)
+            .width(Length::Fill)
+            .style(w::inset_sunken),
+        );
+    }
+
+    col = col.push(w::card(list_col).width(Length::Fill));
+    col.into()
 }
 
 fn general_tab(app: &App) -> Element<'_, Message> {
@@ -858,13 +1240,7 @@ fn access_tab(app: &App) -> Element<'_, Message> {
 }
 
 fn companion_tab(app: &App) -> Element<'_, Message> {
-    let envs = &app.vm.connection.environments;
-    let target_env = app
-        .companion_server_id
-        .as_deref()
-        .and_then(|id| envs.iter().find(|e| e.id == id))
-        .or_else(|| envs.iter().find(|e| e.active))
-        .or_else(|| envs.first());
+    let target_env = active_server(app);
 
     let (env_id, look) = match target_env {
         Some(e) => (e.id.clone(), e.companion.look.clone()),
@@ -872,18 +1248,6 @@ fn companion_tab(app: &App) -> Element<'_, Message> {
     };
 
     let mut col = Column::new().spacing(L);
-    if !envs.is_empty() {
-        let mut srv_row = row![].spacing(XS);
-        for e in envs {
-            srv_row = srv_row.push(
-                button(text(&e.label).size(TEXT_SMALL))
-                    .padding(CHIP_PAD)
-                    .style(w::chip_style(e.id == env_id))
-                    .on_press(Message::CompanionServerSelected(e.id.clone())),
-            );
-        }
-        col = col.push(srv_row);
-    }
 
     let preview = container(companion::view(look.clone(), companion::Mood::Idle, 96.0, app.tick_phase, app.companion_poked))
         .center_x(Length::Fill)

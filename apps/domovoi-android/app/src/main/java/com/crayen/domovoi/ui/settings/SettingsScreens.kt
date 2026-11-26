@@ -5,7 +5,6 @@ import android.graphics.Bitmap
 import android.os.Build
 import android.provider.Settings
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -19,30 +18,31 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowForward
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.Archive
 import androidx.compose.material.icons.outlined.Build
 import androidx.compose.material.icons.outlined.CalendarMonth
-import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Computer
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.CreateNewFolder
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Devices
 import androidx.compose.material.icons.outlined.Download
+import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Key
 import androidx.compose.material.icons.outlined.Memory
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Notifications
+import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.PhoneAndroid
 import androidx.compose.material.icons.outlined.PlayArrow
-import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.outlined.TabletAndroid
 import androidx.compose.material.icons.outlined.Tune
@@ -66,47 +66,53 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Slider
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.crayen.domovoi.app.ConnectionView
 import com.crayen.domovoi.app.Event
 import com.crayen.domovoi.app.ScheduledTaskView
 import com.crayen.domovoi.app.SettingFieldView
+import com.crayen.domovoi.core.AppAppearance
+import com.crayen.domovoi.core.AppPreferences
 import com.crayen.domovoi.core.Core
-import com.crayen.domovoi.ui.common.ProjectIconTile
 import com.crayen.domovoi.ui.common.CompanionAvatar
 import com.crayen.domovoi.ui.common.CompanionEditor
 import com.crayen.domovoi.ui.common.CompanionMood
-import com.crayen.domovoi.ui.common.companionMood
 import com.crayen.domovoi.ui.common.EmptyState
+import com.crayen.domovoi.ui.common.ProjectIconTile
 import com.crayen.domovoi.ui.common.SectionHeader
+import com.crayen.domovoi.ui.common.companionMood
 import com.crayen.domovoi.ui.common.copyText
 import com.crayen.domovoi.ui.common.watch
 import com.crayen.domovoi.ui.nav.Navigator
 import com.crayen.domovoi.ui.nav.Screen
-import com.crayen.domovoi.ui.threads.NameDialog
 import com.crayen.domovoi.ui.theme.LocalTints
 import com.crayen.domovoi.ui.theme.Mono
 import com.crayen.domovoi.ui.theme.Space
+import com.crayen.domovoi.ui.threads.NameDialog
 import com.crayen.domovoi.ui.tools.ToolScaffold
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
@@ -114,105 +120,456 @@ import com.google.zxing.qrcode.QRCodeWriter
 private val clear = Color.Transparent
 
 @Composable
-private fun Nav(label: String, icon: androidx.compose.ui.graphics.vector.ImageVector, supporting: String? = null, onClick: () -> Unit) {
+private fun Nav(
+    label: String,
+    icon: ImageVector,
+    supporting: String? = null,
+    badge: String? = null,
+    enabled: Boolean = true,
+    onClick: () -> Unit,
+) {
     ListItem(
         headlineContent = { Text(label) },
         supportingContent = supporting?.let { { Text(it) } },
         leadingContent = { Icon(icon, null) },
-        trailingContent = { Icon(Icons.AutoMirrored.Outlined.ArrowForward, null, modifier = Modifier.size(18.dp)) },
+        trailingContent = {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Space.s)) {
+                if (!badge.isNullOrEmpty()) {
+                    Text(badge, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Icon(Icons.AutoMirrored.Outlined.ArrowForward, null, modifier = Modifier.size(18.dp))
+            }
+        },
         colors = ListItemDefaults.colors(containerColor = clear),
-        modifier = Modifier.clickable(onClick = onClick),
+        modifier = Modifier
+            .alpha(if (enabled) 1f else 0.45f)
+            .clickable(enabled = enabled, onClick = onClick),
     )
 }
 
-/** Servers, this server's settings, projects, archived threads and notifications. */
+@Composable
+private fun ScopeCaption(text: String) {
+    Text(
+        text,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(horizontal = Space.l, vertical = Space.xs),
+    )
+}
+
+@Composable
+private fun StatusPill(label: String, tint: Color) {
+    Surface(
+        color = tint.copy(alpha = 0.14f),
+        shape = RoundedCornerShape(999.dp),
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.labelSmall,
+            color = tint,
+            fontWeight = FontWeight.Medium,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+        )
+    }
+}
+
+/** Subtle header card at the top of every server-specific settings screen. */
+@Composable
+private fun ServerContextBanner(connection: ConnectionView) {
+    val tints = LocalTints.current
+    val name = connection.environmentLabel.ifEmpty { "This server" }
+    val connected = connection.state == "connected"
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        shape = MaterialTheme.shapes.medium,
+        modifier = Modifier.fillMaxWidth().padding(horizontal = Space.l, vertical = Space.s),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = Space.m, vertical = Space.s),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Space.m),
+        ) {
+            CompanionAvatar(connection.companion.look, if (connected) CompanionMood.Idle else CompanionMood.Offline, 28.dp, still = true)
+            Column(Modifier.weight(1f)) {
+                Text(name, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(
+                    "Server setting · Shared across all devices",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            StatusPill(
+                label = if (connected) "Connected" else connection.state.replaceFirstChar { it.uppercase() },
+                tint = if (connected) tints.success else tints.caution,
+            )
+        }
+    }
+}
+
+/** Root Settings screen: clearly separates per-server configuration from this device's own preferences. */
 @Composable
 fun SettingsScreen(core: Core, nav: Navigator) {
     val connection by core.view.connection.watch()
-    val settings by core.view.settings.watch()
+    val tints = LocalTints.current
     val context = LocalContext.current
+    val appearance by AppPreferences.appearance.collectAsState()
+    val dynamicColor by AppPreferences.dynamicColor.collectAsState()
+
     var renamingEnv by remember { mutableStateOf<com.crayen.domovoi.app.EnvironmentView?>(null) }
     var forgetting by remember { mutableStateOf<com.crayen.domovoi.app.EnvironmentView?>(null) }
-    var editingCompanion by remember { mutableStateOf<String?>(null) }
-    var pickingProject by remember(connection.activeEnvironmentId) { mutableStateOf<String?>(null) }
-    var renamingProject by remember { mutableStateOf<com.crayen.domovoi.app.ProjectSettingsView?>(null) }
-    var removing by remember { mutableStateOf<com.crayen.domovoi.app.ProjectSettingsView?>(null) }
-    LaunchedEffect(connection.state) { if (connection.state == "connected") { core.update(Event.LoadRemoteAccess); core.update(Event.LoadSettings("archived")) } }
+
     ToolScaffold("Settings", onBack = null) { padding ->
         LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = Space.xxl)) {
-            item("server") {
-                SectionHeader("Connected server")
-                ListItem(
-                    headlineContent = { Text(connection.environmentLabel.ifEmpty { "—" }) },
-                    supportingContent = {
-                        Column {
-                            Text(listOf(connection.state, connection.serverVersion.ifEmpty { null }, connection.platform.ifEmpty { null }).filterNotNull().joinToString(" · "))
-                            // A remote server's URL is the local end of the tunnel: not worth showing.
-                            if (!connection.remote && connection.serverUrl.isNotEmpty()) {
-                                Text(connection.serverUrl, fontFamily = Mono, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            }
-                        }
-                    },
-                    leadingContent = { Icon(if (connection.remote) Icons.Outlined.Public else Icons.Outlined.Computer, null) },
-                    colors = ListItemDefaults.colors(containerColor = clear),
-                )
-                if (connection.activeEnvironmentId.isNotEmpty()) {
-                    ListItem(
-                        headlineContent = { Text("Companion") },
-                        supportingContent = { Text(if (connection.companion.custom) "Your own look" else "Drawn from the server's key") },
-                        leadingContent = { CompanionAvatar(connection.companion.look, companionMood(connection), 28.dp) },
-                        trailingContent = { Icon(Icons.AutoMirrored.Outlined.ArrowForward, null, modifier = Modifier.size(18.dp)) },
-                        colors = ListItemDefaults.colors(containerColor = clear),
-                        modifier = Modifier.clickable { editingCompanion = connection.activeEnvironmentId },
-                    )
-                }
-                Row(Modifier.padding(horizontal = Space.l), horizontalArrangement = Arrangement.spacedBy(Space.s)) {
-                    if (connection.state == "connected") OutlinedButton(onClick = { core.update(Event.Disconnect) }) { Text("Disconnect") }
-                    else FilledTonalButton(onClick = { core.update(Event.Reconnect) }) { Text("Reconnect") }
-                }
+            item("servers-h") {
+                SectionHeader("Servers")
+                ScopeCaption("Select a server to configure its settings, providers, projects, scheduled tasks, and access.")
             }
-            item("servers-h") { SectionHeader("Servers") }
             items(connection.environments, key = { "env/${it.id}" }) { env ->
                 var menu by remember { mutableStateOf(false) }
+                val activeStatus = if (env.active) {
+                    when (connection.state) {
+                        "connected" -> "Connected" to tints.success
+                        "connecting", "pairing" -> "Connecting…" to tints.caution
+                        "reconnecting" -> "Reconnecting…" to tints.caution
+                        else -> "Offline" to MaterialTheme.colorScheme.onSurfaceVariant
+                    }
+                } else null
+                val detail = if (env.active && connection.state == "connected" && connection.remote && connection.path.isNotEmpty()) {
+                    "${connection.path.replaceFirstChar { it.uppercase() }} · ${connection.rttMs} ms"
+                } else env.detail
+
                 ListItem(
-                    headlineContent = { Text(env.label) },
-                    supportingContent = { Text(env.detail, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                    leadingContent = { Icon(if (env.remote) Icons.Outlined.Public else Icons.Outlined.Computer, null) },
+                    headlineContent = {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Space.s)) {
+                            Text(
+                                env.label,
+                                fontWeight = if (env.active) FontWeight.SemiBold else FontWeight.Normal,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f, fill = false),
+                            )
+                            activeStatus?.let { (label, tint) -> StatusPill(label, tint) }
+                        }
+                    },
+                    supportingContent = { Text(detail, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    leadingContent = {
+                        CompanionAvatar(
+                            env.companion.look,
+                            if (env.active) companionMood(connection) else CompanionMood.Idle,
+                            32.dp,
+                            still = !env.active,
+                        )
+                    },
                     trailingContent = {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            if (env.active) Icon(Icons.Outlined.Check, "In use", tint = MaterialTheme.colorScheme.primary)
                             Box {
                                 IconButton(onClick = { menu = true }) { Icon(Icons.Outlined.MoreVert, "Actions for ${env.label}") }
                                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                                    DropdownMenuItem(text = { Text("Rename…") }, onClick = { menu = false; renamingEnv = env })
-                                    DropdownMenuItem(
-                                        text = { Text("Companion…") },
-                                        leadingIcon = { CompanionAvatar(env.companion.look, CompanionMood.Idle, 24.dp, still = true) },
-                                        onClick = { menu = false; editingCompanion = env.id },
-                                    )
+                                    if (!env.active) {
+                                        DropdownMenuItem(text = { Text("Switch to server") }, onClick = { menu = false; core.update(Event.SelectEnvironment(env.id)) })
+                                    }
+                                    DropdownMenuItem(text = { Text("Rename on this device…") }, onClick = { menu = false; renamingEnv = env })
                                     DropdownMenuItem(text = { Text("Move up") }, onClick = { menu = false; core.update(Event.MoveEnvironment(env.id, -1)) })
                                     DropdownMenuItem(text = { Text("Move down") }, onClick = { menu = false; core.update(Event.MoveEnvironment(env.id, 1)) })
                                     DropdownMenuItem(text = { Text("Forget", color = MaterialTheme.colorScheme.error) }, onClick = { menu = false; forgetting = env })
                                 }
                             }
+                            Icon(Icons.AutoMirrored.Outlined.ArrowForward, null, modifier = Modifier.size(18.dp))
                         }
                     },
                     colors = ListItemDefaults.colors(containerColor = clear),
-                    modifier = Modifier.clickable { if (!env.active) core.update(Event.SelectEnvironment(env.id)) },
+                    modifier = Modifier.clickable {
+                        if (!env.active) core.update(Event.SelectEnvironment(env.id))
+                        nav.open(Screen.ServerHub(env.id))
+                    },
                 )
             }
             item("add-server") { Nav("Add server", Icons.Outlined.Add) { nav.open(Screen.AddServer) } }
-            item("this-h") { SectionHeader("This server") }
-            item("this") {
-                Column {
-                    Nav("Server settings", Icons.Outlined.Tune) { nav.open(Screen.ServerSettings) }
-                    Nav("Providers", Icons.Outlined.Memory) { nav.open(Screen.Providers) }
-                    Nav("Scheduled tasks", Icons.Outlined.CalendarMonth) { nav.open(Screen.ScheduledTasks) }
-                    Nav("Access & devices", Icons.Outlined.Key) { nav.open(Screen.Access) }
-                    Nav("Maintenance", Icons.Outlined.Build) { nav.open(Screen.Maintenance) }
+
+            item("device-divider") { HorizontalDivider(Modifier.padding(vertical = Space.s)) }
+
+            item("device-h") {
+                SectionHeader("This device")
+                ScopeCaption("Saved on this device only. Applies across all servers.")
+            }
+            item("appearance") {
+                Column(Modifier.fillMaxWidth().padding(horizontal = Space.l, vertical = Space.s), verticalArrangement = Arrangement.spacedBy(Space.s)) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Space.s)) {
+                        Icon(Icons.Outlined.Palette, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
+                        Text("Theme", style = MaterialTheme.typography.bodyLarge)
+                    }
+                    SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                        AppAppearance.entries.forEachIndexed { index, mode ->
+                            SegmentedButton(
+                                selected = appearance == mode,
+                                onClick = { AppPreferences.setAppearance(context, mode) },
+                                shape = SegmentedButtonDefaults.itemShape(index = index, count = AppAppearance.entries.size),
+                                label = { Text(mode.label) },
+                            )
+                        }
+                    }
                 }
             }
-            item("projects-h") { SectionHeader("Projects") }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                item("dynamic-color") {
+                    ListItem(
+                        headlineContent = { Text("Dynamic color") },
+                        supportingContent = { Text("Match colors to your wallpaper on this device.") },
+                        trailingContent = {
+                            Switch(checked = dynamicColor, onCheckedChange = { AppPreferences.setDynamicColor(context, it) })
+                        },
+                        colors = ListItemDefaults.colors(containerColor = clear),
+                    )
+                }
+            }
+            item("notifications") {
+                ListItem(
+                    headlineContent = { Text("Notifications") },
+                    supportingContent = { Text("Approvals and finished turns on this device.") },
+                    leadingContent = { Icon(Icons.Outlined.Notifications, null) },
+                    trailingContent = { Icon(Icons.AutoMirrored.Outlined.ArrowForward, null, modifier = Modifier.size(18.dp)) },
+                    colors = ListItemDefaults.colors(containerColor = clear),
+                    modifier = Modifier.clickable {
+                        context.startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName))
+                    },
+                )
+            }
+        }
+    }
+
+    renamingEnv?.let { env ->
+        NameDialog("Rename server", "Name", "Rename", env.label, onDismiss = { renamingEnv = null }) {
+            renamingEnv = null
+            core.update(Event.RenameEnvironment(env.id, it))
+        }
+    }
+    forgetting?.let { env ->
+        AlertDialog(
+            onDismissRequest = { forgetting = null },
+            title = { Text("Forget ${env.label}?") },
+            text = { Text("Forgetting the server in use also signs this phone out there. Forgetting another one only removes it here.") },
+            confirmButton = { TextButton(onClick = { forgetting = null; core.update(Event.ForgetEnvironment(env.id)) }) { Text("Forget", color = MaterialTheme.colorScheme.error) } },
+            dismissButton = { TextButton(onClick = { forgetting = null }) { Text("Cancel") } },
+        )
+    }
+}
+
+/** Per-server settings hub: connection details, server-stored settings, and local per-server customization. */
+@Composable
+fun ServerHubScreen(core: Core, environmentId: String, nav: Navigator) {
+    val connection by core.view.connection.watch()
+    val settings by core.view.settings.watch()
+    val tints = LocalTints.current
+
+    val server = connection.environments.firstOrNull { it.id == environmentId }
+    val isActive = connection.activeEnvironmentId == environmentId
+    val isConnected = isActive && connection.state == "connected"
+    val isConnecting = !isActive || connection.state in setOf("connecting", "reconnecting", "pairing")
+    val serverLabel = server?.label ?: connection.environmentLabel.ifEmpty { "Server" }
+
+    var editingCompanion by remember { mutableStateOf(false) }
+    var renaming by remember { mutableStateOf(false) }
+    var forgetting by remember { mutableStateOf(false) }
+
+    LaunchedEffect(environmentId) {
+        if (connection.activeEnvironmentId != environmentId) {
+            core.update(Event.SelectEnvironment(environmentId))
+        }
+    }
+    LaunchedEffect(isConnected, environmentId) {
+        if (isConnected) {
+            core.update(Event.LoadRemoteAccess)
+            core.update(Event.LoadSettings("archived"))
+            core.update(Event.LoadSettings("providers"))
+        }
+    }
+
+    val readyProviders = settings.providers.count { it.status == "ready" }
+
+    ToolScaffold(
+        title = serverLabel,
+        subtitle = "Server settings",
+        onBack = nav::back,
+    ) { padding ->
+        if (server == null) {
+            Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
+                EmptyState(Icons.Outlined.Computer, "Server removed", "This server is no longer saved on this device.")
+            }
+        } else {
+            LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = Space.xxl)) {
+                item("connection-card") {
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceContainerLow,
+                        shape = MaterialTheme.shapes.large,
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = Space.l, vertical = Space.s),
+                    ) {
+                        Column(Modifier.padding(Space.l), verticalArrangement = Arrangement.spacedBy(Space.m)) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Space.m)) {
+                                CompanionAvatar(
+                                    server.companion.look,
+                                    if (isActive) companionMood(connection) else CompanionMood.Offline,
+                                    44.dp,
+                                    still = !isActive,
+                                )
+                                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Space.xxs)) {
+                                    Text(server.label, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    val meta = buildList {
+                                        if (isConnected) {
+                                            if (connection.remote && connection.path.isNotEmpty()) {
+                                                add("${connection.path.replaceFirstChar { it.uppercase() }} · ${connection.rttMs} ms")
+                                            }
+                                            if (connection.serverVersion.isNotEmpty()) add("v${connection.serverVersion}")
+                                            if (connection.platform.isNotEmpty()) add(connection.platform)
+                                        } else {
+                                            add(server.detail)
+                                        }
+                                    }.joinToString(" · ")
+                                    if (meta.isNotEmpty()) {
+                                        Text(meta, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                    }
+                                    if (isConnected && !connection.remote && connection.serverUrl.isNotEmpty()) {
+                                        Text(connection.serverUrl, fontFamily = Mono, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    }
+                                }
+                                StatusPill(
+                                    label = when {
+                                        isConnected -> "Connected"
+                                        isConnecting -> if (connection.state == "reconnecting") "Reconnecting…" else "Connecting…"
+                                        else -> "Offline"
+                                    },
+                                    tint = when {
+                                        isConnected -> tints.success
+                                        isConnecting -> tints.caution
+                                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                                    },
+                                )
+                            }
+                            if (isConnecting) {
+                                LinearProgressIndicator(Modifier.fillMaxWidth())
+                            } else if (!isConnected && !connection.error.isNullOrEmpty()) {
+                                Text(connection.error!!, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                            }
+                            Row(horizontalArrangement = Arrangement.spacedBy(Space.s)) {
+                                if (isConnected) {
+                                    FilledTonalButton(onClick = { core.update(Event.Resync) }) { Text("Resync") }
+                                    OutlinedButton(onClick = { core.update(Event.Disconnect) }) { Text("Disconnect") }
+                                } else {
+                                    FilledTonalButton(onClick = { core.update(Event.Reconnect) }) { Text("Reconnect") }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                item("server-config-h") {
+                    SectionHeader("Server configuration")
+                    ScopeCaption(
+                        if (isConnected) "Stored on ${server.label} and shared across all your devices."
+                        else "Connect to ${server.label} to view or change its server configuration.",
+                    )
+                }
+                item("server-config") {
+                    Column {
+                        Nav("General settings", Icons.Outlined.Tune, enabled = isConnected) { nav.open(Screen.ServerSettings) }
+                        Nav(
+                            "Providers",
+                            Icons.Outlined.Memory,
+                            badge = if (isConnected && settings.providers.isNotEmpty()) "$readyProviders/${settings.providers.size}" else null,
+                            enabled = isConnected,
+                        ) { nav.open(Screen.Providers) }
+                        Nav(
+                            "Projects",
+                            Icons.Outlined.Folder,
+                            badge = if (isConnected) "${settings.projects.size}" else null,
+                            enabled = isConnected,
+                        ) { nav.open(Screen.ServerProjects) }
+                        Nav("Scheduled tasks", Icons.Outlined.CalendarMonth, enabled = isConnected) { nav.open(Screen.ScheduledTasks) }
+                        Nav("Access & devices", Icons.Outlined.Key, enabled = isConnected) { nav.open(Screen.Access) }
+                        Nav(
+                            "Archived threads",
+                            Icons.Outlined.Archive,
+                            badge = if (isConnected && settings.archived.isNotEmpty()) "${settings.archived.size}" else null,
+                            enabled = isConnected,
+                        ) { nav.open(Screen.ArchivedThreads) }
+                        Nav("Maintenance", Icons.Outlined.Build, enabled = isConnected) { nav.open(Screen.Maintenance) }
+                    }
+                }
+
+                item("local-divider") { HorizontalDivider(Modifier.padding(vertical = Space.s)) }
+
+                item("local-h") {
+                    SectionHeader("On this device")
+                    ScopeCaption("Saved locally on this device for ${server.label}.")
+                }
+                item("local-items") {
+                    Column {
+                        ListItem(
+                            headlineContent = { Text("Companion") },
+                            supportingContent = { Text(if (server.companion.custom) "Custom look on this device" else "Drawn from the server's key") },
+                            leadingContent = { CompanionAvatar(server.companion.look, CompanionMood.Idle, 28.dp, still = true) },
+                            trailingContent = { Icon(Icons.AutoMirrored.Outlined.ArrowForward, null, modifier = Modifier.size(18.dp)) },
+                            colors = ListItemDefaults.colors(containerColor = clear),
+                            modifier = Modifier.clickable { editingCompanion = true },
+                        )
+                        ListItem(
+                            headlineContent = { Text("Rename on this device…") },
+                            leadingContent = { Icon(Icons.Outlined.Edit, null) },
+                            colors = ListItemDefaults.colors(containerColor = clear),
+                            modifier = Modifier.clickable { renaming = true },
+                        )
+                        ListItem(
+                            headlineContent = { Text("Forget server…", color = MaterialTheme.colorScheme.error) },
+                            leadingContent = { Icon(Icons.Outlined.Delete, null, tint = MaterialTheme.colorScheme.error) },
+                            colors = ListItemDefaults.colors(containerColor = clear),
+                            modifier = Modifier.clickable { forgetting = true },
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    if (editingCompanion && server != null) {
+        CompanionEditor(core, server.id) { editingCompanion = false }
+    }
+    if (renaming && server != null) {
+        NameDialog("Rename server", "Name", "Rename", server.label, onDismiss = { renaming = false }) {
+            renaming = false
+            core.update(Event.RenameEnvironment(server.id, it))
+        }
+    }
+    if (forgetting && server != null) {
+        AlertDialog(
+            onDismissRequest = { forgetting = false },
+            title = { Text("Forget ${server.label}?") },
+            text = { Text("Forgetting the server in use also signs this phone out there. Forgetting another one only removes it here.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    forgetting = false
+                    core.update(Event.ForgetEnvironment(server.id))
+                    nav.back()
+                }) { Text("Forget", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = { TextButton(onClick = { forgetting = false }) { Text("Cancel") } },
+        )
+    }
+}
+
+/** Projects registered on the active server. */
+@Composable
+fun ServerProjectsScreen(core: Core, nav: Navigator, onBack: () -> Unit) {
+    val connection by core.view.connection.watch()
+    val settings by core.view.settings.watch()
+    var pickingProject by remember(connection.activeEnvironmentId) { mutableStateOf<String?>(null) }
+    var renamingProject by remember { mutableStateOf<com.crayen.domovoi.app.ProjectSettingsView?>(null) }
+    var removing by remember { mutableStateOf<com.crayen.domovoi.app.ProjectSettingsView?>(null) }
+
+    ToolScaffold("Projects", onBack, subtitle = connection.environmentLabel) { padding ->
+        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = Space.xxl)) {
+            item("ctx") { ServerContextBanner(connection) }
+            if (settings.projects.isEmpty()) {
+                item("empty") { EmptyState(Icons.Outlined.Folder, "No projects yet", "Add a folder or import existing sessions on this server.") }
+            }
             items(settings.projects, key = { "project/${it.id}" }) { project ->
                 var menu by remember { mutableStateOf(false) }
                 ListItem(
@@ -234,55 +591,23 @@ fun SettingsScreen(core: Core, nav: Navigator) {
             }
             item("projects-add") {
                 Column {
+                    SectionHeader("Add to server")
                     Nav("Import from Claude Code", Icons.Outlined.Download) { nav.open(Screen.ImportSessions) }
                     Nav("Add folder on server", Icons.Outlined.CreateNewFolder) { nav.open(Screen.BrowseFolders) }
-                    Text("Removing a project keeps its folder. A removed project is not imported again on its own.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = Space.l))
+                    ScopeCaption("Removing a project keeps its folder on the server. A removed project is not imported again on its own.")
                 }
-            }
-            if (settings.archived.isNotEmpty()) {
-                item("archived-h") { SectionHeader("Archived threads") }
-                items(settings.archived, key = { "archived/${it.id}" }) { thread ->
-                    ListItem(
-                        headlineContent = { Text(thread.title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                        supportingContent = { Text(thread.age) },
-                        trailingContent = { IconButton(onClick = { core.update(Event.ArchiveThread(thread.id, false)) }) { Icon(Icons.Outlined.Unarchive, "Unarchive") } },
-                        colors = ListItemDefaults.colors(containerColor = clear),
-                    )
-                }
-            }
-            item("notifications") {
-                SectionHeader("Notifications")
-                ListItem(
-                    headlineContent = { Text("Notifications while connected") },
-                    supportingContent = { Text("Approvals and finished turns, while Domovoi is open or a turn runs in the background.") },
-                    leadingContent = { Icon(Icons.Outlined.Notifications, null) },
-                    trailingContent = { Icon(Icons.AutoMirrored.Outlined.ArrowForward, null, modifier = Modifier.size(18.dp)) },
-                    colors = ListItemDefaults.colors(containerColor = clear),
-                    modifier = Modifier.clickable {
-                        context.startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName))
-                    },
-                )
             }
         }
     }
+
     settings.projects.firstOrNull { it.id == pickingProject }?.let { project ->
         ProjectIconPicker(project, settings.projectIconFiles, core, connection.state == "connected") { pickingProject = null }
     }
-    editingCompanion?.let { id -> CompanionEditor(core, id) { editingCompanion = null } }
-    renamingEnv?.let { env ->
-        NameDialog("Rename server", "Name", "Rename", env.label, onDismiss = { renamingEnv = null }) { renamingEnv = null; core.update(Event.RenameEnvironment(env.id, it)) }
-    }
     renamingProject?.let { p ->
-        NameDialog("Rename project", "Name", "Rename", p.title, onDismiss = { renamingProject = null }) { renamingProject = null; core.update(Event.RenameProject(p.id, it)) }
-    }
-    forgetting?.let { env ->
-        AlertDialog(
-            onDismissRequest = { forgetting = null },
-            title = { Text("Forget ${env.label}?") },
-            text = { Text("Forgetting the server in use also signs this phone out there. Forgetting another one only removes it here.") },
-            confirmButton = { TextButton(onClick = { forgetting = null; core.update(Event.ForgetEnvironment(env.id)) }) { Text("Forget", color = MaterialTheme.colorScheme.error) } },
-            dismissButton = { TextButton(onClick = { forgetting = null }) { Text("Cancel") } },
-        )
+        NameDialog("Rename project", "Name", "Rename", p.title, onDismiss = { renamingProject = null }) {
+            renamingProject = null
+            core.update(Event.RenameProject(p.id, it))
+        }
     }
     removing?.let { p ->
         AlertDialog(
@@ -291,6 +616,50 @@ fun SettingsScreen(core: Core, nav: Navigator) {
             text = { Text("Its folder stays on the server. Its threads go with it.") },
             confirmButton = { TextButton(onClick = { removing = null; core.update(Event.RemoveProject(p.id)) }) { Text("Remove", color = MaterialTheme.colorScheme.error) } },
             dismissButton = { TextButton(onClick = { removing = null }) { Text("Cancel") } },
+        )
+    }
+}
+
+/** Archived threads stored on the active server. */
+@Composable
+fun ArchivedThreadsScreen(core: Core, onBack: () -> Unit) {
+    val connection by core.view.connection.watch()
+    val settings by core.view.settings.watch()
+    var deleting by remember { mutableStateOf<com.crayen.domovoi.app.ThreadRowView?>(null) }
+
+    LaunchedEffect(connection.activeEnvironmentId, connection.state) {
+        if (connection.state == "connected") core.update(Event.LoadSettings("archived"))
+    }
+
+    ToolScaffold("Archived threads", onBack, subtitle = connection.environmentLabel) { padding ->
+        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = Space.xxl)) {
+            item("ctx") { ServerContextBanner(connection) }
+            if (settings.archived.isEmpty()) {
+                item("empty") { EmptyState(Icons.Outlined.Archive, "No archived threads", "Threads you archive on this server appear here.") }
+            }
+            items(settings.archived, key = { "archived/${it.id}" }) { thread ->
+                ListItem(
+                    headlineContent = { Text(thread.title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    supportingContent = { Text(thread.age) },
+                    trailingContent = {
+                        Row {
+                            IconButton(onClick = { core.update(Event.ArchiveThread(thread.id, false)) }) { Icon(Icons.Outlined.Unarchive, "Unarchive") }
+                            IconButton(onClick = { deleting = thread }) { Icon(Icons.Outlined.Delete, "Delete") }
+                        }
+                    },
+                    colors = ListItemDefaults.colors(containerColor = clear),
+                )
+            }
+        }
+    }
+
+    deleting?.let { thread ->
+        AlertDialog(
+            onDismissRequest = { deleting = null },
+            title = { Text("Delete “${thread.title}”?") },
+            text = { Text("The thread and its messages are deleted for good. This can't be undone.") },
+            confirmButton = { TextButton(onClick = { deleting = null; core.update(Event.DeleteThread(thread.id)) }) { Text("Delete", color = MaterialTheme.colorScheme.error) } },
+            dismissButton = { TextButton(onClick = { deleting = null }) { Text("Cancel") } },
         )
     }
 }
@@ -338,10 +707,14 @@ private fun SettingField(core: Core, field: SettingFieldView) {
 
 @Composable
 fun ServerSettingsScreen(core: Core, onBack: () -> Unit) {
+    val connection by core.view.connection.watch()
     val settings by core.view.settings.watch()
-    LaunchedEffect(Unit) { core.update(Event.LoadSettings("general")) }
-    ToolScaffold("Server settings", onBack) { padding ->
+    LaunchedEffect(connection.activeEnvironmentId, connection.state) {
+        if (connection.state == "connected") core.update(Event.LoadSettings("general"))
+    }
+    ToolScaffold("General settings", onBack, subtitle = connection.environmentLabel) { padding ->
         LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = Space.xxl)) {
+            item("ctx") { ServerContextBanner(connection) }
             settings.groups.forEach { group ->
                 item("g/${group.title}") { SectionHeader(group.title) }
                 items(group.fields, key = { "f/${it.key}" }) { SettingField(core, it) }
@@ -352,13 +725,22 @@ fun ServerSettingsScreen(core: Core, onBack: () -> Unit) {
 
 @Composable
 fun ProvidersScreen(core: Core, onBack: () -> Unit) {
+    val connection by core.view.connection.watch()
     val settings by core.view.settings.watch()
     val tints = LocalTints.current
     var editing by remember { mutableStateOf<ProviderEditing?>(null) }
-    LaunchedEffect(Unit) { core.update(Event.LoadSettings("providers")) }
+    LaunchedEffect(connection.activeEnvironmentId, connection.state) {
+        if (connection.state == "connected") core.update(Event.LoadSettings("providers"))
+    }
     editing?.let { ProviderEditorSheet(it, { e -> core.update(e) }) { editing = null } }
-    ToolScaffold("Providers", onBack, actions = { TextButton(onClick = { core.update(Event.RefreshProviders) }) { Text("Check again") } }) { padding ->
+    ToolScaffold(
+        "Providers",
+        onBack,
+        subtitle = connection.environmentLabel,
+        actions = { TextButton(onClick = { core.update(Event.RefreshProviders) }) { Text("Check again") } },
+    ) { padding ->
         LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = Space.xxl)) {
+            item("ctx") { ServerContextBanner(connection) }
             if (settings.providers.isEmpty()) item("none") { EmptyState(Icons.Outlined.Memory, "No providers yet") }
             items(settings.providers, key = { it.instanceId }) { p ->
                 val ok = p.status == "ready"
@@ -376,34 +758,33 @@ fun ProvidersScreen(core: Core, onBack: () -> Unit) {
             if (settings.canAddAntigravity) item("add") {
                 TextButton(onClick = { editing = newAntigravity() }, modifier = Modifier.padding(horizontal = Space.l)) { Text("Add Antigravity account") }
             }
-            item("fields") {
-                settings.groups.forEach { group ->
-                    SectionHeader(group.title)
-                    group.fields.forEach { SettingField(core, it) }
-                }
-            }
         }
     }
 }
 
 @Composable
 fun ScheduledTasksScreen(core: Core, onBack: () -> Unit, openThread: (String) -> Unit) {
+    val connection by core.view.connection.watch()
     val settings by core.view.settings.watch()
-    val context = androidx.compose.ui.platform.LocalContext.current
+    val context = LocalContext.current
     var editing by remember { mutableStateOf<com.crayen.domovoi.app.ScheduledTaskEdit?>(null) }
     var deleting by remember { mutableStateOf<com.crayen.domovoi.app.ScheduledTaskView?>(null) }
     var rotating by remember { mutableStateOf<com.crayen.domovoi.app.ScheduledTaskView?>(null) }
-    LaunchedEffect(Unit) { core.update(Event.LoadSettings("scheduled")) }
+    LaunchedEffect(connection.activeEnvironmentId, connection.state) {
+        if (connection.state == "connected") core.update(Event.LoadSettings("scheduled"))
+    }
     // "No project" can hold tasks too; a new one starts in a real project when there is one.
     val projects = settings.projects
     val firstProject = (projects.firstOrNull { !it.isScratch } ?: projects.firstOrNull())?.id.orEmpty()
     ToolScaffold(
         "Scheduled tasks", onBack,
+        subtitle = connection.environmentLabel,
         floatingActionButton = {
             ExtendedFloatingActionButton(onClick = { editing = newScheduledTask(firstProject) }, icon = { Icon(Icons.Outlined.Add, null) }, text = { Text("New task") })
         },
     ) { padding ->
         LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = 96.dp)) {
+            item("ctx") { ServerContextBanner(connection) }
             if (settings.scheduledTimeZone.isNotEmpty()) item("tz") { Text("Times in ${settings.scheduledTimeZone}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(Space.l)) }
             if (settings.scheduledTasks.isEmpty()) item("none") { EmptyState(Icons.Outlined.CalendarMonth, "No scheduled tasks", "A task sends its prompt on its own: at a time, every so often, or when its URL gets a request.") }
             items(settings.scheduledTasks, key = { it.id }) { task ->
@@ -489,11 +870,18 @@ fun ScheduledTasksScreen(core: Core, onBack: () -> Unit, openThread: (String) ->
 
 @Composable
 fun MaintenanceScreen(core: Core, onBack: () -> Unit) {
+    val connection by core.view.connection.watch()
     val settings by core.view.settings.watch()
-    LaunchedEffect(Unit) { core.update(Event.LoadSettings("storage")); core.update(Event.LoadSettings("diagnostics")) }
+    LaunchedEffect(connection.activeEnvironmentId, connection.state) {
+        if (connection.state == "connected") {
+            core.update(Event.LoadSettings("storage"))
+            core.update(Event.LoadSettings("diagnostics"))
+        }
+    }
     val storage = settings.storage
-    ToolScaffold("Maintenance", onBack) { padding ->
+    ToolScaffold("Maintenance", onBack, subtitle = connection.environmentLabel) { padding ->
         LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = Space.xxl)) {
+            item("ctx") { ServerContextBanner(connection) }
             item("storage") {
                 SectionHeader("Storage")
                 ListItem(headlineContent = { Text("Database") }, trailingContent = { Text(storage.databaseSize) }, colors = ListItemDefaults.colors(containerColor = clear))
@@ -524,14 +912,21 @@ fun MaintenanceScreen(core: Core, onBack: () -> Unit) {
 /** Remote access, pairing another device, and who is signed in. */
 @Composable
 fun AccessScreen(core: Core, onBack: () -> Unit) {
+    val connection by core.view.connection.watch()
     val settings by core.view.settings.watch()
     val remote = settings.remote
     val context = LocalContext.current
     var revoking by remember { mutableStateOf<com.crayen.domovoi.app.AccessEntryView?>(null) }
     var pairing by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) { core.update(Event.LoadRemoteAccess); core.update(Event.LoadSettings("access")) }
-    ToolScaffold("Access & devices", onBack) { padding ->
+    LaunchedEffect(connection.activeEnvironmentId, connection.state) {
+        if (connection.state == "connected") {
+            core.update(Event.LoadRemoteAccess)
+            core.update(Event.LoadSettings("access"))
+        }
+    }
+    ToolScaffold("Access & devices", onBack, subtitle = connection.environmentLabel) { padding ->
         LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = Space.xxl)) {
+            item("ctx") { ServerContextBanner(connection) }
             item("remote") {
                 SectionHeader("Remote access")
                 ListItem(

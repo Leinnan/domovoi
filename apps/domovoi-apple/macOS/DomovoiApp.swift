@@ -11,6 +11,7 @@ struct DomovoiApp: App {
         Window("Domovoi", id: "main") {
             ContentView(core: core)
                 .environment(\.core, core)
+                .modifier(AppAppearanceModifier())
                 // Room for the thread and the panel; `MainView` hides the
                 // sidebar when all three columns don't fit.
                 .frame(minWidth: 720, minHeight: 560)
@@ -107,6 +108,7 @@ struct DomovoiApp: App {
 
         Settings {
             SettingsWindow(core: core)
+                .modifier(AppAppearanceModifier())
         }
     }
 

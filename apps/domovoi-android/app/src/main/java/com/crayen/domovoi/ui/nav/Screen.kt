@@ -16,7 +16,10 @@ sealed interface Screen {
     data object PullRequests : Screen
     data object Usage : Screen
     data object Settings : Screen
+    data class ServerHub(val environmentId: String) : Screen
     data object ServerSettings : Screen
+    data object ServerProjects : Screen
+    data object ArchivedThreads : Screen
     data object Providers : Screen
     data object ScheduledTasks : Screen
     data object Maintenance : Screen

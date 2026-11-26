@@ -10,7 +10,7 @@ use windows_reactor::{
 };
 
 use super::general::{row, switch};
-use super::{Hooks, Shown, caption, card, heading};
+use super::{Shown, active_server, caption, card, heading};
 use crate::companion::{self, Mood};
 use crate::core_link::CoreLink;
 use crate::theme;
@@ -19,33 +19,15 @@ const EYES: [(&str, &str); 4] = [("round", "Round"), ("oval", "Oval"), ("pill", 
 const EARS: [(&str, &str); 3] = [("none", "None"), ("round", "Round"), ("pointy", "Pointy")];
 const PUPILS: [(&str, &str); 3] = [("small", "Small"), ("medium", "Medium"), ("large", "Large")];
 
-/// The server whose companion is shown: the one picked here, else the connected one, else the first.
-fn subject<'a>(shown: &'a Shown<'_>) -> Option<&'a domovoi_core::view::EnvironmentView> {
-    let servers = &shown.connection.environments;
-    let picked = shown.state.companion_server.as_deref().and_then(|id| servers.iter().find(|s| s.id == id));
-    picked.or_else(|| servers.iter().find(|s| s.active)).or_else(|| servers.first())
-}
-
-pub fn companion(core: &CoreLink, shown: &Shown<'_>, hooks: &Hooks<'_>) -> Vec<View> {
+pub fn companion(core: &CoreLink, shown: &Shown<'_>) -> Vec<View> {
     let dark = shown.icons.dark;
-    let server = subject(shown);
+    let server = active_server(shown.connection);
     // With no server saved yet, the look of the one being connected to is shown and cannot be changed.
     let look = server.map_or(&shown.connection.companion.look, |s| &s.companion.look);
-    let mut out: Vec<View> = vec![caption("Each server has a small face beside its name. It perks up while agents work, looks alert when one waits for you, and sleeps without a connection.").into()];
-
-    let servers = &shown.connection.environments;
-    if servers.len() > 1 {
-        let chips = servers.iter().map(|each| {
-            let (on_menu, key) = (hooks.on_menu.clone(), format!("companion-server:{}", each.id));
-            Button::new()
-                .style(if server.is_some_and(|s| s.id == each.id) { ButtonStyle::Accent } else { ButtonStyle::Default })
-                .automation_name(format!("Companion of {}", each.label))
-                .content(TextBlock::new().text(&each.label).font_size(theme::CAPTION + 1.0))
-                .on_click(move || on_menu.call(key.as_str().into()))
-                .into()
-        });
-        out.push(StackPanel::new().orientation(Orientation::Horizontal).spacing(4.0).children(chips.collect::<Vec<View>>()).into());
-    }
+    let name = server.map_or("this server", |s| s.label.as_str());
+    let mut out: Vec<View> = vec![
+        caption(&format!("Saved on this PC only — customizes how {name} looks here. It perks up while agents work, looks alert when one waits for you, and sleeps without a connection.")).into(),
+    ];
 
     // How it looks at rest and in each mood.
     let face = |mood: Mood, size: f64, name: &str| -> View {

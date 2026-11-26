@@ -23,7 +23,10 @@ struct ThreadView: View {
         #endif
         let header = core.view.header
         VStack(spacing: 0) {
-            if header != nil { ThreadContent(core: core, artifactJump: artifactJump) }
+            if header != nil {
+                ThreadContent(core: core, artifactJump: artifactJump)
+                    .modifier(TranscriptTextScaleModifier())
+            }
             ForEach(header?.waitingChildren ?? [], id: \.threadId) { child in
                 WaitingChildBanner(child: child) { core.update(.selectThread(threadId: $0)) }
                     .padding(.horizontal, Space.gutter)

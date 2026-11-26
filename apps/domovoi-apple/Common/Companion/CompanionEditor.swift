@@ -61,6 +61,12 @@ private struct CompanionAppearanceForm: View {
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 8)
+            } footer: {
+                #if os(macOS)
+                Text("Saved on this Mac for \(server.label). Does not change how \(server.label) appears on your other devices.")
+                #else
+                Text("Saved on this device for \(server.label). Does not change how \(server.label) appears on your other devices.")
+                #endif
             }
             Section("Body") {
                 PaletteSwatchGrid(selection: setting(\.body))

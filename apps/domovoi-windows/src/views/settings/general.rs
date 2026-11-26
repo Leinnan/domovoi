@@ -7,11 +7,12 @@ use domovoi_core::Event;
 use domovoi_core::view::{ConnectionView, SettingFieldView};
 use domovoi_desktop_host::prefs::{self, Appearance, Prefs};
 use windows_reactor::{
-    Button, ButtonStyle, ComboBox, FontWeight, Grid, GridLength, HorizontalAlignment, Menu, MenuExt as _, MenuItem, Orientation, Slider, StackPanel, TextBlock,
-    TextBox, TextTrimming, TextWrapping, ToggleSwitch, VerticalAlignment, View,
+    Button, ButtonStyle, ComboBox, FontWeight, Grid, GridLength, HorizontalAlignment, Image, Menu, MenuExt as _, MenuItem, Orientation, Slider, StackPanel,
+    Stretch, TextBlock, TextBox, TextTrimming, TextWrapping, ToggleSwitch, VerticalAlignment, View,
 };
 
 use super::{Hooks, Shown, caption, card, heading};
+use crate::companion::{self as mascot, Mood};
 use crate::core_link::CoreLink;
 use crate::theme;
 
@@ -180,8 +181,8 @@ fn setting(core: &CoreLink, field: &SettingFieldView, shown: &Shown<'_>, hooks: 
     row(&field.label, &field.help, control)
 }
 
-/// The servers this device is paired with: switch, rename, reorder, forget, add.
-pub fn servers(connection: &ConnectionView, hooks: &Hooks<'_>) -> Vec<View> {
+/// The servers this device is paired with: switch, configure, rename, reorder, forget, add.
+pub fn servers(connection: &ConnectionView, dark: bool, hooks: &Hooks<'_>) -> Vec<View> {
     let count = connection.environments.len();
     let mut rows: Vec<View> = connection
         .environments
@@ -193,7 +194,10 @@ pub fn servers(connection: &ConnectionView, hooks: &Hooks<'_>) -> Vec<View> {
             if !server.detail.is_empty() {
                 name.push(caption(&server.detail).into());
             }
-            let mut items = vec![MenuItem::item(format!("env-rename:{id}"), "Rename…")];
+            let mut items = vec![
+                MenuItem::item(format!("env-configure:{id}"), "Configure Settings…"),
+                MenuItem::item(format!("env-rename:{id}"), "Rename on this PC…"),
+            ];
             if index > 0 {
                 items.push(MenuItem::item(format!("env-up:{id}"), "Move Up"));
             }
@@ -202,19 +206,25 @@ pub fn servers(connection: &ConnectionView, hooks: &Hooks<'_>) -> Vec<View> {
             }
             items.push(MenuItem::separator("separator"));
             items.push(MenuItem::item(format!("env-forget:{id}"), "Forget…"));
-            let state: View = if server.active {
-                caption(if connection.state == "connected" { "Connected" } else { "Selected" }).vertical_alignment(VerticalAlignment::Center).into()
+            let mut controls: Vec<View> = Vec::new();
+            if server.active {
+                controls.push(caption(if connection.state == "connected" { "Connected" } else { "Selected" }).vertical_alignment(VerticalAlignment::Center).into());
             } else {
                 let (on_menu, key) = (hooks.on_menu.clone(), format!("env-select:{id}"));
-                Button::new().automation_name(format!("Switch to {}", server.label)).content(TextBlock::new().text("Switch")).on_click(move || on_menu.call(key.as_str().into())).into()
-            };
+                controls.push(Button::new().automation_name(format!("Switch to {}", server.label)).content(TextBlock::new().text("Switch")).on_click(move || on_menu.call(key.as_str().into())).into());
+            }
+            {
+                let (on_menu, key) = (hooks.on_menu.clone(), format!("env-configure:{id}"));
+                controls.push(Button::new().automation_name(format!("Configure {}", server.label)).content(TextBlock::new().text("Configure")).on_click(move || on_menu.call(key.as_str().into())).into());
+            }
+            let mood = if server.active && connection.state == "connected" { Mood::Idle } else { Mood::Offline };
             Grid::new()
                 .columns([GridLength::Auto, GridLength::STAR, GridLength::Auto, GridLength::Auto])
                 .column_spacing(12.0)
                 .children((
-                    theme::glyph(if server.remote { "\u{E774}" } else { "\u{E977}" }, 18.0).opacity(0.8),
+                    Image::new().source_svg(mascot::image(&server.companion.look, mood, dark)).stretch(Stretch::Uniform).width(28.0).height(28.0),
                     StackPanel::new().grid_column(1).orientation(Orientation::Vertical).vertical_alignment(VerticalAlignment::Center).children(name),
-                    StackPanel::new().grid_column(2).orientation(Orientation::Horizontal).vertical_alignment(VerticalAlignment::Center).children(vec![state]),
+                    StackPanel::new().grid_column(2).orientation(Orientation::Horizontal).spacing(8.0).vertical_alignment(VerticalAlignment::Center).children(controls),
                     Button::new()
                         .grid_column(3)
                         .style(ButtonStyle::Subtle)
@@ -226,11 +236,15 @@ pub fn servers(connection: &ConnectionView, hooks: &Hooks<'_>) -> Vec<View> {
         })
         .collect();
     if rows.is_empty() {
-        rows.push(caption("This device is not paired with a server yet.").into());
+        rows.push(caption("This PC is not paired with a server yet.").into());
     }
     let add = {
         let on_menu = hooks.on_menu.clone();
         Button::new().horizontal_alignment(HorizontalAlignment::Left).content(TextBlock::new().text("Add Server…")).on_click(move || on_menu.call("env-add:".into()))
     };
-    vec![card(rows), add.into()]
+    vec![
+        caption("Server names and order are saved on this PC. Choose Configure to edit settings stored on a specific server.").into(),
+        card(rows),
+        add.into(),
+    ]
 }

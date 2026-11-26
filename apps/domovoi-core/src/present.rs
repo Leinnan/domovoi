@@ -2495,11 +2495,11 @@ fn setting_groups(model: &Model) -> Vec<SettingGroupView> {
             ],
         },
         SettingGroupView {
-            title: "Sidebar".into(),
+            title: "Auto-settle".into(),
             fields: vec![
                 field_text(model, "sidebarAutoSettleAfterDays", "Settle after days", "Threads with no activity move to Settled after this many days."),
-                field_bool(model, "sidebarAutoSettleOnMerge", "Settle when the pull request merges", ""),
-                field_bool(model, "sidebarAutoSettleKeepPullRequests", "Keep threads with open pull requests", ""),
+                field_bool(model, "sidebarAutoSettleOnMerge", "Settle when the pull request merges", "Automatically settle a thread once its pull request merges."),
+                field_bool(model, "sidebarAutoSettleKeepPullRequests", "Keep threads with open pull requests", "Do not auto-settle threads that still have an open pull request."),
             ],
         },
         SettingGroupView {

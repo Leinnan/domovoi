@@ -774,19 +774,19 @@ struct UsageScreen: View {
 struct SettingsScreen: View {
     @ObservedObject var core: Core
     @EnvironmentObject private var companion: CompanionBrain
+    @AppStorage(AppPreferenceKeys.appearance) private var rawAppearance = AppAppearance.system.rawValue
     @State private var adding = false
     @State private var renaming: EnvironmentView?
     @State private var newName = ""
     @State private var notifications: UNAuthorizationStatus?
-    @State private var pickingProjectIcon: ProjectSettingsView?
-    @State private var renamingProject: ProjectSettingsView?
-    @State private var projectName = ""
     @State private var forgetting: EnvironmentView?
-    @State private var removing: ProjectSettingsView?
     @Environment(\.scenePhase) private var scenePhase
 
     private var connection: ConnectionView { core.view.connection }
-    private var remoteAccess: RemoteAccessView { core.view.settings.remote }
+
+    private var deviceTitle: String {
+        UIDevice.current.userInterfaceIdiom == .pad ? "This iPad" : "This iPhone"
+    }
 
     private func readNotifications() async {
         notifications = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
@@ -801,44 +801,80 @@ struct SettingsScreen: View {
         }
     }
 
+    private func statusText(for env: EnvironmentView) -> (String, Color)? {
+        guard env.active else { return nil }
+        switch connection.state {
+        case "connected":
+            return ("Connected", Tint.success)
+        case "connecting", "pairing":
+            return ("Connecting…", Tint.caution)
+        case "reconnecting":
+            return ("Reconnecting…", Tint.caution)
+        default:
+            return ("Offline", .secondary)
+        }
+    }
+
+    private func detailLine(for env: EnvironmentView) -> String {
+        if env.active, connection.state == "connected", connection.remote, !connection.path.isEmpty {
+            return "\(connection.path.capitalized) · \(connection.rttMs) ms"
+        }
+        return env.detail
+    }
+
     var body: some View {
         Form {
-            Section("Connected server") {
-                LabeledContent("Name", value: connection.environmentLabel)
-                LabeledContent("State", value: connection.state.capitalized)
-                if connection.remote {
-                    LabeledContent("Route", value: connection.path.isEmpty ? "—" : "\(connection.path.capitalized), \(connection.rttMs) ms")
-                } else {
-                    LabeledContent("Address", value: connection.serverUrl)
-                }
-                LabeledContent("Server", value: "domovoi-server \(connection.serverVersion)")
-                LabeledContent("Platform", value: connection.platform)
-                if !connection.activeEnvironmentId.isEmpty {
-                    NavigationLink(value: Screen.companion(connection.activeEnvironmentId)) {
-                        SettingsRow(title: "Companion") {
-                            CompanionView(look: connection.companion.look, brain: companion, size: 26)
-                        }
-                    }
-                }
-            }
             Section {
                 ForEach(connection.environments, id: \.id) { env in
-                    Button { core.update(.selectEnvironment(id: env.id)) } label: { EnvironmentRow(env: env) }
-                        .swipeActions {
-                            Button("Forget", role: .destructive) { forgetting = env }
-                            Button("Rename") {
-                                newName = env.label
-                                renaming = env
+                    NavigationLink(value: Screen.serverHub(env.id)) {
+                        HStack(spacing: Space.m) {
+                            if env.active {
+                                CompanionView(look: env.companion.look, brain: companion, size: 30)
+                            } else {
+                                CompanionStill(look: env.companion.look, size: 30, mood: .idle)
                             }
-                            .tint(.blue)
-                        }
-                        .contextMenu {
-                            Button("Rename…") {
-                                newName = env.label
-                                renaming = env
+                            VStack(alignment: .leading, spacing: Space.xxs) {
+                                HStack(spacing: Space.xs) {
+                                    Text(env.label)
+                                        .fontWeight(env.active ? .semibold : .regular)
+                                        .lineLimit(1)
+                                    if let badge = statusText(for: env) {
+                                        Text(badge.0)
+                                            .font(TypeRole.metaSmall.weight(.medium))
+                                            .foregroundStyle(badge.1)
+                                            .padding(.horizontal, 6)
+                                            .padding(.vertical, 1)
+                                            .background(badge.1.opacity(0.14), in: Capsule())
+                                    }
+                                }
+                                Text(detailLine(for: env))
+                                    .font(TypeRole.meta)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
                             }
-                            Button("Forget", role: .destructive) { forgetting = env }
                         }
+                        .padding(.vertical, 2)
+                    }
+                    .swipeActions {
+                        Button("Forget", role: .destructive) { forgetting = env }
+                        Button("Rename") {
+                            newName = env.label
+                            renaming = env
+                        }
+                        .tint(.blue)
+                    }
+                    .contextMenu {
+                        if !env.active {
+                            Button("Switch to Server", systemImage: "arrow.left.arrow.right") {
+                                core.update(.selectEnvironment(id: env.id))
+                            }
+                        }
+                        Button("Rename on \(deviceTitle)…", systemImage: "pencil") {
+                            newName = env.label
+                            renaming = env
+                        }
+                        Button("Forget", systemImage: "trash", role: .destructive) { forgetting = env }
+                    }
                 }
                 .onMove { from, to in
                     // Indexes into the rows as drawn: the list may have changed since.
@@ -855,77 +891,17 @@ struct SettingsScreen: View {
                     Spacer()
                     if connection.environments.count > 1 { EditButton().font(TypeRole.meta) }
                 }
+            } footer: {
+                Text("Select a server to configure its settings, providers, projects, scheduled tasks, and access.")
             }
-            if connection.state == "connected" {
-                Section("This Server") {
-                    NavigationLink(value: Screen.serverSettings) { Label("Server Settings", systemImage: "gearshape.2") }
-                    NavigationLink(value: Screen.providers) { Label("Providers", systemImage: "cpu") }
-                    NavigationLink(value: Screen.scheduledTasks) { Label("Scheduled Tasks", systemImage: "calendar.badge.clock") }
-                    NavigationLink(value: Screen.access) { Label("Access & Devices", systemImage: "person.badge.key") }
-                    NavigationLink(value: Screen.maintenance) { Label("Maintenance", systemImage: "wrench.and.screwdriver") }
-                }
-            }
-            if connection.state == "connected" {
-                Section {
-                    ForEach(core.view.settings.projects, id: \.id) { project in
-                        // A settings row's layout, with the icon a button and the
-                        // path cut at its start.
-                        HStack(spacing: Space.m) {
-                            Button { pickingProjectIcon = project } label: {
-                                ProjectIconTile(icon: project.icon, size: Size.listIcon, core: core)
-                                    .tapTarget()
-                            }
-                            .buttonStyle(.borderless)
-                            .disabled(project.icon.saving)
-                            .accessibilityLabel("Change icon for \(project.title)")
-                            .iconColumn(Size.listIcon)
-                            VStack(alignment: .leading, spacing: Space.xxs) {
-                                Text(project.title)
-                                Text(project.workspaceRoot).font(TypeRole.meta).foregroundStyle(.secondary).lineLimit(1).truncationMode(.head)
-                            }
-                        }
-                        .swipeActions {
-                            Button("Remove", role: .destructive) { removing = project }
-                            Button("Rename") {
-                                projectName = project.title
-                                renamingProject = project
-                            }
-                            .tint(.blue)
-                        }
-                        .contextMenu {
-                            Button("Change Icon…") { pickingProjectIcon = project }.disabled(project.icon.saving)
-                            Button("Rename…") {
-                                projectName = project.title
-                                renamingProject = project
-                            }
-                            Button("Remove", role: .destructive) { removing = project }
-                        }
-                    }
-                    NavigationLink(value: Screen.importSessions) { Label("Import from Claude Code", systemImage: "square.and.arrow.down") }
-                    NavigationLink(value: Screen.browseFolders) { Label("Add Folder on Server", systemImage: "folder.badge.plus") }
-                } header: {
-                    Text("Projects")
-                } footer: {
-                    Text("Removing a project keeps its folder. A removed project is not imported again on its own.")
-                }
-            }
-            if connection.state == "connected", !core.view.settings.archived.isEmpty {
-                Section("Archived Threads") {
-                    ForEach(core.view.settings.archived, id: \.id) { thread in
-                        HStack {
-                            VStack(alignment: .leading, spacing: Space.xxs) {
-                                Text(thread.title).lineLimit(2)
-                                Text(thread.age).font(TypeRole.meta).foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                            Button("Unarchive") { core.update(.archiveThread(threadId: thread.id, archived: false)) }
-                                .buttonStyle(.borderless)
-                        }
+
+            Section {
+                Picker("Appearance", selection: $rawAppearance) {
+                    ForEach(AppAppearance.allCases) { mode in
+                        Text(mode.label).tag(mode.rawValue)
                     }
                 }
-            }
-            Section("Notifications") {
-                LabeledContent("On this device", value: notificationsLine)
+                LabeledContent("Notifications", value: notificationsLine)
                 if notifications == .notDetermined {
                     Button("Turn On Notifications") {
                         AppDelegate.requestPush()
@@ -938,21 +914,13 @@ struct SettingsScreen: View {
                         }
                     }
                 }
-                if connection.state == "connected" {
-                    LabeledContent("From this server", value: remoteAccess.pushConfigured ? "On" : "Off (no APNs key on the server)")
-                }
                 if notifications == .denied, let url = URL(string: UIApplication.openSettingsURLString) {
-                    Link("Turn On in Settings", destination: url)
+                    Link("Turn On in iOS Settings", destination: url)
                 }
-            }
-            Section {
-                if connection.state == "connected" {
-                    Button("Disconnect") { core.update(.disconnect) }
-                } else {
-                    Button("Reconnect") { core.update(.reconnect) }
-                }
+            } header: {
+                Text(deviceTitle)
             } footer: {
-                Text("Forgetting the server in use also signs this device out there and stops its notifications. Forgetting another one only removes it here.")
+                Text("Saved on this device only. Applies across all servers.")
             }
         }
         .navigationTitle("Settings")
@@ -967,40 +935,21 @@ struct SettingsScreen: View {
         } message: { env in
             Text(env.id == connection.activeEnvironmentId ? "This device signs out there and stops getting its notifications. Pairing again needs a new code." : "It's only removed from this device.")
         }
-        .confirmationDialog(
-            "Remove \(removing?.title ?? "this project")?",
-            isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } }),
-            titleVisibility: .visible,
-            presenting: removing
-        ) { project in
-            Button("Remove", role: .destructive) { core.update(.removeProject(projectId: project.id)) }
-        } message: { _ in
-            Text("Its folder stays on the server. Its threads go with it.")
-        }
-        .alert("Rename Project", isPresented: Binding(get: { renamingProject != nil }, set: { if !$0 { renamingProject = nil } })) {
-            TextField("Name", text: $projectName)
-            Button("Rename") {
-                if let project = renamingProject { core.update(.renameProject(projectId: project.id, title: projectName)) }
-            }
-            Button("Cancel", role: .cancel) {}
-        }
         .alert("Rename Server", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
             TextField("Name", text: $newName)
             Button("Rename") {
                 if let env = renaming { core.update(.renameEnvironment(id: env.id, label: newName)) }
             }
             Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Changes how this server is named on this device only.")
         }
         .task {
             await readNotifications()
-            if connection.state == "connected" { core.update(.loadRemoteAccess) }
         }
         // Back from Settings, where it may have changed.
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { Task { await readNotifications() } }
-        }
-        .sheet(isPresented: Binding(get: { pickingProjectIcon != nil }, set: { if !$0 { pickingProjectIcon = nil } })) {
-            if let project = pickingProjectIcon { ProjectIconPicker(project: project, core: core) }
         }
         .sheet(isPresented: $adding) {
             NavigationStack {

@@ -7,8 +7,13 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import com.crayen.domovoi.app.Event
+import com.crayen.domovoi.core.AppAppearance
+import com.crayen.domovoi.core.AppPreferences
 import com.crayen.domovoi.core.Notifier
 import com.crayen.domovoi.system.AppRequest
 import com.crayen.domovoi.system.AppRequests
@@ -28,10 +33,18 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+        AppPreferences.init(this)
         if (savedInstanceState == null) handle(intent)
         if (savedInstanceState == null) com.crayen.domovoi.system.UnifiedPushService.start(this)
         setContent {
-            DomovoiTheme {
+            val appearance by AppPreferences.appearance.collectAsState()
+            val dynamicColor by AppPreferences.dynamicColor.collectAsState()
+            val dark = when (appearance) {
+                AppAppearance.System -> isSystemInDarkTheme()
+                AppAppearance.Light -> false
+                AppAppearance.Dark -> true
+            }
+            DomovoiTheme(dark = dark, dynamic = dynamicColor) {
                 CompositionLocalProvider(LocalCore provides core) {
                     AppRoot(core)
                 }

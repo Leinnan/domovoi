@@ -65,9 +65,12 @@ import com.crayen.domovoi.ui.thread.ThreadScreen
 import com.crayen.domovoi.ui.projects.FolderBrowserScreen
 import com.crayen.domovoi.ui.projects.ImportSessionsScreen
 import com.crayen.domovoi.ui.settings.AccessScreen
+import com.crayen.domovoi.ui.settings.ArchivedThreadsScreen
 import com.crayen.domovoi.ui.settings.MaintenanceScreen
 import com.crayen.domovoi.ui.settings.ProvidersScreen
 import com.crayen.domovoi.ui.settings.ScheduledTasksScreen
+import com.crayen.domovoi.ui.settings.ServerHubScreen
+import com.crayen.domovoi.ui.settings.ServerProjectsScreen
 import com.crayen.domovoi.ui.settings.ServerSettingsScreen
 import com.crayen.domovoi.ui.settings.SettingsScreen
 import com.crayen.domovoi.ui.terminal.TerminalScreen
@@ -159,12 +162,23 @@ fun MainScaffold(core: Core) {
             }
         }
     }
-    // Another server: start over (not on the first value, the one at launch).
+    // Another server: reset thread/PR/usage stacks, but stay inside the
+    // server hub when the user switched servers from Settings.
     var lastEnvironment by remember { mutableStateOf(connection.activeEnvironmentId) }
     LaunchedEffect(connection.activeEnvironmentId) {
         if (connection.activeEnvironmentId == lastEnvironment) return@LaunchedEffect
-        lastEnvironment = connection.activeEnvironmentId
-        stacks.values.forEach { s -> while (s.size > 1) s.removeAt(s.lastIndex) }
+        val newId = connection.activeEnvironmentId
+        lastEnvironment = newId
+        stacks.forEach { (stackTab, s) ->
+            if (stackTab == Tab.Settings) {
+                if (s.size > 1) {
+                    while (s.size > 1) s.removeAt(s.lastIndex)
+                    if (newId.isNotEmpty()) s.add(Screen.ServerHub(newId))
+                }
+            } else {
+                while (s.size > 1) s.removeAt(s.lastIndex)
+            }
+        }
     }
     // The core picked a thread elsewhere (a fork, a PR thread).
     LaunchedEffect(sidebar.selectedThreadId) {
@@ -294,7 +308,10 @@ private fun Content(core: Core, tab: Tab, stack: SnapshotStateList<Screen>, nav:
             entry<Screen.PullRequests> { PullRequestsScreen(core, threadsNav) }
             entry<Screen.Usage> { UsageScreen(core) }
             entry<Screen.Settings> { SettingsScreen(core, nav) }
+            entry<Screen.ServerHub> { key -> ServerHubScreen(core, key.environmentId, nav) }
             entry<Screen.ServerSettings> { ServerSettingsScreen(core, onBack = nav::back) }
+            entry<Screen.ServerProjects> { ServerProjectsScreen(core, nav, onBack = nav::back) }
+            entry<Screen.ArchivedThreads> { ArchivedThreadsScreen(core, onBack = nav::back) }
             entry<Screen.Providers> { ProvidersScreen(core, onBack = nav::back) }
             entry<Screen.ScheduledTasks> { ScheduledTasksScreen(core, onBack = nav::back, openThread = { threadsNav.show(Screen.Thread(it)) }) }
             entry<Screen.Maintenance> { MaintenanceScreen(core, onBack = nav::back) }

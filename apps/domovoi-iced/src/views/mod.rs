@@ -326,6 +326,7 @@ fn render_overlay<'a>(app: &'a App, ov: &'a Overlay) -> Element<'a, Message> {
             }
             col = col
                 .push(w::divider())
+                .push(w::menu_item(Icon::Server, "Manage Servers…", Message::OpenSettings(SettingsSection::Servers), false))
                 .push(w::menu_item(Icon::Plus, "Add Server…", Message::ShowAddServer(true), false))
                 .push(w::menu_item(Icon::Smile, "Customize Companion…", Message::OpenSettings(SettingsSection::Companion), false))
                 .push(w::menu_item(Icon::Power, "Disconnect", core(Event::Disconnect), true));

@@ -319,6 +319,19 @@ impl MainWindow {
         }
         let connection = Rc::clone(&self.store.connection);
         core.set_server(&connection.server_url, connection.remote);
+        // Switching servers while Settings is open clears drafts and reloads the active server section once connected.
+        if self.in_settings && connection.state == "connected" && !connection.active_environment_id.is_empty() {
+            let key = (connection.active_environment_id.clone(), self.settings.section);
+            if self.settings.loaded_for.as_ref() != Some(&key) {
+                if self.settings.loaded_for.as_ref().is_some_and(|(env, _)| *env != key.0) {
+                    self.settings.drafts.clear();
+                }
+                self.settings.loaded_for = Some(key);
+                for event in self.settings.section.loads() {
+                    core.send(event);
+                }
+            }
+        }
         // A turn that just ended shows on the companion's face for a moment.
         if let Some(until) = self.reaction.observe(&connection.active_environment_id, &connection.activity, now_ms()) {
             self.reaction_until = Some(until);
@@ -700,9 +713,15 @@ impl MainWindow {
     fn open_settings(&mut self) {
         if !self.in_settings {
             self.in_settings = true;
-            // The first time, the server's own settings; after, where it was left.
-            let connected = self.store.connection.state == "connected";
-            let section = if self.settings.section == settings::Section::Appearance && connected { settings::Section::General } else { self.settings.section };
+            // The first time, the server's own settings when a server exists; after, where it was left.
+            let has_servers = !self.store.connection.environments.is_empty();
+            let section = if self.settings.section == settings::Section::Appearance && has_servers {
+                settings::Section::General
+            } else if self.settings.section.is_server_scoped() && !has_servers {
+                settings::Section::Servers
+            } else {
+                self.settings.section
+            };
             self.open_section(section);
         }
     }
@@ -710,8 +729,11 @@ impl MainWindow {
     /// Shows `section` of Settings and asks the core for what it shows.
     fn open_section(&mut self, section: settings::Section) {
         self.settings.section = section;
-        for event in section.loads() {
-            self.send(event);
+        if self.store.connection.state == "connected" {
+            self.settings.loaded_for = Some((self.store.connection.active_environment_id.clone(), section));
+            for event in section.loads() {
+                self.send(event);
+            }
         }
     }
 
@@ -801,7 +823,15 @@ impl MainWindow {
                 };
                 self.overlay = Overlay::TaskEditor(Box::new(draft));
             }
-            ("companion-server", id) => self.settings.companion_server = Some(id.to_owned()),
+            ("env-configure", id) => {
+                if self.store.connection.active_environment_id != id {
+                    self.settings.drafts.clear();
+                    self.settings.loaded_for = None;
+                    self.send(Event::SelectEnvironment { id: id.to_owned() });
+                }
+                self.in_settings = true;
+                self.open_section(settings::Section::General);
+            }
             ("go", "palette") => self.command(Command::Palette),
             ("go", "files") => self.command(Command::PaletteFiles),
             ("go", "content") => self.command(Command::PaletteContent),

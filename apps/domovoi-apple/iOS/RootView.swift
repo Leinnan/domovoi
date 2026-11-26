@@ -12,10 +12,13 @@ enum Screen: Hashable {
     case pullRequests
     case usage
     case settings
+    case serverHub(String)
     case companion(String)
     case importSessions
     case browseFolders
     case serverSettings
+    case serverProjects
+    case archivedThreads
     case providers
     case scheduledTasks
     case maintenance
@@ -136,10 +139,17 @@ struct MainStack: View {
             guard route == "new-thread", core.view.threadId == nil, case .thread = path.last else { return }
             path = []
         }
-        // Another server: the screens of the old one mean nothing there.
-        .onChange(of: core.view.connection.activeEnvironmentId) { _, _ in
-            path = []
+        // Another server: leave threads of the old server, but stay in Settings
+        // when the user switched servers from inside Settings.
+        .onChange(of: core.view.connection.activeEnvironmentId) { _, newId in
             awaitingProject = false
+            if path.first == .settings {
+                if path.count > 1 {
+                    path = newId.isEmpty ? [.settings] : [.settings, .serverHub(newId)]
+                }
+            } else {
+                path = []
+            }
         }
         // The core selects a project the server just made.
         .onChange(of: core.view.sidebar.selectedProjectId) { _, id in
@@ -258,12 +268,15 @@ struct MainStack: View {
         case .pullRequests: PullRequestsScreen(core: core)
         case .usage: UsageScreen(core: core)
         case .settings: SettingsScreen(core: core)
+        case .serverHub(let id): ServerHubScreen(core: core, environmentId: id, open: open)
         case .companion(let id):
             CompanionEditor(core: core, environmentId: id)
                 .navigationTitle("Companion").navigationBarTitleDisplayMode(.inline)
         case .importSessions: ImportSessionsScreen(core: core)
         case .browseFolders: FolderBrowserScreen(core: core, open: open, expectProject: { awaitingProject = true })
         case .serverSettings: ServerSettingsScreen(core: core)
+        case .serverProjects: ServerProjectsScreen(core: core)
+        case .archivedThreads: ArchivedThreadsScreen(core: core)
         case .providers: ProvidersScreen(core: core)
         case .scheduledTasks: ScheduledTasksScreen(core: core, open: open)
         case .maintenance: MaintenanceScreen(core: core)

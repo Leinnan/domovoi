@@ -1106,3 +1106,37 @@ fn sidebar_grouping_add_menu_and_right_click_thread_actions() {
     app.vm.sidebar.projects[0].earlier_count = 3;
     snapshot(&app, "33-sidebar-project-grouping");
 }
+
+#[test]
+fn settings_scope_grouping_and_server_switching() {
+    let (mut app, _) = App::new();
+    app.prefs.appearance = Appearance::Dark;
+    app.vm = sample_connected_vm();
+
+    // Open Servers tab under THIS DEVICE and verify both scope headers appear.
+    let _ = app.update(Message::OpenSettings(SettingsSection::Servers));
+    assert_eq!(app.overlay, Some(Overlay::Settings(SettingsSection::Servers)));
+    snapshot(&app, "34-settings-servers");
+    {
+        let mut ui = Simulator::with_size(crate::ui::fonts::settings(), Size::new(1440.0, 900.0), crate::views::view(&app));
+        for label in ["THIS DEVICE", "SERVER", "Appearance", "Servers", "SAVED SERVERS", "Configure"] {
+            assert!(ui.find(label).is_ok(), "missing expected settings label: {label}");
+        }
+    }
+
+    // Open server-scoped Providers section and toggle the inline Server Switcher.
+    let _ = app.update(Message::OpenSettings(SettingsSection::Providers));
+    let _ = app.update(Message::ToggleSettingsServerPicker);
+    assert!(app.settings_server_picker_open);
+    snapshot(&app, "35-settings-server-switcher");
+
+    // Selecting another server closes the picker while staying on Providers in Settings.
+    let _ = app.update(Message::SelectSettingsServer("e2".into()));
+    assert!(!app.settings_server_picker_open);
+    assert_eq!(app.overlay, Some(Overlay::Settings(SettingsSection::Providers)));
+
+    // When disconnected, server-scoped sections stay visible with an offline placeholder.
+    app.vm.connection.state = "disconnected".into();
+    let mut ui = Simulator::with_size(crate::ui::fonts::settings(), Size::new(1440.0, 900.0), crate::views::view(&app));
+    assert!(ui.find("Reconnect").is_ok(), "disconnected server settings should show Reconnect");
+}

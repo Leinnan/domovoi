@@ -2,60 +2,646 @@ import App
 import AppKit
 import SwiftUI
 
-/// The selected Settings tab (shared so the Remote Access menu item and
-/// snapshots can open a tab).
+/// The selected Settings section (shared so the Remote Access menu item and
+/// snapshots can open a section directly).
 @MainActor
 final class SettingsTab: ObservableObject {
     static let shared = SettingsTab()
     @Published var selection = "general"
 }
 
-struct SettingsWindow: View {
-    @ObservedObject var core: Core
-    @ObservedObject private var tab = SettingsTab.shared
+enum SettingsSectionKind: String, CaseIterable, Identifiable {
+    // This Mac (device-local)
+    case appearance
+    case servers
+    // Per-server (server-stored + per-server local companion)
+    case general
+    case providers
+    case projects
+    case scheduled
+    case keybindings
+    case access
+    case archived
+    case maintenance
+    case companion
 
-    private var connected: Bool { ["connected", "reconnecting"].contains(core.view.connection.state) }
+    var id: String { rawValue }
 
-    var body: some View {
-        TabView(selection: Binding(
-            get: { connected ? tab.selection : "companion" },
-            set: { tab.selection = $0 }
-        )) {
-            if connected {
-                GeneralSettings(core: core).tabItem { Label("General", systemImage: "gearshape") }.tag("general")
-                ProvidersSettings(core: core).tabItem { Label("Providers", systemImage: "cpu") }.tag("providers")
-                KeybindingsSettings(core: core).tabItem { Label("Keybindings", systemImage: "keyboard") }.tag("keybindings")
-                ScheduledSettings(core: core).tabItem { Label("Scheduled", systemImage: "calendar.badge.clock") }.tag("scheduled")
-                ArchivedSettings(core: core).tabItem { Label("Archived", systemImage: "archivebox") }.tag("archived")
-                ProjectsSettings(core: core).tabItem { Label("Projects", systemImage: "folder") }.tag("projects")
-                MaintenanceSettings(core: core).tabItem { Label("Maintenance", systemImage: "wrench.and.screwdriver") }.tag("maintenance")
-                AccessSettings(core: core).tabItem { Label("Access", systemImage: "person.badge.key") }.tag("access")
-            }
-            CompanionSettings(core: core).tabItem { Label("Companion", systemImage: "face.smiling") }.tag("companion")
+    static let clientSections: [Self] = [.appearance, .servers]
+    static let serverSections: [Self] = [
+        .general, .providers, .projects, .scheduled, .keybindings, .access, .archived, .maintenance, .companion,
+    ]
+
+    var title: String {
+        switch self {
+        case .appearance: "Appearance"
+        case .servers: "Servers"
+        case .general: "General"
+        case .providers: "Providers"
+        case .projects: "Projects"
+        case .scheduled: "Scheduled Tasks"
+        case .keybindings: "Keybindings"
+        case .access: "Access & Remote"
+        case .archived: "Archived Threads"
+        case .maintenance: "Maintenance"
+        case .companion: "Companion"
         }
-        .frame(width: 720, height: 600)
+    }
+
+    var symbol: String {
+        switch self {
+        case .appearance: "paintbrush"
+        case .servers: "server.rack"
+        case .general: "gearshape"
+        case .providers: "cpu"
+        case .projects: "folder"
+        case .scheduled: "calendar.badge.clock"
+        case .keybindings: "keyboard"
+        case .access: "person.badge.key"
+        case .archived: "archivebox"
+        case .maintenance: "wrench.and.screwdriver"
+        case .companion: "face.smiling"
+        }
+    }
+
+    var isServerScoped: Bool {
+        !Self.clientSections.contains(self)
+    }
+
+    var requiresConnection: Bool {
+        isServerScoped && self != .companion
     }
 }
 
-private struct CompanionSettings: View {
+struct SettingsWindow: View {
     @ObservedObject var core: Core
-    @State private var chosenServer: String?
+    @ObservedObject private var tab = SettingsTab.shared
+    @State private var addingServer = false
 
-    private var servers: [EnvironmentView] { core.view.connection.environments }
-    private var serverId: String {
-        if let chosenServer, servers.contains(where: { $0.id == chosenServer }) { return chosenServer }
-        return (servers.first(where: { $0.active }) ?? servers.first)?.id ?? ""
+    private var connection: ConnectionView { core.view.connection }
+    private var servers: [EnvironmentView] { connection.environments }
+    private var activeServer: EnvironmentView? {
+        servers.first(where: { $0.id == connection.activeEnvironmentId })
+            ?? servers.first(where: { $0.active })
+            ?? servers.first
+    }
+    private var connected: Bool { ["connected", "reconnecting"].contains(connection.state) }
+
+    private var currentSection: SettingsSectionKind {
+        let chosen = SettingsSectionKind(rawValue: tab.selection) ?? .general
+        if chosen.isServerScoped && servers.isEmpty { return .servers }
+        return chosen
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            if !servers.isEmpty {
-                Picker("Server", selection: Binding(get: { serverId }, set: { chosenServer = $0 })) {
-                    ForEach(servers, id: \.id) { Text($0.label).tag($0.id) }
-                }
-                .padding()
+        NavigationSplitView {
+            sidebar
+                .navigationSplitViewColumnWidth(min: 215, ideal: 236, max: 270)
+        } detail: {
+            VStack(spacing: 0) {
+                SettingsDetailHeader(
+                    core: core,
+                    section: currentSection,
+                    server: activeServer
+                )
+                Divider()
+                detailBody
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            CompanionEditor(core: core, environmentId: serverId)
+        }
+        .navigationSplitViewStyle(.balanced)
+        .frame(minWidth: 760, idealWidth: 860, minHeight: 520, idealHeight: 620)
+        .sheet(isPresented: $addingServer) {
+            ConnectView(core: core, cancel: { addingServer = false })
+                .frame(minWidth: 560, minHeight: 480)
+        }
+        .onChange(of: connection.state) { _, state in
+            if state == "connected" {
+                addingServer = false
+                loadSection(currentSection)
+            }
+        }
+        .onChange(of: connection.activeEnvironmentId) { _, _ in
+            if connected { loadSection(currentSection) }
+        }
+        .onChange(of: tab.selection) { _, _ in
+            if connected { loadSection(currentSection) }
+        }
+        .onAppear {
+            if servers.isEmpty && currentSection.isServerScoped {
+                tab.selection = SettingsSectionKind.servers.rawValue
+            } else if connected {
+                loadSection(currentSection)
+            }
+        }
+    }
+
+    private var sidebar: some View {
+        List(selection: Binding(
+            get: { currentSection.rawValue },
+            set: { tab.selection = $0 }
+        )) {
+            Section {
+                ForEach(SettingsSectionKind.clientSections) { sec in
+                    Label(sec.title, systemImage: sec.symbol)
+                        .tag(sec.rawValue)
+                }
+            } header: {
+                Text("This Mac")
+            }
+
+            Section {
+                if let server = activeServer {
+                    ServerSwitcherControl(
+                        core: core,
+                        active: server,
+                        addServer: { addingServer = true },
+                        manageServers: { tab.selection = SettingsSectionKind.servers.rawValue }
+                    )
+                    .listRowInsets(EdgeInsets(top: 2, leading: 6, bottom: 6, trailing: 6))
+
+                    ForEach(SettingsSectionKind.serverSections) { sec in
+                        HStack(spacing: Space.xs) {
+                            Label(sec.title, systemImage: sec.symbol)
+                            Spacer(minLength: Space.xs)
+                            if sec == .companion {
+                                Text("Local")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        .tag(sec.rawValue)
+                    }
+                } else {
+                    Button {
+                        addingServer = true
+                    } label: {
+                        Label("Add a Server…", systemImage: "plus.circle")
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                }
+            } header: {
+                Text("Server Settings")
+            }
+        }
+        .listStyle(.sidebar)
+    }
+
+    @ViewBuilder
+    private var detailBody: some View {
+        if currentSection.requiresConnection && !connected {
+            ServerConnectionPlaceholder(core: core, server: activeServer, section: currentSection)
+        } else {
+            switch currentSection {
+            case .appearance:
+                AppearanceSettings()
+            case .servers:
+                ServersSettings(
+                    core: core,
+                    addServer: { addingServer = true },
+                    configureServer: { id in
+                        core.update(.selectEnvironment(id: id))
+                        tab.selection = SettingsSectionKind.general.rawValue
+                    }
+                )
+            case .general:
+                GeneralSettings(core: core)
+            case .providers:
+                ProvidersSettings(core: core)
+            case .projects:
+                ProjectsSettings(core: core)
+            case .scheduled:
+                ScheduledSettings(core: core)
+            case .keybindings:
+                KeybindingsSettings(core: core)
+            case .access:
+                AccessSettings(core: core)
+            case .archived:
+                ArchivedSettings(core: core)
+            case .maintenance:
+                MaintenanceSettings(core: core)
+            case .companion:
+                CompanionEditor(core: core, environmentId: activeServer?.id ?? "")
+            }
+        }
+    }
+
+    private func loadSection(_ section: SettingsSectionKind) {
+        switch section {
+        case .general:
+            core.update(.loadSettings(section: "general"))
+        case .providers:
+            core.update(.loadSettings(section: "providers"))
+        case .scheduled:
+            core.update(.loadSettings(section: "scheduled"))
+        case .archived:
+            core.update(.loadSettings(section: "archived"))
+        case .maintenance:
+            core.update(.loadSettings(section: "storage"))
+            core.update(.loadSettings(section: "diagnostics"))
+        case .access:
+            core.update(.loadSettings(section: "access"))
+        case .appearance, .servers, .projects, .keybindings, .companion:
+            break
+        }
+    }
+}
+
+/// Inline server switcher at the top of the Server Settings sidebar section.
+private struct ServerSwitcherControl: View {
+    @ObservedObject var core: Core
+    let active: EnvironmentView
+    let addServer: () -> Void
+    let manageServers: () -> Void
+
+    private var connection: ConnectionView { core.view.connection }
+
+    private var dotColor: Color {
+        switch connection.state {
+        case "connected": Tint.success
+        case "connecting", "reconnecting", "pairing": Tint.caution
+        default: .secondary
+        }
+    }
+
+    private var stateLabel: String {
+        switch connection.state {
+        case "connected":
+            if connection.remote && !connection.path.isEmpty {
+                return "\(connection.path.capitalized) · \(connection.rttMs) ms"
+            }
+            return "Connected"
+        case "connecting", "pairing": return "Connecting…"
+        case "reconnecting": return "Reconnecting…"
+        default: return "Offline"
+        }
+    }
+
+    var body: some View {
+        Menu {
+            Section("Configure Server") {
+                ForEach(connection.environments, id: \.id) { env in
+                    Button {
+                        core.update(.selectEnvironment(id: env.id))
+                    } label: {
+                        HStack {
+                            Text(env.label)
+                            if env.id == active.id {
+                                Image(systemName: "checkmark")
+                            }
+                        }
+                    }
+                }
+            }
+            Divider()
+            Button("Manage Servers…", systemImage: "server.rack", action: manageServers)
+            Button("Add Server…", systemImage: "plus", action: addServer)
+        } label: {
+            HStack(spacing: Space.s) {
+                CompanionStill(look: active.companion.look, size: 24, mood: connection.state == "connected" ? .idle : .offline)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(active.label)
+                        .font(.callout.weight(.semibold))
+                        .lineLimit(1)
+                    HStack(spacing: 4) {
+                        Circle()
+                            .fill(dotColor)
+                            .frame(width: 6, height: 6)
+                        Text(stateLabel)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+                Spacer(minLength: 4)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, Space.s)
+            .padding(.vertical, Space.tight)
+            .background(.quaternary.opacity(0.6), in: RoundedRectangle(cornerRadius: Radius.chip))
+            .contentShape(Rectangle())
+        }
+        .menuStyle(.borderlessButton)
+        .help("Choose which server to configure")
+    }
+}
+
+/// Top context header in the detail pane showing section title, scope pill, and live server state.
+private struct SettingsDetailHeader: View {
+    @ObservedObject var core: Core
+    let section: SettingsSectionKind
+    let server: EnvironmentView?
+
+    private var connection: ConnectionView { core.view.connection }
+
+    private var scopeLabel: String {
+        if !section.isServerScoped { return "This Mac" }
+        if section == .companion { return "Saved on this Mac" }
+        return "Server setting"
+    }
+
+    private var scopeSymbol: String {
+        if !section.isServerScoped || section == .companion { return "laptopcomputer" }
+        return "server.rack"
+    }
+
+    private var scopeTint: Color {
+        if !section.isServerScoped || section == .companion { return .secondary }
+        return .accentColor
+    }
+
+    var body: some View {
+        HStack(spacing: Space.m) {
+            if section.isServerScoped, let server {
+                CompanionStill(look: server.companion.look, size: 28, mood: connection.state == "connected" ? .idle : .offline)
+            } else {
+                Image(systemName: section.symbol)
+                    .font(.title3)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 28, height: 28)
+            }
+
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: Space.s) {
+                    Text(section.title)
+                        .font(.headline)
+                    Label(scopeLabel, systemImage: scopeSymbol)
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(scopeTint)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 2)
+                        .background(scopeTint.opacity(0.12), in: Capsule())
+                }
+                if section.isServerScoped, let server {
+                    Text(section == .companion
+                         ? "Customizes how \(server.label) appears on this Mac only."
+                         : "Applies on \(server.label) across all connected devices.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("Saved on this Mac only. Applies across all servers.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Spacer()
+
+            if section.isServerScoped {
+                connectionPill
+            }
+        }
+        .padding(.horizontal, Space.l)
+        .padding(.vertical, Space.m)
+        .background(.bar)
+    }
+
+    @ViewBuilder
+    private var connectionPill: some View {
+        switch connection.state {
+        case "connected":
+            HStack(spacing: 5) {
+                Circle().fill(Tint.success).frame(width: 7, height: 7)
+                Text(connection.remote && !connection.path.isEmpty
+                     ? "\(connection.path.capitalized) · \(connection.rttMs) ms"
+                     : "Connected")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, Space.s)
+            .padding(.vertical, 4)
+            .background(.quaternary.opacity(0.5), in: Capsule())
+        case "connecting", "reconnecting", "pairing":
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.mini)
+                Text(connection.state == "reconnecting" ? "Reconnecting…" : "Connecting…")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        default:
+            Button("Reconnect") { core.update(.reconnect) }
+                .controlSize(.small)
+        }
+    }
+}
+
+/// Shown when a server-stored section is open while the selected server is connecting or offline.
+private struct ServerConnectionPlaceholder: View {
+    @ObservedObject var core: Core
+    let server: EnvironmentView?
+    let section: SettingsSectionKind
+
+    private var connection: ConnectionView { core.view.connection }
+    private var name: String { server?.label ?? "this server" }
+    private var connecting: Bool { ["connecting", "reconnecting", "pairing"].contains(connection.state) }
+
+    var body: some View {
+        ContentUnavailableView {
+            if connecting {
+                Label("Connecting to \(name)…", systemImage: "arrow.triangle.2.circlepath")
+            } else {
+                Label("\(name) is Offline", systemImage: "network.slash")
+            }
+        } description: {
+            if connecting {
+                Text("Loading \(section.title.lowercased()) from \(name).")
+            } else if let error = connection.error, !error.isEmpty {
+                Text(error)
+            } else {
+                Text("\(section.title) is stored on \(name). Reconnect to view or change it.")
+            }
+        } actions: {
+            if connecting {
+                ProgressView().controlSize(.regular)
+            } else {
+                Button("Reconnect") { core.update(.reconnect) }
+                    .buttonStyle(.borderedProminent)
+            }
+        }
+    }
+}
+
+/// Client-local appearance and transcript text scale (saved on this Mac only).
+struct AppearanceSettings: View {
+    @AppStorage(AppPreferenceKeys.appearance) private var rawAppearance = AppAppearance.system.rawValue
+    @AppStorage(AppPreferenceKeys.transcriptTextScale) private var rawScale = TranscriptTextScale.default.rawValue
+
+    private var scale: TranscriptTextScale {
+        TranscriptTextScale(rawValue: rawScale) ?? .default
+    }
+
+    var body: some View {
+        Form {
+            Section {
+                Picker("Theme", selection: $rawAppearance) {
+                    ForEach(AppAppearance.allCases) { mode in
+                        Label(mode.label, systemImage: mode.symbol).tag(mode.rawValue)
+                    }
+                }
+                .pickerStyle(.segmented)
+            } header: {
+                Text("Theme")
+            } footer: {
+                Text("Follows macOS appearance or forces Light or Dark on this Mac.")
+            }
+
+            Section {
+                Picker("Transcript text size", selection: $rawScale) {
+                    ForEach(TranscriptTextScale.allCases) { option in
+                        Text(option.label).tag(option.rawValue)
+                    }
+                }
+                .pickerStyle(.segmented)
+
+                VStack(alignment: .leading, spacing: Space.xs) {
+                    Text("Preview")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text("The quick brown fox asks the agent to review the pull request.")
+                        .font(.body)
+                        .dynamicTypeSize(scale.dynamicTypeSize)
+                }
+                .padding(.vertical, Space.xs)
+            } header: {
+                Text("Reading")
+            } footer: {
+                Text("Adjusts message text size in threads on this Mac.")
+            }
+        }
+        .formStyle(.grouped)
+    }
+}
+
+/// Manages the servers paired with this Mac.
+struct ServersSettings: View {
+    @ObservedObject var core: Core
+    let addServer: () -> Void
+    let configureServer: (String) -> Void
+
+    @State private var renaming: EnvironmentView?
+    @State private var newName = ""
+    @State private var forgetting: EnvironmentView?
+
+    private var connection: ConnectionView { core.view.connection }
+    private var servers: [EnvironmentView] { connection.environments }
+
+    var body: some View {
+        Form {
+            if let local = connection.localServer {
+                Section("Server on this Mac") {
+                    HStack(spacing: Space.s) {
+                        Image(systemName: "desktopcomputer")
+                            .foregroundStyle(.secondary)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(local.label)
+                            Text("\(local.url) · No pairing code needed")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button("Connect") { core.update(.connectLocalServer) }
+                            .buttonStyle(.borderedProminent)
+                    }
+                }
+            }
+
+            Section {
+                if servers.isEmpty {
+                    Text("No servers paired with this Mac yet.")
+                        .foregroundStyle(.secondary)
+                }
+                ForEach(Array(servers.enumerated()), id: \.element.id) { index, env in
+                    HStack(spacing: Space.m) {
+                        CompanionStill(
+                            look: env.companion.look,
+                            size: 28,
+                            mood: env.active && connection.state == "connected" ? .idle : .offline
+                        )
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack(spacing: Space.xs) {
+                                Text(env.label)
+                                    .font(.body.weight(env.active ? .semibold : .regular))
+                                if env.active {
+                                    Text(activeStatusText)
+                                        .font(.caption2.weight(.medium))
+                                        .foregroundStyle(connection.state == "connected" ? Tint.success : Tint.caution)
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 1)
+                                        .background((connection.state == "connected" ? Tint.success : Tint.caution).opacity(0.14), in: Capsule())
+                                }
+                            }
+                            Text(env.detail)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                        Spacer(minLength: Space.xs)
+                        if !env.active {
+                            Button("Switch") { core.update(.selectEnvironment(id: env.id)) }
+                        }
+                        Button("Configure") { configureServer(env.id) }
+                            .buttonStyle(.bordered)
+                        Menu {
+                            Button("Configure Settings…") { configureServer(env.id) }
+                            if !env.active {
+                                Button("Switch to \(env.label)") { core.update(.selectEnvironment(id: env.id)) }
+                            }
+                            Divider()
+                            Button("Rename on This Mac…") {
+                                newName = env.label
+                                renaming = env
+                            }
+                            if index > 0 {
+                                Button("Move Up") { core.update(.moveEnvironment(id: env.id, delta: -1)) }
+                            }
+                            if index + 1 < servers.count {
+                                Button("Move Down") { core.update(.moveEnvironment(id: env.id, delta: 1)) }
+                            }
+                            Divider()
+                            Button("Forget…", role: .destructive) { forgetting = env }
+                        } label: {
+                            Image(systemName: "ellipsis.circle")
+                        }
+                        .menuStyle(.borderlessButton)
+                        .fixedSize()
+                        .help("More actions for \(env.label)")
+                    }
+                    .padding(.vertical, 2)
+                }
+            } header: {
+                Text("Saved Servers")
+            } footer: {
+                Text("Server names and order are saved on this Mac. Choose Configure to edit settings stored on a specific server.")
+            }
+
+            Section {
+                Button("Add Server…", systemImage: "plus", action: addServer)
+            }
+        }
+        .formStyle(.grouped)
+        .alert("Rename Server", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
+            TextField("Name", text: $newName)
+            Button("Rename") {
+                if let env = renaming { core.update(.renameEnvironment(id: env.id, label: newName)) }
+                renaming = nil
+            }
+            Button("Cancel", role: .cancel) { renaming = nil }
+        } message: {
+            Text("Changes how this server is named on this Mac only.")
+        }
+        .forgettingServer($forgetting, core: core)
+    }
+
+    private var activeStatusText: String {
+        switch connection.state {
+        case "connected": "Connected"
+        case "connecting", "pairing": "Connecting…"
+        case "reconnecting": "Reconnecting…"
+        default: "Offline"
         }
     }
 }
@@ -63,14 +649,23 @@ private struct CompanionSettings: View {
 struct GeneralSettings: View {
     @ObservedObject var core: Core
 
+    private var connection: ConnectionView { core.view.connection }
+
     var body: some View {
         Form {
-            Section("Server") {
-                LabeledContent("Address", value: core.view.connection.serverUrl)
-                LabeledContent("Environment", value: core.view.connection.environmentLabel)
-                LabeledContent("Version", value: core.view.connection.serverVersion)
-                LabeledContent("Platform", value: core.view.connection.platform)
-                Button("Disconnect") { core.update(.disconnect) }
+            Section("Connection") {
+                LabeledContent("Server", value: connection.environmentLabel)
+                if connection.remote {
+                    LabeledContent("Route", value: connection.path.isEmpty ? "Remote" : "\(connection.path.capitalized), \(connection.rttMs) ms")
+                } else {
+                    LabeledContent("Address", value: connection.serverUrl)
+                }
+                LabeledContent("Version", value: connection.serverVersion)
+                LabeledContent("Platform", value: connection.platform)
+                HStack(spacing: Space.s) {
+                    Button("Refresh from Server") { core.update(.resync) }
+                    Button("Disconnect", role: .destructive) { core.update(.disconnect) }
+                }
             }
             ForEach(core.view.settings.groups, id: \.title) { group in
                 Section(group.title) {
@@ -268,7 +863,6 @@ struct ScheduledSettings: View {
         }
     }
 }
-
 
 struct ArchivedSettings: View {
     @ObservedObject var core: Core

@@ -13,6 +13,7 @@ struct DomovoiIOSApp: App {
         WindowGroup {
             RootView(core: core)
                 .environment(\.core, core)
+                .modifier(AppAppearanceModifier())
                 .modifier(SystemSurfacesSync(core: core))
                 .onOpenURL { url in
                     guard url.scheme == "domovoi" else { return }

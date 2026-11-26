@@ -72,18 +72,43 @@ pub enum ComposerPopover {
 pub enum SettingsSection {
     #[default]
     Appearance,
+    Servers,
     General,
     Providers,
-    Keybindings,
-    Scheduled,
-    Archived,
     Projects,
-    Maintenance,
+    Scheduled,
+    Keybindings,
     Access,
+    Archived,
+    Maintenance,
     Companion,
 }
 
 impl SettingsSection {
+    pub fn is_server_scoped(self) -> bool {
+        !matches!(self, SettingsSection::Appearance | SettingsSection::Servers)
+    }
+
+    pub fn requires_connection(self) -> bool {
+        self.is_server_scoped() && self != SettingsSection::Companion
+    }
+
+    pub fn title(self) -> &'static str {
+        match self {
+            SettingsSection::Appearance => "Appearance",
+            SettingsSection::Servers => "Servers",
+            SettingsSection::General => "General",
+            SettingsSection::Providers => "Providers",
+            SettingsSection::Projects => "Projects",
+            SettingsSection::Scheduled => "Scheduled Tasks",
+            SettingsSection::Keybindings => "Keybindings",
+            SettingsSection::Access => "Access & Remote",
+            SettingsSection::Archived => "Archived Threads",
+            SettingsSection::Maintenance => "Maintenance",
+            SettingsSection::Companion => "Companion",
+        }
+    }
+
     pub fn core_name(self) -> Option<&'static str> {
         match self {
             SettingsSection::General => Some("general"),
@@ -94,7 +119,7 @@ impl SettingsSection {
             SettingsSection::Projects => Some("projects"),
             SettingsSection::Maintenance => Some("storage"),
             SettingsSection::Access => Some("access"),
-            SettingsSection::Appearance | SettingsSection::Companion => None,
+            SettingsSection::Appearance | SettingsSection::Servers | SettingsSection::Companion => None,
         }
     }
 }
@@ -299,7 +324,7 @@ pub struct App {
 
     // Settings local state
     pub provider_redirect_inputs: HashMap<String, String>,
-    pub companion_server_id: Option<String>,
+    pub settings_server_picker_open: bool,
     pub pairing_qr: Option<(String, iced::widget::qr_code::Data)>,
     pub setting_text_drafts: HashMap<String, String>,
 
@@ -442,9 +467,11 @@ pub enum Message {
     SubmitPrComment(String),
     // Settings & Companion
     OpenSettings(SettingsSection),
+    ToggleSettingsServerPicker,
+    SelectSettingsServer(String),
+    ConfigureServer(String),
     ProviderRedirectChanged { instance_id: String, url: String },
     SettingTextChanged { key: String, value: String },
-    CompanionServerSelected(String),
     CompanionLookChanged { env_id: String, look: CompanionLook },
     PokeCompanion,
     ClearCompanionPoke,
@@ -529,7 +556,7 @@ impl App {
             artifact_quick_edit: String::new(),
             pr_review: PrReviewDraft { verdict: "comment".into(), merge_method: "squash".into(), ..Default::default() },
             provider_redirect_inputs: HashMap::new(),
-            companion_server_id: None,
+            settings_server_picker_open: false,
             pairing_qr: None,
             setting_text_drafts: HashMap::new(),
             overlay: None,
@@ -574,6 +601,17 @@ impl App {
     pub fn send_core(&self, event: Event) {
         if let Some(host) = &self.host {
             host.send(event);
+        }
+    }
+
+    fn load_settings_section(&self, section: SettingsSection) {
+        if let Some(name) = section.core_name() {
+            self.send_core(Event::LoadSettings { section: name.into() });
+            if section == SettingsSection::Access {
+                self.send_core(Event::LoadRemoteAccess);
+            } else if section == SettingsSection::Maintenance {
+                self.send_core(Event::LoadSettings { section: "diagnostics".into() });
+            }
         }
     }
 
@@ -1148,24 +1186,37 @@ impl App {
             }
             // Settings & Companion
             Message::OpenSettings(section) => {
-                if let Some(name) = section.core_name() {
-                    self.send_core(Event::LoadSettings { section: name.into() });
-                    if section == SettingsSection::Access {
-                        self.send_core(Event::LoadRemoteAccess);
-                    } else if section == SettingsSection::Maintenance {
-                        self.send_core(Event::LoadSettings { section: "diagnostics".into() });
-                    }
+                self.settings_server_picker_open = false;
+                if matches!(self.vm.connection.state.as_str(), "connected" | "reconnecting") {
+                    self.load_settings_section(section);
                 }
                 self.overlay = Some(Overlay::Settings(section));
+            }
+            Message::ToggleSettingsServerPicker => {
+                self.settings_server_picker_open = !self.settings_server_picker_open;
+            }
+            Message::SelectSettingsServer(id) => {
+                self.settings_server_picker_open = false;
+                if self.vm.connection.active_environment_id != id {
+                    self.setting_text_drafts.clear();
+                    self.send_core(Event::SelectEnvironment { id });
+                }
+            }
+            Message::ConfigureServer(id) => {
+                self.settings_server_picker_open = false;
+                if self.vm.connection.active_environment_id != id {
+                    self.setting_text_drafts.clear();
+                    self.send_core(Event::SelectEnvironment { id });
+                } else if matches!(self.vm.connection.state.as_str(), "connected" | "reconnecting") {
+                    self.load_settings_section(SettingsSection::General);
+                }
+                self.overlay = Some(Overlay::Settings(SettingsSection::General));
             }
             Message::ProviderRedirectChanged { instance_id, url } => {
                 self.provider_redirect_inputs.insert(instance_id, url);
             }
             Message::SettingTextChanged { key, value } => {
                 self.setting_text_drafts.insert(key, value);
-            }
-            Message::CompanionServerSelected(id) => {
-                self.companion_server_id = Some(id);
             }
             Message::CompanionLookChanged { env_id, look } => {
                 self.send_core(Event::SetCompanion { id: env_id, look });
@@ -1388,6 +1439,7 @@ impl App {
             }
             HostMsg::Delta(delta) => {
                 let prev_state = self.vm.connection.state.clone();
+                let prev_env = self.vm.connection.active_environment_id.clone();
                 delta.apply(&mut self.vm);
                 if let Some(split) = &self.vm.panel.terminal.split {
                     if self.terminal_grid.stacked != split.stacked {
@@ -1399,10 +1451,20 @@ impl App {
                 let asked = self.vm.thread.as_ref().map(|t| &t.secret_requests);
                 self.secret_drafts.retain(|id, _| asked.is_some_and(|asked| asked.iter().any(|r| r.item_id == *id)));
 
-                if self.vm.connection.state == "connected" && prev_state != "connected" {
+                let env_changed = self.vm.connection.active_environment_id != prev_env;
+                let became_connected = self.vm.connection.state == "connected" && prev_state != "connected";
+                if became_connected {
                     self.connect.adding_server = false;
                     self.connect.pairing_code.clear();
                     self.connect.remote_link.clear();
+                }
+                if env_changed {
+                    self.setting_text_drafts.clear();
+                }
+                if (became_connected || (env_changed && self.vm.connection.state == "connected"))
+                    && let Some(Overlay::Settings(sec)) = self.overlay
+                {
+                    self.load_settings_section(sec);
                 }
 
                 // Sync composer text editor when core explicitly replaces the draft.
