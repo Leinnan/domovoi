@@ -381,7 +381,11 @@ fn item_view(item: &TurnItem, message: Option<&ConversationMessage>, checkpoint:
         TurnItem::DynamicTool(i)
             if matches!(
                 i.tool_name.as_deref(),
-                Some("Artifact" | "mcp__t3__t3_artifact_create" | "mcp__t3__t3_artifact_update" | "t3_artifact_create" | "t3_artifact_update")
+                // The tool as Domovoi's server names it, and as it did while its tools were `t3_…` of a server `t3`.
+                Some(
+                    "Artifact" | "mcp__domovoi__artifact_create" | "mcp__domovoi__artifact_update" | "artifact_create" | "artifact_update"
+                        | "mcp__t3__t3_artifact_create" | "mcp__t3__t3_artifact_update" | "t3_artifact_create" | "t3_artifact_update"
+                )
             ) && !matches!(
                 i.input.as_ref().and_then(|v| v.get("action")).and_then(Value::as_str),
                 Some("list" | "delete" | "read")

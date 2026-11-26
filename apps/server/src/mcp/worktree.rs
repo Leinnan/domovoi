@@ -16,12 +16,12 @@ use std::sync::{Mutex, OnceLock};
 
 pub fn tools() -> Vec<Value> {
     vec![
-        tool("t3_worktree_status", "This thread's worktree: attached or not, its path and branch, and the project's root folder. Check before `t3_worktree_handoff`.",
+        tool("worktree_status", "This thread's worktree: attached or not, its path and branch, and the project's root folder. Check before `worktree_handoff`.",
             json!({}), &[], true),
-        tool("t3_worktree_list", "The project's branches (local and remote), with the worktree each is checked out in.",
+        tool("worktree_list", "The project's branches (local and remote), with the worktree each is checked out in.",
             json!({ "query": s("Only branches whose name contains this."), "limit": n("At most this many (default 50, at most 500)."),
                 "refKind": one_of(&["all", "local", "remote"], "Which branches (default all).") }), &[], true),
-        tool("t3_worktree_handoff", "Move this thread into a new git worktree on a new `branch` (from `baseRef`, default the project's current branch), running the project's setup script there. Your current turn keeps its folder: end it after this call. The next turn runs in the worktree with the conversation so far; `continuationPrompt` starts it at once.",
+        tool("worktree_handoff", "Move this thread into a new git worktree on a new `branch` (from `baseRef`, default the project's current branch), running the project's setup script there. Your current turn keeps its folder: end it after this call. The next turn runs in the worktree with the conversation so far; `continuationPrompt` starts it at once.",
             json!({
                 "branch": s("The new branch."), "baseRef": s("What it starts from (default: the project's current branch)."),
                 "runSetupScript": b("Run the project's worktree setup script (default true)."),
@@ -32,9 +32,9 @@ pub fn tools() -> Vec<Value> {
 
 pub async fn call(c: &Call<'_>, name: &str) -> Option<Result<Value, String>> {
     Some(match name {
-        "t3_worktree_status" => status(c),
-        "t3_worktree_list" => list(c).await,
-        "t3_worktree_handoff" => handoff(c).await,
+        "worktree_status" => status(c),
+        "worktree_list" => list(c).await,
+        "worktree_handoff" => handoff(c).await,
         _ => return None,
     })
 }

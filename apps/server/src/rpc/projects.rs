@@ -164,7 +164,7 @@ pub(crate) fn bootstrap_in(store: &crate::store::Store, command_id: &str, title:
 
 async fn ensure_scratch(ctx: Arc<ConnCtx>, _input: IgnoredAny) -> Result<ProjectEnsureScratchResult, Failure> {
     let root = crate::managed::scratch_root().ok_or_else(|| {
-        dispatch_error("Threads without a project are off because the T3 home is inside a Git repository. Point --home-dir at a folder outside it, then restart.")
+        dispatch_error("Threads without a project are off because Domovoi's home is inside a Git repository. Point --home-dir at a folder outside it, then restart.")
     })?;
     std::fs::create_dir_all(&root).map_err(|e| dispatch_error(format!("Could not create {}: {e}", root.display())))?;
     let root_s = root.to_string_lossy().into_owned();

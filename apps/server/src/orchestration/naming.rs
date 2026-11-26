@@ -89,7 +89,7 @@ pub async fn branch(orch: &Orchestrator, thread_id: &str) {
         }
     };
     let Some(fragment) = fragment else { return };
-    let wanted = branch_for(&fragment, mode, settings.branch_name_prefix.as_deref().unwrap_or("t3"));
+    let wanted = branch_for(&fragment, mode, settings.branch_name_prefix.as_deref().unwrap_or("domovoi"));
     if let Some(name) = rename_branch(worktree, current, &wanted).await {
         let renamed = ThreadMetadataUpdate {
             command_id: format!("branch-name:{thread_id}").into(),

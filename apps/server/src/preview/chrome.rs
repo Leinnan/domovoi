@@ -27,17 +27,19 @@ const LAUNCH_TIMEOUT: Duration = Duration::from_secs(20);
 pub const BINARY_ENV: &str = "DOMOVOI_PREVIEW_BROWSER_BINARY";
 
 /// `T3CODE_SERVER_BROWSER_SANDBOX=0` turns Chrome's sandbox off (t3code `sandboxDisabled`).
-const SANDBOX_ENV: &str = "T3CODE_SERVER_BROWSER_SANDBOX";
+const SANDBOX_ENV: &str = "DOMOVOI_SERVER_BROWSER_SANDBOX";
+/// What the variable was called.
+const OLD_SANDBOX_ENV: &str = "T3CODE_SERVER_BROWSER_SANDBOX";
 
 /// Why the browser cannot start.
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum LaunchError {
     /// No browser is installed (t3code: `PreviewBrowserUnsupportedError`).
-    #[error("T3's headless browser is not available on this machine: no Chrome, Chromium or Edge is installed. Install one, or set {BINARY_ENV} to its executable, then try again.")]
+    #[error("Domovoi's headless browser is not available on this machine: no Chrome, Chromium or Edge is installed. Install one, or set {BINARY_ENV} to its executable, then try again.")]
     Unavailable,
     /// This build has no browser (`--no-default-features` without `preview-browser`).
     #[cfg_attr(feature = "preview-browser", expect(dead_code, reason = "only a build without the browser says so"))]
-    #[error("This T3 Code server was built without its headless browser (the `preview-browser` feature).")]
+    #[error("This Domovoi server was built without its headless browser (the `preview-browser` feature).")]
     NotBuilt,
     /// t3code `ServerBrowserLaunchError`.
     #[error("The server preview browser could not start: {0}")]
@@ -177,7 +179,7 @@ pub async fn launch(exe: &Path, user_data: &Path, scratch: bool) -> Result<Proce
         "--hide-crash-restore-bubble",
     ]);
     cmd.arg(format!("--user-data-dir={}", user_data.display()));
-    if std::env::var(SANDBOX_ENV).as_deref() == Ok("0") {
+    if [SANDBOX_ENV, OLD_SANDBOX_ENV].iter().any(|name| std::env::var(name).as_deref() == Ok("0")) {
         cmd.arg("--no-sandbox");
     }
     cmd.arg("about:blank");

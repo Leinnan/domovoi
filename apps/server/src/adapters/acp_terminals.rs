@@ -5,7 +5,7 @@
 //!
 //! - The command runs in the folder the agent names, else the thread's; with
 //!   the server's environment and the instance's, less the thread's identity
-//!   (`T3CODE_THREAD_ID`, `T3_ACP_MCP_*`), then the variables the request sets.
+//!   (`DOMOVOI_THREAD_ID` and its old name), then the variables the request sets.
 //!   With `shell_commands` (Devin sends shell source) a command without
 //!   arguments runs in `sh -c`.
 //! - Output is cut from its start (at a UTF-8 boundary) past the request's
@@ -139,7 +139,7 @@ impl State {
 pub struct Refused(pub String);
 
 fn number(terminal_id: &str) -> Option<u64> {
-    terminal_id.strip_prefix("t3-term-")?.parse().ok()
+    terminal_id.strip_prefix("domovoi-term-")?.parse().ok()
 }
 
 /// The name of signal `n`.
@@ -234,7 +234,7 @@ impl Terminals {
         };
         for (name, _) in std::env::vars_os() {
             let upper = name.to_string_lossy().to_uppercase();
-            if upper == "T3CODE_THREAD_ID" || upper.starts_with("T3_ACP_MCP_") {
+            if upper == crate::terminal::THREAD_ENV || upper == crate::terminal::OLD_THREAD_ENV {
                 cmd.env_remove(&name);
             }
         }
@@ -299,7 +299,7 @@ impl Terminals {
             }
             let _ = exit_tx.send(Some(status));
         });
-        Ok(json!({ "terminalId": format!("t3-term-{n}") }))
+        Ok(json!({ "terminalId": format!("domovoi-term-{n}") }))
     }
 
     /// `terminal/output`: `{ output, truncated, exitStatus? }`.
@@ -439,10 +439,10 @@ mod tests {
         terms.release(&long).await.unwrap();
         assert!(terms.output(&long).is_err(), "released");
 
-        let mut update = json!({ "sessionUpdate": "tool_call_update", "toolCallId": "c", "content": [{ "type": "terminal", "terminalId": id }, { "type": "terminal", "terminalId": "t3-term-99" }] });
+        let mut update = json!({ "sessionUpdate": "tool_call_update", "toolCallId": "c", "content": [{ "type": "terminal", "terminalId": id }, { "type": "terminal", "terminalId": "domovoi-term-99" }] });
         terms.embed("s", &mut update);
         assert!(update["content"][0]["content"]["text"].as_str().unwrap().starts_with("yes too"));
-        assert_eq!(update["content"][1]["content"]["text"], "[terminal t3-term-99]");
+        assert_eq!(update["content"][1]["content"]["text"], "[terminal domovoi-term-99]");
         terms.dispose_all();
         let _ = std::fs::remove_dir_all(dir);
     }

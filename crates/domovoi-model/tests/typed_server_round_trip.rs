@@ -16,7 +16,7 @@ use domovoi_model::typed::{
 };
 
 const FIXTURES: [&str; 1] = ["session1"];
-const ENVIRONMENT_ROUTE: &str = "/.well-known/t3/environment";
+const ENVIRONMENT_ROUTE: &str = "/.well-known/domovoi/environment";
 
 /// Kinds the recorded sessions are known to contain. Checking none of one of
 /// these means the walk over the fixtures broke, not that the types are right.

@@ -1,7 +1,7 @@
 {
  "cases": [
   {
-   "http": "GET /.well-known/t3/environment",
+   "http": "GET /.well-known/domovoi/environment",
    "status": 200,
    "anonymous": true
   },

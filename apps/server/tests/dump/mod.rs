@@ -77,7 +77,7 @@ impl Normalizer {
                 (pattern("/api/attachments/upload/[A-Za-z0-9_.-]+"), "/api/attachments/upload/<signed>"),
                 (pattern("/api/hooks/task-webhook/[A-Za-z0-9_-]+"), "/api/hooks/task-webhook/<secret>"),
                 // A checkpoint's ref is named after its scope, a hash of the thread's id.
-                (pattern("refs/t3/orchestration-v2/checkpoints/[A-Za-z0-9_-]+/"), "refs/t3/orchestration-v2/checkpoints/<scope>/"),
+                (pattern("refs/domovoi/checkpoints/[A-Za-z0-9_-]+/"), "refs/domovoi/checkpoints/<scope>/"),
                 (pattern(r"\b[0-9a-f]{40}\b"), "<sha>"),
                 (pattern(r"\bCommit [0-9a-f]{7}\b"), "Commit <sha>"),
                 (pattern(r"\b[0-9a-f]{32}\b"), "<hex32>"),

@@ -336,7 +336,7 @@ pub struct ExecutionEnvironmentCapabilities {
 }
 
 /// A server and the machine it runs on, as it describes itself
-/// (`ExecutionEnvironmentDescriptor`): served at `/.well-known/t3/environment`
+/// (`ExecutionEnvironmentDescriptor`): served at `/.well-known/domovoi/environment`
 /// and repeated in the server's config and lifecycle events.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

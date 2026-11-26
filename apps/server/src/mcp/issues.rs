@@ -71,7 +71,7 @@ pub fn tools() -> Vec<Value> {
         issue_tool("comment_on_issue", "Post a comment on an issue.", with_target(json!({ "body": s("The comment (markdown).") })), &["body"], false, false),
         issue_tool("set_issue_state", "Move an issue to one of its states. read_issue lists them under states.",
             with_target(json!({ "state": s("A state name from read_issue's states.") })), &["state"], false, false),
-        issue_tool("link_issue", "Link an issue to a thread so T3 Code shows it beside the thread. Link every issue you work on or file.",
+        issue_tool("link_issue", "Link an issue to a thread so Domovoi shows it beside the thread. Link every issue you work on or file.",
             with_target(thread.clone()), &[], false, false),
         issue_tool("unlink_issue", "Remove an issue link from a thread. The issue itself is not changed.", with_target(thread.clone()), &[], false, true),
         issue_tool("list_thread_issues", "List the issues linked to a thread.", thread, &[], true, false),
@@ -123,7 +123,7 @@ async fn resolve_target(c: &Call<'_>, project_id: Option<String>) -> Result<Targ
         return Ok(Target { r: resolved.r, url: Some(url), issue: resolved.issue });
     }
     let Some(key) = c.str("key") else {
-        return Err("IssueTargetIncompleteError: Pass either url, or key (with projectId when not running inside a T3 thread).".into());
+        return Err("IssueTargetIncompleteError: Pass either url, or key (with projectId when not running inside a Domovoi thread).".into());
     };
     let scope = project_scope(c, project_id).await?;
     Ok(Target { r: IssueRef { project_id: scope.project_id, tracker: scope.tracker, host: scope.host, scope: scope.scope, key }, url: None, issue: None })

@@ -5471,7 +5471,7 @@ fn unified_artifacts_panel_versions_modes_and_thread_switch() {
             },
             {
                 "id": "i-update", "runId": "r1", "ordinal": 2, "type": "dynamic_tool",
-                "toolName": "mcp__t3__t3_artifact_update", "status": "completed",
+                "toolName": "mcp__domovoi__artifact_update", "status": "completed",
                 "input": { "id": "calc", "title": "Calculator Pro", "content": "<!doctype html><html><body>v2</body></html>" },
                 "output": { "id": "calc", "version": 2 }
             },

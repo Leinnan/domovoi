@@ -6,9 +6,9 @@
 //!
 //! As t3code's: a WebSocket upgrade with a port 1..=65535 (else 400 `Bad
 //! Request`), authenticated like a media request with `terminal:operate`;
-//! refused with 403 and `x-t3-tunnel-disabled: 1` while `enablePreviewTunnel`
+//! refused with 403 and `x-domovoi-tunnel-disabled: 1` while `enablePreviewTunnel`
 //! is off or a managed policy switches the tunnel off; 403 with
-//! `x-t3-tunnel-port-refused: 1` for this server's own port (a page would get
+//! `x-domovoi-tunnel-port-refused: 1` for this server's own port (a page would get
 //! an unauthenticated loopback client of it); 502 with the same header when
 //! nothing accepts on `127.0.0.1` or `[::1]` within 5 s. Only loopback is
 //! ever dialled: the request names a port, never a host. The port is dialled
@@ -36,9 +36,9 @@ use tokio::sync::broadcast::error::RecvError;
 pub const ROUTE: &str = "/api/preview/tunnel";
 /// A refusal about the port itself (nothing listens there, or it is this
 /// server's), as opposed to a proxy in front of the server answering 502.
-pub const PORT_REFUSED_HEADER: &str = "x-t3-tunnel-port-refused";
+pub const PORT_REFUSED_HEADER: &str = "x-domovoi-tunnel-port-refused";
 /// A refusal because the tunnel is switched off here.
-pub const DISABLED_HEADER: &str = "x-t3-tunnel-disabled";
+pub const DISABLED_HEADER: &str = "x-domovoi-tunnel-disabled";
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 /// What one read from the loopback connection carries at most.
@@ -99,10 +99,10 @@ pub async fn handler(
     // Subscribed before the setting is read, so a switch-off while dialling is not missed.
     let mut changes = crate::settings::subscribe();
     if !allows_preview_tunnel(&state.settings.read().await.clone()) {
-        return refused(StatusCode::FORBIDDEN, DISABLED_HEADER, "The preview tunnel is turned off on this T3 Code server.".into());
+        return refused(StatusCode::FORBIDDEN, DISABLED_HEADER, "The preview tunnel is turned off on this Domovoi server.".into());
     }
     if served_port() == Some(port) {
-        return refused(StatusCode::FORBIDDEN, PORT_REFUSED_HEADER, format!("Port {port} is this T3 Code server's own port."));
+        return refused(StatusCode::FORBIDDEN, PORT_REFUSED_HEADER, format!("Port {port} is this Domovoi server's own port."));
     }
     let upstream = match dial(port).await {
         Ok(s) => s,

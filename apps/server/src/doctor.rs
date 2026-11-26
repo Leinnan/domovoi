@@ -482,7 +482,7 @@ async fn check_port(host: &str, port: u16, environment_id: Option<&str>) -> Chec
         return Check::new(name, Status::Warn, format!("{address} is in use"));
     };
     let origin = format!("http://{address}");
-    let environment = match http.get(format!("{origin}/.well-known/t3/environment")).send().await {
+    let environment = match crate::wire::environment::asked(&http, &origin).await {
         Ok(res) => res.json::<crate::wire::environment::EnvironmentDescriptor>().await.ok(),
         Err(_) => None,
     };

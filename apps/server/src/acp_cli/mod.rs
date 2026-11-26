@@ -283,7 +283,7 @@ pub(crate) async fn acp_initialize(kind: Kind, exe: &Path, config: &Config, extr
     let args: Vec<&str> = spawn.args.iter().map(String::as_str).collect();
     let (rpc, _events) = crate::jsonrpc::RpcClient::spawn_with(&spawn.program, &args, cwd.as_deref(), &spawn.env, true, |_, _| {}).map_err(|e| e.to_string())?;
     let asked = tokio::time::timeout(limit, async {
-        let init = rpc.request("initialize", kind.initialize_params("t3-code-provider-probe")).await.map_err(|e| e.to_string())?;
+        let init = rpc.request("initialize", kind.initialize_params("domovoi-provider-probe")).await.map_err(|e| e.to_string())?;
         let more = match extra {
             Some((method, params)) => rpc.request(method, params).await.ok(),
             None => None,
@@ -563,8 +563,8 @@ mod tests {
         assert!(grok.env.contains(&("GROK_OAUTH2_REFERRER".into(), "t3code".into())));
         assert_eq!(Kind::Kiro.spawn(Path::new("kiro-cli"), &c, None).args, ["acp", "--agent-engine=v3", "--auth-method=cli"]);
         assert_eq!(Kind::Fx.spawn(Path::new("fx"), &c, None).args, ["acp"]);
-        assert_eq!(Kind::Grok.initialize_params("t3-code")["_meta"], json!({ "clientType": "extension" }));
-        assert_eq!(Kind::Kiro.initialize_params("t3-code")["clientCapabilities"]["_meta"]["kiro"]["hooks"]["v2"], true);
+        assert_eq!(Kind::Grok.initialize_params("domovoi")["_meta"], json!({ "clientType": "extension" }));
+        assert_eq!(Kind::Kiro.initialize_params("domovoi")["clientCapabilities"]["_meta"]["kiro"]["hooks"]["v2"], true);
         assert_eq!(Kind::Fx.session_meta(), Some(json!({ "fx": { "profileMcpServers": true } })));
     }
 }

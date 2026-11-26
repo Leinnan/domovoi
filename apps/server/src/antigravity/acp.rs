@@ -24,7 +24,7 @@ fn version(v: Option<&str>) -> Option<(u64, u64, u64)> {
 /// it is Zed.
 pub fn client_info(agent_version: Option<&str>) -> Value {
     match version(agent_version) {
-        Some(v) if v >= (1, 5, 1) => json!({ "name": "t3-code", "title": "T3 Code", "version": crate::wire::environment::SERVER_VERSION }),
+        Some(v) if v >= (1, 5, 1) => json!({ "name": "domovoi", "title": "Domovoi", "version": crate::wire::environment::SERVER_VERSION }),
         _ => json!({ "name": "zed", "version": "0.0.0" }),
     }
 }
@@ -519,7 +519,7 @@ mod tests {
 
     #[test]
     fn initialize_and_session_meta_follow_the_agent_version() {
-        assert_eq!(client_info(Some("1.5.14"))["name"], "t3-code");
+        assert_eq!(client_info(Some("1.5.14"))["name"], "domovoi");
         assert_eq!(client_info(Some("1.5.0"))["name"], "zed");
         assert_eq!(client_info(None)["name"], "zed");
         let params = initialize_params(Some("1.5.14"));
@@ -589,7 +589,7 @@ mod tests {
     #[test]
     fn sign_in_links_are_found_in_either_form() {
         assert_eq!(auth_url_in("Open the following link to authenticate the ACP server: https://accounts.google.com/x\r").as_deref(), Some("https://accounts.google.com/x"));
-        assert_eq!(auth_url_in("__T3_ANTIGRAVITY_AUTH_URL__\"https://accounts.google.com/y\"").as_deref(), Some("https://accounts.google.com/y"));
+        assert_eq!(auth_url_in("__DOMOVOI_ANTIGRAVITY_AUTH_URL__\"https://accounts.google.com/y\"").as_deref(), Some("https://accounts.google.com/y"));
         assert_eq!(auth_url_in("{\"jsonrpc\":\"2.0\"}"), None);
     }
 

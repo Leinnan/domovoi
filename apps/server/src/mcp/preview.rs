@@ -154,17 +154,17 @@ pub fn tools() -> Vec<Value> {
                 "urlIncludes": s("A URL part to wait for."),
                 "timeoutMs": timeout_ms(),
             }), &[], true, false),
-        browser_tool("t3_preview_list",
+        browser_tool("preview_list",
             "List this thread's preview tabs. Only `runtime:'server'` entries can be automated here. Others are in the user's local desktop app. Never pass a non-server `tabId` to a `preview_*` tool. Tell the user that tab is on their local desktop and this environment cannot reach it.",
             json!({ "cursor": n("Index to start at (nextCursor of the last page)."), "limit": n("At most this many (1 to 50, default 20).") }), &[], true, false),
-        browser_tool("t3_preview_close",
+        browser_tool("preview_close",
             "Close one preview tab this thread owns. Use it on a tab you opened for your own check when you finish.",
             json!({ "tabId": s("The tab to close.") }), &["tabId"], false, true),
     ]
 }
 
 pub async fn call(c: &Call<'_>, name: &str) -> Option<Result<Value, String>> {
-    if !(name.starts_with("preview_") || name.starts_with("t3_preview_")) {
+    if !(name.starts_with("preview_") || name.starts_with("preview_")) {
         return None;
     }
     if !tools().iter().any(|t| t["name"] == name) {
@@ -174,8 +174,8 @@ pub async fn call(c: &Call<'_>, name: &str) -> Option<Result<Value, String>> {
         return Some(Err(e));
     }
     Some(match name {
-        "t3_preview_list" => Ok(list(c)),
-        "t3_preview_close" => close(c).await,
+        "preview_list" => Ok(list(c)),
+        "preview_close" => close(c).await,
         "preview_snapshot" => snapshot(c).await,
         "preview_open" => open(c).await,
         "preview_evaluate" => invoke(c, "evaluate", without_tab(c.args), DEFAULT_TIMEOUT).await.map(|value| json!({ "value": value })),

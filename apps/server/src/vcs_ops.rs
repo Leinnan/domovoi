@@ -717,9 +717,9 @@ pub async fn diff_file_contents(input: &DiffFileContentsInput) -> Result<DiffFil
 
 // ---- temporary worktree branches ----
 
-/// `buildTemporaryWorktreeBranchName`: `t3/<8 hex>`.
+/// The branch a new worktree starts on, until it is named: `domovoi/<8 hex>`.
 pub fn temporary_branch_name() -> String {
-    format!("t3/{}", &crate::util::new_uuid().replace('-', "")[..8])
+    format!("domovoi/{}", &crate::util::new_uuid().replace('-', "")[..8])
 }
 
 /// A branch `a/b` cannot exist when a branch `a` does: flatten it to `a-b`.

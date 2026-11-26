@@ -43,7 +43,7 @@ pub struct Descriptor {
     pub version: u32,
     /// `http://127.0.0.1:13773`: the loopback address the server is bound to.
     pub url: String,
-    /// The server's id, as `/.well-known/t3/environment` gives it.
+    /// The server's id, as `/.well-known/domovoi/environment` gives it.
     pub environment_id: String,
     /// The machine's name, for the client's "connect" card.
     pub label: String,

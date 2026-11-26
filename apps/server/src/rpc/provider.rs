@@ -60,7 +60,7 @@ async fn auth_controller(ctx: &ConnCtx, id: &str, operation: &'static str) -> Fa
         return Failure::setup(id, operation, "Antigravity's sign-in does not support this operation.");
     }
     let detail = if instance(ctx, id).await.is_some() {
-        "This provider does not support sign-in in T3 Code."
+        "This provider does not support sign-in in Domovoi."
     } else {
         "This provider instance is no longer available."
     };
@@ -73,13 +73,13 @@ async fn managed_codex(ctx: &ConnCtx, id: &str, operation: &'static str, managed
         return Err(Failure::setup(id, operation, "Managed installation is not available for this provider instance."));
     };
     if !inst.managed {
-        return Err(Failure::setup(id, operation, "Choose managed setup to install Codex in T3 Code."));
+        return Err(Failure::setup(id, operation, "Choose managed setup to install Codex in Domovoi."));
     }
     if managed_only && !inst.binary_path.is_empty() && inst.binary_path != "codex" {
         return Err(Failure::setup(
             id,
             operation,
-            "This instance uses a custom executable. Clear its binary path to manage installation in T3 Code.",
+            "This instance uses a custom executable. Clear its binary path to manage installation in Domovoi.",
         ));
     }
     Ok(inst)

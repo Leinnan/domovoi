@@ -47,7 +47,9 @@ const STOP_GRACE: Duration = Duration::from_secs(3);
 const STOP_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const PREVIEW_URL_MAX_LENGTH: usize = 2_048;
 const CONFIGURED_LOCAL_SERVER_URLS_MAX_ITEMS: usize = 32;
-const AGENT_THREAD_ENV: &str = "T3CODE_THREAD_ID";
+const AGENT_THREAD_ENV: &str = crate::terminal::THREAD_ENV;
+/// What it was called: a process started before the update carries only this.
+const OLD_AGENT_THREAD_ENV: &str = crate::terminal::OLD_THREAD_ENV;
 #[cfg(any(not(windows), test))]
 const LSOF_LOCAL_HOST_TOKENS: &[&str] = &["localhost", "127.0.0.1", "0.0.0.0", "::1", "*", "[::]", "[::1]"];
 
@@ -182,13 +184,13 @@ pub fn stoppable_process_group(table: &HashMap<i32, ProcessRow>, pid: i32, serve
 #[cfg(any(not(windows), test))]
 /// macOS `ps -E -ww -o pid=,command=`: argv followed by the launch environment.
 pub fn parse_ps_environment_threads(raw: &str) -> HashMap<u32, Option<String>> {
-    let prefix = format!("{AGENT_THREAD_ENV}=");
+    let prefixes = [format!("{AGENT_THREAD_ENV}="), format!("{OLD_AGENT_THREAD_ENV}=")];
     raw.lines()
         .filter_map(|line| {
             let line = line.trim_start();
             let (pid, rest) = line.split_once(' ')?;
             let pid = pid.parse::<u32>().ok()?;
-            let thread = rest.split_whitespace().find_map(|w| w.strip_prefix(prefix.as_str())).map(str::to_owned);
+            let thread = prefixes.iter().find_map(|prefix| rest.split_whitespace().find_map(|w| w.strip_prefix(prefix.as_str()))).map(str::to_owned);
             Some((pid, thread.filter(|t| !t.is_empty())))
         })
         .collect()
@@ -196,8 +198,11 @@ pub fn parse_ps_environment_threads(raw: &str) -> HashMap<u32, Option<String>> {
 
 /// `/proc/<pid>/environ`, NUL-separated.
 pub fn parse_proc_environ_thread(raw: &str) -> Option<String> {
-    let prefix = format!("{AGENT_THREAD_ENV}=");
-    raw.split('\0').find_map(|e| e.strip_prefix(prefix.as_str())).map(|v| v.trim().to_owned()).filter(|v| !v.is_empty())
+    [AGENT_THREAD_ENV, OLD_AGENT_THREAD_ENV]
+        .iter()
+        .find_map(|name| raw.split('\0').find_map(|e| e.strip_prefix(&format!("{name}="))))
+        .map(|v| v.trim().to_owned())
+        .filter(|v| !v.is_empty())
 }
 
 #[cfg(not(windows))]

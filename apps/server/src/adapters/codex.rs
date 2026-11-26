@@ -80,7 +80,7 @@ impl CodexServer {
         });
         rpc.request("initialize", json!({
             "capabilities": { "experimentalApi": true },
-            "clientInfo": { "name": "T3 Code", "title": "T3 Code", "version": crate::wire::environment::SERVER_VERSION },
+            "clientInfo": { "name": "Domovoi", "title": "Domovoi", "version": crate::wire::environment::SERVER_VERSION },
         })).await.map_err(|e| format!("codex initialize failed: {e}"))?;
         rpc.notify("initialized", None).await.map_err(|e| e.to_string())?;
         let server = Arc::new(CodexServer { rpc, routes, loaded: Mutex::new(HashSet::new()) });
@@ -163,7 +163,7 @@ impl CodexServer {
         if crate::mcp::session_for(&input.thread_id).is_some() {
             let mut context = serde_json::Map::new();
             for (i, section) in crate::agent_instructions::SECTIONS.iter().enumerate() {
-                context.insert(format!("t3_code_orchestration_{:02}", i + 1), json!({ "kind": "application", "value": section }));
+                context.insert(format!("domovoi_orchestration_{:02}", i + 1), json!({ "kind": "application", "value": section }));
             }
             params["additionalContext"] = Value::Object(context);
         }

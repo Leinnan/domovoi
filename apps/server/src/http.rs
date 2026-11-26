@@ -53,7 +53,7 @@ fn tcp_address(tcp: &Tcp) -> Option<IpAddr> {
 }
 
 /// Routes an iroh peer without a session may use: discovery and pairing.
-const PAIRING_ROUTES: &[&str] = &["/.well-known/t3/environment", "/api/auth/session", "/oauth/token"];
+const PAIRING_ROUTES: &[&str] = &[crate::wire::environment::ROUTE, crate::wire::environment::OLD_ROUTE, "/api/auth/session", "/oauth/token"];
 
 fn rpc_router() -> Arc<RpcRouter<ConnCtx>> {
     static ROUTER: OnceLock<Arc<RpcRouter<ConnCtx>>> = OnceLock::new();
@@ -64,7 +64,8 @@ pub fn router(state: SharedState) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/ready", get(ready))
-        .route("/.well-known/t3/environment", get(environment))
+        .route(crate::wire::environment::ROUTE, get(environment))
+        .route(crate::wire::environment::OLD_ROUTE, get(environment))
         .route("/api/auth/session", get(auth_session))
         .route("/oauth/token", post(token_exchange))
         .route("/api/auth/websocket-ticket", post(ws_ticket))
@@ -334,7 +335,7 @@ async fn webhook(
         let mut res = Response::new(axum::body::Body::from(body));
         *res.status_mut() = StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
         res.headers_mut().insert(axum::http::header::CONTENT_TYPE, HeaderValue::from_static("application/json"));
-        res.headers_mut().insert("x-t3-hook-outcome", HeaderValue::from_static(outcome));
+        res.headers_mut().insert("x-domovoi-hook-outcome", HeaderValue::from_static(outcome));
         res
     };
     if !matches!(method, Method::GET | Method::POST | Method::PUT | Method::PATCH) {
@@ -640,10 +641,16 @@ fn paired(state: &SharedState, tcp: &Tcp, attempt: Option<TcpAttempt>) {
 }
 
 const GRANT_TOKEN_EXCHANGE: &str = "urn:ietf:params:oauth:grant-type:token-exchange";
-const TOKEN_TYPE_BOOTSTRAP: &str = "urn:t3:params:oauth:token-type:environment-bootstrap";
 const TOKEN_TYPE_ACCESS: &str = "urn:ietf:params:oauth:token-type:access_token";
 
-/// t3code `AuthTokenExchangeRequest` (form-encoded).
+/// Whether a token exchange's `subject_token_type` says the token is a
+/// pairing code, under the name it has or the one it had.
+fn is_pairing_code(subject_token_type: &str) -> bool {
+    use crate::wire::environment::{OLD_TOKEN_TYPE_BOOTSTRAP, TOKEN_TYPE_BOOTSTRAP};
+    subject_token_type == TOKEN_TYPE_BOOTSTRAP || subject_token_type == OLD_TOKEN_TYPE_BOOTSTRAP
+}
+
+/// The body of a token exchange (form-encoded).
 #[derive(Deserialize)]
 struct TokenRequest {
     grant_type: String,
@@ -659,7 +666,7 @@ struct TokenRequest {
 /// RFC 8693 token exchange: a pairing code for a bearer access token. Over
 /// iroh the token is bound to the peer's key.
 async fn token_exchange(State(state): State<SharedState>, peer: Peer, tcp: Tcp, Form(body): Form<TokenRequest>) -> Response {
-    if body.grant_type != GRANT_TOKEN_EXCHANGE || body.subject_token_type != TOKEN_TYPE_BOOTSTRAP || body.requested_token_type != TOKEN_TYPE_ACCESS {
+    if body.grant_type != GRANT_TOKEN_EXCHANGE || !is_pairing_code(&body.subject_token_type) || body.requested_token_type != TOKEN_TYPE_ACCESS {
         return invalid_request("invalid_command");
     }
     let scope = match body.scope.as_deref().map(str::trim) {

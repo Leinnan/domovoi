@@ -72,8 +72,8 @@ const WAIT_POLL: Duration = Duration::from_millis(100);
 const TITLE_LIMIT: usize = 512;
 /// How long `preview_open` with `open: true` waits for a client to show the tab.
 const REVEAL_VIEWER_WAIT: Duration = Duration::from_secs(1);
-const HTML_PAGE_URL: &str = "http://t3-page.localhost/page.html";
-const HTML_FAVICON_URL: &str = "http://t3-page.localhost/favicon.ico";
+const HTML_PAGE_URL: &str = "http://domovoi-page.localhost/page.html";
+const HTML_FAVICON_URL: &str = "http://domovoi-page.localhost/favicon.ico";
 const HTML_VIEWPORT_HEIGHT: u64 = 800;
 const HTML_MAX_CAPTURE_HEIGHT: u64 = 4_000;
 const HTML_TIMEOUT: Duration = Duration::from_secs(20);
@@ -1280,7 +1280,7 @@ impl ServerBrowser {
                 if tabs >= SERVER_TAB_LIMIT || owned.len() >= AGENT_TAB_LIMIT {
                     return Err(OpError::new(
                         "PreviewAutomationControlInterruptedError",
-                        format!("Too many server browser tabs are open ({AGENT_TAB_LIMIT} per agent session, {SERVER_TAB_LIMIT} per server). Close one with t3_preview_close or reuse one from preview_status tabs."),
+                        format!("Too many server browser tabs are open ({AGENT_TAB_LIMIT} per agent session, {SERVER_TAB_LIMIT} per server). Close one with preview_close or reuse one from preview_status tabs."),
                     ));
                 }
                 // The browser must be running before the tab is announced, so a missing one fails the call, not a tab.

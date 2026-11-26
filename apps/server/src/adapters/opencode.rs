@@ -3,7 +3,7 @@
 //! generated password, serves every thread; its `/api/event` stream is
 //! routed by session (a session's child sessions go to its turn too). A
 //! thread is an OpenCode session in the thread's folder; a turn is a prompt
-//! (whose message id Domovoi picks, `msg_t3_turn_…`, so it marks where a fork
+//! (whose message id Domovoi picks, `msg_domovoi_turn_…`, so it marks where a fork
 //! or rollback cuts), ended by `session.execution.*`.
 //!
 //! Permissions follow the runtime mode as t3code sets them (full access
@@ -60,7 +60,10 @@ const DECLINED: &str = "The user declined this request.";
 /// step, and a background subagent never reports.
 const DISMISSED: &str = "The user dismissed this question. Continue without an answer.";
 /// The session's instruction entry Domovoi writes.
-const INSTRUCTIONS_KEY: &str = "t3-code";
+const INSTRUCTIONS_KEY: &str = "domovoi";
+/// The key the entry had while the tools were a server `t3`'s: a session
+/// from then still holds it, with the tools' old names.
+const OLD_INSTRUCTIONS_KEY: &str = "t3-code";
 /// OpenCode before 2.2.6 loads a new MCP server's tools 100 ms after it
 /// connects: a prompt sent sooner lacks them.
 const MCP_TOOL_SETTLE: Duration = Duration::from_millis(250);
@@ -103,6 +106,8 @@ pub fn rules(runtime_mode: &str, mcp: Option<&str>) -> Value {
         ]
     };
     if let Some(name) = mcp {
+        // Every thread's MCP server but this one's, under the name it has now and the one it had.
+        rules.push(json!({ "action": "domovoi-*", "resource": "*", "effect": "deny" }));
         rules.push(json!({ "action": "t3-code-*", "resource": "*", "effect": "deny" }));
         rules.push(json!({ "action": format!("{name}_*"), "resource": "*", "effect": "allow" }));
     }
@@ -116,13 +121,13 @@ pub fn mcp_server_name(thread_id: &str) -> String {
         Some(c) if c.is_ascii_alphanumeric() || c == '_' || c == '-' => c,
         _ => '_',
     }).collect();
-    let name = format!("t3-code-{safe}");
+    let name = format!("domovoi-{safe}");
     if name.len() <= 64 {
         return name;
     }
     use sha2::Digest as _;
     let digest = hex::encode(sha2::Sha256::digest(thread_id.as_bytes()));
-    format!("t3-code-{}", &digest[..16])
+    format!("domovoi-{}", &digest[..16])
 }
 
 /// `providerID/modelID` as OpenCode's model ref.
@@ -280,7 +285,7 @@ fn session_of_event(event: &Value) -> Option<&str> {
 /// URL path takes as they are.
 fn prompt_id(session: &str, attempt: &str) -> String {
     let attempt: String = attempt.chars().map(|c| if c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | ':' | '.') { c } else { '_' }).collect();
-    format!("msg_t3_turn_{session}:{attempt}")
+    format!("msg_domovoi_turn_{session}:{attempt}")
 }
 
 /// Whether a recorded native turn is a prompt's message id, which a fork
@@ -655,6 +660,11 @@ impl OpenCodeServer {
         let held = self.instructed.lock().await.get(session).cloned();
         if held == text {
             return;
+        }
+        if held.is_none() {
+            // The first word to this session: an entry under the old key goes.
+            let old = format!("/api/experimental/session/{session}/instructions/entries/{OLD_INSTRUCTIONS_KEY}");
+            let _ = self.call(reqwest::Method::DELETE, &old, None).await;
         }
         let path = format!("/api/experimental/session/{session}/instructions/entries/{INSTRUCTIONS_KEY}");
         let sent = match &text {
@@ -1306,13 +1316,14 @@ mod tests {
 
     #[test]
     fn each_thread_allows_only_its_own_mcp_server() {
-        assert_eq!(mcp_server_name("thread:1/é"), "t3-code-thread_1__");
+        assert_eq!(mcp_server_name("thread:1/é"), "domovoi-thread_1__");
         let long = mcp_server_name(&"x".repeat(80));
-        assert_eq!(long.len(), "t3-code-".len() + 16);
-        assert!(long.starts_with("t3-code-") && long[8..].chars().all(|c| c.is_ascii_hexdigit()));
-        let r = rules("full-access", Some("t3-code-t1"));
-        assert_eq!(r[1], json!({ "action": "t3-code-*", "resource": "*", "effect": "deny" }));
-        assert_eq!(r[2], json!({ "action": "t3-code-t1_*", "resource": "*", "effect": "allow" }));
+        assert_eq!(long.len(), "domovoi-".len() + 16);
+        assert!(long.starts_with("domovoi-") && long[8..].chars().all(|c| c.is_ascii_hexdigit()));
+        let r = rules("full-access", Some("domovoi-t1"));
+        assert_eq!(r[1], json!({ "action": "domovoi-*", "resource": "*", "effect": "deny" }));
+        assert_eq!(r[2], json!({ "action": "t3-code-*", "resource": "*", "effect": "deny" }));
+        assert_eq!(r[3], json!({ "action": "domovoi-t1_*", "resource": "*", "effect": "allow" }));
     }
 
     #[test]

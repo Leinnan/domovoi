@@ -120,7 +120,7 @@ async fn exchange(base: &str, code: &str) -> reqwest::Response {
     let body = format!(
         "grant_type={}&subject_token={code}&subject_token_type={}&requested_token_type={}&client_label=Test%20Phone&client_device_type=mobile&client_os=iOS",
         "urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Atoken-exchange",
-        "urn%3At3%3Aparams%3Aoauth%3Atoken-type%3Aenvironment-bootstrap",
+        "urn%3Adomovoi%3Aparams%3Aoauth%3Atoken-type%3Aenvironment-bootstrap",
         "urn%3Aietf%3Aparams%3Aoauth%3Atoken-type%3Aaccess_token",
     );
     http_client().post(format!("{base}/oauth/token")).header("content-type", "application/x-www-form-urlencoded").body(body).send().await.unwrap()
@@ -160,7 +160,7 @@ async fn remote_devices_pair_and_stay_bound_to_their_key() {
     let base = format!("http://127.0.0.1:{}", phone.port());
 
     // An unknown device may discover and pair, nothing else.
-    assert_eq!(http_client().get(format!("{base}/.well-known/t3/environment")).send().await.unwrap().status(), 200);
+    assert_eq!(http_client().get(format!("{base}/.well-known/domovoi/environment")).send().await.unwrap().status(), 200);
     assert_eq!(http_client().get(format!("{base}/api/orchestration/shell")).send().await.unwrap().status(), 401);
     assert_eq!(exchange(&base, "WRONGCODE123").await.status(), 401);
     // The code printed at start lives a day: it works on this machine only.
@@ -728,7 +728,7 @@ async fn an_app_on_this_machine_signs_in_by_writing_a_file() {
     let mut server = start_as("local");
     let base = format!("http://127.0.0.1:{}", server.port);
     let found = descriptor(&server.home);
-    let environment = http_client().get(format!("{base}/.well-known/t3/environment")).send().await.unwrap().json::<Value>().await.unwrap();
+    let environment = http_client().get(format!("{base}/.well-known/domovoi/environment")).send().await.unwrap().json::<Value>().await.unwrap();
     assert_eq!(found, json!({ "version": 1, "url": base, "environmentId": environment["environmentId"], "label": environment["label"] }));
     #[cfg(unix)]
     {
@@ -850,7 +850,7 @@ async fn requests_under_a_name_that_is_not_the_servers_are_refused() {
     let body = res.json::<Value>().await.unwrap();
     assert_eq!((&body["_tag"], &body["host"]), (&json!("HostNotAllowedError"), &json!("evil.example")));
     assert!(body["message"].as_str().unwrap().contains("--allowed-host evil.example"), "{body}");
-    assert_eq!(get("/.well-known/t3/environment", "evil.example:13773").await.status(), 403);
+    assert_eq!(get("/.well-known/domovoi/environment", "evil.example:13773").await.status(), 403);
     let res = exchange_as(&base, &server.startup_code, Some("evil.example"), None).await;
     assert_eq!(res.status(), 403, "not even with a good code");
 
@@ -900,7 +900,7 @@ async fn exchange_as(base: &str, code: &str, host: Option<&str>, origin: Option<
     let body = format!(
         "grant_type={}&subject_token={code}&subject_token_type={}&requested_token_type={}",
         "urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Atoken-exchange",
-        "urn%3At3%3Aparams%3Aoauth%3Atoken-type%3Aenvironment-bootstrap",
+        "urn%3Adomovoi%3Aparams%3Aoauth%3Atoken-type%3Aenvironment-bootstrap",
         "urn%3Aietf%3Aparams%3Aoauth%3Atoken-type%3Aaccess_token",
     );
     let mut request = http_client().post(format!("{base}/oauth/token")).header("content-type", "application/x-www-form-urlencoded").body(body);
@@ -955,7 +955,7 @@ async fn sign_in(base: &str, code: &str) -> String {
 /// The answer to a pairing code offered for a session.
 async fn try_sign_in(base: &str, code: &str) -> reqwest::Response {
     let body = format!(
-        "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Atoken-exchange&subject_token={code}&subject_token_type=urn%3At3%3Aparams%3Aoauth%3Atoken-type%3Aenvironment-bootstrap&requested_token_type=urn%3Aietf%3Aparams%3Aoauth%3Atoken-type%3Aaccess_token"
+        "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Atoken-exchange&subject_token={code}&subject_token_type=urn%3Adomovoi%3Aparams%3Aoauth%3Atoken-type%3Aenvironment-bootstrap&requested_token_type=urn%3Aietf%3Aparams%3Aoauth%3Atoken-type%3Aaccess_token"
     );
     http_client().post(format!("{base}/oauth/token")).header("content-type", "application/x-www-form-urlencoded").body(body).send().await.unwrap()
 }

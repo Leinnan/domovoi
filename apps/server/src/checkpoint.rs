@@ -2,7 +2,7 @@
 //!
 //! Capture stages the whole working tree (tracked + untracked, respecting
 //! .gitignore) into a temporary index, writes a tree and a commit parented on
-//! HEAD, and points a ref under `refs/t3/orchestration-v2/checkpoints/` at it.
+//! HEAD, and points a ref under `refs/domovoi/checkpoints/` at it.
 //! The user's index, branch and stash are never touched.
 
 use base64::Engine;
@@ -38,7 +38,7 @@ async fn git(cwd: &str, args: &[&str]) -> Result<String, GitError> {
 pub fn checkpoint_ref(scope_id: &str, ordinal: u64) -> String {
     let digest = hex::encode(Sha256::digest(scope_id.as_bytes()));
     let key = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&digest[..32]);
-    format!("refs/t3/orchestration-v2/checkpoints/{key}/ordinal/{ordinal}")
+    format!("refs/domovoi/checkpoints/{key}/ordinal/{ordinal}")
 }
 
 pub async fn is_git_repository(cwd: &str) -> bool {
@@ -57,15 +57,15 @@ pub async fn capture(cwd: &str, checkpoint_ref: &str) -> Result<String, GitError
         }
         git_env(cwd, &["add", "-A", "--", "."], &env).await?;
         let tree = git_env(cwd, &["write-tree"], &env).await?.trim().to_owned();
-        let mut args = vec!["commit-tree", tree.as_str(), "-m", "t3 checkpoint"];
+        let mut args = vec!["commit-tree", tree.as_str(), "-m", "domovoi checkpoint"];
         if let Some(h) = &head {
             args.extend(["-p", h.as_str()]);
         }
         let commit = git_env(
             cwd,
             &args,
-            &[("GIT_AUTHOR_NAME", "T3 Code"), ("GIT_AUTHOR_EMAIL", "checkpoints@t3.invalid"),
-              ("GIT_COMMITTER_NAME", "T3 Code"), ("GIT_COMMITTER_EMAIL", "checkpoints@t3.invalid")],
+            &[("GIT_AUTHOR_NAME", "Domovoi"), ("GIT_AUTHOR_EMAIL", "checkpoints@domovoi.invalid"),
+              ("GIT_COMMITTER_NAME", "Domovoi"), ("GIT_COMMITTER_EMAIL", "checkpoints@domovoi.invalid")],
         )
         .await?
         .trim()

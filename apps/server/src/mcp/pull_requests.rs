@@ -49,7 +49,7 @@ fn states(d: &str) -> Value {
 
 pub fn tools() -> Vec<Value> {
     vec![
-        tool("link_pull_request", "Link a PR to this thread. T3 shows its status. For several PRs, use `link_pull_requests`.", target_props(&[]), &[], false),
+        tool("link_pull_request", "Link a PR to this thread. Domovoi shows its status. For several PRs, use `link_pull_requests`.", target_props(&[]), &[], false),
         tool("link_pull_requests", "Link several PRs to a thread. Use it instead of one `link_pull_request` per PR. URLs that are not PRs come back in `invalidUrls`.",
             json!({ "threadId": s("Thread. Default: this thread."), "urls": { "type": "array", "items": { "type": "string" }, "minItems": 1, "description": "Pull request URLs." } }), &["urls"], false),
         tool("unlink_pull_request", "Remove a PR link from this thread. Succeeds with `wasLinked=false` when it was not linked.", target_props(&[]), &[], false),

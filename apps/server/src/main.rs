@@ -817,7 +817,7 @@ async fn serve(args: &Args, paths: state::Paths, base: Base, shutdown: tokio_uti
         }
     }
     if let Some(pairing) = &pairing {
-        tracing::info!("Authentication required. Open T3 Code using the pairing URL.");
+        tracing::info!("Authentication required. Open Domovoi using the pairing URL.");
         // stdout, not the log: the code grants full access for a day.
         println!("pairingUrl: {}/pair#token={pairing}", web.trim_end_matches('/'));
     }

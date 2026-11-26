@@ -624,7 +624,7 @@ fn authenticate(model: &mut Model) -> Cmd {
 }
 
 const GRANT_TOKEN_EXCHANGE: &str = "urn:ietf:params:oauth:grant-type:token-exchange";
-const TOKEN_TYPE_BOOTSTRAP: &str = "urn:t3:params:oauth:token-type:environment-bootstrap";
+const TOKEN_TYPE_BOOTSTRAP: &str = "urn:domovoi:params:oauth:token-type:environment-bootstrap";
 const TOKEN_TYPE_ACCESS: &str = "urn:ietf:params:oauth:token-type:access_token";
 
 fn exchange(model: &mut Model, code: &str) -> Cmd {

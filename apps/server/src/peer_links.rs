@@ -12,7 +12,7 @@
 //!
 //! - `peerLinks.link` (`PeerLinkCreateInput`): dials the peer with this
 //!   server's own peer-link key (`<home>/remote/peer.key`, apart from the key
-//!   phones dial), reads its descriptor (`/.well-known/t3/environment`), and
+//!   phones dial), reads its descriptor (`/.well-known/domovoi/environment`), and
 //!   exchanges the code (`/oauth/token`) for a session bound to that key,
 //!   narrowed to the access asked for (`mcpClientScopes`): `read-only` is
 //!   `orchestration:read`; `full-access` adds `orchestration:operate`,
@@ -26,8 +26,8 @@
 //! - `peerLinks.unlink`: forgets the link and its token here and signs the
 //!   session out at the peer (`/api/domovoi/session/end`) when it answers,
 //!   so either side can end a link;
-//! - agents: `t3_environment_links`, `t3_environment_unlink`, and
-//!   `t3_thread_list` with `environmentId`, read through the link from the
+//! - agents: `environment_links`, `environment_unlink`, and
+//!   `thread_list` with `environmentId`, read through the link from the
 //!   peer's `/api/orchestration/shell` (`crate::mcp::environments`).
 //!
 //! Links are kept in `<userdata>/peer-links.json` (owner-only) and each token
@@ -38,7 +38,7 @@
 //! (`approval-required`, `auto-accept-edits`, `auto`) are refused as
 //! `incompatible`, since a Domovoi peer cannot hold a linked agent to a
 //! runtime-mode ceiling (t3code's `mcpModeLimitHeader` and `linkFence`); no
-//! link request cards (`t3_environment_link`, so `peerLinks.answerRequest`
+//! link request cards (`environment_link`, so `peerLinks.answerRequest`
 //! only checks the card); no other forwarded tool (t3code forwards every
 //! thread tool to the peer's `/mcp`, which serves only its own agents here)
 //! and no remote delegation (`delegated_task.remote.*`); http(s)
@@ -292,7 +292,7 @@ impl PeerLinks {
     async fn probe(&self, state: &AppState, address: &Address, timeout: Duration) -> Result<(String, Descriptor), Failure> {
         let origin = self.origin(state, address, timeout).await?;
         let answer = tokio::time::timeout(timeout, async {
-            http().get(format!("{origin}/.well-known/t3/environment")).send().await?.error_for_status()?.json::<Descriptor>().await
+            crate::wire::environment::asked(&http(), &origin).await?.error_for_status()?.json::<Descriptor>().await
         })
         .await;
         match answer {
@@ -420,7 +420,7 @@ impl PeerLinks {
         let form = url::form_urlencoded::Serializer::new(String::new())
             .append_pair("grant_type", "urn:ietf:params:oauth:grant-type:token-exchange")
             .append_pair("subject_token", code)
-            .append_pair("subject_token_type", "urn:t3:params:oauth:token-type:environment-bootstrap")
+            .append_pair("subject_token_type", crate::wire::environment::TOKEN_TYPE_BOOTSTRAP)
             .append_pair("requested_token_type", "urn:ietf:params:oauth:token-type:access_token")
             .append_pair("scope", scope)
             .append_pair("client_label", &format!("Domovoi · {own_label}"))
@@ -511,7 +511,7 @@ impl PeerLinks {
 
     /// An address that answers as the linked peer, with its token (`resolve`).
     pub async fn resolve(&self, state: &AppState, environment_id: &str) -> Result<(PeerLink, String, String), Failure> {
-        let not_linked = || error(PeerLinkReason::UnknownLink, format!("This environment is not linked to {environment_id}. t3_environment_links lists the linked ones."));
+        let not_linked = || error(PeerLinkReason::UnknownLink, format!("This environment is not linked to {environment_id}. environment_links lists the linked ones."));
         let stored = self.stored(environment_id)?.ok_or_else(not_linked)?;
         let link = stored.link;
         if link.expired() {

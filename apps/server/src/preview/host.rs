@@ -60,7 +60,7 @@ impl OpError {
             "humanControl" => "A human controls this browser tab. Wait until they release control.",
             "tabRequired" => "Multiple browser tabs belong to this session. Pass a tabId from preview_open or from the tabs listed by preview_status.",
             "dialogPending" => "A browser dialog is pending. Read preview_status and resolve it with preview_dialog.",
-            "tabLimit" => "Too many server browser tabs are open. Close one with t3_preview_close, or reuse a tabId from preview_status tabs.",
+            "tabLimit" => "Too many server browser tabs are open. Close one with preview_close, or reuse a tabId from preview_status tabs.",
             "closed" => "This browser tab is closed. Call preview_open.",
             _ => "Browser control changed. Take a fresh snapshot before trying again.",
         };

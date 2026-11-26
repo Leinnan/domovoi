@@ -474,7 +474,7 @@ impl ClaudeSession {
         let mut plan_submitted = false;
         let tasks_key = format!("claude-checklist:{}", turn.run.id);
         let mut tool_inputs: HashMap<String, (String, Value)> = HashMap::new();
-        // Streaming artifact tool calls (`Artifact`, `mcp__t3__t3_artifact_*`): tool_use id -> (name, partial json)
+        // Streaming artifact tool calls (`Artifact`, `mcp__domovoi__artifact_*`): tool_use id -> (name, partial json)
         let mut streaming_artifact_tools: HashMap<String, (String, String)> = HashMap::new();
         let mut last_assistant_uuid: Option<String> = None;
         // Streamed blocks already completed by an `assistant` message.
@@ -1082,7 +1082,8 @@ impl ClaudeSession {
 /// Whether `name` is an artifact-publishing tool whose streaming JSON should
 /// update the transcript live while Claude generates it.
 fn is_artifact_tool(name: &str) -> bool {
-    matches!(name, "Artifact" | "mcp__t3__t3_artifact_create" | "mcp__t3__t3_artifact_update")
+    // A session from before the tools were renamed still calls them `t3_…` of a server `t3`.
+    matches!(name, "Artifact" | "mcp__domovoi__artifact_create" | "mcp__domovoi__artifact_update" | "mcp__t3__t3_artifact_create" | "mcp__t3__t3_artifact_update")
 }
 
 /// Extracts best-effort title/kind/id/content hints from a partial JSON tool

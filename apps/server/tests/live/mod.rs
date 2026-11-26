@@ -329,9 +329,9 @@ async fn subagent(p: Live) {
 async fn agent_tools(p: Live) {
     let server = start_live(&format!("tools-{}", p.instance));
     let (mut ws, _) = ready(&server, &p).await;
-    launch(&mut ws, &p, "t1", "Call the t3_project_info tool, then reply with the project's title and nothing else.", "full-access", "default").await;
+    launch(&mut ws, &p, "t1", "Call the project_info tool, then reply with the project's title and nothing else.", "full-access", "default").await;
     let (all, _) = settle(&mut ws, "t1", 1).await;
-    let called = all.iter().any(|e| e["type"] == "turn-item.updated" && e["payload"].to_string().contains("t3_project_info"));
+    let called = all.iter().any(|e| e["type"] == "turn-item.updated" && e["payload"].to_string().contains("project_info"));
     assert!(called, "the tool was called: {:?}", item_types(&all));
     assert!(reply(&all, "t1", 1).contains("Domovoi Live"), "{}", reply(&all, "t1", 1));
 }
@@ -340,7 +340,7 @@ async fn agent_tools(p: Live) {
 async fn delegated_task(p: Live) {
     let server = start_live(&format!("delegate-{}", p.instance));
     let (mut ws, _) = ready(&server, &p).await;
-    launch(&mut ws, &p, "t1", "Use the delegate_task tool to give another agent this task: reply with the word MANGO. Wait for it with t3_thread_wait, then tell me what it replied.", "full-access", "default").await;
+    launch(&mut ws, &p, "t1", "Use the delegate_task tool to give another agent this task: reply with the word MANGO. Wait for it with thread_wait, then tell me what it replied.", "full-access", "default").await;
     let (all, _) = settle(&mut ws, "t1", 1).await;
     assert!(reply(&all, "t1", 1).contains("MANGO"), "{}", reply(&all, "t1", 1));
     let r = call(&mut ws, &fresh_id("shell"), "orchestration.getThreadProjection", json!({ "threadId": "t1" })).await;
@@ -480,12 +480,12 @@ async fn a_thread_switched_to_another_provider_keeps_its_conversation() {
     assert!(reply(&all, "t1", 2).to_uppercase().contains("PAPAYA"), "Codex knows:\n{}", transcript(&all));
 }
 
-/// The agent moves its thread into a worktree with `t3_worktree_handoff`;
+/// The agent moves its thread into a worktree with `worktree_handoff`;
 /// the continuation runs there, in a new session that has the conversation.
 async fn worktree_handoff(p: Live) {
     let server = start_live(&format!("handoff-{}", p.instance));
     let (mut ws, _) = ready(&server, &p).await;
-    launch(&mut ws, &p, "t1", "Remember the codeword PAPAYA. Then call the t3_worktree_handoff tool with branch \"live-handoff\" and continuationPrompt \"Reply with the codeword I gave you, then run pwd.\". Then end your turn.", "full-access", "default").await;
+    launch(&mut ws, &p, "t1", "Remember the codeword PAPAYA. Then call the worktree_handoff tool with branch \"live-handoff\" and continuationPrompt \"Reply with the codeword I gave you, then run pwd.\". Then end your turn.", "full-access", "default").await;
     settle(&mut ws, "t1", 1).await;
     let (all, _) = settle(&mut ws, "t1", 2).await;
     assert!(reply(&all, "t1", 2).to_uppercase().contains("PAPAYA"), "the conversation went along:\n{}", transcript(&all));

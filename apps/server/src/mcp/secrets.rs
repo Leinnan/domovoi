@@ -44,7 +44,7 @@ pub fn tools() -> Vec<Value> {
             "reason": s("What it is for and where to get it. A link goes in `url`."),
             "url": s("Sign-in or setup page for the value (http or https). Shown as a button."),
             "placeholder": s("Hint shown in the empty field."),
-            "delivery": one_of(&["secretRef", "file"], "secretRef (default) for a T3 tool; file for a command."),
+            "delivery": one_of(&["secretRef", "file"], "secretRef (default) for one of Domovoi's tools; file for a command."),
             "value": s("Pasted in this thread; no card."),
             "timeoutMs": n("How long to wait for the user (default 600000, 1000 to 3600000)."),
             "clientRequestId": s("Retry key."),

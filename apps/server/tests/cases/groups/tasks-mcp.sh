@@ -16,7 +16,7 @@ import json, os, sys, time, urllib.request, urllib.error
 d = os.environ["DIR"]
 name, body, opts = sys.argv[1], sys.argv[2], dict(o.split("=", 1) for o in sys.argv[3:])
 time.sleep(float(opts.get("wait", "0")))
-server = json.loads(open(d + "/out/mcp-config.jsonl").readline())["mcpServers"]["t3"]
+server = json.loads(open(d + "/out/mcp-config.jsonl").readline())["mcpServers"]["domovoi"]
 headers = {"content-type": "application/json"}
 if opts.get("token") == "bad": headers["Authorization"] = "Bearer domovoi_mcp_00000000000000000000000000000000"
 elif opts.get("token") != "none": headers.update(server["headers"])

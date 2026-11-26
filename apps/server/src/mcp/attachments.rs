@@ -32,10 +32,10 @@ fn owners() -> &'static Mutex<HashMap<String, (String, i64)>> {
 
 pub fn tools() -> Vec<Value> {
     vec![
-        tool("t3_attachment_prepare_upload", "Get an upload URL. POST the file's exact bytes to `uploadUrl` (else this server's `relativeUrl`), then send it with `t3_thread_send_attachments` and the returned `attachmentId`.",
+        tool("attachment_prepare_upload", "Get an upload URL. POST the file's exact bytes to `uploadUrl` (else this server's `relativeUrl`), then send it with `thread_send_attachments` and the returned `attachmentId`.",
             json!({ "upload": object("{\"type\":\"image\"|\"file\",\"name\":\"shot.png\",\"mimeType\":\"image/png\",\"sizeBytes\":1234}.") }), &["upload"], false),
-        tool("t3_attachment_discard", "Discard a pending upload (not a sent attachment).", json!({ "attachmentId": s("From `t3_attachment_prepare_upload`.") }), &["attachmentId"], false),
-        tool("t3_thread_send_attachments", "Send uploaded attachments as a new message to a thread of this project (default: this one); it starts the thread or queues behind its work. No retry key. Success does not mean the provider read them or finished.",
+        tool("attachment_discard", "Discard a pending upload (not a sent attachment).", json!({ "attachmentId": s("From `attachment_prepare_upload`.") }), &["attachmentId"], false),
+        tool("thread_send_attachments", "Send uploaded attachments as a new message to a thread of this project (default: this one); it starts the thread or queues behind its work. No retry key. Success does not mean the provider read them or finished.",
             json!({
                 "threadId": s("Default: this thread."),
                 "message": s("Text sent with them."),
@@ -46,9 +46,9 @@ pub fn tools() -> Vec<Value> {
 
 pub async fn call(c: &Call<'_>, name: &str) -> Option<Result<Value, String>> {
     Some(match name {
-        "t3_attachment_prepare_upload" => prepare(c),
-        "t3_attachment_discard" => discard(c),
-        "t3_thread_send_attachments" => send(c).await,
+        "attachment_prepare_upload" => prepare(c),
+        "attachment_discard" => discard(c),
+        "thread_send_attachments" => send(c).await,
         _ => return None,
     })
 }

@@ -1,4 +1,4 @@
-//! Artifact tools (`t3_artifact_*`): create, update, list, and read durable,
+//! Artifact tools (`artifact_*`): create, update, list, and read durable,
 //! versioned visual/interactive artifacts (HTML, React/JSX, SVG, Mermaid,
 //! Markdown, code) directly in Domovoi's UI across all providers and plans.
 
@@ -14,7 +14,7 @@ const KINDS: &[&str] = &["html", "react", "svg", "mermaid", "markdown", "code"];
 pub fn tools() -> Vec<Value> {
     vec![
         tool(
-            "t3_artifact_create",
+            "artifact_create",
             "Create a standalone, previewable artifact (HTML web page/dashboard, interactive React JSX/TSX component, SVG illustration, Mermaid diagram, Markdown report, or code snippet) in the user's Artifacts panel. Prefer this over pasting large HTML/JSX/SVG blocks into chat.",
             json!({
                 "id": s("Optional stable slug/id to identify this artifact across updates."),
@@ -29,10 +29,10 @@ pub fn tools() -> Vec<Value> {
             false,
         ),
         tool(
-            "t3_artifact_update",
+            "artifact_update",
             "Publish a new version of an existing artifact created in this thread, updating the user's Artifacts panel in place while keeping prior versions in history.",
             json!({
-                "id": s("The artifact id returned by `t3_artifact_create`."),
+                "id": s("The artifact id returned by `artifact_create`."),
                 "content": s("Updated full artifact source. Omit if `path` is provided."),
                 "path": s("Optional relative workspace file path to read the updated content from."),
                 "title": s("Optional updated title."),
@@ -44,14 +44,14 @@ pub fn tools() -> Vec<Value> {
             false,
         ),
         tool(
-            "t3_artifact_list",
+            "artifact_list",
             "List artifacts created in this thread, with their titles, kinds, and latest version numbers.",
             json!({}),
             &[],
             true,
         ),
         tool(
-            "t3_artifact_read",
+            "artifact_read",
             "Read an artifact's source and version history (latest version by default, or a specific `version`).",
             json!({
                 "id": s("The artifact id."),
@@ -65,10 +65,10 @@ pub fn tools() -> Vec<Value> {
 
 pub async fn call(c: &Call<'_>, name: &str) -> Option<Result<Value, String>> {
     Some(match name {
-        "t3_artifact_create" => create_or_update(c, false),
-        "t3_artifact_update" => create_or_update(c, true),
-        "t3_artifact_list" => list(c),
-        "t3_artifact_read" => read(c),
+        "artifact_create" => create_or_update(c, false),
+        "artifact_update" => create_or_update(c, true),
+        "artifact_list" => list(c),
+        "artifact_read" => read(c),
         _ => return None,
     })
 }

@@ -715,7 +715,7 @@ async fn prepare_triage(ctx: Arc<ConnCtx>, input: TriageInput) -> TriagePrompt {
         .map(|s| s.lines().rev().take(40).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n"))
         .unwrap_or_default();
     let prompt = format!(
-        "Help me triage a problem with T3 Code.\n\n## Environment\n- Server: domovoi-server {} (t3code protocol)\n- Platform: {} {}\n- Client: {} {} on {} {} ({}), app {}\n\n## What happened\n<describe what you did, what you expected, and what happened instead>\n\n## Recent server log\n```\n{}\n```\n",
+        "Help me triage a problem with Domovoi.\n\n## Environment\n- Server: domovoi-server {}\n- Platform: {} {}\n- Client: {} {} on {} {} ({}), app {}\n\n## What happened\n<describe what you did, what you expected, and what happened instead>\n\n## Recent server log\n```\n{}\n```\n",
         env.server_version,
         env.platform.os,
         env.platform.arch,

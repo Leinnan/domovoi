@@ -345,11 +345,11 @@ fn worktree_local_branch(number: u64, head_branch: &str, cross_repository: bool,
         let parent_taken = (1..segments.len()).any(|i| local.iter().any(|b| *b == segments[..i].join("/")));
         !parent_taken && !local.iter().any(|b| b.starts_with(&format!("{name}/")))
     };
-    let preferred = format!("t3code/pr-{number}/{suffix}");
+    let preferred = format!("domovoi/pr-{number}/{suffix}");
     if creatable(&preferred) {
         return preferred;
     }
-    let flat = format!("t3code-pr-{number}-{}", suffix.replace('/', "-"));
+    let flat = format!("domovoi-pr-{number}-{}", suffix.replace('/', "-"));
     let mut attempt = 1;
     loop {
         let candidate = if attempt == 1 { flat.clone() } else { format!("{flat}-{attempt}") };
@@ -915,8 +915,8 @@ mod tests {
     #[test]
     fn names_cross_repository_worktree_branches() {
         assert_eq!(worktree_local_branch(5, "main", false, &[]), "main");
-        assert_eq!(worktree_local_branch(5, "fix/x", true, &[]), "t3code/pr-5/fix/x");
-        assert_eq!(worktree_local_branch(5, "x", true, &["t3code".into()]), "t3code-pr-5-x");
+        assert_eq!(worktree_local_branch(5, "fix/x", true, &[]), "domovoi/pr-5/fix/x");
+        assert_eq!(worktree_local_branch(5, "x", true, &["domovoi".into()]), "domovoi-pr-5-x");
     }
 
     #[test]
@@ -944,12 +944,12 @@ mod tests {
             "detail": "fatal: couldn't find remote ref", "argumentCount": 4, "exitCode": 128 });
         assert_eq!(json!(Failure::from(fetch.clone())), fetch_json);
         let materialization = |head_repository: Option<&str>| Failure::Materialization {
-            cwd: "/repo".into(), pull_request_number: 7, head_repository: head_repository.map(str::to_owned), head_branch: "fix".into(), local_branch: "t3code/pr-7/fix".into(), cause: Box::new(fetch.clone()),
+            cwd: "/repo".into(), pull_request_number: 7, head_repository: head_repository.map(str::to_owned), head_branch: "fix".into(), local_branch: "domovoi/pr-7/fix".into(), cause: Box::new(fetch.clone()),
         };
         assert_eq!(
             json!(materialization(None)),
             json!({ "_tag": "GitPullRequestMaterializationError", "cwd": "/repo", "pullRequestNumber": 7, "headRepository": null, "headBranch": "fix",
-                "localBranch": "t3code/pr-7/fix", "cause": fetch_json })
+                "localBranch": "domovoi/pr-7/fix", "cause": fetch_json })
         );
         assert_eq!(json!(materialization(Some("forker/widgets")))["headRepository"], "forker/widgets");
         assert_eq!(

@@ -180,7 +180,7 @@ pub fn recovered() -> bool {
 const RESTART_CONTINUATION: &str = "restart_continuation";
 
 /// What the agent is told when its turn was cut off by a server restart.
-pub const CONTINUE_PROMPT: &str = "The T3 Code server restarted while you were working, which stopped your last turn. Continue where you left off.";
+pub const CONTINUE_PROMPT: &str = "The Domovoi server restarted while you were working, which stopped your last turn. Continue where you left off.";
 
 /// On a deliberate stop: remembers the turns it cuts off (thread, run).
 pub fn record_restart_continuation(store: &Store, live: &[(String, String)]) {

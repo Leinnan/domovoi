@@ -41,14 +41,14 @@ pub fn tools() -> Vec<Value> {
         tool("create_threads", "Start up to 20 new top-level threads in this project at once, only when the user asks for new threads.",
             json!({ "threads": { "type": "array", "description": "Each {\"prompt\",\"title\",\"target\",\"runtimeMode\",\"interactionMode\"}.", "items": { "type": "object" } },
                 "clientRequestId": s("Repeat the same id to retry without creating them twice.") }), &["threads"], false),
-        tool("t3_workflow_stop", "Stop one of your subagents (by `subagentId`, from its item) without stopping your turn.",
+        tool("workflow_stop", "Stop one of your subagents (by `subagentId`, from its item) without stopping your turn.",
             json!({ "subagentId": s("The subagent."), "runId": s("Its run; default: your running one.") }), &["subagentId"], false),
         tool("schedule_task", "Schedule a prompt to run later, repeatedly or on webhook requests in this project: in a new thread each time, in this one (`bindToCurrentThread`), or in another thread of this project (`threadId`); `freshSession` gives each run in that thread a new agent session. Give `scheduledTaskId` to change a task: what you leave out (prompt, schedule, its thread) stays as it is. Only schedules: it does not run the prompt now.",
             json!({
                 "prompt": s("What the agent is asked each time (needed for a new task)."), "schedule": schedule, "title": s("A name for the task."),
                 "enabled": b("Default true, or as it was for a changed task."),
                 "bindToCurrentThread": b("true: run in this thread rather than a new one each time; false (on a change): back to a new thread each time."),
-                "threadId": s("Run in this thread of the project (from t3_thread_list) rather than a new one each time."),
+                "threadId": s("Run in this thread of the project (from thread_list) rather than a new one each time."),
                 "freshSession": b("With a thread: each run starts a new agent session."),
                 "scheduledTaskId": s("Change this task instead of making one."),
                 "name": s("Same as title."), "thisThread": b("Same as bindToCurrentThread."),
@@ -57,7 +57,7 @@ pub fn tools() -> Vec<Value> {
         tool("list_scheduled_tasks", "This project's scheduled tasks: schedule, whether enabled, the thread runs go to (threadMode, boundThreadId), the next and last run.", json!({}), &[], true),
         tool("delete_scheduled_task", "Delete one of this project's scheduled tasks.", json!({ "scheduledTaskId": s("The task.") }), &["scheduledTaskId"], false),
         tool("run_scheduled_task_now", "Run one of this project's scheduled tasks now (not a webhook task); answers the thread the run went to.", json!({ "taskId": s("The task.") }), &["taskId"], false),
-        tool("t3_project_info", "This thread's project: title, root folder, this thread's worktree and branch, and the project's scripts.", json!({}), &[], true),
+        tool("project_info", "This thread's project: title, root folder, this thread's worktree and branch, and the project's scripts.", json!({}), &[], true),
     ]
 }
 
@@ -67,12 +67,12 @@ pub async fn call(c: &Call<'_>, name: &str) -> Option<Result<Value, String>> {
         "delegate_task" => delegate(c).await,
         "task_status" | "task_cancel" => task(c, name == "task_cancel").await,
         "create_threads" => create_threads(c).await,
-        "t3_workflow_stop" => workflow_stop(c).await,
+        "workflow_stop" => workflow_stop(c).await,
         "schedule_task" => schedule(c).await,
         "list_scheduled_tasks" => list_tasks(c),
         "delete_scheduled_task" => delete_task(c),
         "run_scheduled_task_now" => run_now(c).await,
-        "t3_project_info" => project_info(c).await,
+        "project_info" => project_info(c).await,
         _ => return None,
     })
 }
@@ -201,7 +201,7 @@ fn task_state(c: &Call<'_>, id: &str) -> Result<Value, String> {
     Ok(json!({ "taskId": id, "childThreadId": id, "title": t.title, "workState": status, "childRunId": active_run(&runs).map(|r| r.id.clone()),
         "hasPendingQuestion": open.iter().any(|r| r["kind"] == "user_input"), "pendingApproval": open.iter().any(|r| r["kind"] != "user_input"),
         "summary": if status == "working" { Value::Null } else { json!(latest_reply(&messages)) },
-        "next": if open.is_empty() { Value::Null } else { json!("It waits on a request: answer it with t3_pending_request, or tell the user.") } }))
+        "next": if open.is_empty() { Value::Null } else { json!("It waits on a request: answer it with pending_request, or tell the user.") } }))
 }
 
 async fn task(c: &Call<'_>, cancel: bool) -> Result<Value, String> {

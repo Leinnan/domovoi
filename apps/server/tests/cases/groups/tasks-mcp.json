@@ -174,7 +174,7 @@
    "note": "the tools"
   },
   {
-   "sh": "mcp 12 '{\"jsonrpc\": \"2.0\", \"id\": 1, \"method\": \"tools/call\", \"params\": {\"name\": \"t3_thread_list\"}}' ",
+   "sh": "mcp 12 '{\"jsonrpc\": \"2.0\", \"id\": 1, \"method\": \"tools/call\", \"params\": {\"name\": \"thread_list\"}}' ",
    "tag": "projects.readFile",
    "payload": {
     "cwd": "$DIR/mcp-out",
@@ -183,7 +183,7 @@
    "note": "the other threads of the project, newest first"
   },
   {
-   "sh": "mcp 13 '{\"jsonrpc\": \"2.0\", \"id\": 1, \"method\": \"tools/call\", \"params\": {\"name\": \"t3_thread_list\", \"arguments\": {\"limit\": 1}}}' ",
+   "sh": "mcp 13 '{\"jsonrpc\": \"2.0\", \"id\": 1, \"method\": \"tools/call\", \"params\": {\"name\": \"thread_list\", \"arguments\": {\"limit\": 1}}}' ",
    "tag": "projects.readFile",
    "payload": {
     "cwd": "$DIR/mcp-out",
@@ -192,7 +192,7 @@
    "note": "at most one"
   },
   {
-   "sh": "mcp 14 '{\"jsonrpc\": \"2.0\", \"id\": 1, \"method\": \"tools/call\", \"params\": {\"name\": \"t3_thread_read\", \"arguments\": {\"threadId\": \"thread-2\"}}}' ",
+   "sh": "mcp 14 '{\"jsonrpc\": \"2.0\", \"id\": 1, \"method\": \"tools/call\", \"params\": {\"name\": \"thread_read\", \"arguments\": {\"threadId\": \"thread-2\"}}}' ",
    "tag": "projects.readFile",
    "payload": {
     "cwd": "$DIR/mcp-out",
@@ -201,7 +201,7 @@
    "note": "a thread's messages"
   },
   {
-   "sh": "mcp 15 '{\"jsonrpc\": \"2.0\", \"id\": 1, \"method\": \"tools/call\", \"params\": {\"name\": \"t3_thread_read\", \"arguments\": {}}}' ",
+   "sh": "mcp 15 '{\"jsonrpc\": \"2.0\", \"id\": 1, \"method\": \"tools/call\", \"params\": {\"name\": \"thread_read\", \"arguments\": {}}}' ",
    "tag": "projects.readFile",
    "payload": {
     "cwd": "$DIR/mcp-out",
@@ -210,7 +210,7 @@
    "note": "no thread named"
   },
   {
-   "sh": "mcp 16 '{\"jsonrpc\": \"2.0\", \"id\": 1, \"method\": \"tools/call\", \"params\": {\"name\": \"t3_thread_read\", \"arguments\": {\"threadId\": \"nope\"}}}' ",
+   "sh": "mcp 16 '{\"jsonrpc\": \"2.0\", \"id\": 1, \"method\": \"tools/call\", \"params\": {\"name\": \"thread_read\", \"arguments\": {\"threadId\": \"nope\"}}}' ",
    "tag": "projects.readFile",
    "payload": {
     "cwd": "$DIR/mcp-out",
@@ -219,7 +219,7 @@
    "note": "a thread that is not there"
   },
   {
-   "sh": "mcp 17 '{\"jsonrpc\": \"2.0\", \"id\": 1, \"method\": \"tools/call\", \"params\": {\"name\": \"t3_thread_read\", \"arguments\": {\"threadId\": \"thread-elsewhere\"}}}' ",
+   "sh": "mcp 17 '{\"jsonrpc\": \"2.0\", \"id\": 1, \"method\": \"tools/call\", \"params\": {\"name\": \"thread_read\", \"arguments\": {\"threadId\": \"thread-elsewhere\"}}}' ",
    "tag": "projects.readFile",
    "payload": {
     "cwd": "$DIR/mcp-out",
@@ -228,7 +228,7 @@
    "note": "a thread of another project"
   },
   {
-   "sh": "mcp 18 '{\"jsonrpc\": \"2.0\", \"id\": 1, \"method\": \"tools/call\", \"params\": {\"name\": \"t3_thread_send\", \"arguments\": {\"threadId\": \"thread-2\", \"message\": \"Please look at calc.py\"}}}' ",
+   "sh": "mcp 18 '{\"jsonrpc\": \"2.0\", \"id\": 1, \"method\": \"tools/call\", \"params\": {\"name\": \"thread_send\", \"arguments\": {\"threadId\": \"thread-2\", \"message\": \"Please look at calc.py\"}}}' ",
    "tag": "projects.readFile",
    "payload": {
     "cwd": "$DIR/mcp-out",
@@ -237,7 +237,7 @@
    "note": "a message to another thread"
   },
   {
-   "sh": "mcp 19 '{\"jsonrpc\": \"2.0\", \"id\": 1, \"method\": \"tools/call\", \"params\": {\"name\": \"t3_thread_send\", \"arguments\": {\"threadId\": \"thread-2\", \"message\": \"  \"}}}' ",
+   "sh": "mcp 19 '{\"jsonrpc\": \"2.0\", \"id\": 1, \"method\": \"tools/call\", \"params\": {\"name\": \"thread_send\", \"arguments\": {\"threadId\": \"thread-2\", \"message\": \"  \"}}}' ",
    "tag": "projects.readFile",
    "payload": {
     "cwd": "$DIR/mcp-out",
@@ -246,7 +246,7 @@
    "note": "no message"
   },
   {
-   "sh": "mcp 20 '{\"jsonrpc\": \"2.0\", \"id\": 1, \"method\": \"tools/call\", \"params\": {\"name\": \"t3_thread_send\", \"arguments\": {\"threadId\": \"thread-1\", \"message\": \"hi\"}}}' ",
+   "sh": "mcp 20 '{\"jsonrpc\": \"2.0\", \"id\": 1, \"method\": \"tools/call\", \"params\": {\"name\": \"thread_send\", \"arguments\": {\"threadId\": \"thread-1\", \"message\": \"hi\"}}}' ",
    "tag": "projects.readFile",
    "payload": {
     "cwd": "$DIR/mcp-out",
@@ -255,7 +255,7 @@
    "note": "to the caller's own thread"
   },
   {
-   "sh": "mcp 21 '{\"jsonrpc\": \"2.0\", \"id\": 1, \"method\": \"tools/call\", \"params\": {\"name\": \"t3_thread_send\", \"arguments\": {\"threadId\": \"thread-elsewhere\", \"message\": \"hi\"}}}' ",
+   "sh": "mcp 21 '{\"jsonrpc\": \"2.0\", \"id\": 1, \"method\": \"tools/call\", \"params\": {\"name\": \"thread_send\", \"arguments\": {\"threadId\": \"thread-elsewhere\", \"message\": \"hi\"}}}' ",
    "tag": "projects.readFile",
    "payload": {
     "cwd": "$DIR/mcp-out",
@@ -264,7 +264,7 @@
    "note": "to a thread of another project"
   },
   {
-   "sh": "mcp 22 '{\"jsonrpc\": \"2.0\", \"id\": 1, \"method\": \"tools/call\", \"params\": {\"name\": \"t3_thread_wait\", \"arguments\": {\"threadId\": \"thread-2\", \"timeoutSeconds\": 20}}}' wait=1",
+   "sh": "mcp 22 '{\"jsonrpc\": \"2.0\", \"id\": 1, \"method\": \"tools/call\", \"params\": {\"name\": \"thread_wait\", \"arguments\": {\"threadId\": \"thread-2\", \"timeoutSeconds\": 20}}}' wait=1",
    "tag": "projects.readFile",
    "payload": {
     "cwd": "$DIR/mcp-out",
@@ -273,7 +273,7 @@
    "note": "waiting for a thread until its run has failed"
   },
   {
-   "sh": "mcp 23 '{\"jsonrpc\": \"2.0\", \"id\": 1, \"method\": \"tools/call\", \"params\": {\"name\": \"t3_thread_read\", \"arguments\": {\"threadId\": \"thread-2\", \"limit\": 1}}}' ",
+   "sh": "mcp 23 '{\"jsonrpc\": \"2.0\", \"id\": 1, \"method\": \"tools/call\", \"params\": {\"name\": \"thread_read\", \"arguments\": {\"threadId\": \"thread-2\", \"limit\": 1}}}' ",
    "tag": "projects.readFile",
    "payload": {
     "cwd": "$DIR/mcp-out",
@@ -282,7 +282,7 @@
    "note": "the thread with the message and its failed run"
   },
   {
-   "sh": "mcp 24 '{\"jsonrpc\": \"2.0\", \"id\": 1, \"method\": \"tools/call\", \"params\": {\"name\": \"t3_thread_wait\", \"arguments\": {\"threadId\": \"nope\"}}}' ",
+   "sh": "mcp 24 '{\"jsonrpc\": \"2.0\", \"id\": 1, \"method\": \"tools/call\", \"params\": {\"name\": \"thread_wait\", \"arguments\": {\"threadId\": \"nope\"}}}' ",
    "tag": "projects.readFile",
    "payload": {
     "cwd": "$DIR/mcp-out",
@@ -300,7 +300,7 @@
    "note": "a child agent in this thread's folder"
   },
   {
-   "sh": "mcp 26 '{\"jsonrpc\": \"2.0\", \"id\": 1, \"method\": \"tools/call\", \"params\": {\"name\": \"t3_thread_wait\", \"arguments\": {\"threadId\": \"@TASK@\", \"timeoutSeconds\": 20}}}' wait=1",
+   "sh": "mcp 26 '{\"jsonrpc\": \"2.0\", \"id\": 1, \"method\": \"tools/call\", \"params\": {\"name\": \"thread_wait\", \"arguments\": {\"threadId\": \"@TASK@\", \"timeoutSeconds\": 20}}}' wait=1",
    "tag": "projects.readFile",
    "payload": {
     "cwd": "$DIR/mcp-out",
@@ -318,7 +318,7 @@
    "note": "a child in a worktree of its own, with another provider"
   },
   {
-   "sh": "mcp 28 '{\"jsonrpc\": \"2.0\", \"id\": 1, \"method\": \"tools/call\", \"params\": {\"name\": \"t3_thread_wait\", \"arguments\": {\"threadId\": \"@TASK2@\", \"timeoutSeconds\": 20}}}' wait=1",
+   "sh": "mcp 28 '{\"jsonrpc\": \"2.0\", \"id\": 1, \"method\": \"tools/call\", \"params\": {\"name\": \"thread_wait\", \"arguments\": {\"threadId\": \"@TASK2@\", \"timeoutSeconds\": 20}}}' wait=1",
    "tag": "projects.readFile",
    "payload": {
     "cwd": "$DIR/mcp-out",
@@ -336,7 +336,7 @@
    "note": "another model of the caller's provider"
   },
   {
-   "sh": "mcp 30 '{\"jsonrpc\": \"2.0\", \"id\": 1, \"method\": \"tools/call\", \"params\": {\"name\": \"t3_thread_wait\", \"arguments\": {\"threadId\": \"@TASK3@\", \"timeoutSeconds\": 20}}}' wait=1",
+   "sh": "mcp 30 '{\"jsonrpc\": \"2.0\", \"id\": 1, \"method\": \"tools/call\", \"params\": {\"name\": \"thread_wait\", \"arguments\": {\"threadId\": \"@TASK3@\", \"timeoutSeconds\": 20}}}' wait=1",
    "tag": "projects.readFile",
    "payload": {
     "cwd": "$DIR/mcp-out",
@@ -468,7 +468,7 @@
    "expect": "chunk"
   },
   {
-   "sh": "mcp 44 '{\"jsonrpc\": \"2.0\", \"id\": 1, \"method\": \"tools/call\", \"params\": {\"name\": \"t3_project_info\", \"arguments\": {}}}' wait=2",
+   "sh": "mcp 44 '{\"jsonrpc\": \"2.0\", \"id\": 1, \"method\": \"tools/call\", \"params\": {\"name\": \"project_info\", \"arguments\": {}}}' wait=2",
    "tag": "projects.readFile",
    "payload": {
     "cwd": "$DIR/mcp-out",
@@ -486,7 +486,7 @@
    "note": "a tool the server has not"
   },
   {
-   "sh": "mcp 46 '{\"jsonrpc\": \"2.0\", \"id\": 1, \"method\": \"tools/call\", \"params\": {\"name\": \"t3_thread_list\"}}' ",
+   "sh": "mcp 46 '{\"jsonrpc\": \"2.0\", \"id\": 1, \"method\": \"tools/call\", \"params\": {\"name\": \"thread_list\"}}' ",
    "tag": "projects.readFile",
    "payload": {
     "cwd": "$DIR/mcp-out",
@@ -505,7 +505,7 @@
    "sleep_ms": 3000
   },
   {
-   "sh": "mcp 47 '{\"jsonrpc\": \"2.0\", \"id\": 1, \"method\": \"tools/call\", \"params\": {\"name\": \"t3_thread_list\"}}' ",
+   "sh": "mcp 47 '{\"jsonrpc\": \"2.0\", \"id\": 1, \"method\": \"tools/call\", \"params\": {\"name\": \"thread_list\"}}' ",
    "tag": "projects.readFile",
    "payload": {
     "cwd": "$DIR/mcp-out",

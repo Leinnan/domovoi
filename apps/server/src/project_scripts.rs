@@ -4,7 +4,7 @@
 //! terminal of the thread, so its output is there to read; terminals of a
 //! script marked `stopOnSettle` close when the thread settles.
 
-#![expect(clippy::disallowed_types, reason = "the user's `t3.json`: its entries, and what else each says, passed on as written")]
+#![expect(clippy::disallowed_types, reason = "the user's `domovoi.json`: its entries, and what else each says, passed on as written")]
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -13,7 +13,7 @@ use std::sync::Mutex;
 use domovoi_model::typed::{ProjectScript, ProjectScriptIcon, ServerSettings};
 
 /// A script resolved for a project: a `ProjectScript` of the settings or of
-/// the project, or an entry of a `t3.json`, which may say less (a command is
+/// the project, or an entry of a `domovoi.json`, which may say less (a command is
 /// enough there). Written as JSON it is the script as it was given.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -38,7 +38,7 @@ pub struct Script {
     pub preview_url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_open_preview: Option<bool>,
-    /// What else a `t3.json` or a project says of the script: it is the
+    /// What else a `domovoi.json` or a project says of the script: it is the
     /// user's file, and what this build does not read of it is passed on.
     #[serde(flatten)]
     pub rest: Map<String, Value>,
@@ -75,7 +75,7 @@ fn scripts_of(scripts: &[ProjectScript]) -> Vec<Script> {
 
 /// A project's scripts as t3code resolves them (`resolveProjectScripts`):
 /// the per-project override, else the project's own, else the defaults;
-/// with none of those, the `scripts` of a `t3.json` in the project root.
+/// with none of those, the `scripts` of a `domovoi.json` in the project root.
 ///
 /// `project_scripts` are the project's own as its record holds them; one
 /// that does not read as a script is left out.
@@ -96,15 +96,21 @@ pub fn resolve(settings: &ServerSettings, project_id: &str, project_scripts: &[P
     if !defaults.is_empty() {
         return defaults;
     }
-    t3_json_scripts(workspace_root)
+    project_file_scripts(workspace_root)
 }
 
-/// `scripts` of `<root>/t3.json`, each given an id from its name if it has none.
-pub fn t3_json_scripts(workspace_root: &str) -> Vec<Script> {
-    let Ok(text) = std::fs::read_to_string(std::path::Path::new(workspace_root).join("t3.json")) else { return vec![] };
+/// The project's own file of scripts, and the name it had (a project that
+/// has only that one is read as before; the file is never renamed for it).
+const PROJECT_FILES: [&str; 2] = ["domovoi.json", "t3.json"];
+
+/// `scripts` of `<root>/domovoi.json` (or, without one, `<root>/t3.json`),
+/// each given an id from its name if it has none.
+pub fn project_file_scripts(workspace_root: &str) -> Vec<Script> {
+    let root = std::path::Path::new(workspace_root);
+    let Some((name, text)) = PROJECT_FILES.iter().find_map(|name| Some((*name, std::fs::read_to_string(root.join(name)).ok()?))) else { return vec![] };
     // The project's own file, of which only `scripts` is read: a list whose entries may or may not be scripts.
     let Ok(file) = serde_json::from_str::<Value>(&text) else {
-        tracing::warn!(%workspace_root, "t3.json is not valid JSON");
+        tracing::warn!(%workspace_root, "{name} is not valid JSON");
         return vec![];
     };
     file.get("scripts")
@@ -138,18 +144,22 @@ fn stop_on_settle() -> &'static Mutex<HashSet<(String, String)>> {
 }
 
 /// Runs `script` in the thread terminal `terminal_id` (a login shell in
-/// `cwd`, with t3code's `T3CODE_PROJECT_ROOT` / `T3CODE_WORKTREE_PATH`).
+/// `cwd`, with `DOMOVOI_PROJECT_ROOT` / `DOMOVOI_WORKTREE_PATH`, and for one
+/// release under their old names too, `T3CODE_…`, which scripts written
+/// until now read).
 /// Returns once the command is typed; the script keeps running there.
 pub fn run(thread_id: &str, terminal_id: &str, script: &Script, project_root: &str, worktree_path: Option<&str>, cwd: &str) -> Result<(), String> {
     let state = crate::state::STATE.get().ok_or("the server is not running")?;
     let command = script.command.as_deref().filter(|c| !c.trim().is_empty()).ok_or("the script has no command")?;
     let mut env = HashMap::from([
+        ("DOMOVOI_PROJECT_ROOT".to_owned(), project_root.to_owned()),
         ("T3CODE_PROJECT_ROOT".to_owned(), project_root.to_owned()),
         ("NO_COLOR".to_owned(), "1".to_owned()),
         ("FORCE_COLOR".to_owned(), "0".to_owned()),
         ("COLORTERM".to_owned(), String::new()),
     ]);
     if let Some(w) = worktree_path {
+        env.insert("DOMOVOI_WORKTREE_PATH".into(), w.to_owned());
         env.insert("T3CODE_WORKTREE_PATH".into(), w.to_owned());
     }
     state.terminals.open(thread_id, terminal_id, cwd, &env).map_err(|e| e.0)?;
@@ -197,11 +207,28 @@ mod tests {
         serde_json::from_value(value).unwrap()
     }
 
+    /// A project that still has the file under its old name is read as
+    /// before; once it has a `domovoi.json`, that one is read and not the other.
     #[test]
-    fn scripts_resolve_from_overrides_project_defaults_then_t3_json() {
+    fn the_projects_file_is_domovoi_json_and_t3_json_where_there_is_none() {
         let root = std::env::temp_dir().join(format!("domovoi-scripts-{}", crate::util::new_uuid()));
         std::fs::create_dir_all(&root).unwrap();
-        std::fs::write(root.join("t3.json"), r#"{ "scripts": [{ "name": "Setup Worktree", "command": "make deps", "runOnWorktreeCreate": true, "note": "mine" }, { "name": "bad" }] }"#).unwrap();
+        let file = |command: &str| format!(r#"{{ "scripts": [{{ "name": "Setup", "command": "{command}" }}] }}"#);
+        let commands = |root: &std::path::Path| project_file_scripts(&root.to_string_lossy()).iter().filter_map(|s| s.command.clone()).collect::<Vec<_>>();
+        assert!(commands(&root).is_empty());
+        std::fs::write(root.join("t3.json"), file("old")).unwrap();
+        assert_eq!(commands(&root), ["old"]);
+        std::fs::write(root.join("domovoi.json"), file("new")).unwrap();
+        assert_eq!(commands(&root), ["new"]);
+        assert!(root.join("t3.json").exists(), "the old file is left where it is");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn scripts_resolve_from_overrides_project_defaults_then_the_projects_file() {
+        let root = std::env::temp_dir().join(format!("domovoi-scripts-{}", crate::util::new_uuid()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("domovoi.json"), r#"{ "scripts": [{ "name": "Setup Worktree", "command": "make deps", "runOnWorktreeCreate": true, "note": "mine" }, { "name": "bad" }] }"#).unwrap();
         let root_s = root.to_string_lossy().into_owned();
         let script = |id: &str, command: &str| json!({ "id": id, "name": id, "command": command, "icon": "play", "runOnWorktreeCreate": false });
         let own: Vec<ProjectScript> = serde_json::from_value(json!([script("own", "a")])).unwrap();

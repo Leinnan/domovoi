@@ -89,7 +89,7 @@ struct Client {
 /// presents it, and the answer without the token.
 async fn sign_in(base: &str, code: &str) -> (String, Value) {
     let body = format!(
-        "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Atoken-exchange&subject_token={code}&subject_token_type=urn%3At3%3Aparams%3Aoauth%3Atoken-type%3Aenvironment-bootstrap&requested_token_type=urn%3Aietf%3Aparams%3Aoauth%3Atoken-type%3Aaccess_token"
+        "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Atoken-exchange&subject_token={code}&subject_token_type=urn%3Adomovoi%3Aparams%3Aoauth%3Atoken-type%3Aenvironment-bootstrap&requested_token_type=urn%3Aietf%3Aparams%3Aoauth%3Atoken-type%3Aaccess_token"
     );
     let res = http_client().post(format!("{base}/oauth/token")).header("content-type", "application/x-www-form-urlencoded").body(body).send().await.unwrap();
     assert_eq!(res.status(), 200);
@@ -197,7 +197,7 @@ async fn token_exchange(base: &str, fields: &[(&str, &str)]) -> Value {
 }
 
 const GRANT: &str = "urn:ietf:params:oauth:grant-type:token-exchange";
-const BOOTSTRAP: &str = "urn:t3:params:oauth:token-type:environment-bootstrap";
+const BOOTSTRAP: &str = "urn:domovoi:params:oauth:token-type:environment-bootstrap";
 const ACCESS: &str = "urn:ietf:params:oauth:token-type:access_token";
 
 #[tokio::test(flavor = "multi_thread")]

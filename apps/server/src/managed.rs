@@ -141,7 +141,7 @@ pub fn icon_svg(name: &str) -> String {
 }
 
 fn readme(name: &str) -> String {
-    format!("<img src=\"assets/icon.svg\" width=\"64\" height=\"64\" alt=\"\">\n\n# {name}\n\nCreated in [T3 Code](https://t3.codes).\n")
+    format!("<img src=\"assets/icon.svg\" width=\"64\" height=\"64\" alt=\"\">\n\n# {name}\n\nCreated in Domovoi.\n")
 }
 
 fn describe_commit_failure(stderr: &str) -> String {

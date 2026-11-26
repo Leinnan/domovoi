@@ -690,7 +690,7 @@ pub async fn update(state: &crate::state::AppState, input: UpdateInput) -> Resul
     let refreshed = state.providers.refresh(Some(&instance)).await;
     let verified = refreshed.iter().find(|p| p.instance_id.as_str() == instance);
     let (status, message) = if could_not_verify(verified, None) {
-        (ServerProviderUpdateStatus::Unchanged, "Update command completed, but T3 Code could not verify the provider version.")
+        (ServerProviderUpdateStatus::Unchanged, "Update command completed, but Domovoi could not verify the provider version.")
     } else {
         (ServerProviderUpdateStatus::Succeeded, "Provider updated.")
     };

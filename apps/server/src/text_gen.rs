@@ -465,7 +465,7 @@ pub fn thread_title_prompt(message: &str, project: Option<&str>, previous: Optio
 - Local git history is not evidence of what a linked PR or issue is about. Never title the thread after branch names, commit messages, or merged commits found in the checkout.
 - If a linked PR or issue cannot be read, fall back to the user's stated action plus its number, such as \"Take Over PR 8588\". This is the one case where a PR or issue number belongs in the title.";
     let body = match previous {
-        None => format!("Generate a title that will help the user recognize this T3 Code thread weeks later.
+        None => format!("Generate a title that will help the user recognize this Domovoi thread weeks later.
 Return JSON with keys title and needsRefinement.
 Set needsRefinement to true only if the subject is still unknown, such as an unresolved link, \"fix this\", or an unexplained attachment. Otherwise set it to false.
 
@@ -491,7 +491,7 @@ Editorial rules:
 
 User message:
 {}", avoid_rule(project, "quotes, labels, filler, and trailing punctuation"), limit(message, 8_000)),
-        Some(prev) => format!("Regenerate the title for an existing T3 Code thread so the user can recognize it weeks later.
+        Some(prev) => format!("Regenerate the title for an existing Domovoi thread so the user can recognize it weeks later.
 The previous title was {}.
 Return JSON with keys title and needsRefinement. Set needsRefinement to false.
 

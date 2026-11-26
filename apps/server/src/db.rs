@@ -214,7 +214,7 @@ const MIGRATIONS: &[&str] = &[
     "CREATE TABLE thread_permission_rules (
         thread_id TEXT NOT NULL, provider TEXT NOT NULL, rule TEXT NOT NULL, added_at TEXT NOT NULL,
         PRIMARY KEY (thread_id, provider, rule));",
-    // 14: durable, versioned thread artifacts (MCP t3_artifact_* tools and
+    // 14: durable, versioned thread artifacts (MCP artifact_* tools and
     // captured Claude Code native Artifact calls).
     "CREATE TABLE artifacts (
         id TEXT PRIMARY KEY, thread_id TEXT NOT NULL, project_id TEXT NOT NULL,
@@ -240,6 +240,11 @@ const MIGRATIONS: &[&str] = &[
     // 17: the sessions of the web client, which signed in with a cookie. No
     // request can present one any more.
     "DELETE FROM auth_sessions WHERE method = 'browser-session-cookie';",
+    // 18: the MCP server is `domovoi` (was `t3`) and its tools lost their
+    // `t3_` prefix: what a thread was allowed for good is kept under the
+    // tool's new name.
+    "UPDATE OR REPLACE thread_permission_rules SET rule = 'mcp__domovoi__' || substr(rule, length('mcp__t3__t3_') + 1) WHERE substr(rule, 1, length('mcp__t3__t3_')) = 'mcp__t3__t3_';
+     UPDATE OR REPLACE thread_permission_rules SET rule = 'mcp__domovoi__' || substr(rule, length('mcp__t3__') + 1) WHERE substr(rule, 1, length('mcp__t3__')) = 'mcp__t3__';",
 ];
 
 impl Db {
@@ -462,6 +467,21 @@ impl Drop for OpenBatch<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Migration 18: what a thread was allowed for good follows its tools to
+    /// their new names; a rule for anything else is left as it is.
+    #[test]
+    fn allowed_tools_are_kept_under_the_tools_new_names() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(MIGRATIONS[12]).unwrap();
+        for rule in ["mcp__t3__t3_thread_read", "mcp__t3__html_render", "mcp__domovoi__html_render", "Bash(ls)", "mcp__other__t3_thing"] {
+            conn.execute("INSERT INTO thread_permission_rules VALUES ('t1', 'claudeAgent', ?1, 'now')", [rule]).unwrap();
+        }
+        conn.execute_batch(MIGRATIONS[17]).unwrap();
+        let mut rules: Vec<String> = conn.prepare("SELECT rule FROM thread_permission_rules").unwrap().query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect();
+        rules.sort();
+        assert_eq!(rules, ["Bash(ls)", "mcp__domovoi__html_render", "mcp__domovoi__thread_read", "mcp__other__t3_thing"]);
+    }
 
     #[cfg(unix)]
     #[test]

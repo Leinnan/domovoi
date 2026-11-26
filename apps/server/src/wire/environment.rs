@@ -3,7 +3,7 @@ use domovoi_model::typed::{
     EnvironmentMachineKind, ExecutionEnvironmentCapabilities, ExecutionEnvironmentDescriptor, ExecutionEnvironmentPlatform,
 };
 
-/// `ExecutionEnvironmentDescriptor` (served at `/.well-known/t3/environment`).
+/// Which server this is and what it can do (served at [`ROUTE`]).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EnvironmentDescriptor {
@@ -57,6 +57,28 @@ impl From<&EnvironmentDescriptor> for ExecutionEnvironmentDescriptor {
             capabilities: environment.capabilities.clone(),
         }
     }
+}
+
+/// Where a server says which one it is, to anyone who asks.
+pub const ROUTE: &str = "/.well-known/domovoi/environment";
+/// Where it said so until it was named after Domovoi. Still answered, for
+/// an app, a command line or a linked server from before; and asked for by
+/// this build when the server asked is one from before.
+pub const OLD_ROUTE: &str = "/.well-known/t3/environment";
+
+/// What a pairing code is called in a token exchange (`subject_token_type`).
+pub const TOKEN_TYPE_BOOTSTRAP: &str = "urn:domovoi:params:oauth:token-type:environment-bootstrap";
+/// And what it was called, which an app from before still sends.
+pub const OLD_TOKEN_TYPE_BOOTSTRAP: &str = "urn:t3:params:oauth:token-type:environment-bootstrap";
+
+/// The answer of the server at `origin` to "which one are you": asked at
+/// [`ROUTE`], and at [`OLD_ROUTE`] of a server that does not know the first.
+pub async fn asked(http: &reqwest::Client, origin: &str) -> reqwest::Result<reqwest::Response> {
+    let answer = http.get(format!("{origin}{ROUTE}")).send().await?;
+    if answer.status() == reqwest::StatusCode::NOT_FOUND {
+        return http.get(format!("{origin}{OLD_ROUTE}")).send().await;
+    }
+    Ok(answer)
 }
 
 /// The version domovoi-server reports: its own.

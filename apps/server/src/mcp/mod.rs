@@ -24,8 +24,16 @@ use domovoi_model::typed::command::MessageDispatch;
 use domovoi_model::typed::{Actor, AppThread, ConversationMessage, CreationSource, MessageRole, Run, RunStatus};
 use std::sync::{Arc, Mutex, OnceLock};
 
-/// The MCP server's name as agents see it (Claude tools are `mcp__t3__*`).
-pub const SERVER_NAME: &str = "t3";
+/// The MCP server's name as agents see it (Claude tools are `mcp__domovoi__*`).
+pub const SERVER_NAME: &str = "domovoi";
+
+/// The name the tool `name` has now. Until the server was `domovoi` it was
+/// `t3`, and most of its tools `t3_…`: an agent resumed from then (or one
+/// reading its own old transcript) still calls them so.
+pub fn current_tool_name(name: &str) -> &str {
+    let name = name.strip_prefix("mcp__t3__").or_else(|| name.strip_prefix("mcp__domovoi__")).unwrap_or(name);
+    name.strip_prefix("t3_").unwrap_or(name)
+}
 
 /// `http://127.0.0.1:<port>/mcp`, once the server listens.
 pub static ENDPOINT: OnceLock<String> = OnceLock::new();
@@ -306,7 +314,7 @@ pub async fn handle(state: &Arc<AppState>, token: &str, msg: &Value) -> Option<V
         "initialize" => ok(json!({
             "protocolVersion": msg["params"]["protocolVersion"].as_str().unwrap_or("2025-06-18"),
             "capabilities": { "tools": { "listChanged": false } },
-            "serverInfo": { "name": "domovoi-server", "title": "T3 Code (Domovoi)", "version": crate::wire::environment::SERVER_VERSION },
+            "serverInfo": { "name": "domovoi-server", "title": "Domovoi", "version": crate::wire::environment::SERVER_VERSION },
             "instructions": crate::agent_instructions::MCP_SUMMARY,
         })),
         "ping" => ok(json!({})),
@@ -317,7 +325,7 @@ pub async fn handle(state: &Arc<AppState>, token: &str, msg: &Value) -> Option<V
                 return err(-32001, "This thread is gone.");
             };
             let caller = Caller { project_id: thread.project_id.as_str().to_owned(), thread_id, thread };
-            let name = msg["params"]["name"].as_str().unwrap_or_default();
+            let name = current_tool_name(msg["params"]["name"].as_str().unwrap_or_default());
             let args = msg["params"].get("arguments").cloned().unwrap_or(json!({}));
             ok(match call_tool(state, &caller, name, &args).await {
                 Ok(v) => finished(v),
@@ -388,7 +396,7 @@ mod tests {
                 assert!(t["inputSchema"]["properties"].get(r.as_str().unwrap()).is_some(), "{}: {r}", t["name"]);
             }
         }
-        for name in ["t3_thread_list", "t3_thread_read", "t3_thread_wait", "task_status", "t3_project_info", "orchestrator_capabilities", "t3_worktree_status", "list_scheduled_tasks"] {
+        for name in ["thread_list", "thread_read", "thread_wait", "task_status", "project_info", "orchestrator_capabilities", "worktree_status", "list_scheduled_tasks"] {
             assert!(read_only_tools().iter().any(|t| t == name), "{name}");
         }
         let m = completion_message("Fix tests", "t9", "result_available", Some("All green."));

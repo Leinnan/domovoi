@@ -55,7 +55,7 @@ const SUPPORTED: ((u64, u64, u64), (u64, u64, u64)) = ((1, 5, 1), (2, 0, 0));
 
 pub const SIGN_IN_REQUIRED: &str = "Sign in to Antigravity in Settings before you continue.";
 pub const AUTH_STDOUT_PREFIX: &str = "Open the following link to authenticate the ACP server: ";
-pub const AUTH_BROWSER_MARKER: &str = "__T3_ANTIGRAVITY_AUTH_URL__";
+pub const AUTH_BROWSER_MARKER: &str = "__DOMOVOI_ANTIGRAVITY_AUTH_URL__";
 const SIGN_IN_MESSAGE: &str = "Sign in with Google to use Antigravity.";
 const AUTH_UNCHECKED_MESSAGE: &str = "Antigravity is installed. Google account access is not checked yet.";
 const MISSING_MESSAGE: &str = "Antigravity ACP runtime is not installed or its executable could not be found.";
@@ -979,7 +979,7 @@ mod tests {
 
     #[test]
     fn the_browser_helper_line_is_json_after_the_marker() {
-        assert_eq!(browser_url_line("https://a/b?c=\"d\""), "__T3_ANTIGRAVITY_AUTH_URL__\"https://a/b?c=\\\"d\\\"\"\n");
+        assert_eq!(browser_url_line("https://a/b?c=\"d\""), "__DOMOVOI_ANTIGRAVITY_AUTH_URL__\"https://a/b?c=\\\"d\\\"\"\n");
     }
 
     #[test]

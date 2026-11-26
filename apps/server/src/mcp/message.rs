@@ -21,7 +21,7 @@ pub fn tools() -> Vec<Value> {
     vec![
         tool("send_to_user", "Show the user a Markdown message in this thread, exactly as written, before your turn ends. Use it for content the user must read in full mid-turn, such as a draft, a code block, or what a question you are about to ask refers to. Don't repeat it in your reply.",
             json!({ "message": s("Markdown, shown verbatim (at most 4000 characters).") }), &["message"], true),
-        tool("tool_search", "Find T3 Code tools by name or purpose, then call them by name: threads (t3_thread_*), worktrees, delegated tasks, schedules, artifacts, html_render, pull requests, attachments, request_secret. Exact names work too.",
+        tool("tool_search", "Find Domovoi tools by name or purpose, then call them by name: threads (thread_*), worktrees, delegated tasks, schedules, artifacts, html_render, pull requests, attachments, request_secret. Exact names work too.",
             json!({ "query": s("Names or words, at most 500 characters.") }), &["query"], true),
     ]
 }
@@ -45,13 +45,13 @@ fn send_to_user(c: &Call<'_>) -> Result<Value, String> {
 /// Tools ranked by how many of the query's words their name or description holds; an exact name first.
 pub(crate) fn matches(tools: &[Value], query: &str) -> Vec<Value> {
     let query = query.trim().to_lowercase();
-    let words: Vec<&str> = query.split(|c: char| c.is_whitespace() || c == ',').filter(|w| !w.is_empty()).map(|w| w.trim_start_matches("mcp__t3__")).collect();
+    let words: Vec<&str> = query.split(|c: char| c.is_whitespace() || c == ',').filter(|w| !w.is_empty()).map(super::current_tool_name).collect();
     let mut scored: Vec<(usize, &Value)> = tools
         .iter()
         .filter_map(|t| {
             let name = t["name"].as_str()?.to_lowercase();
             let text = format!("{name} {}", t["description"].as_str().unwrap_or_default().to_lowercase());
-            let exact = words.iter().any(|w| *w == name || w.strip_prefix("select:").is_some_and(|list| list.split(',').any(|n| n.trim_start_matches("mcp__t3__") == name)));
+            let exact = words.iter().any(|w| *w == name || w.strip_prefix("select:").is_some_and(|list| list.split(',').any(|n| super::current_tool_name(n) == name)));
             let hits = words.iter().filter(|w| text.contains(**w) || name.contains(&w.replace('-', "_"))).count();
             let score = if exact { usize::MAX } else { hits };
             (score > 0).then_some((score, t))
@@ -80,7 +80,8 @@ mod tests {
         assert_eq!(found[0]["name"], "request_secret");
         let found = matches(&tools, "pull request");
         assert!(found.iter().any(|t| t["name"] == "link_pull_request"), "{found:?}");
-        assert!(matches(&tools, "mcp__t3__html_render")[0]["name"] == "html_render");
+        assert!(matches(&tools, "mcp__domovoi__html_render")[0]["name"] == "html_render");
+        assert!(matches(&tools, "mcp__t3__html_render")[0]["name"] == "html_render", "as it was named");
         assert!(matches(&tools, "zzzz-nothing").is_empty());
     }
 }

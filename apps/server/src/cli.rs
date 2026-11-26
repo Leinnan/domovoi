@@ -51,7 +51,7 @@ async fn open<'a>(base: &'a Base, host: &str, port: u16) -> Fallible<Option<Loca
     };
     let origin = format!("http://{host}:{port}");
     let http = reqwest::Client::builder().timeout(Duration::from_secs(30)).build()?;
-    let Ok(res) = http.get(format!("{origin}/.well-known/t3/environment")).send().await else {
+    let Ok(res) = crate::wire::environment::asked(&http, &origin).await else {
         return Ok(None);
     };
     // Anything but this server's own descriptor is another server's answer.
@@ -64,7 +64,7 @@ async fn open<'a>(base: &'a Base, host: &str, port: u16) -> Fallible<Option<Loca
     let form = url::form_urlencoded::Serializer::new(String::new())
         .append_pair("grant_type", "urn:ietf:params:oauth:grant-type:token-exchange")
         .append_pair("subject_token", &code)
-        .append_pair("subject_token_type", "urn:t3:params:oauth:token-type:environment-bootstrap")
+        .append_pair("subject_token_type", crate::wire::environment::TOKEN_TYPE_BOOTSTRAP)
         .append_pair("requested_token_type", "urn:ietf:params:oauth:token-type:access_token")
         .append_pair("client_label", CLI_LABEL)
         .append_pair("client_device_type", "bot")

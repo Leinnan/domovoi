@@ -110,10 +110,13 @@ async fn health_ready_compression_and_protocol_check() {
     assert_eq!(brotli.headers().get("content-encoding").and_then(|v| v.to_str().ok()), Some("br"));
 
     // JSON too.
-    let environment = client.get(format!("{base}/.well-known/t3/environment")).header("accept-encoding", "gzip").send().await.unwrap();
+    let environment = client.get(format!("{base}/.well-known/domovoi/environment")).header("accept-encoding", "gzip").send().await.unwrap();
     assert_eq!(environment.headers().get("content-encoding").and_then(|v| v.to_str().ok()), Some("gzip"));
     let environment: Value = serde_json::from_slice(&gunzip(&environment.bytes().await.unwrap())).unwrap();
     assert_eq!(environment["orchestrationProtocolVersion"], PROTOCOL);
+    // An app from before the server was named after Domovoi asks where it always did, and is answered the same.
+    let as_before: Value = client.get(format!("{base}/.well-known/t3/environment")).send().await.unwrap().json().await.unwrap();
+    assert_eq!(as_before, environment);
 
     // The socket asks for a credential first, whatever protocol the URL names.
     for query in [String::new(), "?orchestrationProtocol=2".to_owned(), format!("?protocol={PROTOCOL}")] {
@@ -209,6 +212,7 @@ async fn next_frame(ws: &mut Ws) -> Value {
 }
 
 /// A bearer token for a new device, from a pairing code minted beside the running server.
+/// The code is offered as an app from before does: under the name it had (`urn:t3:…`).
 async fn bearer_token(server: &Server) -> String {
     let out = Command::new(env!("CARGO_BIN_EXE_domovoi-server"))
         .env("DOMOVOI_NO_SESSION_IMPORT", "1")
@@ -526,7 +530,7 @@ async fn sign_in(base: &str, code: &str) -> String {
 /// The answer to a pairing code offered for a session.
 async fn try_sign_in(base: &str, code: &str) -> reqwest::Response {
     let body = format!(
-        "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Atoken-exchange&subject_token={code}&subject_token_type=urn%3At3%3Aparams%3Aoauth%3Atoken-type%3Aenvironment-bootstrap&requested_token_type=urn%3Aietf%3Aparams%3Aoauth%3Atoken-type%3Aaccess_token"
+        "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Atoken-exchange&subject_token={code}&subject_token_type=urn%3Adomovoi%3Aparams%3Aoauth%3Atoken-type%3Aenvironment-bootstrap&requested_token_type=urn%3Aietf%3Aparams%3Aoauth%3Atoken-type%3Aaccess_token"
     );
     http_client().post(format!("{base}/oauth/token")).header("content-type", "application/x-www-form-urlencoded").body(body).send().await.unwrap()
 }

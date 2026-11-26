@@ -1673,7 +1673,7 @@ async fn signed_in(server: &Server) -> String {
     let text = String::from_utf8_lossy(&out.stdout).into_owned();
     let code = text.lines().find_map(|l| l.split("#token=").nth(1)).unwrap().trim().to_owned();
     let body = format!(
-        "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Atoken-exchange&subject_token={code}&subject_token_type=urn%3At3%3Aparams%3Aoauth%3Atoken-type%3Aenvironment-bootstrap&requested_token_type=urn%3Aietf%3Aparams%3Aoauth%3Atoken-type%3Aaccess_token&client_device_type=mobile"
+        "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Atoken-exchange&subject_token={code}&subject_token_type=urn%3Adomovoi%3Aparams%3Aoauth%3Atoken-type%3Aenvironment-bootstrap&requested_token_type=urn%3Aietf%3Aparams%3Aoauth%3Atoken-type%3Aaccess_token&client_device_type=mobile"
     );
     let res: Value = http()
         .post(format!("http://127.0.0.1:{}/oauth/token", server.port))
@@ -2117,8 +2117,9 @@ async fn a_new_worktree_runs_the_setup_script() {
     let mut ws = socket(&server, &token).await;
     let repo = server.dir.join("w").canonicalize().unwrap();
     // The terminal's shell: PowerShell on Windows, a POSIX shell elsewhere.
-    let command = if cfg!(windows) { r#"echo $env:T3CODE_PROJECT_ROOT > setup-ran.txt"# } else { r#"echo \"$T3CODE_PROJECT_ROOT\" > setup-ran.txt"# };
-    std::fs::write(repo.join("t3.json"), format!(r#"{{ "scripts": [{{ "name": "Setup", "command": "{command}", "runOnWorktreeCreate": true }}] }}"#)).unwrap();
+    // The script reads the project's root under the variable's name and under the one it had.
+    let command = if cfg!(windows) { r#"echo $env:DOMOVOI_PROJECT_ROOT $env:T3CODE_PROJECT_ROOT > setup-ran.txt"# } else { r#"echo \"$DOMOVOI_PROJECT_ROOT $T3CODE_PROJECT_ROOT\" > setup-ran.txt"# };
+    std::fs::write(repo.join("domovoi.json"), format!(r#"{{ "scripts": [{{ "name": "Setup", "command": "{command}", "runOnWorktreeCreate": true }}] }}"#)).unwrap();
     git(&repo, &["init", "-q", "-b", "main"]);
     git(&repo, &["add", "."]);
     git(&repo, &["commit", "-qm", "init"]);
@@ -2137,7 +2138,8 @@ async fn a_new_worktree_runs_the_setup_script() {
         assert!(tokio::time::Instant::now() < deadline, "the setup script didn't run in {worktree}");
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
-    assert_eq!(std::fs::read_to_string(&marker).unwrap().trim(), repo.to_str().unwrap(), "with t3code's environment");
+    let root = repo.to_str().unwrap();
+    assert_eq!(std::fs::read_to_string(&marker).unwrap().trim(), format!("{root} {root}"), "the project's root, under both names");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -2777,7 +2779,7 @@ async fn agents_use_the_mcp_tools_and_hear_back_from_a_delegated_task() {
     while configs.len() < 2 {
         for line in std::fs::read_to_string(&log).unwrap_or_default().lines() {
             let a: Vec<String> = serde_json::from_str(line).unwrap_or_default();
-            assert!(a.iter().any(|x| x.starts_with("--allowedTools=") && x.contains("mcp__t3__t3_thread_read")), "read-only tools are allowed: {a:?}");
+            assert!(a.iter().any(|x| x.starts_with("--allowedTools=") && x.contains("mcp__domovoi__thread_read")), "read-only tools are allowed: {a:?}");
             if let Some(c) = a.iter().find_map(|x| x.strip_prefix("--mcp-config=")) {
                 configs.insert(c.to_owned());
             }
@@ -2789,9 +2791,9 @@ async fn agents_use_the_mcp_tools_and_hear_back_from_a_delegated_task() {
     let mut lead = None;
     for c in &configs {
         let v: Value = serde_json::from_str(c).unwrap();
-        let url = v["mcpServers"]["t3"]["url"].as_str().unwrap().to_owned();
-        let tok = v["mcpServers"]["t3"]["headers"]["Authorization"].as_str().unwrap().trim_start_matches("Bearer ").to_owned();
-        let (_, r) = mcp(&url, Some(&tok), "tools/call", json!({ "name": "t3_thread_list", "arguments": {} })).await;
+        let url = v["mcpServers"]["domovoi"]["url"].as_str().unwrap().to_owned();
+        let tok = v["mcpServers"]["domovoi"]["headers"]["Authorization"].as_str().unwrap().trim_start_matches("Bearer ").to_owned();
+        let (_, r) = mcp(&url, Some(&tok), "tools/call", json!({ "name": "thread_list", "arguments": {} })).await;
         let ids: Vec<String> = r["result"]["structuredContent"]["threads"].as_array().unwrap().iter().map(|t| t["threadId"].as_str().unwrap().to_owned()).collect();
         if ids == ["t2"] {
             lead = Some((url, tok));
@@ -2803,10 +2805,10 @@ async fn agents_use_the_mcp_tools_and_hear_back_from_a_delegated_task() {
     assert_eq!(init["result"]["capabilities"]["tools"]["listChanged"], false);
     let (_, list) = mcp(&url, Some(&tok), "tools/list", json!({})).await;
     assert!(list["result"]["tools"].as_array().unwrap().iter().any(|t| t["name"] == "delegate_task"));
-    let (_, read) = mcp(&url, Some(&tok), "tools/call", json!({ "name": "t3_thread_read", "arguments": { "threadId": "t2" } })).await;
+    let (_, read) = mcp(&url, Some(&tok), "tools/call", json!({ "name": "thread_read", "arguments": { "threadId": "t2" } })).await;
     let texts: Vec<&str> = read["result"]["structuredContent"]["messages"].as_array().unwrap().iter().filter_map(|m| m["text"].as_str()).collect();
     assert!(texts.contains(&"DONE"), "{read}");
-    let (_, outside) = mcp(&url, Some(&tok), "tools/call", json!({ "name": "t3_thread_read", "arguments": { "threadId": "nope" } })).await;
+    let (_, outside) = mcp(&url, Some(&tok), "tools/call", json!({ "name": "thread_read", "arguments": { "threadId": "nope" } })).await;
     assert_eq!(outside["result"]["isError"], true);
 
     // Delegate: a child thread runs the task, and t1 is told when it is done.
@@ -3160,20 +3162,28 @@ async fn a_scripted_opencode_turn_records_every_kind_of_item() {
     // Domovoi's MCP server, for this thread only, and what its tools are for.
     let added = sent.iter().find(|r| r["method"] == "PUT" && r["path"].as_str().is_some_and(|p| p.starts_with("/api/experimental/mcp/"))).expect("the MCP server");
     let (path, query) = added["path"].as_str().unwrap().split_once('?').unwrap();
-    assert_eq!(path, "/api/experimental/mcp/t3-code-t1");
+    assert_eq!(path, "/api/experimental/mcp/domovoi-t1");
     let location: Vec<(String, String)> = url::form_urlencoded::parse(query.as_bytes()).into_owned().collect();
     assert_eq!(location, [("location[directory]".to_owned(), workspace.to_string_lossy().into_owned())]);
     let config = &added["body"]["config"];
     assert_eq!((config["type"].as_str(), config["oauth"].as_bool()), (Some("remote"), Some(false)));
     let token = config["headers"]["Authorization"].as_str().unwrap().strip_prefix("Bearer ").unwrap();
-    let (_, r) = mcp(config["url"].as_str().unwrap(), Some(token), "tools/call", json!({ "name": "t3_project_info", "arguments": {} })).await;
+    let (_, r) = mcp(config["url"].as_str().unwrap(), Some(token), "tools/call", json!({ "name": "project_info", "arguments": {} })).await;
     assert_eq!(r["result"]["structuredContent"]["threadId"], "t1", "{r}");
     let rules = created["body"]["permissions"].as_array().unwrap();
-    assert_eq!(rules[rules.len() - 2..], [json!({ "action": "t3-code-*", "resource": "*", "effect": "deny" }), json!({ "action": "t3-code-t1_*", "resource": "*", "effect": "allow" })]);
-    let instructed = sent.iter().find(|r| r["method"] == "PUT" && r["path"] == "/api/experimental/session/ses_1/instructions/entries/t3-code").expect("the instructions");
-    assert!(instructed["body"]["value"].as_str().unwrap().contains("## T3 Code orchestration"));
+    // Every thread's MCP server is denied, under its name and the one it had, but this thread's.
+    assert_eq!(rules[rules.len() - 3..], [
+        json!({ "action": "domovoi-*", "resource": "*", "effect": "deny" }),
+        json!({ "action": "t3-code-*", "resource": "*", "effect": "deny" }),
+        json!({ "action": "domovoi-t1_*", "resource": "*", "effect": "allow" }),
+    ]);
+    let instructed = sent.iter().find(|r| r["method"] == "PUT" && r["path"] == "/api/experimental/session/ses_1/instructions/entries/domovoi").expect("the instructions");
+    // What a session from before was told under the old key (the tools' old names) is taken out first.
+    let cleared = sent.iter().position(|r| r["method"] == "DELETE" && r["path"] == "/api/experimental/session/ses_1/instructions/entries/t3-code").expect("the old entry is deleted");
+    assert!(cleared < sent.iter().position(|r| std::ptr::eq(r, instructed)).unwrap());
+    assert!(instructed["body"]["value"].as_str().unwrap().contains("## Domovoi orchestration"));
     let prompt = sent.iter().find(|r| r["path"] == "/api/session/ses_1/prompt").unwrap();
-    assert!(prompt["body"]["id"].as_str().unwrap().starts_with("msg_t3_turn_ses_1:"), "{prompt}");
+    assert!(prompt["body"]["id"].as_str().unwrap().starts_with("msg_domovoi_turn_ses_1:"), "{prompt}");
 
     fail_steer_stop_and_roll_back(&mut ws, false).await;
     // The session is cut back to before the first undone turn's prompt.
@@ -3182,7 +3192,7 @@ async fn a_scripted_opencode_turn_records_every_kind_of_item() {
     assert_eq!(stage["body"]["files"], false, "files are the checkpoint's");
     assert!(sent.iter().any(|r| r["path"] == "/api/session/ses_1/revert/commit"));
     assert_eq!(opencode_prompts(&server, "ses_1"), ["ALL of it"]);
-    assert!(stage["body"]["messageID"].as_str().unwrap().starts_with("msg_t3_turn_ses_1:"));
+    assert!(stage["body"]["messageID"].as_str().unwrap().starts_with("msg_domovoi_turn_ses_1:"));
 }
 
 /// What the scripted `opencode serve` holds as a session's prompts.
@@ -3230,7 +3240,7 @@ async fn an_opencode_fork_continues_a_copy_of_the_session_cut_at_the_run() {
     let sent: Vec<Value> = std::fs::read_to_string(server.dir.join("out").join("opencode-requests.log")).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
     let forks: Vec<&Value> = sent.iter().filter(|r| r["path"] == format!("/api/session/{source}/fork")).map(|r| &r["body"]).collect();
     assert_eq!(forks.len(), 2);
-    assert!(forks[0]["before"].as_str().unwrap().starts_with(&format!("msg_t3_turn_{source}:")), "cut before run 2's prompt: {}", forks[0]);
+    assert!(forks[0]["before"].as_str().unwrap().starts_with(&format!("msg_domovoi_turn_{source}:")), "cut before run 2's prompt: {}", forks[0]);
     assert_eq!(*forks[1], json!({}), "all of it");
     // The source thread's session is untouched.
     assert_eq!(opencode_prompts(&server, &source), ["one", "two"]);
@@ -3567,9 +3577,9 @@ async fn the_agent_tools_answer_and_write_as_recorded() {
         let a: Vec<String> = serde_json::from_str(line).unwrap_or_default();
         let Some(config) = a.iter().find_map(|x| x.strip_prefix("--mcp-config=")) else { continue };
         let v: Value = serde_json::from_str(config).unwrap();
-        let url = v["mcpServers"]["t3"]["url"].as_str().unwrap().to_owned();
-        let tok = v["mcpServers"]["t3"]["headers"]["Authorization"].as_str().unwrap().trim_start_matches("Bearer ").to_owned();
-        let (_, r) = mcp(&url, Some(&tok), "tools/call", json!({ "name": "t3_thread_list", "arguments": {} })).await;
+        let url = v["mcpServers"]["domovoi"]["url"].as_str().unwrap().to_owned();
+        let tok = v["mcpServers"]["domovoi"]["headers"]["Authorization"].as_str().unwrap().trim_start_matches("Bearer ").to_owned();
+        let (_, r) = mcp(&url, Some(&tok), "tools/call", json!({ "name": "thread_list", "arguments": {} })).await;
         if r["result"]["structuredContent"]["threads"].as_array().is_some_and(|t| t.len() == 1 && t[0]["threadId"] == "t2") {
             lead = Some((url, tok));
         }
@@ -3584,18 +3594,18 @@ async fn the_agent_tools_answer_and_write_as_recorded() {
     };
     let completed = |n: usize| move |all: &[Value]| all.iter().filter(|e| e["type"] == "run.updated" && e["payload"]["status"] == "completed").count() >= n;
 
-    tool("t3_thread_list", json!({})).await;
-    tool("t3_thread_list", json!({ "limit": 0 })).await;
-    tool("t3_thread_read", json!({ "threadId": "t2" })).await;
-    tool("t3_thread_read", json!({ "threadId": "t2", "limit": 1 })).await;
-    tool("t3_thread_read", json!({ "threadId": "nope" })).await;
-    tool("t3_thread_read", json!({})).await;
-    tool("t3_thread_send", json!({ "threadId": "t1", "message": "to myself" })).await;
-    tool("t3_thread_send", json!({ "threadId": "t2" })).await;
-    tool("t3_thread_send", json!({ "threadId": "t2", "message": "DONE again" })).await;
+    tool("thread_list", json!({})).await;
+    tool("thread_list", json!({ "limit": 0 })).await;
+    tool("thread_read", json!({ "threadId": "t2" })).await;
+    tool("thread_read", json!({ "threadId": "t2", "limit": 1 })).await;
+    tool("thread_read", json!({ "threadId": "nope" })).await;
+    tool("thread_read", json!({})).await;
+    tool("thread_send", json!({ "threadId": "t1", "message": "to myself" })).await;
+    tool("thread_send", json!({ "threadId": "t2" })).await;
+    tool("thread_send", json!({ "threadId": "t2", "message": "DONE again" })).await;
     until(&mut ws, "t2", "the sent message's run", completed(2)).await;
-    tool("t3_thread_wait", json!({ "threadId": "t2", "timeoutSeconds": 5 })).await;
-    tool("t3_project_info", json!({})).await;
+    tool("thread_wait", json!({ "threadId": "t2", "timeoutSeconds": 5 })).await;
+    tool("project_info", json!({})).await;
     tool("no_such_tool", json!({})).await;
 
     // A delegated task that finishes: t1 hears back, and answers.
@@ -3612,9 +3622,9 @@ async fn the_agent_tools_answer_and_write_as_recorded() {
     let long = tool("delegate_task", json!({ "task": "keep going", "title": "Long job DONE", "model": "claude-opus-5-5" })).await["taskId"].as_str().expect("a task id").to_owned();
     until(&mut ws, &long, "the task's reply", |all| all.iter().any(|e| e["type"] == "provider-turn.updated" && e["payload"]["status"] == "running")).await;
     tokio::time::sleep(Duration::from_millis(1200)).await;
-    tool("t3_thread_send", json!({ "threadId": long, "message": "DONE after that" })).await;
+    tool("thread_send", json!({ "threadId": long, "message": "DONE after that" })).await;
     tool("task_status", json!({ "taskId": long })).await;
-    tool("t3_thread_wait", json!({ "threadId": long, "timeoutSeconds": 1 })).await;
+    tool("thread_wait", json!({ "threadId": long, "timeoutSeconds": 1 })).await;
     tool("task_cancel", json!({ "taskId": long })).await;
     until(&mut ws, &long, "the cancelled task", |all| all.iter().any(|e| e["type"] == "run.updated" && e["payload"]["status"] == "interrupted")).await;
     until(&mut ws, "t1", "the report of the cancelled task", completed(3)).await;
@@ -4068,7 +4078,7 @@ async fn hook(server: &Server, path: &str, body: &str, secret: Option<&str>, del
         req = req.header("x-hub-signature-256", format!("sha256={hex}"));
     }
     let res = req.send().await.unwrap();
-    (res.status().as_u16(), res.headers().get("x-t3-hook-outcome").map(|v| v.to_str().unwrap().to_owned()).unwrap_or_default())
+    (res.status().as_u16(), res.headers().get("x-domovoi-hook-outcome").map(|v| v.to_str().unwrap().to_owned()).unwrap_or_default())
 }
 
 /// A webhook task: a wrong signature and a filtered request are turned away,
@@ -4157,9 +4167,9 @@ async fn mcp_sessions(server: &Server, count: usize) -> std::collections::HashMa
             let a: Vec<String> = serde_json::from_str(line).unwrap_or_default();
             let Some(c) = a.iter().find_map(|x| x.strip_prefix("--mcp-config=")) else { continue };
             let v: Value = serde_json::from_str(c).unwrap();
-            let url = v["mcpServers"]["t3"]["url"].as_str().unwrap().to_owned();
-            let tok = v["mcpServers"]["t3"]["headers"]["Authorization"].as_str().unwrap().trim_start_matches("Bearer ").to_owned();
-            let (_, r) = mcp(&url, Some(&tok), "tools/call", json!({ "name": "t3_project_info", "arguments": {} })).await;
+            let url = v["mcpServers"]["domovoi"]["url"].as_str().unwrap().to_owned();
+            let tok = v["mcpServers"]["domovoi"]["headers"]["Authorization"].as_str().unwrap().trim_start_matches("Bearer ").to_owned();
+            let (_, r) = mcp(&url, Some(&tok), "tools/call", json!({ "name": "project_info", "arguments": {} })).await;
             if let Some(t) = r["result"]["structuredContent"]["threadId"].as_str() {
                 found.insert(t.to_owned(), (url, tok));
             }
@@ -4204,31 +4214,31 @@ async fn agents_organize_threads_schedule_and_hand_off_to_a_worktree() {
         }
     };
     let args = std::fs::read_to_string(server.dir.join("out").join("args.log")).unwrap();
-    assert!(args.contains("--append-system-prompt=## T3 Code orchestration"), "Claude is told what the tools are for");
+    assert!(args.contains("--append-system-prompt=## Domovoi orchestration"), "Claude is told what the tools are for");
     until(&mut ws, "t1", "t1's turn", |all| run_status(all, 1).as_deref() == Some("completed")).await;
     until(&mut ws, "t2", "t2's turn", |all| last(all, "run.updated").is_some_and(|r| r["status"] == "completed")).await;
 
     let caps = tool("orchestrator_capabilities", json!({})).await;
     assert!(caps["providers"].as_array().unwrap().iter().any(|p| p["providerInstanceId"] == "claudeAgent"), "{caps}");
     assert_eq!(caps["inheritedModel"], "claude-haiku-5-5");
-    let found = tool("t3_thread_search", json!({ "query": "Finished" })).await;
+    let found = tool("thread_search", json!({ "query": "Finished" })).await;
     assert!(found["matches"].as_array().unwrap().iter().any(|m| m["threadId"] == "t2"), "{found}");
-    tool("t3_thread_update", json!({ "threadId": "t2", "action": "rename", "title": "Renamed" })).await;
-    tool("t3_thread_organize", json!({ "threadId": "t2", "action": "pin" })).await;
-    let listed = tool("t3_thread_list", json!({ "titleContains": "renamed" })).await;
+    tool("thread_update", json!({ "threadId": "t2", "action": "rename", "title": "Renamed" })).await;
+    tool("thread_organize", json!({ "threadId": "t2", "action": "pin" })).await;
+    let listed = tool("thread_list", json!({ "titleContains": "renamed" })).await;
     assert_eq!(listed["threads"][0]["threadId"], "t2", "{listed}");
-    let sent = tool("t3_thread_send", json!({ "threadId": "t2", "message": "DONE again", "clientRequestId": "k1" })).await;
-    let waited = tool("t3_thread_wait", json!({ "threadId": "t2", "runId": sent["runId"], "timeoutMs": 15000 })).await;
+    let sent = tool("thread_send", json!({ "threadId": "t2", "message": "DONE again", "clientRequestId": "k1" })).await;
+    let waited = tool("thread_wait", json!({ "threadId": "t2", "runId": sent["runId"], "timeoutMs": 15000 })).await;
     assert_eq!((waited["status"].as_str(), waited["lastReply"].as_str()), (Some("completed"), Some("Finished.")), "{waited}");
-    let again = tool("t3_thread_send", json!({ "threadId": "t2", "message": "DONE again", "clientRequestId": "k1" })).await;
+    let again = tool("thread_send", json!({ "threadId": "t2", "message": "DONE again", "clientRequestId": "k1" })).await;
     assert_eq!(again["runId"], sent["runId"], "a retry is the same message");
-    assert_eq!(tool("t3_queue", json!({ "threadId": "t2", "action": "list" })).await["items"], json!([]));
+    assert_eq!(tool("queue", json!({ "threadId": "t2", "action": "list" })).await["items"], json!([]));
 
-    let launched = tool("t3_thread_launch", json!({ "title": "Side", "message": "DONE" })).await;
+    let launched = tool("thread_launch", json!({ "title": "Side", "message": "DONE" })).await;
     let made = tool("create_threads", json!({ "threads": [{ "title": "A", "prompt": "DONE" }, { "title": "B" }] })).await;
     assert_eq!(made["threads"].as_array().unwrap().len(), 2);
-    let forked = tool("t3_thread_transfer", json!({ "threadId": "t2", "action": "fork", "title": "Fork of other" })).await;
-    let all = tool("t3_thread_list", json!({ "limit": 100 })).await;
+    let forked = tool("thread_transfer", json!({ "threadId": "t2", "action": "fork", "title": "Fork of other" })).await;
+    let all = tool("thread_list", json!({ "limit": 100 })).await;
     let ids: Vec<&str> = all["threads"].as_array().unwrap().iter().filter_map(|t| t["threadId"].as_str()).collect();
     for id in [launched["threadId"].as_str().unwrap(), made["threads"][0]["threadId"].as_str().unwrap(), forked["targetThreadId"].as_str().unwrap()] {
         assert!(ids.contains(&id), "{id} in {ids:?}");
@@ -4264,12 +4274,12 @@ async fn agents_organize_threads_schedule_and_hand_off_to_a_worktree() {
     // Hand t1 off to a worktree from inside a turn (as an agent does): the
     // continuation waits for the turn, then runs in the worktree, in a new
     // session given the conversation.
-    assert_eq!(tool("t3_worktree_status", json!({})).await["attached"], false);
-    let refs = tool("t3_worktree_list", json!({ "refKind": "local" })).await;
+    assert_eq!(tool("worktree_status", json!({})).await["attached"], false);
+    let refs = tool("worktree_list", json!({ "refKind": "local" })).await;
     assert!(refs["refs"].as_array().unwrap().iter().any(|r| r["name"] == "main"), "{refs}");
     say(&mut ws, 2, "keep working", json!({ "type": "queue_after_active" })).await;
     until(&mut ws, "t1", "the turn to run", |all| all.iter().any(|e| e["type"] == "provider-turn.updated" && e["payload"]["status"] == "running" && e["payload"]["ordinal"] == 2)).await;
-    let handed = tool("t3_worktree_handoff", json!({ "branch": "t3/handoff", "continuationPrompt": "DONE there" })).await;
+    let handed = tool("worktree_handoff", json!({ "branch": "t3/handoff", "continuationPrompt": "DONE there" })).await;
     let path = handed["worktreePath"].as_str().unwrap().to_owned();
     assert!(std::path::Path::new(&path).join("a.txt").exists(), "{handed}");
     assert_eq!(handed["continuation"]["status"], "scheduled");
@@ -4285,7 +4295,7 @@ async fn agents_organize_threads_schedule_and_hand_off_to_a_worktree() {
     if let Some(cwd) = cwd {
         assert_eq!(std::fs::canonicalize(cwd).unwrap(), std::fs::canonicalize(&path).unwrap());
     }
-    let again = mcp(&url, Some(&tok), "tools/call", json!({ "name": "t3_worktree_handoff", "arguments": { "branch": "t3/again" } })).await.1;
+    let again = mcp(&url, Some(&tok), "tools/call", json!({ "name": "worktree_handoff", "arguments": { "branch": "t3/again" } })).await.1;
     assert_eq!(again["result"]["isError"], true, "a thread in a worktree is not handed off again");
 }
 
@@ -4300,7 +4310,7 @@ async fn a_handoff_in_the_first_turn_takes_the_conversation_along() {
     launched(&mut ws, &workspace, "claudeAgent", "claude-haiku-5-5", "keep working").await;
     until(&mut ws, "t1", "the first turn", |all| all.iter().any(|e| e["type"] == "provider-turn.updated" && e["payload"]["status"] == "running")).await;
     let (url, tok) = mcp_sessions(&server, 1).await["t1"].clone();
-    let (_, r) = mcp(&url, Some(&tok), "tools/call", json!({ "name": "t3_worktree_handoff", "arguments": { "branch": "t3/first", "continuationPrompt": "DONE there" } })).await;
+    let (_, r) = mcp(&url, Some(&tok), "tools/call", json!({ "name": "worktree_handoff", "arguments": { "branch": "t3/first", "continuationPrompt": "DONE there" } })).await;
     assert_ne!(r["result"]["isError"], true, "{r}");
     let r = call(&mut ws, "stop", "orchestration.dispatchCommand", json!({ "type": "thread.stop", "commandId": "stop-1", "threadId": "t1" })).await;
     assert_eq!(r["exit"]["_tag"], "Success", "{r}");
@@ -4392,7 +4402,7 @@ async fn an_acp_agent_runs_turns() {
     let new = by("session/new").last().unwrap().clone();
     assert_eq!(new["params"]["mcpServers"][0]["type"], "http", "the tools go along: {new}");
     let prompt = by("session/prompt").last().unwrap()["params"]["prompt"][0]["text"].as_str().unwrap().to_owned();
-    assert!(prompt.starts_with("<t3_code_instructions>") && prompt.contains("TOOLS please"), "{prompt}");
+    assert!(prompt.starts_with("<domovoi_instructions>") && prompt.contains("TOOLS please"), "{prompt}");
     let answer = sent.iter().find(|m| m["id"] == 900).unwrap();
     assert_eq!(answer["result"], json!({ "outcome": { "outcome": "selected", "optionId": "yes" } }));
     let r = call(&mut ws, "p2", "server.refreshProviders", json!({})).await;
@@ -5620,21 +5630,21 @@ async fn agents_ask_for_secrets_link_pull_requests_and_send_attachments() {
     assert_eq!(raw("pull_request_read", json!({ "number": 42, "repository": "acme/app" })).await["isError"], true, "no gh here");
 
     // Attachments: prepared, uploaded, sent as a message; one discarded.
-    let prepared = tool("t3_attachment_prepare_upload", json!({ "upload": { "type": "file", "name": "notes.txt", "mimeType": "text/plain", "sizeBytes": 5 } })).await;
+    let prepared = tool("attachment_prepare_upload", json!({ "upload": { "type": "file", "name": "notes.txt", "mimeType": "text/plain", "sizeBytes": 5 } })).await;
     let upload_url = prepared["uploadUrl"].as_str().unwrap();
     let put = http().post(upload_url).body("hello").send().await.unwrap();
     assert!(put.status().is_success(), "{}", put.status());
-    let sent = tool("t3_thread_send_attachments", json!({ "message": "See the notes", "attachments": [{ "type": "file", "id": prepared["attachmentId"], "name": "notes.txt", "mimeType": "text/plain", "sizeBytes": 5 }] })).await;
+    let sent = tool("thread_send_attachments", json!({ "message": "See the notes", "attachments": [{ "type": "file", "id": prepared["attachmentId"], "name": "notes.txt", "mimeType": "text/plain", "sizeBytes": 5 }] })).await;
     assert_eq!(sent["status"], "queued", "{sent}");
-    let bogus = raw("t3_thread_send_attachments", json!({ "attachments": [{ "type": "file", "id": "pending-not-mine", "name": "x", "mimeType": "text/plain", "sizeBytes": 1 }] })).await;
+    let bogus = raw("thread_send_attachments", json!({ "attachments": [{ "type": "file", "id": "pending-not-mine", "name": "x", "mimeType": "text/plain", "sizeBytes": 1 }] })).await;
     assert_eq!(bogus["isError"], true);
-    let other = tool("t3_attachment_prepare_upload", json!({ "upload": { "type": "image", "name": "a.png", "mimeType": "image/png", "sizeBytes": 3 } })).await;
-    assert_eq!(tool("t3_attachment_discard", json!({ "attachmentId": other["attachmentId"] })).await, json!({}));
+    let other = tool("attachment_prepare_upload", json!({ "upload": { "type": "image", "name": "a.png", "mimeType": "image/png", "sizeBytes": 3 } })).await;
+    assert_eq!(tool("attachment_discard", json!({ "attachmentId": other["attachmentId"] })).await, json!({}));
 
     // HTML pages become artifacts; messages and tool search answer at once.
     let rendered = tool("html_render", json!({ "html": "<!doctype html><p>Chart</p>", "title": "Chart", "height": 5000 })).await;
     assert_eq!(rendered["htmlRender"]["height"], 2000, "{rendered}");
-    let artifacts = tool("t3_artifact_list", json!({})).await;
+    let artifacts = tool("artifact_list", json!({})).await;
     assert!(artifacts["artifacts"].as_array().unwrap().iter().any(|a| a["id"] == rendered["htmlRender"]["attachmentId"] && a["kind"] == "html"), "{artifacts}");
     assert_eq!(raw("html_render", json!({ "path": "/etc/hosts", "title": "x", "height": 100 })).await["isError"], true, "a supervised thread passes html");
     assert_eq!(tool("send_to_user", json!({ "message": "**Draft**" })).await["sentMessage"], "**Draft**");
@@ -5702,7 +5712,7 @@ fn snapshot_ref(snapshot: &Value, role: &str, name: &str) -> String {
     format!("aria-ref={r}")
 }
 
-/// The browser tools (`preview_*`, `t3_preview_*`, `html_preview`) as thread `t1`'s agent, on
+/// The browser tools (`preview_*`, `preview_*`, `html_preview`) as thread `t1`'s agent, on
 /// the server's headless browser. Skipped without Chrome or Chromium.
 #[tokio::test(flavor = "multi_thread")]
 async fn agents_drive_the_server_browser() {
@@ -5735,8 +5745,8 @@ async fn agents_drive_the_server_browser() {
         assert!(tokio::time::Instant::now() < deadline, "no --mcp-config");
         tokio::time::sleep(Duration::from_millis(50)).await;
     };
-    let url = config["mcpServers"]["t3"]["url"].as_str().unwrap().to_owned();
-    let tok = config["mcpServers"]["t3"]["headers"]["Authorization"].as_str().unwrap().trim_start_matches("Bearer ").to_owned();
+    let url = config["mcpServers"]["domovoi"]["url"].as_str().unwrap().to_owned();
+    let tok = config["mcpServers"]["domovoi"]["headers"]["Authorization"].as_str().unwrap().trim_start_matches("Bearer ").to_owned();
     let tool = async |name: &str, arguments: Value| -> Value {
         let (_, r) = mcp(&url, Some(&tok), "tools/call", json!({ "name": name, "arguments": arguments })).await;
         r["result"].clone()
@@ -5812,12 +5822,12 @@ async fn agents_drive_the_server_browser() {
     assert_eq!(answered["dialog"], Value::Null);
 
     // The thread's tabs, and closing the agent's own.
-    let listed = ok(&tool("t3_preview_list", json!({})).await);
+    let listed = ok(&tool("preview_list", json!({})).await);
     let session = &listed["sessions"][0];
     assert_eq!((session["tabId"].clone(), session["runtime"].clone(), session["headless"].clone(), session["automationOwner"].clone()), (json!(tab), json!("server"), json!(true), json!("t1")), "{listed}");
     assert_eq!(listed["nextCursor"], Value::Null);
-    ok(&tool("t3_preview_close", json!({ "tabId": tab })).await);
-    assert_eq!(ok(&tool("t3_preview_list", json!({})).await)["sessions"], json!([]));
+    ok(&tool("preview_close", json!({ "tabId": tab })).await);
+    assert_eq!(ok(&tool("preview_list", json!({})).await)["sessions"], json!([]));
 
     // An HTML page checked before it is shown.
     let checked = tool("html_preview", json!({ "html": "<body style='margin:0'><div style='height:1200px'>Chart</div><script>console.warn('careful')</script></body>", "width": 400, "appearance": "light" })).await;

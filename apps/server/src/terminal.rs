@@ -724,7 +724,9 @@ impl Terminals {
         // `cmd.exe` can't start in a `\\?\C:\…` folder.
         cmd.cwd(crate::util::plain_path(std::path::Path::new(cwd)));
         cmd.env("TERM", "xterm-256color");
-        cmd.env("T3CODE_THREAD_ID", thread_id);
+        for (name, value) in thread_env(thread_id) {
+            cmd.env(name, value);
+        }
         for (k, v) in env {
             cmd.env(k, v);
         }
@@ -1210,4 +1212,17 @@ mod tests {
             json!({ "_tag": "TerminalSessionLookupError", "threadId": "th", "terminalId": "t1" })
         );
     }
+}
+
+/// The variable that tells what runs for a thread which thread that is
+/// (its terminals, an agent's shells): `rpc::local_servers` reads it off a
+/// process to say whose dev server it is.
+pub const THREAD_ENV: &str = "DOMOVOI_THREAD_ID";
+/// What it was called, which scripts written until now still read. Set
+/// beside the new name for one release.
+pub const OLD_THREAD_ENV: &str = "T3CODE_THREAD_ID";
+
+/// Both names of [`THREAD_ENV`], set to `thread_id`.
+pub fn thread_env(thread_id: &str) -> [(String, String); 2] {
+    [(THREAD_ENV.to_owned(), thread_id.to_owned()), (OLD_THREAD_ENV.to_owned(), thread_id.to_owned())]
 }

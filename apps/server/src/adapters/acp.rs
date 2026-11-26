@@ -137,7 +137,7 @@ pub fn initialize_params() -> Value {
     json!({
         "protocolVersion": PROTOCOL_VERSION,
         "clientCapabilities": { "fs": { "readTextFile": false, "writeTextFile": false }, "terminal": false },
-        "clientInfo": { "name": "t3-code", "title": "T3 Code (Domovoi)", "version": crate::wire::environment::SERVER_VERSION },
+        "clientInfo": { "name": "domovoi", "title": "Domovoi", "version": crate::wire::environment::SERVER_VERSION },
     })
 }
 
@@ -306,7 +306,7 @@ impl AcpSession {
             Some(kind) => {
                 let config = crate::acp_cli::config(&instance);
                 let exe = crate::acp_cli::resolve(kind, &config)?;
-                (kind.spawn(&exe, &config, Some(&input.runtime_mode)), kind.initialize_params("t3-code"), kind.auth_method(&config), config.env)
+                (kind.spawn(&exe, &config, Some(&input.runtime_mode)), kind.initialize_params("domovoi"), kind.auth_method(&config), config.env)
             }
             None => {
                 let spawn = spawn_for(&instance)?;
@@ -314,7 +314,7 @@ impl AcpSession {
                 (spawn, registry_initialize_params(devin), auth_method(&instance), env)
             }
         };
-        spawn.env.push(("T3CODE_THREAD_ID".into(), input.thread_id.clone()));
+        spawn.env.extend(crate::terminal::thread_env(&input.thread_id));
         let log = crate::logging::protocol_log(log_dir.join(format!("acp-{}-{}.ndjson", crate::orchestration::events::enc(&instance), crate::util::new_uuid())));
         let args: Vec<&str> = spawn.args.iter().map(String::as_str).collect();
         let (rpc, mut events) = RpcClient::spawn_with(&spawn.program, &args, Some(&input.cwd), &spawn.env, true, log).map_err(|e| format!("could not start the ACP agent: {e}"))?;
@@ -405,7 +405,7 @@ impl AcpSession {
         use crate::antigravity as ag;
         let instance = input.model_selection.instance_id.as_str().to_owned();
         let log = crate::logging::protocol_log(log_dir.join(format!("antigravity-{}-{}.ndjson", crate::orchestration::events::enc(&instance), crate::util::new_uuid())));
-        let launch = ag::launch::start(&instance, &input.cwd, vec![("T3CODE_THREAD_ID".into(), input.thread_id.clone())], log).await?;
+        let launch = ag::launch::start(&instance, &input.cwd, crate::terminal::thread_env(&input.thread_id).to_vec(), log).await?;
         let failed = |launch: ag::launch::Launch, message: String| async move {
             launch.kill().await;
             Err::<Arc<Self>, String>(message)
@@ -882,7 +882,7 @@ impl AcpSession {
         let text = if instructions.is_empty() {
             input.text.clone()
         } else {
-            format!("<t3_code_instructions>\n{}\n</t3_code_instructions>\n\n<user_request>\n{}\n</user_request>", instructions.join("\n\n"), input.text)
+            format!("<domovoi_instructions>\n{}\n</domovoi_instructions>\n\n<user_request>\n{}\n</user_request>", instructions.join("\n\n"), input.text)
         };
         blocks.push(json!({ "type": "text", "text": text }));
         blocks
@@ -1338,7 +1338,7 @@ impl AcpSession {
                     terminals.create(&params)
                 } else {
                     Err(super::acp_terminals::Refused(
-                        "The active T3 runtime policy requires approval for terminal/create. Request permission with session/request_permission before retrying.".into(),
+                        "The active Domovoi runtime policy requires approval for terminal/create. Request permission with session/request_permission before retrying.".into(),
                     ))
                 }
             }

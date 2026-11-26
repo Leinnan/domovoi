@@ -139,7 +139,7 @@ async fn ws(server: &impl Base, path: &str, session: Option<&str>) -> Result<Ws,
 async fn refused(server: &impl Base, path: &str, session: Option<&str>) -> (u16, Vec<String>, String) {
     match ws(server, path, session).await {
         Err(tokio_tungstenite::tungstenite::Error::Http(res)) => {
-            let markers = ["x-t3-tunnel-port-refused", "x-t3-tunnel-disabled"].iter().filter(|h| res.headers().get(**h).is_some_and(|v| v == "1")).map(|h| (*h).to_owned()).collect();
+            let markers = ["x-domovoi-tunnel-port-refused", "x-domovoi-tunnel-disabled"].iter().filter(|h| res.headers().get(**h).is_some_and(|v| v == "1")).map(|h| (*h).to_owned()).collect();
             (res.status().as_u16(), markers, String::from_utf8_lossy(res.body().as_deref().unwrap_or_default()).into_owned())
         }
         Err(e) => panic!("{path}: {e}"),
@@ -232,10 +232,10 @@ async fn the_tunnel_reaches_loopback_ports_only_while_it_is_on() {
     assert_eq!(status, 403);
     assert_eq!(serde_json::from_str::<Value>(&body).unwrap()["requiredPermission"], "terminal:operate", "{body}");
     let own = refused(&server, &format!("/api/preview/tunnel?port={}", server.port), Some(&owner)).await;
-    assert_eq!(own, (403, vec!["x-t3-tunnel-port-refused".to_owned()], format!("Port {} is this T3 Code server's own port.", server.port)));
+    assert_eq!(own, (403, vec!["x-domovoi-tunnel-port-refused".to_owned()], format!("Port {} is this Domovoi server's own port.", server.port)));
     let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
     let nothing = refused(&server, &format!("/api/preview/tunnel?port={closed}"), Some(&owner)).await;
-    assert_eq!(nothing, (502, vec!["x-t3-tunnel-port-refused".to_owned()], format!("Nothing accepted a connection on loopback port {closed}.")));
+    assert_eq!(nothing, (502, vec!["x-domovoi-tunnel-port-refused".to_owned()], format!("Nothing accepted a connection on loopback port {closed}.")));
 
     // Switching the tunnel off closes the one open and refuses new ones.
     let mut socket = rpc(&server, &owner).await;
@@ -252,7 +252,7 @@ async fn the_tunnel_reaches_loopback_ports_only_while_it_is_on() {
     .await;
     assert_eq!(ended, Ok(true), "the open tunnel closed");
     let disabled = refused(&server, &format!("/api/preview/tunnel?port={echo}"), Some(&owner)).await;
-    assert_eq!(disabled, (403, vec!["x-t3-tunnel-disabled".to_owned()], "The preview tunnel is turned off on this T3 Code server.".to_owned()));
+    assert_eq!(disabled, (403, vec!["x-domovoi-tunnel-disabled".to_owned()], "The preview tunnel is turned off on this Domovoi server.".to_owned()));
     let on = call(&mut socket, "2", "server.updateSettings", json!({ "patch": { "enablePreviewTunnel": true } })).await;
     assert_eq!(on["exit"]["_tag"], "Success", "{on}");
     let mut again = ws(&server, &format!("/api/preview/tunnel?port={echo}"), Some(&owner)).await.unwrap();
@@ -494,7 +494,7 @@ async fn sign_in(base: &str, code: &str) -> String {
 /// The answer to a pairing code offered for a session.
 async fn try_sign_in(base: &str, code: &str) -> reqwest::Response {
     let body = format!(
-        "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Atoken-exchange&subject_token={code}&subject_token_type=urn%3At3%3Aparams%3Aoauth%3Atoken-type%3Aenvironment-bootstrap&requested_token_type=urn%3Aietf%3Aparams%3Aoauth%3Atoken-type%3Aaccess_token"
+        "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Atoken-exchange&subject_token={code}&subject_token_type=urn%3Adomovoi%3Aparams%3Aoauth%3Atoken-type%3Aenvironment-bootstrap&requested_token_type=urn%3Aietf%3Aparams%3Aoauth%3Atoken-type%3Aaccess_token"
     );
     http().post(format!("{base}/oauth/token")).header("content-type", "application/x-www-form-urlencoded").body(body).send().await.unwrap()
 }
