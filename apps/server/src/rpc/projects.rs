@@ -378,6 +378,42 @@ pub fn register(r: Router<ConnCtx>) -> Router<ConnCtx> {
     .unary("projects.ensureScratch", ensure_scratch)
     .unary("projects.createNew", create_new)
     .unary("projects.createFromThread", create_from_thread)
+    .unary("projects.indexStatus", |ctx: Arc<ConnCtx>, RecordOrNot(input): RecordOrNot<IndexProjectInput>| async move {
+        let db = ctx.state.store.db().clone();
+        let pid = input.project_id;
+        Ok::<_, Never>(blocking(move || crate::indexer::status(&db, &pid)).await)
+    })
+    .unary("projects.reindex", |ctx: Arc<ConnCtx>, RecordOrNot(input): RecordOrNot<IndexProjectInput>| async move {
+        let project = ctx
+            .state
+            .store
+            .get_project(&input.project_id)
+            .ok()
+            .flatten()
+            .ok_or_else(|| dispatch_error("Project not found."))?;
+        let db = ctx.state.store.db().clone();
+        let pid = input.project_id;
+        let root = std::path::PathBuf::from(project.workspace_root);
+        let force = input.force.unwrap_or(true);
+        let base_ref = input.base_ref;
+        blocking(move || {
+            let cancel = std::sync::atomic::AtomicBool::new(false);
+            crate::indexer::index_project(&db, &pid, &root, base_ref.as_deref(), force, &cancel)
+        })
+        .await
+        .map_err(|e| dispatch_error(&e))
+    })
+}
+
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct IndexProjectInput {
+    #[serde(default, deserialize_with = "text_or_empty")]
+    project_id: String,
+    #[serde(default)]
+    base_ref: Option<String>,
+    #[serde(default)]
+    force: Option<bool>,
 }
 
 #[cfg(test)]

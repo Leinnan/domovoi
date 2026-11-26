@@ -12,7 +12,7 @@ use crate::config_failure::Failure;
 use serde_json::Value;
 
 /// Settings keys that only `providers:manage` may change.
-const PROVIDER_SETTINGS: [&str; 5] = ["providers", "providerInstances", "usageLimitSources", "textGenerators", "secretProviders"];
+const PROVIDER_SETTINGS: [&str; 6] = ["providers", "providerInstances", "usageLimitSources", "textGenerators", "secretProviders", "failoverPools"];
 
 /// `requiredScopesForServerSettingsPatch`.
 fn settings_patch_permissions(patch: &Value) -> Vec<&'static str> {

@@ -237,6 +237,11 @@ pub fn register(r: Router<ConnCtx>) -> Router<ConnCtx> {
         }
         .boxed()
     })
+    .unary("providers.failoverStatus", |ctx: Arc<ConnCtx>, _: serde::de::IgnoredAny| async move {
+        let settings = ctx.state.settings.read().await;
+        let providers = ctx.state.providers.snapshot().await;
+        Ok::<_, Never>(crate::failover::global().status(&settings, &providers))
+    })
 }
 
 #[cfg(test)]

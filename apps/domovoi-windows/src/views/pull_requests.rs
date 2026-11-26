@@ -5,7 +5,7 @@
 use std::rc::Rc;
 
 use domovoi_core::Event;
-use domovoi_core::view::{PullRequestDetailView, PullRequestRowView, PullRequestsView};
+use domovoi_core::view::{PrReviewView, PullRequestDetailView, PullRequestRowView, PullRequestsView};
 use domovoi_desktop_host::palette;
 use windows_reactor::{
     Border, Button, ButtonStyle, Callback, ComboBox, FontWeight, Grid, GridLength, HorizontalAlignment, Orientation, ScrollBarVisibility, ScrollViewer, StackPanel,
@@ -276,6 +276,7 @@ fn detail(core: &CoreLink, request: &PullRequestDetailView, busy: bool, state: &
     if !request.body.is_empty() {
         lines.push(card(markdown::blocks(&request.body, draw)));
     }
+    lines.push(ai_review_card(core, request, busy, draw.dark));
 
     let chosen = VERDICTS.iter().position(|(value, _)| *value == state.verdict());
     let (on_verdict, on_review, on_comment) = (on_act.clone(), on_act.clone(), on_act.clone());
@@ -320,6 +321,145 @@ fn detail(core: &CoreLink, request: &PullRequestDetailView, busy: bool, state: &
         .horizontal_scroll_bar_visibility(ScrollBarVisibility::Disabled)
         .content(StackPanel::new().orientation(Orientation::Vertical).spacing(12.0).margin(Thickness::new(16.0, 4.0, 20.0, 16.0)).children(lines))
         .into()
+}
+
+fn ai_review_card(core: &CoreLink, request: &PullRequestDetailView, pr_busy: bool, dark: bool) -> View {
+    let busy = pr_busy || request.ai_review.as_ref().is_some_and(|r| r.busy);
+    let mut header_actions: Vec<View> = Vec::new();
+    if let Some(rev) = &request.ai_review
+        && rev.busy
+        && !rev.run_id.is_empty()
+    {
+        header_actions.push(tell(core, "Cancel", Event::CancelPrReview { run_id: rev.run_id.clone() }).into());
+    } else {
+        header_actions.push(tell(core, "Run AI Review", Event::StartPrReview { key: request.key.clone(), full: false }).style(ButtonStyle::Accent).is_enabled(!busy).into());
+        header_actions.push(tell(core, "Full Review", Event::StartPrReview { key: request.key.clone(), full: true }).is_enabled(!busy).into());
+    }
+    let mut rows: Vec<View> = vec![
+        Grid::new()
+            .columns([GridLength::STAR, GridLength::Auto])
+            .column_spacing(8.0)
+            .children((
+                TextBlock::new().text("AI Code Review").font_weight(FontWeight::SEMI_BOLD).vertical_alignment(VerticalAlignment::Center),
+                StackPanel::new().grid_column(1).orientation(Orientation::Horizontal).spacing(6.0).children(header_actions),
+            ))
+            .into(),
+    ];
+    if let Some(rev) = &request.ai_review {
+        rows.extend(ai_review_rows(core, request, rev, dark));
+    } else {
+        rows.push(caption("Runs an evidence-checked review in a read-only snapshot. Never auto-approves.").text_wrapping(TextWrapping::WrapWholeWords).into());
+    }
+    card(rows)
+}
+
+fn ai_review_rows(core: &CoreLink, request: &PullRequestDetailView, rev: &PrReviewView, dark: bool) -> Vec<View> {
+    let mut rows: Vec<View> = Vec::new();
+    let mut meta: Vec<String> = vec![rev.status.clone()];
+    if !rev.phase.is_empty() {
+        meta.push(rev.phase.clone());
+    }
+    if !rev.scope_mode.is_empty() {
+        meta.push(rev.scope_mode.clone());
+    }
+    if !rev.head_sha.is_empty() {
+        meta.push(rev.head_sha[..rev.head_sha.len().min(8)].to_owned());
+    }
+    if rev.risk_score > 0 {
+        meta.push(format!("Risk {}/100", rev.risk_score));
+    }
+    rows.push(caption(&meta.join(" · ")).into());
+    if let Some(msg) = &rev.phase_message {
+        rows.push(caption(msg).text_wrapping(TextWrapping::WrapWholeWords).into());
+    }
+    if rev.is_stale {
+        rows.push(
+            TextBlock::new()
+                .text("PR head changed since this review; re-run before publishing.")
+                .font_size(theme::CAPTION)
+                .foreground(theme::rgb(palette::project_rgb("amber", dark)))
+                .text_wrapping(TextWrapping::WrapWholeWords)
+                .into(),
+        );
+    }
+    if let Some(err) = &rev.error {
+        rows.push(TextBlock::new().text(err).font_size(theme::CAPTION).foreground(theme::critical()).text_wrapping(TextWrapping::WrapWholeWords).into());
+    }
+    if let Some(pub_id) = &rev.published_review_id {
+        rows.push(
+            TextBlock::new()
+                .text(format!("Published to remote review ({pub_id})"))
+                .font_size(theme::CAPTION)
+                .foreground(theme::rgb(palette::project_rgb("green", dark)))
+                .into(),
+        );
+    }
+    for drv in &rev.risk_drivers {
+        rows.push(caption(&format!("+{} {} — {}", drv.points, drv.label, drv.detail)).text_wrapping(TextWrapping::WrapWholeWords).into());
+    }
+    if !rev.summary.is_empty() {
+        rows.push(TextBlock::new().text(&rev.summary).text_wrapping(TextWrapping::WrapWholeWords).into());
+    }
+    for f in &rev.findings {
+        let mut f_lines: Vec<View> = vec![
+            Grid::new()
+                .columns([GridLength::Auto, GridLength::STAR, GridLength::Auto])
+                .column_spacing(8.0)
+                .children((
+                    tell(
+                        core,
+                        if f.selected { "✓" } else { "○" },
+                        Event::TogglePrFinding { run_id: rev.run_id.clone(), finding_id: f.id.clone(), selected: !f.selected },
+                    )
+                    .is_enabled(!rev.busy),
+                    TextBlock::new()
+                        .grid_column(1)
+                        .text(format!("[{}/{}] {}", f.severity, f.kind, f.title))
+                        .font_weight(FontWeight::SEMI_BOLD)
+                        .text_wrapping(TextWrapping::WrapWholeWords)
+                        .vertical_alignment(VerticalAlignment::Center),
+                    caption(&f.source_stage).grid_column(2).vertical_alignment(VerticalAlignment::Center),
+                ))
+                .into(),
+        ];
+        if !f.path.is_empty() {
+            f_lines.push(TextBlock::new().text(format!("{}:{} ({})", f.path, f.line, f.side)).font_family(theme::MONO).font_size(theme::CAPTION).opacity(0.75).into());
+        }
+        if !f.detail.is_empty() {
+            f_lines.push(TextBlock::new().text(&f.detail).font_size(theme::CAPTION + 1.0).text_wrapping(TextWrapping::WrapWholeWords).into());
+        }
+        if !f.action.is_empty() {
+            f_lines.push(caption(&format!("Suggested fix: {}", f.action)).text_wrapping(TextWrapping::WrapWholeWords).into());
+        }
+        for q in &f.evidence_quotes {
+            f_lines.push(TextBlock::new().text(q).font_family(theme::MONO).font_size(theme::CAPTION).text_wrapping(TextWrapping::Wrap).into());
+        }
+        rows.push(
+            Border::new()
+                .padding(Thickness::uniform(8.0))
+                .corner_radius(4.0)
+                .border_brush(theme::stroke())
+                .border_thickness(Thickness::uniform(1.0))
+                .content(StackPanel::new().orientation(Orientation::Vertical).spacing(4.0).children(f_lines))
+                .into(),
+        );
+    }
+    if !rev.findings.is_empty() || rev.can_publish {
+        rows.push(
+            Grid::new()
+                .columns([GridLength::STAR, GridLength::Auto])
+                .column_spacing(8.0)
+                .children((
+                    caption(&format!("{} of {} selected", rev.selected_count, rev.findings.len())).vertical_alignment(VerticalAlignment::Center),
+                    tell(core, "Publish Selected", Event::PublishPrReview { key: request.key.clone(), run_id: rev.run_id.clone() })
+                        .grid_column(1)
+                        .style(ButtonStyle::Accent)
+                        .is_enabled(rev.can_publish && !rev.busy),
+                ))
+                .into(),
+        );
+    }
+    rows
 }
 
 #[cfg(test)]

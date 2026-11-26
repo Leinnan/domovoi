@@ -438,6 +438,15 @@ pub enum Event {
     /// Checks the pull request out in a worktree and starts a new thread there.
     StartPullRequestThread { key: String },
     SelectPullRequest { key: String },
+    /// Starts an evidence-checked AI code review on the pull request (`full: true` skips incremental reuse).
+    StartPrReview { key: String, full: bool },
+    CancelPrReview { run_id: String },
+    TogglePrFinding { run_id: String, finding_id: String, selected: bool },
+    PublishPrReview { key: String, run_id: String },
+    /// Rebuilds the local SQLite codebase index for a project.
+    ReindexProject { project_id: String },
+    /// Updates or creates a priority-ordered provider failover pool.
+    SaveFailoverPool { pool_id: String, name: String, instance_ids: Vec<String>, same_driver_first: bool, allow_cross_provider: bool },
     LoadUsage { days: u32 },
     /// Restricts the Usage page to one provider (`""` shows all).
     FilterUsageProvider { provider: String },

@@ -233,6 +233,8 @@ struct SettingsWindow: View {
             core.update(.loadSettings(section: "general"))
         case .providers:
             core.update(.loadSettings(section: "providers"))
+        case .projects:
+            core.update(.loadSettings(section: "projects"))
         case .scheduled:
             core.update(.loadSettings(section: "scheduled"))
         case .archived:
@@ -242,7 +244,7 @@ struct SettingsWindow: View {
             core.update(.loadSettings(section: "diagnostics"))
         case .access:
             core.update(.loadSettings(section: "access"))
-        case .appearance, .servers, .projects, .keybindings, .companion:
+        case .appearance, .servers, .keybindings, .companion:
             break
         }
     }
@@ -708,6 +710,9 @@ struct ProvidersSettings: View {
                     Button("Add Antigravity Account…") { editing = .newAntigravity() }
                 }
             }
+            Section("Failover Pools & Availability") {
+                FailoverPoolsBody(core: core)
+            }
         }
         .formStyle(.grouped)
         .sheet(item: $editing) { draft in
@@ -905,32 +910,38 @@ struct ProjectsSettings: View {
     var body: some View {
         Form {
             ForEach(core.view.settings.projects, id: \.id) { p in
-                HStack(spacing: Space.s) {
-                    ProjectIconTile(icon: p.icon, size: 24, core: core)
-                    VStack(alignment: .leading) {
-                        Text(p.title)
-                        Text(p.workspaceRoot).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.head)
+                VStack(alignment: .leading, spacing: Space.xs) {
+                    HStack(spacing: Space.s) {
+                        ProjectIconTile(icon: p.icon, size: 24, core: core)
+                        VStack(alignment: .leading) {
+                            Text(p.title)
+                            Text(p.workspaceRoot).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.head)
+                        }
+                        Spacer(minLength: Space.xs)
+                        Text("\(p.threadCount) threads").foregroundStyle(.secondary).fixedSize()
+                        if core.view.connection.isOnThisMac {
+                            Button { NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: p.workspaceRoot) } label: { Image(systemName: "folder") }
+                                .buttonStyle(.borderless)
+                                .help("Reveal in Finder")
+                                .accessibilityLabel("Reveal \(p.title) in Finder")
+                        }
+                        Button("Change Icon…") { pickingIcon = p }
+                            .disabled(p.icon.saving || core.view.connection.state != "connected")
+                            .accessibilityLabel("Change icon for \(p.title)")
+                        Button("Rename…") {
+                            title = p.title
+                            renaming = p
+                        }
+                        Button("Remove…", role: .destructive) { removing = p }
                     }
-                    Spacer(minLength: Space.xs)
-                    Text("\(p.threadCount) threads").foregroundStyle(.secondary).fixedSize()
-                    if core.view.connection.isOnThisMac {
-                        Button { NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: p.workspaceRoot) } label: { Image(systemName: "folder") }
-                            .buttonStyle(.borderless)
-                            .help("Reveal in Finder")
-                            .accessibilityLabel("Reveal \(p.title) in Finder")
+                    if !p.isScratch {
+                        ProjectIndexRow(core: core, project: p)
                     }
-                    Button("Change Icon…") { pickingIcon = p }
-                        .disabled(p.icon.saving || core.view.connection.state != "connected")
-                        .accessibilityLabel("Change icon for \(p.title)")
-                    Button("Rename…") {
-                        title = p.title
-                        renaming = p
-                    }
-                    Button("Remove…", role: .destructive) { removing = p }
                 }
             }
         }
         .formStyle(.grouped)
+        .onAppear { core.update(.loadSettings(section: "projects")) }
         .sheet(isPresented: Binding(get: { pickingIcon != nil }, set: { if !$0 { pickingIcon = nil } })) {
             if let project = pickingIcon { ProjectIconPicker(project: project, core: core) }
         }

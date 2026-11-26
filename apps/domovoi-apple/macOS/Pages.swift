@@ -169,6 +169,10 @@ struct PullRequestsPage: View {
                             }
                             .font(.callout)
                             PullRequestActions(core: core, detail: pr, busy: prs.busy)
+                            GroupBox("AI Code Review") {
+                                AiCodeReviewBody(core: core, detail: pr, busy: prs.busy)
+                                    .padding(Space.xs)
+                            }
                             if !pr.checks.isEmpty {
                                 GroupBox("Checks") {
                                     VStack(alignment: .leading, spacing: Space.xs) {

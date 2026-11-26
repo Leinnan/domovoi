@@ -564,6 +564,10 @@ fun ServerProjectsScreen(core: Core, nav: Navigator, onBack: () -> Unit) {
     var renamingProject by remember { mutableStateOf<com.crayen.domovoi.app.ProjectSettingsView?>(null) }
     var removing by remember { mutableStateOf<com.crayen.domovoi.app.ProjectSettingsView?>(null) }
 
+    LaunchedEffect(connection.activeEnvironmentId, connection.state) {
+        if (connection.state == "connected") core.update(Event.LoadSettings("projects"))
+    }
+
     ToolScaffold("Projects", onBack, subtitle = connection.environmentLabel) { padding ->
         LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = Space.xxl)) {
             item("ctx") { ServerContextBanner(connection) }
@@ -572,22 +576,53 @@ fun ServerProjectsScreen(core: Core, nav: Navigator, onBack: () -> Unit) {
             }
             items(settings.projects, key = { "project/${it.id}" }) { project ->
                 var menu by remember { mutableStateOf(false) }
-                ListItem(
-                    headlineContent = { Text(project.title) },
-                    supportingContent = { Text("${project.workspaceRoot} · ${project.threadCount} threads", maxLines = 1, overflow = TextOverflow.StartEllipsis) },
-                    leadingContent = { ProjectIconTile(project.icon, core) },
-                    trailingContent = {
-                        Box {
-                            IconButton(onClick = { menu = true }) { Icon(Icons.Outlined.MoreVert, "Actions for ${project.title}") }
-                            DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                                DropdownMenuItem(text = { Text("Change Icon…") }, enabled = !project.icon.saving && connection.state == "connected", onClick = { menu = false; pickingProject = project.id })
-                                DropdownMenuItem(text = { Text("Rename…") }, onClick = { menu = false; renamingProject = project })
-                                DropdownMenuItem(text = { Text("Remove", color = MaterialTheme.colorScheme.error) }, onClick = { menu = false; removing = project })
+                Column {
+                    ListItem(
+                        headlineContent = { Text(project.title) },
+                        supportingContent = { Text("${project.workspaceRoot} · ${project.threadCount} threads", maxLines = 1, overflow = TextOverflow.StartEllipsis) },
+                        leadingContent = { ProjectIconTile(project.icon, core) },
+                        trailingContent = {
+                            Box {
+                                IconButton(onClick = { menu = true }) { Icon(Icons.Outlined.MoreVert, "Actions for ${project.title}") }
+                                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                                    DropdownMenuItem(text = { Text("Change Icon…") }, enabled = !project.icon.saving && connection.state == "connected", onClick = { menu = false; pickingProject = project.id })
+                                    DropdownMenuItem(text = { Text("Rename…") }, onClick = { menu = false; renamingProject = project })
+                                    DropdownMenuItem(text = { Text("Remove", color = MaterialTheme.colorScheme.error) }, onClick = { menu = false; removing = project })
+                                }
                             }
+                        },
+                        colors = ListItemDefaults.colors(containerColor = clear),
+                    )
+                    if (!project.isScratch) {
+                        val idx = project.index
+                        val summary = buildList {
+                            add("Index: ${idx.status}")
+                            add("${idx.fileCount} files")
+                            add("${idx.packageCount} pkgs")
+                            add("${idx.edgeCount} edges")
+                            add("${idx.symbolCount} symbols")
+                            if (idx.commitSha.isNotEmpty()) add(idx.commitSha.take(8))
+                            if (idx.indexedAt.isNotEmpty()) add(idx.indexedAt)
+                            if (idx.conventionPaths.isNotEmpty()) add("docs: ${idx.conventionPaths.joinToString(", ")}")
+                        }.joinToString(" · ")
+                        Row(
+                            Modifier.fillMaxWidth().padding(horizontal = Space.l, vertical = Space.xs),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(Space.s),
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text(summary, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                idx.error?.takeIf { it.isNotEmpty() }?.let { err ->
+                                    Text(err, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                                }
+                            }
+                            TextButton(
+                                onClick = { core.update(Event.ReindexProject(project.id)) },
+                                enabled = idx.status != "indexing",
+                            ) { Text(if (idx.status == "indexing") "Indexing…" else "Reindex") }
                         }
-                    },
-                    colors = ListItemDefaults.colors(containerColor = clear),
-                )
+                    }
+                }
             }
             item("projects-add") {
                 Column {
@@ -757,6 +792,66 @@ fun ProvidersScreen(core: Core, onBack: () -> Unit) {
             }
             if (settings.canAddAntigravity) item("add") {
                 TextButton(onClick = { editing = newAntigravity() }, modifier = Modifier.padding(horizontal = Space.l)) { Text("Add Antigravity account") }
+            }
+            item("failover-h") { SectionHeader("Failover pools & availability") }
+            if (settings.failoverInstances.isEmpty()) {
+                item("failover-empty") { ScopeCaption("No live availability data yet.") }
+            } else {
+                items(settings.failoverInstances, key = { "fo-inst/${it.instanceId}" }) { inst ->
+                    val detail = buildList {
+                        add(inst.driver)
+                        add(if (inst.available) "available" else "rate-limited")
+                        if (inst.activeJobs > 0u) add("${inst.activeJobs} active")
+                        inst.limitedUntil?.takeIf { it.isNotEmpty() }?.let { add("until $it") }
+                        inst.lastError?.takeIf { it.isNotEmpty() }?.let { add(it) }
+                    }.joinToString(" · ")
+                    ListItem(
+                        headlineContent = { Text(inst.displayName.ifEmpty { inst.instanceId }) },
+                        supportingContent = { Text(detail) },
+                        trailingContent = { StatusPill(if (inst.available) "Available" else "Limited", if (inst.available) tints.success else tints.caution) },
+                        colors = ListItemDefaults.colors(containerColor = clear),
+                    )
+                }
+            }
+            if (settings.failoverPools.isEmpty() && settings.providers.isNotEmpty()) {
+                item("failover-create") {
+                    TextButton(
+                        onClick = {
+                            core.update(
+                                Event.SaveFailoverPool(
+                                    poolId = "default",
+                                    name = "Default Pool",
+                                    instanceIds = settings.providers.map { it.instanceId },
+                                    sameDriverFirst = true,
+                                    allowCrossProvider = true,
+                                ),
+                            )
+                        },
+                        modifier = Modifier.padding(horizontal = Space.l),
+                    ) { Text("Create default failover pool") }
+                }
+            }
+            items(settings.failoverPools, key = { "fo-pool/${it.id}" }) { pool ->
+                Column(Modifier.fillMaxWidth().padding(horizontal = Space.l, vertical = Space.xs), verticalArrangement = Arrangement.spacedBy(Space.xs)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("${pool.name} (${pool.id})", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+                        if (pool.instanceIds.size > 1) {
+                            TextButton(onClick = {
+                                val rotated = pool.instanceIds.drop(1) + pool.instanceIds.first()
+                                core.update(Event.SaveFailoverPool(pool.id, pool.name, rotated, pool.sameDriverFirst, pool.allowCrossProvider))
+                            }) { Text("Rotate") }
+                        }
+                    }
+                    Text(pool.instanceIds.joinToString(" → "), fontFamily = Mono, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Row(horizontalArrangement = Arrangement.spacedBy(Space.s)) {
+                        OutlinedButton(onClick = {
+                            core.update(Event.SaveFailoverPool(pool.id, pool.name, pool.instanceIds, !pool.sameDriverFirst, pool.allowCrossProvider))
+                        }) { Text(if (pool.sameDriverFirst) "Same driver: On" else "Same driver: Off") }
+                        OutlinedButton(onClick = {
+                            core.update(Event.SaveFailoverPool(pool.id, pool.name, pool.instanceIds, pool.sameDriverFirst, !pool.allowCrossProvider))
+                        }) { Text(if (pool.allowCrossProvider) "Cross-provider: On" else "Cross-provider: Off") }
+                    }
+                }
             }
         }
     }

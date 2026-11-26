@@ -59,7 +59,95 @@ pub fn providers(core: &CoreLink, shown: &Shown<'_>, hooks: &Hooks<'_>) -> Vec<V
         out.push(empty("The server's providers are loading."));
     }
     out.extend(settings.providers.iter().map(|provider| self::provider(core, provider, shown, hooks)));
+    out.push(failover_card(core, settings));
     out
+}
+
+fn failover_card(core: &CoreLink, settings: &SettingsView) -> View {
+    let mut lines: Vec<View> = vec![TextBlock::new().text("Failover Pools & Availability").font_weight(FontWeight::SEMI_BOLD).into()];
+    if settings.failover_instances.is_empty() {
+        lines.push(caption("No live availability data yet.").into());
+    } else {
+        for inst in &settings.failover_instances {
+            let name = if inst.display_name.is_empty() { inst.instance_id.as_str() } else { inst.display_name.as_str() };
+            let mut detail = format!("{} · {}", inst.driver, if inst.available { "available" } else { "rate-limited" });
+            if inst.active_jobs > 0 {
+                detail.push_str(&format!(" · {} active", inst.active_jobs));
+            }
+            if let Some(until) = &inst.limited_until {
+                detail.push_str(&format!(" · until {until}"));
+            }
+            if let Some(err) = &inst.last_error {
+                detail.push_str(&format!(" · {err}"));
+            }
+            lines.push(fact(name, &detail));
+        }
+    }
+    if settings.failover_pools.is_empty() && !settings.providers.is_empty() {
+        let ids: Vec<String> = settings.providers.iter().map(|p| p.instance_id.clone()).collect();
+        lines.push(
+            tell(
+                core,
+                "Create Default Pool",
+                Event::SaveFailoverPool {
+                    pool_id: "default".into(),
+                    name: "Default Pool".into(),
+                    instance_ids: ids,
+                    same_driver_first: true,
+                    allow_cross_provider: true,
+                },
+            )
+            .horizontal_alignment(HorizontalAlignment::Left)
+            .into(),
+        );
+    }
+    for pool in &settings.failover_pools {
+        let mut rotated = pool.instance_ids.clone();
+        if rotated.len() > 1 {
+            rotated.rotate_left(1);
+        }
+        lines.push(TextBlock::new().text(format!("{} ({}): {}", pool.name, pool.id, pool.instance_ids.join(" → "))).font_family(theme::MONO).font_size(theme::CAPTION).into());
+        lines.push(buttons(vec![
+            tell(
+                core,
+                if pool.same_driver_first { "Same driver first: On" } else { "Same driver first: Off" },
+                Event::SaveFailoverPool {
+                    pool_id: pool.id.clone(),
+                    name: pool.name.clone(),
+                    instance_ids: pool.instance_ids.clone(),
+                    same_driver_first: !pool.same_driver_first,
+                    allow_cross_provider: pool.allow_cross_provider,
+                },
+            )
+            .into(),
+            tell(
+                core,
+                if pool.allow_cross_provider { "Cross-provider: On" } else { "Cross-provider: Off" },
+                Event::SaveFailoverPool {
+                    pool_id: pool.id.clone(),
+                    name: pool.name.clone(),
+                    instance_ids: pool.instance_ids.clone(),
+                    same_driver_first: pool.same_driver_first,
+                    allow_cross_provider: !pool.allow_cross_provider,
+                },
+            )
+            .into(),
+            tell(
+                core,
+                "Rotate",
+                Event::SaveFailoverPool {
+                    pool_id: pool.id.clone(),
+                    name: pool.name.clone(),
+                    instance_ids: rotated,
+                    same_driver_first: pool.same_driver_first,
+                    allow_cross_provider: pool.allow_cross_provider,
+                },
+            )
+            .is_enabled(pool.instance_ids.len() > 1)
+            .into(),
+        ]));
+    }
+    card(lines)
 }
 
 /// One agent: what it is, whether it is ready, and what can be done about it.

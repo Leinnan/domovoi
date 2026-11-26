@@ -74,6 +74,10 @@ plain_settings! {
         "saveTerminalScreens" => save_terminal_screens,
         "removeAgentCreditsOnMerge" => remove_agent_credits_on_merge,
         "reviewGuidesEnabled" => review_guides_enabled,
+        "aiReviewEnabled" => ai_review_enabled,
+        "aiReviewLensEnabled" => ai_review_lens_enabled,
+        "failoverLimitedThreads" => failover_limited_threads,
+        "prWatcherEnabled" => pr_watcher_enabled,
         "autoResumeLimitedThreads" => auto_resume_limited_threads,
         "snoozeLimitedThreads" => snooze_limited_threads,
     }
@@ -82,6 +86,8 @@ plain_settings! {
         "worktreesDirectory" => worktrees_directory,
         "branchNamePrefix" => branch_name_prefix,
         "addProjectBaseDirectory" => add_project_base_directory,
+        "aiReviewDepthMode" => ai_review_depth_mode,
+        "aiReviewInstructions" => ai_review_instructions,
     }
 }
 

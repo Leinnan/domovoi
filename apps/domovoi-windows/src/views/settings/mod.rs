@@ -314,7 +314,7 @@ pub fn page(core: &CoreLink, shown: &Shown<'_>, hooks: Hooks<'_>) -> View {
             Section::Servers => general::servers(shown.connection, shown.icons.dark, &hooks),
             Section::General => general::general(core, shown, &hooks),
             Section::Companion => companion::companion(core, shown),
-            Section::Projects => server::projects(shown, &hooks),
+            Section::Projects => server::projects(core, shown, &hooks),
             Section::Providers => providers::providers(core, shown, &hooks),
             Section::Scheduled => providers::scheduled(core, shown, &hooks),
             Section::Keybindings => providers::keybindings(core, shown.settings),

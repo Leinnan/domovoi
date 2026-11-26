@@ -623,6 +623,46 @@ pub fn pull_requests_comment(pull_request: &PullRequestListEntry, body: &str) ->
     built("pullRequests.comment", about(pull_request, json!({ "body": body })))
 }
 
+pub fn pull_requests_reviews_get(pull_request: &PullRequestListEntry) -> Request {
+    built("pullRequests.reviews.get", about(pull_request, json!({})))
+}
+
+pub fn pull_requests_reviews_start(pull_request: &PullRequestListEntry, force_full: bool) -> Request {
+    built("pullRequests.reviews.start", about(pull_request, json!({ "forceFull": force_full })))
+}
+
+pub fn pull_requests_reviews_cancel(run_id: &str) -> Request {
+    built("pullRequests.reviews.cancel", json!({ "runId": run_id }))
+}
+
+pub fn pull_requests_reviews_set_finding_selected(run_id: &str, finding_id: &str, selected: bool) -> Request {
+    built("pullRequests.reviews.setFindingSelected", json!({ "runId": run_id, "findingId": finding_id, "selected": selected }))
+}
+
+pub fn pull_requests_reviews_publish(pull_request: &PullRequestListEntry, run_id: &str) -> Request {
+    built("pullRequests.reviews.publish", about(pull_request, json!({ "runId": run_id })))
+}
+
+pub fn pull_requests_reviews_subscribe() -> Request {
+    built("pullRequests.reviews.subscribe", json!({}))
+}
+
+pub fn projects_index_status(project_id: &str) -> Request {
+    built("projects.indexStatus", json!({ "projectId": project_id }))
+}
+
+pub fn projects_reindex(project_id: &str, force: bool) -> Request {
+    built("projects.reindex", json!({ "projectId": project_id, "force": force }))
+}
+
+pub fn providers_failover_status() -> Request {
+    bare("providers.failoverStatus")
+}
+
+pub fn server_update_failover_pools(pools: &[domovoi_model::typed::FailoverPoolConfig]) -> Request {
+    built("server.updateSettings", json!({ "patch": { "failoverPools": pools } }))
+}
+
 // ---- terminals ----
 
 pub fn subscribe_terminal_details() -> Request {

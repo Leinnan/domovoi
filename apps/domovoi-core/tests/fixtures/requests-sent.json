@@ -1691,7 +1691,19 @@
           "projectId": "p1",
           "repository": "o/calc"
         },
+        "rpc": "pullRequests.reviews.get"
+      },
+      {
+        "payload": {
+          "number": 12,
+          "projectId": "p1",
+          "repository": "o/calc"
+        },
         "rpc": "pullRequests.summary"
+      },
+      {
+        "payload": {},
+        "rpc": "pullRequests.reviews.subscribe"
       }
     ]
   },
@@ -1992,6 +2004,10 @@
   {
     "step": "the providers settings",
     "sent": [
+      {
+        "payload": {},
+        "rpc": "providers.failoverStatus"
+      },
       {
         "payload": {},
         "rpc": "server.refreshProviders"

@@ -908,6 +908,12 @@ pub async fn trigger(service: Arc<ScheduledTasks>, task_id: &str, token: &str, r
         return Answer::RateLimited("rate_limited");
     }
     claim_replay_key(&store, task_id, &replay_key, &delivery_id, now);
+    // Wake the PR watcher immediately when a webhook carries a GitHub/GitLab PR or MR event.
+    if let Ok(parsed_body) = serde_json::from_str::<Value>(&request.body_text)
+        && crate::pr_watcher::webhook_pr_event_number(&parsed_body).is_some()
+    {
+        crate::pr_watcher::wake_now();
+    }
     log("accepted", verified, &rendered.missing, Some(&rendered.prompt), None, false);
     let (id, owner) = (delivery_id.clone(), task_id.to_owned());
     tokio::spawn(async move {

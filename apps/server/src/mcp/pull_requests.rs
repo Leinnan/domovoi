@@ -57,7 +57,7 @@ pub fn tools() -> Vec<Value> {
             json!({ "threadId": s("Thread. Default: this thread."), "states": states("Unlink PRs in these states.") }), &["states"], false),
         tool("list_thread_pull_requests", "List a thread's PRs, with last known state. Not an end-of-work check.",
             json!({ "threadId": s("Thread. Default: this thread."), "states": states("Only PRs in these states (no known state counts as open)."), "cursor": s("From `nextCursor`.") }), &[], true),
-        tool("watch_pull_request", "Watch an open PR for this thread, linking it first if needed. The watch is recorded on the thread; this server does not poll the host yet, so check the PR yourself with `pull_request_read` before you rely on it.",
+        tool("watch_pull_request", "Watch an open PR for this thread, linking it first if needed. The server's background PR watcher polls GitHub/GitLab and wakes this thread automatically when checks finish or the PR merges/closes.",
             target_props(&[("until", one_of(&["checks", "merged"], "How long the watch holds: until checks finish (default for a new watch) or until it merges or closes."))]), &[], false),
         tool("unwatch_pull_request", "Stop watching a PR for this thread. It stays linked.", target_props(&[]), &[], false),
         tool("pull_request_read", "Read a PR's state and checks from its host. Use instead of gh.",
@@ -66,6 +66,17 @@ pub fn tools() -> Vec<Value> {
                 "repository": s("owner/name. Default: this project's repository."),
                 "sections": { "type": "array", "items": { "type": "string", "enum": ["summary", "checks"] }, "description": "Default: summary, checks." },
             }), &[], true),
+        tool("run_pull_request_review", "Start an evidence-checked AI code review on a pull request using a read-only frozen snapshot and local codebase index.",
+            target_props(&[("full", json!({ "type": "boolean", "description": "Force a full review instead of incremental delta." }))]), &[], false),
+        tool("read_pull_request_review", "Read the latest evidence-checked AI code review run, risk breakdown, findings, suggestions, and questions for a pull request.",
+            target_props(&[]), &[], true),
+        tool("publish_pull_request_review", "Publish the selected validated findings of an AI code review run as a non-blocking GitHub/GitLab review.",
+            target_props(&[("runId", s("Review run ID from `run_pull_request_review` or `read_pull_request_review`."))]), &["runId"], false),
+        tool("project_context_graph", "Query the local SQLite codebase index for callers, dependencies, nearest tests, dependent packages, symbols, and convention docs (`REVIEW.md`, `AGENTS.md`).",
+            json!({
+                "paths": { "type": "array", "items": { "type": "string" }, "minItems": 1, "description": "Repository-relative file paths to inspect." },
+                "maxRelated": n("Maximum related files to return (default 24)."),
+            }), &["paths"], true),
     ]
 }
 
@@ -79,6 +90,10 @@ pub async fn call(c: &Call<'_>, name: &str) -> Option<Result<Value, String>> {
         "watch_pull_request" => watch(c, true).await,
         "unwatch_pull_request" => watch(c, false).await,
         "pull_request_read" => read(c).await,
+        "run_pull_request_review" => run_review(c).await,
+        "read_pull_request_review" => read_review(c).await,
+        "publish_pull_request_review" => publish_review(c).await,
+        "project_context_graph" => context_graph(c).await,
         _ => return None,
     })
 }
@@ -381,6 +396,94 @@ async fn read(c: &Call<'_>) -> Result<Value, String> {
         answer["checks"] = serde_json::to_value(&checks).unwrap_or(Value::Null);
     }
     Ok(answer)
+}
+
+async fn run_review(c: &Call<'_>) -> Result<Value, String> {
+    let target = resolve(c, c.args).await?;
+    let force_full = c.args["full"].as_bool().unwrap_or(false);
+    let pr_ref = crate::rpc::source_control::pull_requests::PrRef {
+        project_id: c.caller.project_id.clone(),
+        host: Some(target.host.clone()),
+        expected_account_id: None,
+        repository: target.repository.clone(),
+        number: target.number,
+    };
+    let project = crate::rpc::source_control::pull_requests::require_project(c.state, &pr_ref).await.map_err(|e| e.to_string())?;
+    let source = match project.provider {
+        crate::rpc::source_control::pull_request_failure::Provider::GitHub => crate::rpc::source_control::github::guide_source(&project, target.number).await,
+        crate::rpc::source_control::pull_request_failure::Provider::GitLab => crate::rpc::source_control::gitlab::guide_source(&project, target.number).await,
+    }
+    .map_err(|e| e.detail)?;
+    let head = source.head.ok_or_else(|| "Pull request has no head commit.".to_owned())?;
+    let is_stacked = !matches!(source.base_branch.as_str(), "main" | "master" | "develop" | "trunk");
+    let run = crate::review::start_review(
+        c.state.clone(),
+        crate::review::StartReviewInput {
+            project,
+            number: target.number,
+            title: source.title,
+            author: String::new(),
+            description: source.body,
+            base_ref: source.base_branch,
+            head_sha: head,
+            force_full,
+            is_stacked_base: is_stacked,
+        },
+    )
+    .await?;
+    serde_json::to_value(&run).map_err(|e| e.to_string())
+}
+
+async fn read_review(c: &Call<'_>) -> Result<Value, String> {
+    let target = resolve(c, c.args).await?;
+    let pr_key = crate::rpc::source_control::review_guides::key(&target.host, &target.repository, target.number);
+    let res = crate::review::store::latest_for_pr(c.state.store.db(), &pr_key, None);
+    serde_json::to_value(&res).map_err(|e| e.to_string())
+}
+
+async fn publish_review(c: &Call<'_>) -> Result<Value, String> {
+    let target = resolve(c, c.args).await?;
+    let run_id = c.str("runId").ok_or_else(|| "invalid_request: `runId` is required.".to_owned())?;
+    let pr_ref = crate::rpc::source_control::pull_requests::PrRef {
+        project_id: c.caller.project_id.clone(),
+        host: Some(target.host.clone()),
+        expected_account_id: None,
+        repository: target.repository.clone(),
+        number: target.number,
+    };
+    let project = crate::rpc::source_control::pull_requests::require_project(c.state, &pr_ref).await.map_err(|e| e.to_string())?;
+    let published = crate::review::publish::publish_run(c.state.store.db(), &project, &run_id).await?;
+    serde_json::to_value(&published).map_err(|e| e.to_string())
+}
+
+async fn context_graph(c: &Call<'_>) -> Result<Value, String> {
+    let paths: Vec<String> = c.args["paths"]
+        .as_array()
+        .ok_or_else(|| "invalid_request: `paths` must be a non-empty array.".to_owned())?
+        .iter()
+        .filter_map(|v| v.as_str().map(str::to_owned))
+        .collect();
+    if paths.is_empty() {
+        return Err("invalid_request: `paths` must be non-empty.".into());
+    }
+    let max_related = c.args["maxRelated"].as_u64().unwrap_or(24).clamp(1, 100) as usize;
+    let db = c.state.store.db().clone();
+    let project_id = c.caller.project_id.clone();
+    // Ensure index exists for this project on first query.
+    if crate::indexer::status(&db, &project_id).status == "idle"
+        && let Ok(Some(proj)) = c.state.store.get_project(&project_id)
+    {
+        let db2 = db.clone();
+        let pid2 = project_id.clone();
+        let root = std::path::PathBuf::from(proj.workspace_root);
+        let _ = tokio::task::spawn_blocking(move || {
+            let cancel = std::sync::atomic::AtomicBool::new(false);
+            crate::indexer::index_project(&db2, &pid2, &root, None, false, &cancel)
+        })
+        .await;
+    }
+    let ctx = crate::indexer::query::context_for_changed_files(&db, &project_id, &paths, max_related);
+    serde_json::to_value(&ctx).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]

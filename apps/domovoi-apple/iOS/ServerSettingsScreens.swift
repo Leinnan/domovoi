@@ -260,22 +260,27 @@ struct ServerProjectsScreen: View {
                         .foregroundStyle(.secondary)
                 }
                 ForEach(core.view.settings.projects, id: \.id) { project in
-                    HStack(spacing: Space.m) {
-                        Button { pickingProjectIcon = project } label: {
-                            ProjectIconTile(icon: project.icon, size: Size.listIcon, core: core)
-                                .tapTarget()
+                    VStack(alignment: .leading, spacing: Space.xs) {
+                        HStack(spacing: Space.m) {
+                            Button { pickingProjectIcon = project } label: {
+                                ProjectIconTile(icon: project.icon, size: Size.listIcon, core: core)
+                                    .tapTarget()
+                            }
+                            .buttonStyle(.borderless)
+                            .disabled(project.icon.saving)
+                            .accessibilityLabel("Change icon for \(project.title)")
+                            .iconColumn(Size.listIcon)
+                            VStack(alignment: .leading, spacing: Space.xxs) {
+                                Text(project.title)
+                                Text("\(project.workspaceRoot) · \(project.threadCount) threads")
+                                    .font(TypeRole.meta)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                                    .truncationMode(.head)
+                            }
                         }
-                        .buttonStyle(.borderless)
-                        .disabled(project.icon.saving)
-                        .accessibilityLabel("Change icon for \(project.title)")
-                        .iconColumn(Size.listIcon)
-                        VStack(alignment: .leading, spacing: Space.xxs) {
-                            Text(project.title)
-                            Text("\(project.workspaceRoot) · \(project.threadCount) threads")
-                                .font(TypeRole.meta)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                                .truncationMode(.head)
+                        if !project.isScratch {
+                            ProjectIndexRow(core: core, project: project)
                         }
                     }
                     .swipeActions {
@@ -308,6 +313,7 @@ struct ServerProjectsScreen: View {
         }
         .navigationTitle("Projects")
         .navigationBarTitleDisplayMode(.inline)
+        .onAppear { core.update(.loadSettings(section: "projects")) }
         .sheet(isPresented: Binding(get: { pickingProjectIcon != nil }, set: { if !$0 { pickingProjectIcon = nil } })) {
             if let project = pickingProjectIcon { ProjectIconPicker(project: project, core: core) }
         }
@@ -462,6 +468,9 @@ struct ProvidersScreen: View {
                 }
             } footer: {
                 Text("Other agents sign in and install on the server itself, in their command-line tools. Antigravity signs in here: Google returns to the server's machine, so from this device paste the address the browser ended on.")
+            }
+            Section("Failover Pools & Availability") {
+                FailoverPoolsBody(core: core)
             }
         }
         .navigationTitle("Providers")

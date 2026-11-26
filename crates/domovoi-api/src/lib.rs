@@ -78,6 +78,9 @@ pub mod kept {
     pub const VERSION_CONTROL: &str = "version control: a new repository, the branch alone, a branch's commits, a diff's files, a pull request by its URL";
     pub const ADMINISTRATION: &str = "administration: the configuration read once (the API cases read it back after a change), a keybinding added, text generator models, issue triage, usage rates, a provider CLI's update, a secret source checked";
     pub const SINGLE_CALLS: &str = "a terminal opened by itself, one webhook delivery, signing a provider instance out";
+    pub const CODEBASE_INDEX: &str = "local SQLite codebase index status and reindex";
+    pub const FAILOVER: &str = "multi-instance provider failover pool status";
+    pub const AI_REVIEWS: &str = "evidence-checked AI pull request reviews";
 }
 
 macro_rules! methods {
@@ -164,10 +167,12 @@ methods! {
     "projects.createNew" => Unary, ORCHESTRATION_OPERATE, Client;
     "projects.ensureScratch" => Unary, ORCHESTRATION_OPERATE, Client;
     "projects.fetchLfsObject" => Unary, SOURCE_CONTROL_WRITE, Client;
+    "projects.indexStatus" => Unary, ORCHESTRATION_READ, Client;
     "projects.listEntries" => Unary, FILESYSTEM_READ, Client;
     "projects.listIgnoredFiles" => Unary, FILESYSTEM_READ, Kept(kept::FILES);
     "projects.mutate" => Unary, ORCHESTRATION_OPERATE, Client;
     "projects.readFile" => Unary, FILESYSTEM_READ, Client;
+    "projects.reindex" => Unary, ORCHESTRATION_OPERATE, Client;
     "projects.searchContents" => Unary, FILESYSTEM_READ, Client;
     "projects.searchEntries" => Unary, FILESYSTEM_READ, Client;
     "projects.writeFile" => Unary, FILESYSTEM_WRITE, Client;
@@ -180,6 +185,7 @@ methods! {
     "provider.install.remove" => Unary, PROVIDERS_MANAGE, Client;
     "provider.install.start" => Unary, PROVIDERS_MANAGE, Client;
     "provider.install.subscribe" => Stream, ORCHESTRATION_READ, Client;
+    "providers.failoverStatus" => Unary, ORCHESTRATION_READ, Client;
     "pullRequests.activity" => Unary, ORCHESTRATION_READ, Kept(kept::PULL_REQUEST_PAGE);
     "pullRequests.changeBreakdown" => Unary, ORCHESTRATION_READ, Kept(kept::PULL_REQUEST_PAGE);
     "pullRequests.checks" => Unary, ORCHESTRATION_READ, Client;
@@ -200,6 +206,13 @@ methods! {
     "pullRequests.requestReviewers" => Unary, SOURCE_CONTROL_WRITE, Kept(kept::PULL_REQUEST_PAGE);
     "pullRequests.reviewGuide" => Unary, ORCHESTRATION_READ, Kept(kept::PULL_REQUEST_PAGE);
     "pullRequests.reviewerCandidates" => Unary, ORCHESTRATION_READ, Kept(kept::PULL_REQUEST_PAGE);
+    "pullRequests.reviews.cancel" => Unary, ORCHESTRATION_OPERATE, Client;
+    "pullRequests.reviews.get" => Unary, ORCHESTRATION_READ, Client;
+    "pullRequests.reviews.list" => Unary, ORCHESTRATION_READ, Kept(kept::AI_REVIEWS);
+    "pullRequests.reviews.publish" => Unary, SOURCE_CONTROL_WRITE, Client;
+    "pullRequests.reviews.setFindingSelected" => Unary, ORCHESTRATION_OPERATE, Client;
+    "pullRequests.reviews.start" => Unary, ORCHESTRATION_OPERATE, Client;
+    "pullRequests.reviews.subscribe" => Stream, ORCHESTRATION_READ, Client;
     "pullRequests.routing" => Unary, ORCHESTRATION_READ, Kept(kept::PULL_REQUEST_PAGE);
     "pullRequests.routingIdentity" => Unary, ORCHESTRATION_READ, Kept(kept::PULL_REQUEST_PAGE);
     "pullRequests.runAction" => Unary, SOURCE_CONTROL_WRITE, Client;

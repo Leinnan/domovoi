@@ -590,6 +590,9 @@ struct PullRequestDetailScreen: View {
                     if busy { LoadingRow("Working on it…") }
                 }
                 .disabled(busy)
+                Section("AI Code Review") {
+                    AiCodeReviewBody(core: core, detail: d, busy: busy)
+                }
                 if !d.checks.isEmpty {
                     Section("Checks") {
                         ForEach(Array(d.checks.enumerated()), id: \.offset) { _, check in

@@ -253,6 +253,104 @@ const MIGRATIONS: &[&str] = &[
        json_extract(record, '$.type') IN ('approval_request', 'user_input_request')
        OR (json_extract(record, '$.type') = 'secret_request' AND json_extract(record, '$.secretStatus') = 'pending')
      ELSE 0 END;",
+    // 20: local codebase index, evidence-checked AI PR reviews, and PR watcher state.
+    "CREATE TABLE repo_index_state (
+        project_id TEXT PRIMARY KEY,
+        base_ref TEXT NOT NULL,
+        commit_sha TEXT NOT NULL,
+        indexed_at TEXT NOT NULL,
+        file_count INTEGER NOT NULL,
+        package_count INTEGER NOT NULL,
+        edge_count INTEGER NOT NULL,
+        symbol_count INTEGER NOT NULL,
+        convention_paths_json TEXT NOT NULL
+    );
+    CREATE TABLE repo_index_files (
+        project_id TEXT NOT NULL,
+        path TEXT NOT NULL,
+        blob_sha TEXT NOT NULL,
+        size_bytes INTEGER NOT NULL,
+        language TEXT,
+        package_path TEXT,
+        is_test INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (project_id, path)
+    );
+    CREATE TABLE repo_index_edges (
+        project_id TEXT NOT NULL,
+        source_path TEXT NOT NULL,
+        target_path TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        PRIMARY KEY (project_id, source_path, target_path, kind)
+    );
+    CREATE INDEX idx_repo_index_edges_target ON repo_index_edges (project_id, target_path);
+    CREATE TABLE repo_index_symbols (
+        project_id TEXT NOT NULL,
+        path TEXT NOT NULL,
+        name TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        start_line INTEGER NOT NULL,
+        end_line INTEGER NOT NULL,
+        signature TEXT,
+        is_exported INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE INDEX idx_repo_index_symbols_name ON repo_index_symbols (project_id, name);
+    CREATE TABLE pr_review_runs (
+        id TEXT PRIMARY KEY,
+        pr_key TEXT NOT NULL,
+        project_id TEXT NOT NULL,
+        host TEXT NOT NULL,
+        repository TEXT NOT NULL,
+        number INTEGER NOT NULL,
+        head_sha TEXT NOT NULL,
+        base_ref TEXT NOT NULL,
+        base_sha TEXT NOT NULL,
+        merge_base_sha TEXT NOT NULL,
+        scope_mode TEXT NOT NULL,
+        source_run_id TEXT,
+        status TEXT NOT NULL,
+        phase TEXT NOT NULL,
+        risk_score INTEGER NOT NULL DEFAULT 0,
+        risk_drivers_json TEXT NOT NULL DEFAULT '[]',
+        summary_markdown TEXT,
+        model_selection_json TEXT,
+        published_review_id TEXT,
+        publish_lock_token TEXT,
+        error_detail TEXT,
+        usage_json TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+    CREATE INDEX idx_pr_review_runs_pr ON pr_review_runs (pr_key, created_at DESC);
+    CREATE TABLE pr_review_findings (
+        id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL REFERENCES pr_review_runs (id) ON DELETE CASCADE,
+        kind TEXT NOT NULL,
+        severity TEXT NOT NULL,
+        title TEXT NOT NULL,
+        detail TEXT NOT NULL,
+        action TEXT NOT NULL,
+        path TEXT,
+        line INTEGER,
+        side TEXT,
+        evidence_json TEXT NOT NULL,
+        counter_evidence_json TEXT NOT NULL,
+        selected INTEGER NOT NULL DEFAULT 1,
+        source_stage TEXT NOT NULL
+    );
+    CREATE INDEX idx_pr_review_findings_run ON pr_review_findings (run_id);
+    CREATE TABLE pr_watcher_cursors (
+        project_id TEXT PRIMARY KEY,
+        last_polled_at TEXT NOT NULL,
+        comment_cursor_since TEXT NOT NULL
+    );
+    CREATE TABLE pr_comment_activations (
+        project_id TEXT NOT NULL,
+        comment_id TEXT NOT NULL,
+        pr_number INTEGER NOT NULL,
+        run_id TEXT,
+        processed_at TEXT NOT NULL,
+        PRIMARY KEY (project_id, comment_id)
+    );",
 ];
 
 impl Db {

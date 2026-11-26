@@ -27,7 +27,7 @@ fn named(title: &str, under: &str) -> StackPanel {
     StackPanel::new().orientation(Orientation::Vertical).vertical_alignment(VerticalAlignment::Center).children(lines)
 }
 
-pub fn projects(shown: &Shown<'_>, hooks: &Hooks<'_>) -> Vec<View> {
+pub fn projects(core: &CoreLink, shown: &Shown<'_>, hooks: &Hooks<'_>) -> Vec<View> {
     let rows: Vec<View> = shown
         .settings
         .projects
@@ -68,7 +68,40 @@ pub fn projects(shown: &Shown<'_>, hooks: &Hooks<'_>) -> Vec<View> {
                 );
                 parts.push(Button::new().grid_column(3).style(ButtonStyle::Subtle).automation_name(format!("More for {title}")).content(theme::glyph("\u{E712}", 14.0)).menu(menu));
             }
-            Grid::new().columns([GridLength::Auto, GridLength::STAR, GridLength::Auto, GridLength::Auto]).column_spacing(12.0).children(parts).into()
+            let header: View = Grid::new().columns([GridLength::Auto, GridLength::STAR, GridLength::Auto, GridLength::Auto]).column_spacing(12.0).children(parts).into();
+            if project.is_scratch {
+                return header;
+            }
+            let idx = &project.index;
+            let mut summary = format!(
+                "Index: {} · {} files · {} pkgs · {} edges · {} symbols",
+                idx.status, idx.file_count, idx.package_count, idx.edge_count, idx.symbol_count
+            );
+            if !idx.commit_sha.is_empty() {
+                summary.push_str(&format!(" · {}", &idx.commit_sha[..idx.commit_sha.len().min(8)]));
+            }
+            if !idx.indexed_at.is_empty() {
+                summary.push_str(&format!(" · {}", idx.indexed_at));
+            }
+            if !idx.convention_paths.is_empty() {
+                summary.push_str(&format!(" · docs: {}", idx.convention_paths.join(", ")));
+            }
+            let mut idx_lines: Vec<View> = vec![caption(&summary).into()];
+            if let Some(err) = &idx.error {
+                idx_lines.push(TextBlock::new().text(err).font_size(theme::CAPTION).foreground(theme::critical()).text_wrapping(TextWrapping::WrapWholeWords).into());
+            }
+            let index_bar: View = Grid::new()
+                .columns([GridLength::STAR, GridLength::Auto])
+                .column_spacing(8.0)
+                .children((
+                    StackPanel::new().orientation(Orientation::Vertical).spacing(2.0).children(idx_lines),
+                    tell(core, if idx.status == "indexing" { "Indexing…" } else { "Reindex" }, Event::ReindexProject { project_id: project.id.clone() })
+                        .grid_column(1)
+                        .is_enabled(idx.status != "indexing")
+                        .vertical_alignment(VerticalAlignment::Center),
+                ))
+                .into();
+            StackPanel::new().orientation(Orientation::Vertical).spacing(6.0).children(vec![header, index_bar]).into()
         })
         .collect();
     if rows.is_empty() { vec![empty("No projects yet. Add one from the new-thread page.")] } else { vec![card(rows)] }

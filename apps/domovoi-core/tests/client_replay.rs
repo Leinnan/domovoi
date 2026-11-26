@@ -6200,3 +6200,157 @@ fn a_server_reached_under_a_name_it_does_not_answer_to_says_what_to_do() {
     let effects = shell.drive(&mut model, Event::Reconnect);
     assert!(socket_url(&effects).is_some());
 }
+
+#[test]
+fn ai_pr_review_codebase_index_and_failover_pool_flows() {
+    let (mut model, _) = connected();
+    model.projects = vec![records::project(json!({ "id": "p1", "title": "api", "workspaceRoot": "/repo/api" }))];
+
+    // 1. Load Projects settings -> requests projects.indexStatus; ReindexProject -> projects.reindex.
+    let sent = sent_requests(&run(&mut model, Event::LoadSettings { section: "projects".into() }));
+    assert!(sent.iter().any(|r| r["tag"] == "projects.indexStatus" && r["payload"]["projectId"] == "p1"));
+    let sent = sent_requests(&run(&mut model, Event::ReindexProject { project_id: "p1".into() }));
+    assert_eq!(sent[0]["tag"], "projects.reindex");
+    assert_eq!(sent[0]["payload"]["projectId"], "p1");
+    let req_id = sent[0]["id"].as_str().unwrap().to_owned();
+    let _ = sock(
+        &mut model,
+        exit_ok(
+            &req_id,
+            json!({
+                "projectId": "p1",
+                "status": "ready",
+                "commitSha": "deadbeef1234",
+                "indexedAt": "2026-11-26T20:00:00Z",
+                "fileCount": 42,
+                "packageCount": 3,
+                "edgeCount": 19,
+                "symbolCount": 110,
+                "conventionPaths": ["AGENTS.md", "REVIEW.md"],
+            }),
+        ),
+    );
+    let view = DomovoiApp.view(&model);
+    let idx = &view.settings.projects[0].index;
+    assert_eq!((idx.status.as_str(), idx.file_count, idx.package_count, idx.edge_count, idx.symbol_count), ("ready", 42, 3, 19, 110));
+    assert_eq!(idx.convention_paths, vec!["AGENTS.md", "REVIEW.md"]);
+
+    // 2. Load Providers settings -> requests providers.failoverStatus; SaveFailoverPool -> server.updateSettings.
+    let sent = sent_requests(&run(&mut model, Event::LoadSettings { section: "providers".into() }));
+    let fo_req = sent.iter().find(|r| r["tag"] == "providers.failoverStatus").expect("failoverStatus requested");
+    let fo_id = fo_req["id"].as_str().unwrap().to_owned();
+    let _ = sock(
+        &mut model,
+        exit_ok(
+            &fo_id,
+            json!({
+                "pools": [{ "id": "default", "name": "Default", "instanceIds": ["claudeAgent", "codex"], "sameDriverFirst": true, "allowCrossProvider": true }],
+                "instances": [
+                    { "instanceId": "claudeAgent", "driver": "claudeAgent", "displayName": "Claude", "available": false, "limitedUntil": "2026-11-26T21:00:00Z", "lastError": "429", "activeJobs": 0 },
+                    { "instanceId": "codex", "driver": "codex", "displayName": "Codex", "available": true, "activeJobs": 1 },
+                ],
+            }),
+        ),
+    );
+    let view = DomovoiApp.view(&model);
+    assert_eq!(view.settings.failover_pools.len(), 1);
+    assert_eq!(view.settings.failover_instances.len(), 2);
+    assert!(!view.settings.failover_instances[0].available);
+    assert!(view.settings.failover_instances[1].available);
+
+    let sent = sent_requests(&run(
+        &mut model,
+        Event::SaveFailoverPool {
+            pool_id: "default".into(),
+            name: "Default".into(),
+            instance_ids: vec!["codex".into(), "claudeAgent".into()],
+            same_driver_first: true,
+            allow_cross_provider: false,
+        },
+    ));
+    assert_eq!(sent[0]["tag"], "server.updateSettings");
+    assert_eq!(sent[0]["payload"]["patch"]["failoverPools"][0]["instanceIds"], json!(["codex", "claudeAgent"]));
+    assert_eq!(sent[0]["payload"]["patch"]["failoverPools"][0]["allowCrossProvider"], json!(false));
+
+    // 3. PR review lifecycle: select -> start -> toggle finding -> publish -> cancel.
+    model.pages.prs = vec![records::pull_request(json!({
+        "projectId": "p1",
+        "repository": "o/api",
+        "number": 7,
+        "title": "Harden auth",
+        "state": "open",
+        "isDraft": false,
+    }))];
+    let key = DomovoiApp.view(&model).pull_requests.items[0].key.clone();
+    let sent = sent_requests(&run(&mut model, Event::SelectPullRequest { key: key.clone() }));
+    assert!(sent.iter().any(|r| r["tag"] == "pullRequests.reviews.get"));
+    assert!(sent.iter().any(|r| r["tag"] == "pullRequests.reviews.subscribe"));
+
+    let sent = sent_requests(&run(&mut model, Event::StartPrReview { key: key.clone(), full: true }));
+    assert_eq!(sent[0]["tag"], "pullRequests.reviews.start");
+    assert_eq!(sent[0]["payload"]["forceFull"], json!(true));
+    let start_id = sent[0]["id"].as_str().unwrap().to_owned();
+    let reload = sent_requests(&sock(&mut model, exit_ok(&start_id, json!({ "runId": "rev-1", "status": "queued" }))));
+    let get_req = reload.iter().find(|r| r["tag"] == "pullRequests.reviews.get").expect("reloads review after start");
+    let get_id = get_req["id"].as_str().unwrap().to_owned();
+    let _ = sock(
+        &mut model,
+        exit_ok(
+            &get_id,
+            json!({
+                "run": {
+                    "id": "rev-1",
+                    "prKey": "github.com:o/api#7",
+                    "projectId": "p1",
+                    "host": "github.com",
+                    "repository": "o/api",
+                    "number": 7,
+                    "headSha": "cafebabe1234",
+                    "baseRef": "main",
+                    "baseSha": "11112222",
+                    "mergeBaseSha": "11112222",
+                    "scopeMode": "full",
+                    "status": "validated",
+                    "phase": "validated",
+                    "riskScore": 72,
+                    "riskDrivers": [{ "points": 20, "label": "Auth path", "detail": "Touches token parser" }],
+                    "summary": "Found one high-severity token validation issue.",
+                    "createdAt": "2026-11-26T20:00:00Z",
+                    "updatedAt": "2026-11-26T20:01:00Z",
+                },
+                "findings": [{
+                    "id": "f-1",
+                    "runId": "rev-1",
+                    "kind": "finding",
+                    "severity": "high",
+                    "title": "Missing signature check",
+                    "detail": "Token signature is not verified before decode.",
+                    "action": "Verify HMAC before parsing claims.",
+                    "path": "src/auth.rs",
+                    "line": 42,
+                    "side": "new",
+                    "evidence": [{ "path": "src/auth.rs", "line": 42, "quote": "let claims = decode_unverified(tok)?;" }],
+                    "selected": true,
+                    "sourceStage": "primary",
+                }]
+            }),
+        ),
+    );
+    let view = DomovoiApp.view(&model);
+    let rev = view.pull_requests.selected.as_ref().unwrap().ai_review.as_ref().unwrap();
+    assert_eq!((rev.run_id.as_str(), rev.status.as_str(), rev.risk_score, rev.selected_count), ("rev-1", "validated", 72, 1));
+    assert!(rev.can_publish);
+    assert_eq!(rev.findings[0].evidence_quotes, vec!["src/auth.rs:42 — let claims = decode_unverified(tok)?;"]);
+
+    let sent = sent_requests(&run(&mut model, Event::TogglePrFinding { run_id: "rev-1".into(), finding_id: "f-1".into(), selected: false }));
+    assert_eq!(sent[0]["tag"], "pullRequests.reviews.setFindingSelected");
+    assert_eq!(sent[0]["payload"]["selected"], json!(false));
+
+    let sent = sent_requests(&run(&mut model, Event::PublishPrReview { key: key.clone(), run_id: "rev-1".into() }));
+    assert_eq!(sent[0]["tag"], "pullRequests.reviews.publish");
+    assert_eq!(sent[0]["payload"]["runId"], "rev-1");
+
+    let sent = sent_requests(&run(&mut model, Event::CancelPrReview { run_id: "rev-1".into() }));
+    assert_eq!(sent[0]["tag"], "pullRequests.reviews.cancel");
+    assert_eq!(sent[0]["payload"]["runId"], "rev-1");
+}

@@ -101,6 +101,12 @@ fn gate() -> &'static tokio::sync::Semaphore {
     G.get_or_init(|| tokio::sync::Semaphore::new(1))
 }
 
+/// Concurrent permit pool for parallel AI review chunks (up to 8 simultaneous workers).
+fn review_gate() -> &'static tokio::sync::Semaphore {
+    static G: std::sync::OnceLock<tokio::sync::Semaphore> = std::sync::OnceLock::new();
+    G.get_or_init(|| tokio::sync::Semaphore::new(8))
+}
+
 /// A strict JSON schema object (every key required, nothing else), which
 /// both CLIs accept for structured output.
 pub fn object(props: &[(&str, Value)]) -> Value {
@@ -121,6 +127,8 @@ pub enum Writer {
     SourceControl,
     /// Review guides (`reviewGuideModelSelection`).
     ReviewGuide,
+    /// Evidence-checked AI pull request reviews (`aiReviewModelSelection`).
+    AiReview,
 }
 
 /// Which model writes for `writer`: its own model selection of the settings,
@@ -131,6 +139,11 @@ pub fn model_for(settings: &ServerSettings, writer: Writer) -> TextGenerationMod
     let specific = match writer {
         Writer::SourceControl => settings.source_control_writer_model_selection.clone().flatten(),
         Writer::ReviewGuide => settings.review_guide_model_selection.clone().flatten(),
+        Writer::AiReview => settings
+            .ai_review_model_selection
+            .clone()
+            .flatten()
+            .or_else(|| settings.review_guide_model_selection.clone().flatten()),
         Writer::Text => None,
     };
     match specific {
@@ -182,6 +195,16 @@ struct Run<'a> {
     selection: Selection,
     model: String,
     investigate: bool,
+    /// Optional custom `--settings` JSON string for Claude (e.g. `PreToolUse` review-tool-guard hook).
+    claude_settings_json: Option<String>,
+}
+
+/// Structured output returned alongside the provider instance/model that produced it.
+pub struct GenerationOutcome<A> {
+    pub value: A,
+    pub instance_id: String,
+    pub model: String,
+    pub failovers: u32,
 }
 
 /// Runs the request; the answer is the schema's object, read as `A`.
@@ -191,20 +214,101 @@ pub async fn generate<A: DeserializeOwned>(req: Request<'_, A>) -> Result<A, Tex
     let instance = selection.instance.clone().unwrap_or_else(|| "codex".into());
     let model = selection.model.clone().filter(|m| !m.is_empty()).ok_or_else(|| error(op, "No text generation model is selected."))?;
     let _permit = gate().acquire().await.map_err(|_| error(op, "Text generation is shutting down."))?;
+    let _job = crate::failover::global().acquire_job(&instance);
+    run_once(op, req.cwd, &req.prompt.text, &req.prompt.schema.to_string(), selection, &instance, model, req.investigate, None).await
+}
+
+/// Runs a headless structured generation with automatic failover across healthy
+/// provider instances when a usage/rate limit is hit, using the concurrent review pool.
+pub async fn generate_with_failover<A: DeserializeOwned>(
+    operation: &str,
+    cwd: Option<&str>,
+    prompt_text: &str,
+    schema: &Value,
+    primary: &TextGenerationModelSelection,
+    investigate: bool,
+    claude_settings_json: Option<String>,
+    settings: &ServerSettings,
+    providers: &[domovoi_model::typed::ServerProvider],
+) -> Result<GenerationOutcome<A>, TextGenerationError> {
+    let selection = Selection::of(primary);
+    let primary_instance = selection.instance.clone().unwrap_or_else(|| "codex".into());
+    let primary_model = selection.model.clone().filter(|m| !m.is_empty()).ok_or_else(|| error(operation, "No review model is selected."))?;
+    let mut candidates = crate::failover::global().candidates(&primary_instance, &primary_model, settings, providers);
+    if candidates.is_empty() {
+        // Fallback to primary so the caller sees the provider's own error if all pools are empty.
+        candidates.push(crate::failover::FailoverCandidate {
+            instance_id: primary_instance.clone(),
+            driver: crate::orchestration::commands::driver_for_instance(&primary_instance),
+            model: primary_model.clone(),
+        });
+    }
+    let schema_str = schema.to_string();
+    let _permit = review_gate().acquire().await.map_err(|_| error(operation, "Review runner is shutting down."))?;
+    let mut failovers = 0u32;
+    let mut last_err = None;
+    for (idx, cand) in candidates.iter().enumerate() {
+        let _job = crate::failover::global().acquire_job(&cand.instance_id);
+        let cand_sel = Selection { instance: Some(cand.instance_id.clone()), model: Some(cand.model.clone()), effort: selection.effort.clone() };
+        match run_once::<A>(
+            operation,
+            cwd,
+            prompt_text,
+            &schema_str,
+            cand_sel,
+            &cand.instance_id,
+            cand.model.clone(),
+            investigate,
+            claude_settings_json.clone(),
+        )
+        .await
+        {
+            Ok(value) => {
+                return Ok(GenerationOutcome { value, instance_id: cand.instance_id.clone(), model: cand.model.clone(), failovers });
+            }
+            Err(err) => {
+                if let Some(reset_iso) = crate::failover::classify_usage_limit_error(&err.detail) {
+                    crate::failover::global().mark_limited(&cand.instance_id, reset_iso.as_deref(), err.detail.clone());
+                    last_err = Some(err);
+                    if idx + 1 < candidates.len() {
+                        failovers += 1;
+                        continue;
+                    }
+                    break;
+                }
+                return Err(err);
+            }
+        }
+    }
+    Err(last_err.unwrap_or_else(|| error(operation, "All candidate provider instances are currently rate-limited.")))
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_once<A: DeserializeOwned>(
+    op: &str,
+    cwd: Option<&str>,
+    prompt: &str,
+    schema: &str,
+    selection: Selection,
+    instance: &str,
+    model: String,
+    investigate: bool,
+    claude_settings_json: Option<String>,
+) -> Result<A, TextGenerationError> {
     let scratch = std::env::temp_dir().join(format!("domovoi-textgen-{}", crate::util::new_uuid()));
     std::fs::create_dir_all(&scratch).map_err(|e| error(op, format!("Could not create a working folder: {e}")))?;
-    let cwd = req.cwd.map(std::path::PathBuf::from).unwrap_or_else(|| scratch.clone());
-    let timeout = if req.investigate { INVESTIGATION_TIMEOUT } else { TIMEOUT };
-    let run = Run { operation: op, prompt: &req.prompt.text, schema: req.prompt.schema.to_string(), selection, model, investigate: req.investigate };
-    let result = match crate::orchestration::commands::driver_for_instance(&instance).as_str() {
+    let cwd = cwd.map(std::path::PathBuf::from).unwrap_or_else(|| scratch.clone());
+    let timeout = if investigate { INVESTIGATION_TIMEOUT } else { TIMEOUT };
+    let run = Run { operation: op, prompt, schema: schema.to_owned(), selection, model, investigate, claude_settings_json };
+    let result = match crate::orchestration::commands::driver_for_instance(instance).as_str() {
         "claudeAgent" => run_claude(&run, &cwd, timeout).await,
         "codex" => run_codex(&run, &cwd, &scratch, timeout).await,
+        "opencode" => run_opencode(&run, &cwd, timeout).await,
         "pi" => run_pi(&run, &cwd, timeout).await,
-        "antigravity" => run_antigravity(&run, &instance, timeout).await,
+        "antigravity" => run_antigravity(&run, instance, timeout).await,
         other => Err(error(op, format!("Text generation with {other} is not supported by this server."))),
     };
     let _ = std::fs::remove_dir_all(&scratch);
-    // The model's answer is an object; each record takes from it the keys it knows.
     serde_json::from_value(result?).map_err(|e| error(op, format!("The model's answer could not be read: {e}")))
 }
 
@@ -260,7 +364,11 @@ async fn run_claude(req: &Run<'_>, cwd: &std::path::Path, timeout: Duration) -> 
     if let Some(e) = &req.selection.effort {
         cmd.args(["--effort", e]);
     }
-    cmd.args(["--settings", r#"{"disableAllHooks":true}"#]);
+    if let Some(custom) = &req.claude_settings_json {
+        cmd.args(["--settings", custom]);
+    } else {
+        cmd.args(["--settings", r#"{"disableAllHooks":true}"#]);
+    }
     if req.investigate {
         cmd.args(["--tools", "Read,Grep,Glob,Bash", "--allowedTools", "Read,Grep,Glob,Bash(git diff:*),Bash(git log:*),Bash(git show:*)",
             "--disallowedTools", "Bash(git * --output*),Bash(git * -o *)", "--permission-mode", "dontAsk"]);
@@ -292,6 +400,33 @@ async fn run_codex(req: &Run<'_>, cwd: &std::path::Path, scratch: &std::path::Pa
         let tail: String = stderr.lines().rev().take(5).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n");
         error(op, if code != 0 && !tail.trim().is_empty() { tail } else { "Codex gave no answer.".into() })
     })
+}
+
+/// The model's answer through the OpenCode CLI (`opencode run --format json`).
+async fn run_opencode(req: &Run<'_>, cwd: &std::path::Path, timeout: Duration) -> Result<Value, TextGenerationError> {
+    let op = req.operation;
+    let bin = crate::providers::executable(crate::adapters::opencode::OPENCODE_TOOL).map_err(|e| error(op, e))?;
+    let mut cmd = crate::process::command(bin);
+    cmd.current_dir(cwd).args(["run", "--format", "json", "--model", &req.model]);
+    let prompt = format!("{}\n\nRespond with ONLY a single JSON object (no prose) matching this JSON schema:\n{}", req.prompt, req.schema);
+    let (code, stdout, stderr) = run(op, cmd, &prompt, timeout).await?;
+    // OpenCode emits NDJSON events or final text; inspect last text/object line first.
+    let mut combined = String::new();
+    for line in stdout.lines() {
+        if let Ok(v) = serde_json::from_str::<Value>(line.trim()) {
+            if let Some(t) = v.pointer("/part/text").and_then(Value::as_str) {
+                combined.push_str(t);
+            } else if let Some(t) = v.get("text").and_then(Value::as_str) {
+                combined.push_str(t);
+            }
+        }
+    }
+    parse_json_text(&combined)
+        .or_else(|| parse_json_text(&stdout))
+        .ok_or_else(|| {
+            let tail: String = stderr.lines().rev().take(5).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n");
+            error(op, if code != 0 && !tail.trim().is_empty() { tail } else { "OpenCode gave no structured JSON answer.".into() })
+        })
 }
 
 /// pi's `errorMessage` is the provider's raw answer and can echo

@@ -305,6 +305,42 @@ pub struct ServerSettings {
     /// Which models the Usage tab counts; a value the schema does not accept is ignored (`ForwardCompatibleOptional`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usage_model_filter: Option<Lenient<UsageModelFilter>>,
+
+    // ---- Domovoi AI code review, failover pools & PR watcher ----
+
+    /// Priority-ordered provider-instance failover pools.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failover_pools: Option<Vec<crate::typed::FailoverPoolConfig>>,
+    /// Opt-in: hand off interactive threads to a healthy fallback instance on usage limit instead of waiting for reset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failover_limited_threads: Option<bool>,
+    /// Enable evidence-checked AI PR reviews.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ai_review_enabled: Option<bool>,
+    /// Model selection for AI PR reviews; falls back to `reviewGuideModelSelection`, then `textGenerationModelSelection`.
+    #[serde(default, deserialize_with = "double_option", skip_serializing_if = "Option::is_none")]
+    pub ai_review_model_selection: Option<Option<ModelSelection>>,
+    /// `auto` | `economic` | `deep`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ai_review_depth_mode: Option<String>,
+    /// Max reviewable files per chunk (clamped 2..=20, default 8).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ai_review_chunk_size: Option<u32>,
+    /// Max concurrent review chunks (clamped 1..=8, default 3).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ai_review_parallel_chunks: Option<u32>,
+    /// Run optional second-pass adversarial Lens review over primary chunk findings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ai_review_lens_enabled: Option<bool>,
+    /// Additional global instructions merged with repository convention docs (`REVIEW.md`, `AGENTS.md`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ai_review_instructions: Option<String>,
+    /// Enable background GitHub/GitLab PR watcher polling (for `watch_pull_request` and auto-reviews).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pr_watcher_enabled: Option<bool>,
+    /// PR watcher poll interval in seconds (default 60, minimum 15).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pr_watcher_interval_secs: Option<u64>,
 }
 
 /// A value read the way `ForwardCompatibleOptional` reads one: a value that
@@ -677,11 +713,20 @@ pub struct ProjectSettingsOverrides {
     /// Unlike the other settings, overridden field by field for each instance.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_instances: Option<BTreeMap<ProviderInstanceId, ProjectProviderInstanceOverride>>,
+    /// Automatically trigger incremental AI code reviews when new PRs or pushes appear on this project.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_review_prs: Option<bool>,
+    /// PR comment trigger prefix (e.g. `/review`) that activates an AI code review on this project.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_comment_trigger: Option<String>,
+    /// Publish validated AI code reviews automatically without waiting for manual triage (default false).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_publish_reviews: Option<bool>,
 }
 
 /// Every key of `ProjectSettingsOverrides`, to tell its settings from the
 /// keys a newer server added.
-const PROJECT_SETTINGS_OVERRIDE_KEYS: [&str; 28] = [
+const PROJECT_SETTINGS_OVERRIDE_KEYS: [&str; 31] = [
     "worktreeCleanup",
     "defaultModelSelection",
     "defaultRuntimeMode",
@@ -710,6 +755,9 @@ const PROJECT_SETTINGS_OVERRIDE_KEYS: [&str; 28] = [
     "responseStreamingMode",
     "speechProjectCustomWords",
     "providerInstances",
+    "autoReviewPrs",
+    "reviewCommentTrigger",
+    "autoPublishReviews",
 ];
 
 /// One project's overrides as `projectSettingsOverrides` holds them
@@ -1220,6 +1268,7 @@ mod tests {
                 "sidebarAutoSettleAfterDays" => json!(3),
                 "responseStreamingMode" => json!("turn"),
                 "providerInstances" => json!({ "codex": { "enabled": false } }),
+                "reviewCommentTrigger" => json!("/review"),
                 _ => json!(true),
             };
             sent.insert(key.to_owned(), value);

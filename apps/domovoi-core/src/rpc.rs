@@ -29,6 +29,7 @@ pub enum Route {
     AuthAccess,
     DatabaseStorage,
     GitAction(String),
+    PrReviewStream(String),
     // Unary calls
     /// Fire-and-forget: a failure shows `label` with the server's message.
     Command(String),
@@ -79,6 +80,10 @@ pub enum Route {
     PullRequests,
     PullRequestDetail(String),
     PullRequestChecks(String),
+    PrReview(String),
+    PrReviewAction { key: String, done: String },
+    FailoverStatus,
+    ProjectIndex(String),
     /// Merge, close, review, comment…: `done` is the toast once it worked.
     PullRequestAction { key: String, done: String },
     /// A pull request checked out in a worktree for a new thread.

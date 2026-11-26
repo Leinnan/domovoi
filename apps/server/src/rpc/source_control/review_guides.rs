@@ -262,6 +262,9 @@ async fn write(userdata: &Path, key: &str, root: &str, c: &Change, head: &str, s
     git(root, &["fetch", "--quiet", "origin", &format!("pull/{}/head", c.number)]).await.ok();
     git(root, &["cat-file", "-e", &format!("{head}^{{commit}}")]).await.map_err(|_| format!("The head commit {head} is not available locally."))?;
     git(root, &["worktree", "add", "--detach", "--quiet", &scratch_s, head]).await?;
+    let range = format!("{}...HEAD", c.base_commit);
+    let diff_text = git(&scratch_s, &["diff", "--unified=3", "--no-color", &range]).await.unwrap_or_default();
+    let hunks = crate::review::evidence::parse_diff_hunks(&diff_text);
     let req = crate::text_gen::Request {
         operation: "generateReviewGuide", cwd: Some(&scratch_s), prompt: crate::text_gen::Prompt::with_schema(prompt(c, &settings.instructions), schema()),
         model: settings.model.clone(), investigate: true,
@@ -272,7 +275,16 @@ async fn write(userdata: &Path, key: &str, root: &str, c: &Change, head: &str, s
     // The model's answer, in the shape of `schema()`.
     let answer = answer.map_err(|e| e.detail)?;
     let tour: Fields<ModelTour> = serde_json::from_value(answer).map_err(|e| e.to_string())?;
-    let stops = clean_stops(&tour);
+    let mut stops = clean_stops(&tour);
+    if !hunks.is_empty() {
+        for stop in &mut stops {
+            stop.excerpts.retain(|e| {
+                let side = if matches!(e.side, ExcerptSide::Old) { "old" } else { "new" };
+                crate::review::evidence::validate_hunk_range(&hunks, &e.path, side, e.start, e.end)
+            });
+            stop.notes.retain(|n| crate::review::evidence::validate_hunk_range(&hunks, &n.path, "new", n.line, n.line));
+        }
+    }
     if stops.is_empty() {
         return Err("The model returned no stops.".into());
     }

@@ -737,6 +737,114 @@ fn providers_tab(app: &App) -> Element<'_, Message> {
         col = col.push(w::card(p_col).width(Length::Fill));
     }
 
+    // Failover pools & live instance availability
+    let mut fo_col = Column::new().spacing(S).push(
+        row![
+            w::heading("Failover Pools & Availability"),
+            Space::new().width(Length::Fill),
+            if app.vm.settings.failover_pools.is_empty() && !app.vm.settings.providers.is_empty() {
+                let ids: Vec<String> = app.vm.settings.providers.iter().map(|p| p.instance_id.clone()).collect();
+                Element::from(w::small_button(
+                    "Create Default Pool",
+                    w::secondary_style,
+                    Some(core(Event::SaveFailoverPool {
+                        pool_id: "default".into(),
+                        name: "Default Pool".into(),
+                        instance_ids: ids,
+                        same_driver_first: true,
+                        allow_cross_provider: true,
+                    })),
+                ))
+            } else {
+                Space::new().into()
+            },
+        ]
+        .align_y(Alignment::Center),
+    );
+    if app.vm.settings.failover_instances.is_empty() {
+        fo_col = fo_col.push(w::faint("No live availability data yet.", TEXT_CAPTION));
+    } else {
+        for inst in &app.vm.settings.failover_instances {
+            let mut detail = format!("{} · {}", inst.driver, if inst.available { "available" } else { "rate-limited" });
+            if inst.active_jobs > 0 {
+                detail.push_str(&format!(" · {} active", inst.active_jobs));
+            }
+            if let Some(until) = &inst.limited_until {
+                detail.push_str(&format!(" · until {until}"));
+            }
+            if let Some(err) = &inst.last_error {
+                detail.push_str(&format!(" · {err}"));
+            }
+            let title = if inst.display_name.is_empty() { &inst.instance_id } else { &inst.display_name };
+            let tone: w::Tone = if inst.available { |c| c.success } else { |c| c.warning };
+            fo_col = fo_col.push(
+                row![
+                    w::dot(tone, 7.0),
+                    text(title).size(TEXT_SMALL).font(fonts::MEDIUM),
+                    w::muted(detail, TEXT_CAPTION).width(Length::Fill),
+                ]
+                .spacing(S)
+                .align_y(Alignment::Center),
+            );
+        }
+    }
+    for pool in &app.vm.settings.failover_pools {
+        let mut rotated = pool.instance_ids.clone();
+        if rotated.len() > 1 {
+            rotated.rotate_left(1);
+        }
+        fo_col = fo_col.push(
+            container(
+                column![
+                    row![
+                        text(format!("{} ({})", pool.name, pool.id)).size(TEXT_SMALL).font(fonts::SEMIBOLD).width(Length::Fill),
+                        w::small_button(
+                            if pool.same_driver_first { "Same driver first: On" } else { "Same driver first: Off" },
+                            if pool.same_driver_first { w::primary_style } else { w::secondary_style },
+                            Some(core(Event::SaveFailoverPool {
+                                pool_id: pool.id.clone(),
+                                name: pool.name.clone(),
+                                instance_ids: pool.instance_ids.clone(),
+                                same_driver_first: !pool.same_driver_first,
+                                allow_cross_provider: pool.allow_cross_provider,
+                            })),
+                        ),
+                        w::small_button(
+                            if pool.allow_cross_provider { "Cross-provider: On" } else { "Cross-provider: Off" },
+                            if pool.allow_cross_provider { w::primary_style } else { w::secondary_style },
+                            Some(core(Event::SaveFailoverPool {
+                                pool_id: pool.id.clone(),
+                                name: pool.name.clone(),
+                                instance_ids: pool.instance_ids.clone(),
+                                same_driver_first: pool.same_driver_first,
+                                allow_cross_provider: !pool.allow_cross_provider,
+                            })),
+                        ),
+                        w::small_button(
+                            "Rotate",
+                            w::ghost_style,
+                            (pool.instance_ids.len() > 1).then(|| core(Event::SaveFailoverPool {
+                                pool_id: pool.id.clone(),
+                                name: pool.name.clone(),
+                                instance_ids: rotated,
+                                same_driver_first: pool.same_driver_first,
+                                allow_cross_provider: pool.allow_cross_provider,
+                            })),
+                        ),
+                    ]
+                    .spacing(XS)
+                    .align_y(Alignment::Center),
+                    w::faint(pool.instance_ids.join(" → "), TEXT_CAPTION).font(fonts::MONO),
+                ]
+                .spacing(XXS),
+            )
+            .padding(S)
+            .width(Length::Fill)
+            .style(w::inset_sunken),
+        );
+    }
+    col = col.push(w::card(fo_col).width(Length::Fill));
+
     col.into()
 }
 
@@ -997,6 +1105,39 @@ fn projects_tab(app: &App) -> Element<'_, Message> {
                             symbol: String::new(),
                             color,
                         })),
+                    ),
+                ]
+                .spacing(S)
+                .align_y(Alignment::Center),
+            );
+        }
+        if !p.is_scratch {
+            let idx = &p.index;
+            let mut summary = format!(
+                "Index: {} · {} files · {} pkgs · {} edges · {} symbols",
+                idx.status, idx.file_count, idx.package_count, idx.edge_count, idx.symbol_count
+            );
+            if !idx.commit_sha.is_empty() {
+                let short = &idx.commit_sha[..idx.commit_sha.len().min(8)];
+                summary.push_str(&format!(" · {short}"));
+            }
+            if !idx.indexed_at.is_empty() {
+                summary.push_str(&format!(" · {}", idx.indexed_at));
+            }
+            if !idx.convention_paths.is_empty() {
+                summary.push_str(&format!(" · docs: {}", idx.convention_paths.join(", ")));
+            }
+            let mut idx_col = Column::new().spacing(XXS).width(Length::Fill).push(w::faint(summary, TEXT_CAPTION));
+            if let Some(err) = &idx.error {
+                idx_col = idx_col.push(w::colored(err, TEXT_CAPTION, |c| c.danger));
+            }
+            card_col = card_col.push(
+                row![
+                    idx_col,
+                    w::small_button(
+                        if idx.status == "indexing" { "Indexing…" } else { "Reindex" },
+                        w::secondary_style,
+                        (idx.status != "indexing").then(|| core(Event::ReindexProject { project_id: p.id.clone() })),
                     ),
                 ]
                 .spacing(S)

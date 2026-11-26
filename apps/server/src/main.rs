@@ -26,10 +26,12 @@ mod defaults;
 mod diagrams;
 mod doctor;
 mod document_text;
+mod failover;
 mod folder_access;
 mod gh;
 mod glab;
 mod http;
+mod indexer;
 mod file_images;
 mod jsonrpc;
 mod keep_awake;
@@ -48,6 +50,7 @@ mod permissions;
 mod pi_rpc;
 mod policy;
 mod preview;
+mod pr_watcher;
 mod project_icons;
 mod project_scripts;
 mod process;
@@ -58,6 +61,7 @@ mod push_web;
 #[cfg(test)]
 mod record_dumps;
 mod remote;
+mod review;
 mod rpc;
 mod service;
 mod settings;
@@ -231,6 +235,13 @@ enum Cmd {
     /// the server, in a child of its own: `document_text.rs`).
     #[command(hide = true, name = "__document-text")]
     DocumentText { path: PathBuf, extension: String },
+    /// Fail-closed read-only tool guard invoked via Claude's `PreToolUse` hook
+    /// during isolated AI code review runs (`review/tool_guard.rs`).
+    #[command(hide = true, name = "review-tool-guard")]
+    ReviewToolGuard {
+        #[arg(long)]
+        root: PathBuf,
+    },
     /// `BROWSER` for Antigravity's agent: hands the Google sign-in link to
     /// the server instead of opening a browser (started by the agent).
     #[command(hide = true, name = "antigravity-browser-url")]
@@ -383,6 +394,9 @@ fn run() -> Fallible {
     if let Some(Cmd::DocumentText { path, extension }) = &args.command {
         std::process::exit(document_text::worker_main(path, extension));
     }
+    if let Some(Cmd::ReviewToolGuard { root }) = &args.command {
+        std::process::exit(review::tool_guard::run_cli_guard(root));
+    }
     if let Some(Cmd::AntigravityBrowserUrl { url, to }) = &args.command {
         use std::io::Write;
         let line = antigravity::browser_url_line(url);
@@ -419,7 +433,7 @@ fn run() -> Fallible {
             runtime()?.block_on(cli::remote(&base, &args.host, args.port, action))
         }
         // Run before the home directory is touched (above).
-        Some(Cmd::AcpMcpBridge | Cmd::AntigravityBrowserUrl { .. } | Cmd::Doctor { .. } | Cmd::DocumentText { .. }) => Ok(()),
+        Some(Cmd::AcpMcpBridge | Cmd::AntigravityBrowserUrl { .. } | Cmd::Doctor { .. } | Cmd::DocumentText { .. } | Cmd::ReviewToolGuard { .. }) => Ok(()),
         Some(Cmd::Stop) => {
             let _log = logging::init(None);
             let base = base(&args, &paths)?;
@@ -579,6 +593,7 @@ async fn serve(args: &Args, paths: state::Paths, base: Base, shutdown: tokio_uti
         tracing::info!("{upgraded}");
     }
     let store = store::Store::new(db);
+    review::publish::log_dangling_locks(store.db());
     let (orchestrator, effects) = orchestration::commands::Orchestrator::new(store.clone());
     let orchestrator = Arc::new(orchestrator);
     providers::init_claude_commands(&paths.userdata);
@@ -783,6 +798,7 @@ async fn serve(args: &Args, paths: state::Paths, base: Base, shutdown: tokio_uti
     scheduled_tasks::service(&state);
     // Threads a usage limit stopped resume (or wake) when it resets.
     usage_recovery::start(state.clone());
+    pr_watcher::start(state.clone());
     if let Some(addr) = &args.hooks_listen {
         let hooks = tokio::net::TcpListener::bind(addr.as_str()).await?;
         tracing::info!("Serving webhook URLs on http://{}", hooks.local_addr()?);

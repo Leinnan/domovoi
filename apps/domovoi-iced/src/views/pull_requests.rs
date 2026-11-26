@@ -2,7 +2,8 @@
 //! worktree thread launch, merge/close/reopen/draft actions, reviews, and comments.
 
 use domovoi_core::Event;
-use iced::widget::{Column, column, container, row, text};
+use domovoi_core::view::{PrReviewView, PullRequestDetailView};
+use iced::widget::{Column, Space, column, container, row, text};
 use iced::{Alignment, Element, Length};
 
 use crate::app::{App, Message};
@@ -202,6 +203,9 @@ pub fn view(app: &App) -> Element<'_, Message> {
             );
         }
 
+        // AI Code Review
+        col = col.push(ai_review_card(d, prs.busy));
+
         // Review & Comment forms
         let verdict = if app.pr_review.verdict.is_empty() { "comment" } else { app.pr_review.verdict.as_str() };
         col = col.push(
@@ -269,4 +273,194 @@ pub fn view(app: &App) -> Element<'_, Message> {
     ]
     .height(Length::Fill)
     .into()
+}
+
+fn ai_review_card<'a>(d: &'a PullRequestDetailView, pr_busy: bool) -> Element<'a, Message> {
+    let mut card_col = Column::new().spacing(S);
+    let busy = pr_busy || d.ai_review.as_ref().is_some_and(|r| r.busy);
+    let mut hdr = row![
+        w::heading("AI Code Review"),
+        Space::new().width(Length::Fill),
+    ]
+    .spacing(XS)
+    .align_y(Alignment::Center);
+
+    if let Some(rev) = &d.ai_review {
+        if rev.busy && !rev.run_id.is_empty() {
+            hdr = hdr.push(w::small_button(
+                "Cancel",
+                w::danger_style,
+                Some(core(Event::CancelPrReview { run_id: rev.run_id.clone() })),
+            ));
+        } else {
+            hdr = hdr
+                .push(w::small_button(
+                    "Run AI Review",
+                    w::primary_style,
+                    (!busy).then(|| core(Event::StartPrReview { key: d.key.clone(), full: false })),
+                ))
+                .push(w::small_button(
+                    "Full Review",
+                    w::secondary_style,
+                    (!busy).then(|| core(Event::StartPrReview { key: d.key.clone(), full: true })),
+                ));
+        }
+    } else {
+        hdr = hdr
+            .push(w::small_button(
+                "Run AI Review",
+                w::primary_style,
+                (!busy).then(|| core(Event::StartPrReview { key: d.key.clone(), full: false })),
+            ))
+            .push(w::small_button(
+                "Full Review",
+                w::secondary_style,
+                (!busy).then(|| core(Event::StartPrReview { key: d.key.clone(), full: true })),
+            ));
+    }
+    card_col = card_col.push(hdr);
+
+    if let Some(rev) = &d.ai_review {
+        card_col = card_col.push(ai_review_body(d, rev));
+    } else {
+        card_col = card_col.push(w::muted(
+            "Runs an evidence-checked review in a read-only snapshot. Findings stay local until you publish selected items; never auto-approves.",
+            TEXT_SMALL,
+        ));
+    }
+
+    w::card(card_col).width(Length::Fill).into()
+}
+
+fn ai_review_body<'a>(d: &'a PullRequestDetailView, rev: &'a PrReviewView) -> Element<'a, Message> {
+    let mut col = Column::new().spacing(S);
+    let status_tone: w::Tone = match rev.status.as_str() {
+        "validated" | "published" => |c| c.success,
+        "failed" => |c| c.danger,
+        "running" | "queued" => |c| c.info,
+        _ => |c| c.muted,
+    };
+    let mut meta = row![w::badge_capsule(&rev.status, Some(status_tone))].spacing(XS).align_y(Alignment::Center);
+    if !rev.phase.is_empty() {
+        meta = meta.push(w::muted(&rev.phase, TEXT_CAPTION));
+    }
+    if !rev.scope_mode.is_empty() {
+        meta = meta.push(w::badge_capsule(&rev.scope_mode, None));
+    }
+    if !rev.head_sha.is_empty() {
+        let short = &rev.head_sha[..rev.head_sha.len().min(8)];
+        meta = meta.push(w::faint(short, TEXT_CAPTION).font(fonts::MONO));
+    }
+    if rev.risk_score > 0 {
+        let risk_tone: w::Tone = if rev.risk_score >= 70 {
+            |c| c.danger
+        } else if rev.risk_score >= 40 {
+            |c| c.warning
+        } else {
+            |c| c.success
+        };
+        meta = meta.push(w::badge_capsule(format!("Risk {}/100", rev.risk_score), Some(risk_tone)));
+    }
+    col = col.push(meta);
+
+    if let Some(msg) = &rev.phase_message {
+        col = col.push(w::muted(msg, TEXT_SMALL));
+    }
+    if rev.is_stale {
+        col = col.push(
+            container(w::colored("PR head changed since this review; re-run before publishing.", TEXT_SMALL, |c| c.warning))
+                .padding(S)
+                .width(Length::Fill)
+                .style(w::banner_style(|c| c.warning)),
+        );
+    }
+    if let Some(err) = &rev.error {
+        col = col.push(
+            container(w::colored(err, TEXT_SMALL, |c| c.danger))
+                .padding(S)
+                .width(Length::Fill)
+                .style(w::banner_style(|c| c.danger)),
+        );
+    }
+    if let Some(pub_id) = &rev.published_review_id {
+        col = col.push(
+            container(w::colored(format!("Published to remote review ({pub_id})"), TEXT_SMALL, |c| c.success))
+                .padding(S)
+                .width(Length::Fill)
+                .style(w::banner_style(|c| c.success)),
+        );
+    }
+    if !rev.risk_drivers.is_empty() {
+        let mut drivers = Column::new().spacing(XXS);
+        for drv in &rev.risk_drivers {
+            drivers = drivers.push(w::faint(format!("+{} {} — {}", drv.points, drv.label, drv.detail), TEXT_CAPTION));
+        }
+        col = col.push(drivers);
+    }
+    if !rev.summary.is_empty() {
+        col = col.push(text(&rev.summary).size(TEXT_SMALL));
+    }
+    for f in &rev.findings {
+        let sev_tone: w::Tone = match f.severity.as_str() {
+            "high" => |c| c.danger,
+            "medium" => |c| c.warning,
+            _ => |c| c.info,
+        };
+        let mut f_hdr = row![
+            w::small_button(
+                if f.selected { "✓" } else { "○" },
+                if f.selected { w::primary_style } else { w::secondary_style },
+                (!rev.busy).then(|| core(Event::TogglePrFinding {
+                    run_id: rev.run_id.clone(),
+                    finding_id: f.id.clone(),
+                    selected: !f.selected,
+                })),
+            ),
+            w::badge_capsule(&f.severity, Some(sev_tone)),
+            w::badge_capsule(&f.kind, None),
+            text(&f.title).size(TEXT_UI).font(fonts::MEDIUM).width(Length::Fill),
+        ]
+        .spacing(XS)
+        .align_y(Alignment::Center);
+        if !f.source_stage.is_empty() {
+            f_hdr = f_hdr.push(w::faint(&f.source_stage, TEXT_CAPTION));
+        }
+        let mut f_col = Column::new().spacing(XXS).push(f_hdr);
+        if !f.path.is_empty() {
+            f_col = f_col.push(w::faint(format!("{}:{} ({})", f.path, f.line, f.side), TEXT_CAPTION).font(fonts::MONO));
+        }
+        if !f.detail.is_empty() {
+            f_col = f_col.push(text(&f.detail).size(TEXT_SMALL));
+        }
+        if !f.action.is_empty() {
+            f_col = f_col.push(w::muted(format!("Suggested fix: {}", f.action), TEXT_SMALL));
+        }
+        for q in &f.evidence_quotes {
+            f_col = f_col.push(
+                container(text(q).size(TEXT_CAPTION).font(fonts::MONO))
+                    .padding(XS)
+                    .width(Length::Fill)
+                    .style(w::inset_sunken),
+            );
+        }
+        col = col.push(container(f_col).padding(S).width(Length::Fill).style(w::inset_surface));
+    }
+    if !rev.findings.is_empty() || rev.can_publish {
+        col = col.push(
+            row![
+                w::muted(format!("{} of {} selected for publication", rev.selected_count, rev.findings.len()), TEXT_CAPTION).width(Length::Fill),
+                w::small_button(
+                    "Publish Selected",
+                    w::primary_style,
+                    (rev.can_publish && !rev.busy).then(|| core(Event::PublishPrReview {
+                        key: d.key.clone(),
+                        run_id: rev.run_id.clone(),
+                    })),
+                ),
+            ]
+            .spacing(S)
+            .align_y(Alignment::Center),
+        );
+    }
+    col.into()
 }

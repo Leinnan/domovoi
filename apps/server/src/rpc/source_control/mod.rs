@@ -5,13 +5,14 @@
 //! guides in `review_guides`) and the pull request side of git (`git_workflow`).
 
 mod git_workflow;
-mod github;
-mod gitlab;
-mod pull_request_failure;
-mod pull_request_records;
+pub(crate) mod github;
+pub(crate) mod gitlab;
+pub(crate) mod pull_request_failure;
+pub(crate) mod pull_request_records;
 pub(crate) mod pull_requests;
 mod repositories;
-mod review_guides;
+pub(crate) mod review_guides;
+mod reviews;
 
 use crate::state::ConnCtx;
 use domovoi_rpc::Router;
@@ -19,5 +20,6 @@ use domovoi_rpc::Router;
 pub fn register(r: Router<ConnCtx>) -> Router<ConnCtx> {
     let r = repositories::register(r);
     let r = pull_requests::register(r);
+    let r = reviews::register(r);
     git_workflow::register(r)
 }

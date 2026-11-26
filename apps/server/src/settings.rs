@@ -30,13 +30,15 @@ use domovoi_model::typed::{ModelFavorite, ProviderModelPreference, ServerSetting
 use tokio::sync::broadcast;
 
 /// Keys whose patch value replaces the current value wholesale.
-const REPLACE: [&str; 6] = [
+const REPLACE: [&str; 8] = [
     "defaultModelSelection",
     "fallbackModelSelection",
     "speechPostProcessingModelSelection",
     "defaultProjectScripts",
     "textGenerationModelSelection",
     "providerInstances",
+    "aiReviewModelSelection",
+    "failoverPools",
 ];
 /// Keyed maps: each entry merges into the saved one; a `null` entry removes it.
 const ENTRY_MAPS: [&str; 7] =

@@ -248,7 +248,7 @@ async fn workspace_projects(
     Ok(ws)
 }
 
-async fn require_project(state: &AppState, r: &PrRef) -> Result<Supported, Failure> {
+pub(crate) async fn require_project(state: &AppState, r: &PrRef) -> Result<Supported, Failure> {
     let ws = workspace_projects(state, Some(&r.project_id), None, None).await?;
     let own = ws.supported.first().cloned();
     let repository = r.repository.trim();
@@ -1021,7 +1021,7 @@ async fn change_breakdown(p: Supported, r: PrRef, _: NoFields) -> Result<Option<
     .map_err(failed(&p, "changeBreakdown"))
 }
 
-async fn head_sha(p: &Supported, number: u64) -> Result<Option<String>, GhError> {
+pub(crate) async fn head_sha(p: &Supported, number: u64) -> Result<Option<String>, GhError> {
     match p.provider {
         Provider::GitHub => github::head_sha(p, number).await,
         Provider::GitLab => gitlab::head_sha(p, number).await,

@@ -90,7 +90,8 @@ pub fn merge(instance: &str, windows: Vec<ServerProviderUsageWindow>) {
         // Windows reported: they can be read after all.
         let changed = list != before || entry.unavailable.is_some();
         entry.unavailable = None;
-        entry.windows = list.into();
+        entry.windows = list.clone().into();
+        crate::failover::global().sync_from_usage_limits(instance, &list);
         changed
     };
     if changed {
@@ -100,6 +101,7 @@ pub fn merge(instance: &str, windows: Vec<ServerProviderUsageWindow>) {
 
 /// Forgets the instance's limits (its account signed out: another may sign in).
 pub fn clear(instance: &str) {
+    crate::failover::global().clear(instance);
     let removed = LIMITS.write().unwrap_or_else(|e| e.into_inner()).as_mut().and_then(|all| all.remove(instance)).is_some();
     if removed {
         changed();
@@ -109,6 +111,8 @@ pub fn clear(instance: &str) {
 /// Replaces all of the instance's limits with a read of them (a quota
 /// service's answer, not a stream of updates).
 pub fn set(instance: &str, limits: ServerProviderUsageLimits) {
+    let windows: Vec<ServerProviderUsageWindow> = limits.windows.iter().cloned().collect();
+    crate::failover::global().sync_from_usage_limits(instance, &windows);
     let changed = {
         let mut all = LIMITS.write().unwrap_or_else(|e| e.into_inner());
         let all = all.get_or_insert_with(HashMap::new);

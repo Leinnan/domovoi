@@ -1400,6 +1400,28 @@ pub struct SettingsView {
     pub projects: Vec<ProjectSettingsView>,
     pub project_icon_files: ProjectIconFilesView,
     pub remote: RemoteAccessView,
+    pub failover_pools: Vec<FailoverPoolView>,
+    pub failover_instances: Vec<FailoverInstanceView>,
+}
+
+#[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct FailoverPoolView {
+    pub id: String,
+    pub name: String,
+    pub instance_ids: Vec<String>,
+    pub same_driver_first: bool,
+    pub allow_cross_provider: bool,
+}
+
+#[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct FailoverInstanceView {
+    pub instance_id: String,
+    pub driver: String,
+    pub display_name: String,
+    pub available: bool,
+    pub limited_until: Option<String>,
+    pub last_error: Option<String>,
+    pub active_jobs: u32,
 }
 
 #[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
@@ -1631,6 +1653,21 @@ pub struct ProjectSettingsView {
     pub is_scratch: bool,
     pub icon: ProjectIconView,
     pub automatic_icon: ProjectIconView,
+    pub index: ProjectIndexView,
+}
+
+#[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct ProjectIndexView {
+    /// `idle` | `indexing` | `ready` | `failed`
+    pub status: String,
+    pub commit_sha: String,
+    pub indexed_at: String,
+    pub file_count: u32,
+    pub package_count: u32,
+    pub edge_count: u32,
+    pub symbol_count: u32,
+    pub convention_paths: Vec<String>,
+    pub error: Option<String>,
 }
 
 #[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
@@ -1698,6 +1735,53 @@ pub struct PullRequestDetailView {
     pub base: String,
     /// The branch it comes from.
     pub head: String,
+    pub ai_review: Option<PrReviewView>,
+}
+
+#[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct PrReviewRiskDriverView {
+    pub points: i32,
+    pub label: String,
+    pub detail: String,
+}
+
+#[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct PrReviewFindingView {
+    pub id: String,
+    /// `finding` | `suggestion` | `question`
+    pub kind: String,
+    /// `high` | `medium` | `low`
+    pub severity: String,
+    pub title: String,
+    pub detail: String,
+    pub action: String,
+    pub path: String,
+    pub line: u32,
+    pub side: String,
+    pub evidence_quotes: Vec<String>,
+    pub selected: bool,
+    pub source_stage: String,
+}
+
+#[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct PrReviewView {
+    pub run_id: String,
+    /// `idle` | `queued` | `running` | `validated` | `failed` | `cancelled` | `published` | `superseded`
+    pub status: String,
+    pub phase: String,
+    pub phase_message: Option<String>,
+    pub scope_mode: String,
+    pub head_sha: String,
+    pub is_stale: bool,
+    pub risk_score: u32,
+    pub risk_drivers: Vec<PrReviewRiskDriverView>,
+    pub summary: String,
+    pub findings: Vec<PrReviewFindingView>,
+    pub selected_count: u32,
+    pub published_review_id: Option<String>,
+    pub error: Option<String>,
+    pub can_publish: bool,
+    pub busy: bool,
 }
 
 #[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]

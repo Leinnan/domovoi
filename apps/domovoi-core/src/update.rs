@@ -1402,6 +1402,10 @@ pub fn import_sessions(model: &mut Model, path: &str, project_id: &str) -> Cmd {
 
 /// A call about one pull request, which `request` makes of its entry in
 /// the list; `done` shows once it worked.
+pub(crate) fn reload_pr_review(model: &mut Model, entry: &PullRequestListEntry, key: String) -> Cmd {
+    call(model, requests::pull_requests_reviews_get(entry), Route::PrReview(key))
+}
+
 fn pr_call(model: &mut Model, key: &str, request: impl FnOnce(&PullRequestListEntry) -> Request, done: &str) -> Cmd {
     let Some(e) = model.pages.prs.iter().find(|p| crate::present::pr_key(p) == key) else { return Command::done() };
     let request = request(e);
@@ -3038,7 +3042,19 @@ pub fn update(event: Event, model: &mut Model) -> Cmd {
 
         // ---- settings ----
         Event::LoadSettings { section } => match section.as_str() {
-            "providers" => call(model, requests::server_refresh_providers(false), Route::Command("Refresh providers".into())).and(provider_setup_streams(model)),
+            "providers" => {
+                let a = call(model, requests::server_refresh_providers(false), Route::Command("Refresh providers".into()));
+                let b = call(model, requests::providers_failover_status(), Route::FailoverStatus);
+                a.and(b).and(provider_setup_streams(model))
+            }
+            "projects" => {
+                let ids: Vec<String> = model.projects.iter().filter(|p| !p.workspace_root.ends_with("/scratch")).map(|p| p.id.as_str().to_owned()).collect();
+                let mut cmd = Command::done();
+                for pid in ids {
+                    cmd = cmd.and(call(model, requests::projects_index_status(&pid), Route::ProjectIndex(pid)));
+                }
+                cmd.and(render())
+            }
             "general" => call(model, requests::server_refresh_providers(false), Route::Command("Refresh providers".into())),
             "scheduled" => subscribe(model, requests::scheduled_tasks_subscribe(), Route::ScheduledTasks),
             "archived" => call(model, requests::orchestration_get_archived_shell_snapshot(), Route::Archived),
@@ -3231,10 +3247,74 @@ pub fn update(event: Event, model: &mut Model) -> Cmd {
             model.pages.pr_selected = Some(key.clone());
             model.pages.pr_detail = None;
             model.pages.pr_checks = None;
-            let Some(e) = model.pages.prs.iter().find(|p| crate::present::pr_key(p) == key) else { return render() };
-            let (summary, checks) = (requests::pull_requests_summary(e), requests::pull_requests_checks(e));
+            model.pages.pr_review = None;
+            model.pages.pr_review_busy = false;
+            model.pages.pr_review_phase_message = None;
+            let Some(e) = model.pages.prs.iter().find(|p| crate::present::pr_key(p) == key).cloned() else { return render() };
+            let (summary, checks, review) = (requests::pull_requests_summary(&e), requests::pull_requests_checks(&e), requests::pull_requests_reviews_get(&e));
             let a = call(model, summary, Route::PullRequestDetail(key.clone()));
-            let b = call(model, checks, Route::PullRequestChecks(key));
+            let b = call(model, checks, Route::PullRequestChecks(key.clone()));
+            let c = call(model, review, Route::PrReview(key.clone()));
+            let d = subscribe(model, requests::pull_requests_reviews_subscribe(), Route::PrReviewStream(key));
+            a.and(b).and(c).and(d).and(render())
+        }
+        Event::StartPrReview { key, full } => {
+            let Some(e) = model.pages.prs.iter().find(|p| crate::present::pr_key(p) == key).cloned() else { return Command::done() };
+            model.pages.pr_review_busy = true;
+            model.pages.pr_review_phase_message = Some("Starting AI review…".into());
+            call(model, requests::pull_requests_reviews_start(&e, full), Route::PrReviewAction { key, done: "AI review started.".into() }).and(render())
+        }
+        Event::CancelPrReview { run_id } => {
+            let key = model.pages.pr_selected.clone().unwrap_or_default();
+            call(model, requests::pull_requests_reviews_cancel(&run_id), Route::PrReviewAction { key, done: "Review cancelled.".into() }).and(render())
+        }
+        Event::TogglePrFinding { run_id, finding_id, selected } => {
+            if let Some(review) = model.pages.pr_review.as_mut()
+                && let Some(f) = review.findings.iter_mut().find(|f| f.id == finding_id)
+            {
+                f.selected = selected;
+            }
+            let key = model.pages.pr_selected.clone().unwrap_or_default();
+            call(
+                model,
+                requests::pull_requests_reviews_set_finding_selected(&run_id, &finding_id, selected),
+                Route::PrReviewAction { key, done: String::new() },
+            )
+            .and(render())
+        }
+        Event::PublishPrReview { key, run_id } => {
+            let Some(e) = model.pages.prs.iter().find(|p| crate::present::pr_key(p) == key).cloned() else { return Command::done() };
+            model.pages.pr_review_busy = true;
+            model.pages.pr_review_phase_message = Some("Publishing validated findings…".into());
+            call(model, requests::pull_requests_reviews_publish(&e, &run_id), Route::PrReviewAction { key, done: "Review published.".into() }).and(render())
+        }
+        Event::ReindexProject { project_id } => {
+            model.pages.project_indexes.insert(
+                project_id.clone(),
+                domovoi_model::typed::ProjectIndexStatus { project_id: project_id.clone(), status: "indexing".into(), ..Default::default() },
+            );
+            call(model, requests::projects_reindex(&project_id, true), Route::ProjectIndex(project_id)).and(render())
+        }
+        Event::SaveFailoverPool { pool_id, name, instance_ids, same_driver_first, allow_cross_provider } => {
+            let mut pools = model
+                .settings
+                .as_ref()
+                .and_then(|s| s.failover_pools.clone())
+                .unwrap_or_default();
+            let entry = domovoi_model::typed::FailoverPoolConfig {
+                id: if pool_id.is_empty() { "default".into() } else { pool_id },
+                name: if name.trim().is_empty() { "Default Failover Pool".into() } else { name },
+                instance_ids: instance_ids.into_iter().map(ProviderInstanceId::from).collect(),
+                same_driver_first,
+                allow_cross_provider,
+            };
+            if let Some(existing) = pools.iter_mut().find(|p| p.id == entry.id) {
+                *existing = entry;
+            } else {
+                pools.push(entry);
+            }
+            let a = call(model, requests::server_update_failover_pools(&pools), Route::Settings);
+            let b = call(model, requests::providers_failover_status(), Route::FailoverStatus);
             a.and(b).and(render())
         }
         Event::LoadUsage { days } => {

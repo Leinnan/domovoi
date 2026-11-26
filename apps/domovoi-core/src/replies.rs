@@ -604,6 +604,27 @@ fn chunk(model: &mut Model, route: &Route, v: Value) -> Vec<Cmd> {
             }
             vec![]
         }
+        Route::PrReviewStream(selected_key) => {
+            if model.pages.pr_selected.as_deref() != Some(selected_key.as_str()) {
+                return vec![];
+            }
+            let Some(ev) = read::<domovoi_model::typed::PrReviewProgressEvent>(model, "an AI review progress update", v) else {
+                return vec![];
+            };
+            model.pages.pr_review_phase_message = ev.message.clone();
+            if let Some(review) = ev.review {
+                model.pages.pr_review_busy = matches!(ev.status.as_str(), "queued" | "running");
+                model.pages.pr_review = Some(review);
+            } else if let Some(existing) = model.pages.pr_review.as_mut()
+                && let Some(run) = existing.run.as_mut()
+                && run.id == ev.run_id
+            {
+                run.status = ev.status.clone();
+                run.phase = ev.phase;
+                model.pages.pr_review_busy = matches!(ev.status.as_str(), "queued" | "running");
+            }
+            vec![]
+        }
         _ => vec![],
     }
 }
@@ -1029,6 +1050,36 @@ fn exit_ok(model: &mut Model, route: Route, value: Value) -> Vec<Cmd> {
             model.pages.pr_checks = read::<PullRequestChecksResult>(model, "a pull request's checks", value).flatten();
             vec![]
         }
+        Route::PrReview(key) if model.pages.pr_selected.as_deref() == Some(key.as_str()) => {
+            let res = read::<domovoi_model::typed::PrReviewResult>(model, "an AI code review", value);
+            if let Some(res) = res {
+                model.pages.pr_review_busy = res.run.as_ref().is_some_and(|r| matches!(r.status.as_str(), "queued" | "running"));
+                model.pages.pr_review = Some(res);
+            }
+            vec![]
+        }
+        Route::PrReviewAction { key, done } => {
+            model.pages.pr_review_busy = false;
+            if !done.is_empty() {
+                model.toast("info", done);
+            }
+            if model.pages.pr_selected.as_deref() == Some(key.as_str())
+                && let Some(e) = model.pages.prs.iter().find(|p| crate::present::pr_key(p) == key).cloned()
+            {
+                return vec![update::reload_pr_review(model, &e, key)];
+            }
+            vec![]
+        }
+        Route::FailoverStatus => {
+            model.pages.failover_status = read::<domovoi_model::typed::FailoverStatusResult>(model, "failover status", value);
+            vec![]
+        }
+        Route::ProjectIndex(pid) => {
+            if let Some(status) = read::<domovoi_model::typed::ProjectIndexStatus>(model, "a project codebase index", value) {
+                model.pages.project_indexes.insert(pid, status);
+            }
+            vec![]
+        }
         Route::ScheduledRuns(task) => {
             let runs = read::<ScheduledRuns>(model, "a scheduled task's runs", value).map(|list| list.runs).unwrap_or_default();
             match task {
@@ -1316,6 +1367,8 @@ fn exit_failed(model: &mut Model, route: Route, cause: &Value) -> Vec<Cmd> {
         Route::Command(l) if l == "Storage cleanup" || l == "Reclaim space" => model.pages.storage_busy = false,
         Route::GitAction(_) => model.panel.git.busy = false,
         Route::PullRequestAction { .. } | Route::PullRequestThread(_) => model.pages.pr_busy = None,
+        Route::PrReviewAction { .. } => model.pages.pr_review_busy = false,
+        Route::PrReview(_) | Route::PrReviewStream(_) | Route::FailoverStatus | Route::ProjectIndex(_) => return vec![],
         Route::SearchThreads(_) => model.search.searching = false,
         // Errors on these are already visible where they happen, or harmless.
         // A later snapshot or message asks again.

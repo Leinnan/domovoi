@@ -59,10 +59,17 @@ async fn dispatch(state: &SharedState, command: Value) {
 /// One pass over the threads: arm recovery where the settings say to, and
 /// resume the threads whose reset has passed.
 pub async fn look(state: &SharedState) {
-    let (auto_resume, auto_snooze) = {
+    crate::failover::global().sweep_expired();
+    let (auto_resume, auto_snooze, failover_threads, settings_snapshot) = {
         let s = state.settings.read().await;
-        (s.auto_resume_limited_threads == Some(true), s.snooze_limited_threads == Some(true))
+        (
+            s.auto_resume_limited_threads == Some(true),
+            s.snooze_limited_threads == Some(true),
+            s.failover_limited_threads == Some(true),
+            (**s).clone(),
+        )
     };
+    let providers_snapshot = if failover_threads { state.providers.snapshot().await } else { Vec::new() };
     let now = crate::time_fmt::now_millis();
     let Ok(threads) = state.store.app_threads() else { return };
     for t in threads.into_iter().filter(|t| t.deleted_at.is_none() && t.archived_at.is_none()) {
@@ -71,7 +78,38 @@ pub async fn look(state: &SharedState) {
         let Some(latest) = runs.iter().max_by_key(|r| r.ordinal) else { continue };
         let Some(reset) = usage_limit_reset(&state.store, &tid, latest) else { continue };
         let reset_ms = millis(reset.as_str()).unwrap_or(now);
+        // Feed the rate-limit window into the global failover coordinator.
+        let primary_instance = t.model_selection.instance_id.as_str().to_owned();
+        if reset_ms > now {
+            crate::failover::global().mark_limited(&primary_instance, Some(reset.as_str()), "Thread run hit usage limit.");
+        }
         let recovery = t.limit_recovery.clone().flatten();
+        // Opt-in interactive thread failover: switch to a healthy fallback instance instead of waiting.
+        if failover_threads && recovery.is_none() && reset_ms > now {
+            let candidates = crate::failover::global().candidates(&primary_instance, &t.model_selection.model, &settings_snapshot, &providers_snapshot);
+            if let Some(fallback) = candidates.into_iter().find(|c| c.instance_id != primary_instance) {
+                let command_id = format!("usage-limit-failover:{}", latest.id);
+                let msg = format!(
+                    "Continue where you left off. (Automatically failed over from `{primary_instance}` to `{}` after hitting a usage limit.)",
+                    fallback.instance_id
+                );
+                let send = json!({
+                    "type": "message.dispatch",
+                    "commandId": command_id,
+                    "threadId": tid,
+                    "messageId": format!("message:{command_id}"),
+                    "text": msg,
+                    "attachments": [],
+                    "createdBy": "system",
+                    "creationSource": "server",
+                    "modelSelection": fallback.to_model_selection(),
+                    "dispatchMode": { "type": "queue_after_active" },
+                    "usageLimitContinuationOfRunId": latest.id,
+                });
+                dispatch(state, send).await;
+                continue;
+            }
+        }
         match recovery {
             None if (auto_resume || auto_snooze) && now - reset_ms < STALE_MS => {
                 dispatch(state, json!({ "type": "thread.metadata.update", "commandId": format!("usage-limit-arm:{}", latest.id), "threadId": tid,

@@ -2526,6 +2526,17 @@ fn setting_groups(model: &Model) -> Vec<SettingGroupView> {
             fields: vec![
                 field_bool(model, "removeAgentCreditsOnMerge", "Remove agent credits when merging", "Strip co-author lines added by agents from merge commits."),
                 field_bool(model, "reviewGuidesEnabled", "Review guides", "Generate a guide for reviewing pull requests."),
+                field_bool(model, "aiReviewEnabled", "AI code reviews", "Run evidence-checked AI code reviews on pull requests in a read-only snapshot."),
+                field_choice(
+                    model,
+                    "aiReviewDepthMode",
+                    "AI review depth",
+                    "auto splits large PRs by import graph; economic uses a single pass; deep always chunks.",
+                    &[("auto", "Auto"), ("economic", "Economic"), ("deep", "Deep")],
+                ),
+                field_bool(model, "aiReviewLensEnabled", "Second-pass Lens review", "Run a focused adversarial second pass over primary findings."),
+                field_bool(model, "prWatcherEnabled", "Background PR watcher", "Poll watched pull requests and wake threads when checks settle or PRs merge."),
+                field_bool(model, "failoverLimitedThreads", "Fail over rate-limited threads", "Hand off interactive threads to a healthy fallback provider instance when a usage limit hits."),
             ],
         },
     ];
@@ -2737,14 +2748,57 @@ fn settings(model: &Model) -> SettingsView {
         projects: model
             .projects
             .iter()
-            .map(|p| ProjectSettingsView {
-                id: p.id.as_str().to_owned(),
-                title: p.title.clone(),
-                workspace_root: p.workspace_root.clone(),
-                icon: crate::project_icons::view(model, p, false),
-                automatic_icon: crate::project_icons::view(model, p, true),
-                thread_count: model.threads.iter().filter(|t| t.project_id == p.id && t.deleted_at.is_none()).count() as u32,
-                is_scratch: p.workspace_root.ends_with("/scratch"),
+            .map(|p| {
+                let idx = pages.project_indexes.get(p.id.as_str());
+                ProjectSettingsView {
+                    id: p.id.as_str().to_owned(),
+                    title: p.title.clone(),
+                    workspace_root: p.workspace_root.clone(),
+                    icon: crate::project_icons::view(model, p, false),
+                    automatic_icon: crate::project_icons::view(model, p, true),
+                    thread_count: model.threads.iter().filter(|t| t.project_id == p.id && t.deleted_at.is_none()).count() as u32,
+                    is_scratch: p.workspace_root.ends_with("/scratch"),
+                    index: ProjectIndexView {
+                        status: idx.map(|s| s.status.clone()).unwrap_or_else(|| "idle".into()),
+                        commit_sha: idx.and_then(|s| s.commit_sha.clone()).unwrap_or_default(),
+                        indexed_at: idx.and_then(|s| s.indexed_at.clone()).unwrap_or_default(),
+                        file_count: idx.map_or(0, |s| narrow(s.file_count)),
+                        package_count: idx.map_or(0, |s| narrow(s.package_count)),
+                        edge_count: idx.map_or(0, |s| narrow(s.edge_count)),
+                        symbol_count: idx.map_or(0, |s| narrow(s.symbol_count)),
+                        convention_paths: idx.map(|s| s.convention_paths.clone()).unwrap_or_default(),
+                        error: idx.and_then(|s| s.error.clone()),
+                    },
+                }
+            })
+            .collect(),
+        failover_pools: pages
+            .failover_status
+            .as_ref()
+            .map(|st| &st.pools)
+            .or_else(|| model.settings.as_ref().and_then(|s| s.failover_pools.as_ref()))
+            .into_iter()
+            .flatten()
+            .map(|pool| FailoverPoolView {
+                id: pool.id.clone(),
+                name: pool.name.clone(),
+                instance_ids: pool.instance_ids.iter().map(|id| id.as_str().to_owned()).collect(),
+                same_driver_first: pool.same_driver_first,
+                allow_cross_provider: pool.allow_cross_provider,
+            })
+            .collect(),
+        failover_instances: pages
+            .failover_status
+            .iter()
+            .flat_map(|st| &st.instances)
+            .map(|inst| FailoverInstanceView {
+                instance_id: inst.instance_id.clone(),
+                driver: inst.driver.clone(),
+                display_name: inst.display_name.clone(),
+                available: inst.available,
+                limited_until: inst.limited_until.clone(),
+                last_error: inst.last_error.clone(),
+                active_jobs: inst.active_jobs,
             })
             .collect(),
     }
@@ -2936,9 +2990,71 @@ fn pull_requests(model: &Model) -> PullRequestsView {
                 number: listed.map_or(0, |e| narrow(e.number)),
                 base: d.map(|d| d.base_branch.clone()).filter(|b| !b.is_empty()).or_else(|| listed.map(|e| e.base_branch.clone())).unwrap_or_default(),
                 head: d.map(|d| d.head_branch.clone()).filter(|b| !b.is_empty()).or_else(|| listed.map(|e| e.head_branch.clone())).unwrap_or_default(),
+                ai_review: pr_review_view(p),
             }
         }),
     }
+}
+
+fn pr_review_view(p: &crate::model::Pages) -> Option<PrReviewView> {
+    let res = p.pr_review.as_ref();
+    let run = res.and_then(|r| r.run.as_ref());
+    if run.is_none() && !p.pr_review_busy {
+        return None;
+    }
+    let Some(run) = run else {
+        return Some(PrReviewView {
+            status: "running".into(),
+            phase: "starting".into(),
+            phase_message: p.pr_review_phase_message.clone(),
+            busy: true,
+            ..Default::default()
+        });
+    };
+    let findings: Vec<PrReviewFindingView> = res
+        .into_iter()
+        .flat_map(|r| &r.findings)
+        .map(|f| PrReviewFindingView {
+            id: f.id.clone(),
+            kind: f.kind.clone(),
+            severity: f.severity.clone(),
+            title: f.title.clone(),
+            detail: f.detail.clone(),
+            action: f.action.clone(),
+            path: f.path.clone().unwrap_or_default(),
+            line: f.line.map_or(0, narrow),
+            side: f.side.clone().unwrap_or_default(),
+            evidence_quotes: f.evidence.iter().map(|e| format!("{}:{} — {}", e.path, e.line, e.quote)).collect(),
+            selected: f.selected,
+            source_stage: f.source_stage.clone(),
+        })
+        .collect();
+    let selected_count = findings.iter().filter(|f| f.selected).count() as u32;
+    let current_head = res.and_then(|r| r.current_head_sha.as_deref());
+    let is_stale = current_head.is_some_and(|h| !h.is_empty() && h != run.head_sha);
+    let busy = p.pr_review_busy || matches!(run.status.as_str(), "queued" | "running");
+    Some(PrReviewView {
+        run_id: run.id.clone(),
+        status: run.status.clone(),
+        phase: run.phase.clone(),
+        phase_message: p.pr_review_phase_message.clone(),
+        scope_mode: run.scope_mode.clone(),
+        head_sha: run.head_sha.clone(),
+        is_stale,
+        risk_score: run.risk_score,
+        risk_drivers: run
+            .risk_drivers
+            .iter()
+            .map(|d| PrReviewRiskDriverView { points: d.points as i32, label: d.label.clone(), detail: d.detail.clone() })
+            .collect(),
+        summary: run.summary_markdown.clone().unwrap_or_default(),
+        findings,
+        selected_count,
+        published_review_id: run.published_review_id.clone(),
+        error: run.error_detail.clone(),
+        can_publish: run.status == "validated" && !is_stale && !busy,
+        busy,
+    })
 }
 
 fn usage_provider_label(key: &str) -> String {

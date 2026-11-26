@@ -63,6 +63,7 @@ import androidx.compose.material.icons.outlined.Warning
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -700,6 +701,7 @@ private fun PullRequestDetailSheet(core: Core, pr: com.crayen.domovoi.app.PullRe
                 if (pr.draft) OutlinedButton(onClick = { core.update(Event.PullRequestAction(pr.key, "ready", "")) }, enabled = !busy) { Text("Ready for review") }
                 if (pr.url.isNotEmpty()) TextButton(onClick = { uri.openUri(pr.url) }) { Text("Open in browser") }
             }
+            AiCodeReviewSection(core, pr, busy)
             if (pr.checks.isNotEmpty()) {
                 Text("Checks", style = MaterialTheme.typography.titleSmall)
                 pr.checks.forEach { c ->
@@ -758,4 +760,102 @@ private fun ReviewDialog(onDismiss: () -> Unit, submit: (String, String) -> Unit
         confirmButton = { TextButton(onClick = { submit(verdict, body) }, enabled = verdict == "approve" || body.isNotBlank()) { Text("Submit") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
+}
+
+@Composable
+private fun AiCodeReviewSection(core: Core, pr: com.crayen.domovoi.app.PullRequestDetailView, prBusy: Boolean) {
+    val tints = LocalTints.current
+    val rev = pr.aiReview
+    val isBusy = prBusy || (rev?.busy == true)
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        shape = MaterialTheme.shapes.medium,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(Space.m), verticalArrangement = Arrangement.spacedBy(Space.s)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Space.s)) {
+                Text("AI Code Review", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+                if (rev != null && rev.busy && rev.runId.isNotEmpty()) {
+                    OutlinedButton(onClick = { core.update(Event.CancelPrReview(rev.runId)) }) { Text("Cancel") }
+                } else {
+                    FilledTonalButton(onClick = { core.update(Event.StartPrReview(pr.key, false)) }, enabled = !isBusy) { Text("Run") }
+                    OutlinedButton(onClick = { core.update(Event.StartPrReview(pr.key, true)) }, enabled = !isBusy) { Text("Full") }
+                }
+            }
+            if (rev == null) {
+                Text(
+                    "Evidence-checked review in a read-only snapshot. Findings stay local until you publish selected items; never auto-approves.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else {
+                val meta = buildList {
+                    add(rev.status)
+                    if (rev.phase.isNotEmpty()) add(rev.phase)
+                    if (rev.scopeMode.isNotEmpty()) add(rev.scopeMode)
+                    if (rev.headSha.isNotEmpty()) add(rev.headSha.take(8))
+                    if (rev.riskScore > 0u) add("Risk ${rev.riskScore}/100")
+                }.joinToString(" · ")
+                Text(meta, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                rev.phaseMessage?.takeIf { it.isNotEmpty() }?.let { msg ->
+                    Text(msg, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                if (rev.isStale) {
+                    Text("PR head changed since this review; re-run before publishing.", style = MaterialTheme.typography.bodySmall, color = tints.caution)
+                }
+                rev.error?.takeIf { it.isNotEmpty() }?.let { err ->
+                    Text(err, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                }
+                rev.publishedReviewId?.takeIf { it.isNotEmpty() }?.let { id ->
+                    Text("Published to remote review ($id)", style = MaterialTheme.typography.bodySmall, color = tints.success)
+                }
+                rev.riskDrivers.forEach { drv ->
+                    Text("+${drv.points} ${drv.label} — ${drv.detail}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                if (rev.summary.isNotEmpty()) {
+                    Text(rev.summary, style = MaterialTheme.typography.bodyMedium)
+                }
+                rev.findings.forEach { f ->
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceContainer,
+                        shape = MaterialTheme.shapes.small,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Column(Modifier.padding(Space.s), verticalArrangement = Arrangement.spacedBy(Space.xs)) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Space.xs)) {
+                                Checkbox(
+                                    checked = f.selected,
+                                    enabled = !rev.busy,
+                                    onCheckedChange = { checked -> core.update(Event.TogglePrFinding(rev.runId, f.id, checked)) },
+                                )
+                                Column(Modifier.weight(1f)) {
+                                    Text("[${f.severity}/${f.kind}] ${f.title}", style = MaterialTheme.typography.titleSmall)
+                                    if (f.path.isNotEmpty()) {
+                                        Text("${f.path}:${f.line} (${f.side})", fontFamily = Mono, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                }
+                                if (f.sourceStage.isNotEmpty()) {
+                                    Text(f.sourceStage, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            }
+                            if (f.detail.isNotEmpty()) Text(f.detail, style = MaterialTheme.typography.bodySmall)
+                            if (f.action.isNotEmpty()) Text("Suggested fix: ${f.action}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            f.evidenceQuotes.forEach { q ->
+                                Text(q, fontFamily = Mono, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                    }
+                }
+                if (rev.findings.isNotEmpty() || rev.canPublish) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Space.s)) {
+                        Text("${rev.selectedCount} of ${rev.findings.size} selected", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
+                        Button(
+                            onClick = { core.update(Event.PublishPrReview(pr.key, rev.runId)) },
+                            enabled = rev.canPublish && !rev.busy,
+                        ) { Text("Publish Selected") }
+                    }
+                }
+            }
+        }
+    }
 }
