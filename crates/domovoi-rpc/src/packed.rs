@@ -40,24 +40,57 @@ pub const PACK_APART_FROM: usize = 64 * 1024;
 /// before it is held in memory.
 pub const UNPACKED_LIMIT: u64 = 256 * 1024 * 1024;
 
+/// `frame` deflated, if it is large and deflating makes it smaller than `worth` bytes.
+fn deflated(frame: &str, worth: impl Fn(usize) -> usize) -> Option<Vec<u8>> {
+    if frame.len() < PACK_FROM {
+        return None;
+    }
+    let mut deflater = flate2::write::DeflateEncoder::new(Vec::with_capacity(frame.len() / 4), flate2::Compression::new(LEVEL));
+    let deflated = deflater.write_all(frame.as_bytes()).and_then(|()| deflater.finish()).ok()?;
+    (worth(deflated.len()) < frame.len()).then_some(deflated)
+}
+
 /// `frame` as it is sent to a client that asked for packed frames: packed if
 /// it is large and packing makes it smaller, as it is otherwise.
 pub fn pack(frame: String) -> String {
-    if frame.len() < PACK_FROM {
-        return frame;
-    }
-    let mut deflater = flate2::write::DeflateEncoder::new(Vec::with_capacity(frame.len() / 4), flate2::Compression::new(LEVEL));
-    let deflated = match deflater.write_all(frame.as_bytes()).and_then(|()| deflater.finish()) {
-        Ok(deflated) => deflated,
-        Err(_) => return frame,
-    };
-    if deflated.len() / 3 * 4 + 8 >= frame.len() {
-        return frame;
-    }
+    let Some(deflated) = deflated(&frame, |deflated| deflated / 3 * 4 + 8) else { return frame };
     let mut packed = String::with_capacity(deflated.len() / 3 * 4 + 8);
     packed.push(PACKED);
     base64::engine::general_purpose::STANDARD_NO_PAD.encode_string(&deflated, &mut packed);
     packed
+}
+
+/// [`pack`] for a transport that carries bytes (an iroh stream): a packed
+/// frame is [`PACKED`]'s byte and the deflated JSON as it is, with no base64.
+pub fn pack_bytes(frame: String) -> Vec<u8> {
+    match deflated(&frame, |deflated| deflated + 1) {
+        Some(deflated) => {
+            let mut packed = Vec::with_capacity(deflated.len() + 1);
+            packed.push(PACKED as u8);
+            packed.extend_from_slice(&deflated);
+            packed
+        }
+        None => frame.into_bytes(),
+    }
+}
+
+/// The frame the bytes `frame` carry ([`pack_bytes`]).
+pub fn unpack_bytes(frame: Vec<u8>) -> Result<String, Unreadable> {
+    match frame.split_first() {
+        Some((&first, deflated)) if first == PACKED as u8 => inflate(deflated),
+        _ => String::from_utf8(frame).map_err(|_| Unreadable::Malformed),
+    }
+}
+
+/// The JSON text `deflated` holds.
+fn inflate(deflated: &[u8]) -> Result<String, Unreadable> {
+    let mut frame = String::with_capacity(deflated.len() * 4);
+    let mut inflater = flate2::read::DeflateDecoder::new(deflated).take(UNPACKED_LIMIT + 1);
+    inflater.read_to_string(&mut frame).map_err(|_| Unreadable::Malformed)?;
+    if frame.len() as u64 > UNPACKED_LIMIT {
+        return Err(Unreadable::TooLarge);
+    }
+    Ok(frame)
 }
 
 /// Why a packed frame could not be read.
@@ -73,13 +106,7 @@ pub enum Unreadable {
 pub fn unpack(text: &str) -> Result<Cow<'_, str>, Unreadable> {
     let Some(packed) = text.strip_prefix(PACKED) else { return Ok(Cow::Borrowed(text)) };
     let deflated = base64::engine::general_purpose::STANDARD_NO_PAD.decode(packed).map_err(|_| Unreadable::Malformed)?;
-    let mut frame = String::with_capacity(deflated.len() * 4);
-    let mut inflater = flate2::read::DeflateDecoder::new(deflated.as_slice()).take(UNPACKED_LIMIT + 1);
-    inflater.read_to_string(&mut frame).map_err(|_| Unreadable::Malformed)?;
-    if frame.len() as u64 > UNPACKED_LIMIT {
-        return Err(Unreadable::TooLarge);
-    }
-    Ok(Cow::Owned(frame))
+    inflate(&deflated).map(Cow::Owned)
 }
 
 #[cfg(test)]
@@ -101,6 +128,21 @@ mod tests {
         // What does not get smaller is not packed: random-looking text of the same length.
         let noise: String = (0..PACK_FROM * 2).map(|i| char::from(b'!' + ((i * 7919 + i / 3 * 104_729) % 90) as u8)).collect();
         assert!(!pack(noise.clone()).starts_with(PACKED) || pack(noise.clone()).len() < noise.len());
+    }
+
+    #[test]
+    fn frames_packed_as_bytes_read_back_and_cost_no_base64() {
+        let small = r#"{"_tag":"Pong"}"#.to_owned();
+        assert_eq!(pack_bytes(small.clone()), small.as_bytes());
+        assert_eq!(unpack_bytes(small.clone().into_bytes()).unwrap(), small);
+
+        let large = format!(r#"{{"_tag":"Chunk","requestId":"1","values":["{}"]}}"#, "wörds and more wörds, ".repeat(2000));
+        let (packed, as_text) = (pack_bytes(large.clone()), pack(large.clone()));
+        assert_eq!(packed[0], PACKED as u8);
+        assert!(packed.len() * 4 <= as_text.len() * 3 + 8, "{} against {} as text", packed.len(), as_text.len());
+        assert_eq!(unpack_bytes(packed).unwrap(), large);
+        assert_eq!(unpack_bytes(vec![PACKED as u8, 0xff, 0xff]), Err(Unreadable::Malformed));
+        assert_eq!(unpack_bytes(vec![0xff, 0xfe]), Err(Unreadable::Malformed), "not text");
     }
 
     #[test]

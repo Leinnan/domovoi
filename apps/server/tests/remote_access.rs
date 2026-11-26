@@ -287,6 +287,205 @@ async fn owner_session(server: &Server) -> String {
     sign_in(&format!("http://127.0.0.1:{}", server.port), &code).await
 }
 
+/// A one-time ticket for the RPC socket of the session `token`.
+async fn rpc_ticket(base: &str, token: &str) -> String {
+    let res = http_client().post(format!("{base}/api/auth/websocket-ticket/rpc")).bearer_auth(token).send().await.unwrap();
+    assert_eq!(res.status(), 200);
+    res.json::<Value>().await.unwrap()["ticket"].as_str().unwrap().to_owned()
+}
+
+/// Opens the RPC socket as an iroh stream and says hello; the server's greeting.
+async fn rpc_stream(bridge: &Bridge, hello: Value) -> (domovoi_remote::frames::FrameReader, domovoi_remote::frames::FrameWriter, Value) {
+    let (mut reader, mut writer) = bridge.rpc().await.expect("the server serves RPC streams");
+    writer.send(hello.to_string().as_bytes()).await.unwrap();
+    let greeting = tokio::time::timeout(Duration::from_secs(10), reader.next()).await.expect("a greeting").unwrap().expect("a greeting, not the stream's end");
+    (reader, writer, serde_json::from_slice(&greeting).unwrap())
+}
+
+/// The RPC socket without HTTP: a paired device opens it as a stream of
+/// frames on a connection of its own, shows a ticket, and is served what a
+/// WebSocket is, with large frames deflated as they are (no base64).
+#[tokio::test(flavor = "multi_thread")]
+async fn the_rpc_socket_is_served_on_an_iroh_stream() {
+    let server = start_as("rpc-stream");
+    let (ticket, code) = parse_link(&pair_link(&server.home, server.port));
+    let (phone, base, token) = paired(&ticket, &code).await;
+    let request = |id: &str, tag: &str| json!({ "_tag": "Request", "id": id, "tag": tag, "payload": {} }).to_string();
+
+    let (mut reader, mut writer, greeting) = rpc_stream(&phone, json!({ "protocol": PROTOCOL, "ticket": rpc_ticket(&base, &token).await, "pack": true })).await;
+    assert_eq!(greeting, json!({ "_tag": "Welcome" }));
+    // The configuration is tens of kilobytes: it comes packed, as bytes.
+    writer.send(request("1", "subscribeServerConfig").as_bytes()).await.unwrap();
+    let packed = reader.next().await.unwrap().expect("the configuration");
+    assert_eq!(packed[0], domovoi_rpc::packed::PACKED as u8);
+    let config_text = domovoi_rpc::packed::unpack_bytes(packed.clone()).unwrap();
+    let config: Value = serde_json::from_str(&config_text).unwrap();
+    assert_eq!((config["_tag"].as_str(), config["requestId"].as_str(), config["values"][0]["type"].as_str()), (Some("Chunk"), Some("1"), Some("snapshot")));
+    // The same over the WebSocket, through the loopback port, costs a third more for its base64.
+    let mut ws = {
+        let url = format!("{}/ws?protocol={PROTOCOL}&pack=1&wsTicket={}", base.replacen("http", "ws", 1), rpc_ticket(&base, &token).await);
+        tokio_tungstenite::connect_async(url.into_client_request().unwrap()).await.unwrap().0
+    };
+    ws.send(Message::Text(request("1", "subscribeServerConfig").into())).await.unwrap();
+    let as_text = loop {
+        if let Message::Text(text) = ws.next().await.unwrap().unwrap() {
+            break text.to_string();
+        }
+    };
+    assert!(as_text.starts_with(domovoi_rpc::packed::PACKED));
+    let ws_text = domovoi_rpc::packed::unpack(&as_text).unwrap();
+    let (on_the_stream, on_the_websocket) = (packed.len() as f64 / config_text.len() as f64, as_text.len() as f64 / ws_text.len() as f64);
+    assert!(on_the_stream < on_the_websocket * 0.8, "a byte of the frame costs {on_the_stream:.3} on the stream and {on_the_websocket:.3} on the WebSocket");
+    // A small frame is text as it is, and a call is answered as on any socket.
+    writer.send(request("2", "no.such.method").as_bytes()).await.unwrap();
+    let refused: Value = loop {
+        let frame = reader.next().await.unwrap().expect("an answer");
+        if frame[0] != domovoi_rpc::packed::PACKED as u8 {
+            let message: Value = serde_json::from_slice(&frame).unwrap();
+            if message["requestId"] == "2" {
+                break message;
+            }
+        }
+    };
+    assert_eq!(refused["exit"]["cause"][0]["_tag"], "Die", "{refused}");
+    // The device is listed as connected while the stream is open.
+    let devices = http_client().get(format!("{base}/api/domovoi/remote")).bearer_auth(&token).send().await.unwrap().json::<Value>().await.unwrap();
+    assert!(devices["devices"].as_array().unwrap().iter().any(|d| d["connected"] == true), "{devices}");
+    writer.finish().await;
+
+    // A ticket opens one socket.
+    let spent = rpc_ticket(&base, &token).await;
+    let (_reader, _writer, first) = rpc_stream(&phone, json!({ "protocol": PROTOCOL, "ticket": spent, "pack": false })).await;
+    assert_eq!(first, json!({ "_tag": "Welcome" }));
+    let (mut again, _w, second) = rpc_stream(&phone, json!({ "protocol": PROTOCOL, "ticket": spent })).await;
+    assert_eq!(second, json!({ "_tag": "Refused", "reason": "invalid_credential" }));
+    assert_eq!(again.next().await.unwrap(), None, "a refused stream ends");
+
+    // A client of another protocol version is welcomed and told to update, and nothing else.
+    let (mut old, mut old_writer, greeting) = rpc_stream(&phone, json!({ "protocol": PROTOCOL - 1, "ticket": rpc_ticket(&base, &token).await })).await;
+    assert_eq!(greeting, json!({ "_tag": "Welcome" }));
+    let told: Value = serde_json::from_slice(&old.next().await.unwrap().unwrap()).unwrap();
+    assert_eq!(told["_tag"], "Defect");
+    assert!(told["defect"].as_str().unwrap().ends_with("Update Domovoi on this device."), "{told}");
+    old_writer.send(request("1", "subscribeServerLifecycle").as_bytes()).await.unwrap();
+    assert_eq!(serde_json::from_slice::<Value>(&old.next().await.unwrap().unwrap()).unwrap(), told);
+
+    // A device that never paired is refused before anything it sends is read,
+    // and a paired one cannot use another's ticket.
+    let stranger = bridge(&ticket, SecretKey::generate()).await;
+    let (_r, _w, greeting) = rpc_stream(&stranger, json!({ "protocol": PROTOCOL, "ticket": rpc_ticket(&base, &token).await })).await;
+    assert_eq!(greeting, json!({ "_tag": "Refused", "reason": "missing_credential" }));
+    let (_ticket2, code2) = parse_link(&pair_link(&server.home, server.port));
+    let (tablet, _tablet_base, _tablet_token) = paired(&ticket, &code2).await;
+    let (_r, _w, greeting) = rpc_stream(&tablet, json!({ "protocol": PROTOCOL, "ticket": rpc_ticket(&base, &token).await })).await;
+    assert_eq!(greeting, json!({ "_tag": "Refused", "reason": "invalid_credential" }));
+
+    stranger.stop().await;
+    tablet.stop().await;
+    phone.stop().await;
+}
+
+/// What the socket of a server reached over iroh costs each way (a
+/// measurement): as a WebSocket through the bridge's loopback port, and as
+/// an iroh stream of its own. Opening it (the ticket, then the socket), one
+/// small call there and back, and the bytes of the configuration's frame.
+/// Both ends are on this machine: the numbers are what each way adds, not
+/// what a network takes.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "measurement; run with --ignored --nocapture"]
+async fn perf_remote_socket_as_websocket_and_as_stream() {
+    let server = start_as("perf-remote");
+    let (ticket, code) = parse_link(&pair_link(&server.home, server.port));
+    let (phone, base, token) = paired(&ticket, &code).await;
+    let request = |id: &str, tag: &str| json!({ "_tag": "Request", "id": id, "tag": tag, "payload": {} }).to_string();
+    let median = |times: &mut Vec<Duration>| -> f64 {
+        times.sort();
+        times[times.len() / 2].as_secs_f64() * 1e6
+    };
+    let open_ws = |ticket: String| {
+        let url = format!("{}/ws?protocol={PROTOCOL}&pack=1&wsTicket={ticket}", base.replacen("http", "ws", 1));
+        async move { tokio_tungstenite::connect_async(url.into_client_request().unwrap()).await.unwrap().0 }
+    };
+
+    // Opening the socket, the two ways in turn.
+    let (mut ws_opened, mut stream_opened) = (vec![], vec![]);
+    for _ in 0..30 {
+        let started = std::time::Instant::now();
+        let ws = open_ws(rpc_ticket(&base, &token).await).await;
+        ws_opened.push(started.elapsed());
+        drop(ws);
+        let started = std::time::Instant::now();
+        let (_reader, writer, greeting) = rpc_stream(&phone, json!({ "protocol": PROTOCOL, "ticket": rpc_ticket(&base, &token).await, "pack": true })).await;
+        stream_opened.push(started.elapsed());
+        assert_eq!(greeting["_tag"], "Welcome");
+        writer.finish().await;
+    }
+
+    // One small call there and back, in blocks of fifty each way in turn.
+    let mut ws = open_ws(rpc_ticket(&base, &token).await).await;
+    let (mut reader, mut writer, _) = rpc_stream(&phone, json!({ "protocol": PROTOCOL, "ticket": rpc_ticket(&base, &token).await, "pack": true })).await;
+    let (mut ws_calls, mut stream_calls) = (vec![], vec![]);
+    for block in 0..6 {
+        for i in 0..50 {
+            let id = format!("w{block}-{i}");
+            let started = std::time::Instant::now();
+            ws.send(Message::Text(request(&id, "orchestration.getArchivedShellSnapshot").into())).await.unwrap();
+            loop {
+                if let Message::Text(text) = ws.next().await.unwrap().unwrap()
+                    && serde_json::from_str::<Value>(&text).is_ok_and(|message| message["requestId"] == id.as_str())
+                {
+                    break;
+                }
+            }
+            ws_calls.push(started.elapsed());
+        }
+        for i in 0..50 {
+            let id = format!("s{block}-{i}");
+            let started = std::time::Instant::now();
+            writer.send(request(&id, "orchestration.getArchivedShellSnapshot").as_bytes()).await.unwrap();
+            loop {
+                let frame = reader.next().await.unwrap().expect("an answer");
+                if serde_json::from_slice::<Value>(&frame).is_ok_and(|message| message["requestId"] == id.as_str()) {
+                    break;
+                }
+            }
+            stream_calls.push(started.elapsed());
+        }
+    }
+
+    // The configuration, a frame of tens of kilobytes, packed each way.
+    ws.send(Message::Text(request("config", "subscribeServerConfig").into())).await.unwrap();
+    let (ws_bytes, ws_frame) = loop {
+        if let Message::Text(text) = ws.next().await.unwrap().unwrap()
+            && text.starts_with(domovoi_rpc::packed::PACKED)
+        {
+            break (text.len(), domovoi_rpc::packed::unpack(&text).unwrap().len());
+        }
+    };
+    writer.send(request("config", "subscribeServerConfig").as_bytes()).await.unwrap();
+    let (stream_bytes, stream_frame) = loop {
+        let frame = reader.next().await.unwrap().expect("the configuration");
+        if frame[0] == domovoi_rpc::packed::PACKED as u8 {
+            break (frame.len(), domovoi_rpc::packed::unpack_bytes(frame).unwrap().len());
+        }
+    };
+    // The two first frames may batch differently: compared per byte of JSON.
+    let (ws_per_kb, stream_per_kb) = (ws_bytes as f64 * 1000.0 / ws_frame as f64, stream_bytes as f64 * 1000.0 / stream_frame as f64);
+
+    let (ws_opened, stream_opened, ws_calls, stream_calls) = (median(&mut ws_opened), median(&mut stream_opened), median(&mut ws_calls), median(&mut stream_calls));
+    println!(
+        "perf remote socket (medians): open {:.2} ms as a WebSocket, {:.2} ms as a stream; one small call {ws_calls:.0} µs and {stream_calls:.0} µs; a packed kilobyte of JSON is {ws_per_kb:.0} and {stream_per_kb:.0} bytes",
+        ws_opened / 1e3, stream_opened / 1e3,
+    );
+    println!("PERF remote.websocket.open.p50 {ws_opened:.4} us");
+    println!("PERF remote.stream.open.p50 {stream_opened:.4} us");
+    println!("PERF remote.websocket.small_unary_round_trip.p50 {ws_calls:.4} us");
+    println!("PERF remote.stream.small_unary_round_trip.p50 {stream_calls:.4} us");
+    println!("PERF remote.websocket.packed_bytes_per_kb {ws_per_kb:.4} bytes");
+    println!("PERF remote.stream.packed_bytes_per_kb {stream_per_kb:.4} bytes");
+    phone.stop().await;
+}
+
 async fn paired(ticket: &str, code: &str) -> (Bridge, String, String) {
     let bridge = bridge(ticket, SecretKey::generate()).await;
     let base = format!("http://127.0.0.1:{}", bridge.port());

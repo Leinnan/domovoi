@@ -704,7 +704,7 @@ async fn serve(args: &Args, paths: state::Paths, base: Base, shutdown: tokio_uti
         let state = state.clone();
         tokio::spawn(async move {
             // A failure is logged by `start` and shown in the status.
-            let _ = state.remote.start(http::router(state.clone())).await;
+            let _ = state.remote.start(http::router(state.clone()), http::remote_rpc(state.clone())).await;
         });
     }
     {

@@ -152,6 +152,25 @@ enum HostCmd {
     Shutdown,
 }
 
+/// How the RPC socket of a server reached over iroh was opened.
+enum Direct {
+    /// As an iroh stream of its own: no HTTP, no WebSocket and no loopback port.
+    Opened(domovoi_remote::frames::FrameReader, domovoi_remote::frames::FrameWriter),
+    /// The server serves such streams and refused this one.
+    Refused(String),
+    /// Not a server reached over iroh, or one that does not serve such
+    /// streams: the socket is a WebSocket.
+    Unavailable,
+}
+
+/// What the socket URL `url` says, if it is the RPC socket of the loopback
+/// port `port`: the hello that opens the same socket as an iroh stream.
+fn hello_of(url: &str, port: u16) -> Option<domovoi_rpc::message::Hello> {
+    let query = url.strip_prefix(&format!("ws://127.0.0.1:{port}/ws?"))?;
+    let named = |name: &str| query.split('&').find_map(|pair| pair.strip_prefix(name)?.strip_prefix('='));
+    Some(domovoi_rpc::message::Hello { protocol: named("protocol")?.parse().ok()?, ticket: named("wsTicket")?.to_owned(), pack: named("pack").is_some() })
+}
+
 struct ActiveSocket {
     outbound: mpsc::Sender<String>,
     task: JoinHandle<()>,
@@ -353,6 +372,16 @@ impl Engine {
                 let engine = Arc::clone(self);
                 let trace = self.trace_ws.clone();
                 let task = tokio::spawn(async move {
+                    match engine.direct_socket(&url).await {
+                        Direct::Opened(reader, writer) => return engine.run_direct_socket(req, gen_id, reader, writer, outbound_rx, trace).await,
+                        Direct::Refused(reason) => {
+                            if engine.socket_gen.load(Ordering::Acquire) == gen_id {
+                                engine.resolve(&mut req, SocketEvent::Closed { reason: format!("Connection failed: {reason}") });
+                            }
+                            return;
+                        }
+                        Direct::Unavailable => {}
+                    }
                     let mut cfg = WebSocketConfig::default();
                     cfg.max_message_size = Some(WS_MAX_MESSAGE_BYTES);
                     cfg.max_frame_size = Some(WS_MAX_MESSAGE_BYTES);
@@ -473,6 +502,95 @@ impl Engine {
                 self.socket_gen.fetch_add(1, Ordering::AcqRel);
                 self.close_socket().await;
             }
+        }
+    }
+
+    /// The RPC socket of `url` as an iroh stream, when `url` is the port of
+    /// the tunnel to a server reached over iroh and that server serves it so.
+    async fn direct_socket(&self, url: &str) -> Direct {
+        use domovoi_rpc::message::Greeting;
+        let Some(bridge) = self.tunnel.lock().await.as_ref().map(|t| Arc::clone(&t.bridge)) else { return Direct::Unavailable };
+        let Some(hello) = hello_of(url, bridge.port()) else { return Direct::Unavailable };
+        // An older server refuses the connection: its ticket is still unused
+        // for the WebSocket.
+        let Ok((mut reader, mut writer)) = bridge.rpc().await else { return Direct::Unavailable };
+        let greeted = async {
+            writer.send(&serde_json::to_vec(&hello).ok()?).await.ok()?;
+            serde_json::from_slice::<Greeting>(&reader.next().await.ok()??).ok()
+        };
+        match tokio::time::timeout(WS_CONNECT_TIMEOUT, greeted).await {
+            Ok(Some(Greeting::Welcome)) => Direct::Opened(reader, writer),
+            Ok(Some(Greeting::Refused { reason })) => Direct::Refused(reason),
+            Ok(None) => Direct::Refused("the server ended the connection".into()),
+            Err(_) => Direct::Refused("the server did not answer".into()),
+        }
+    }
+
+    /// Serves a socket opened by [`Engine::direct_socket`] until either side
+    /// closes it. A frame is the message's text, or packed bytes that are
+    /// unpacked here: the core is given text either way. QUIC keeps the path
+    /// alive and ends the stream when the server is gone, so nothing is
+    /// pinged.
+    async fn run_direct_socket(
+        self: Arc<Self>,
+        mut req: Request<SocketOperation>,
+        gen_id: u64,
+        mut reader: domovoi_remote::frames::FrameReader,
+        writer: domovoi_remote::frames::FrameWriter,
+        mut outbound_rx: mpsc::Receiver<String>,
+        trace: Option<String>,
+    ) {
+        if self.socket_gen.load(Ordering::Acquire) != gen_id {
+            return;
+        }
+        self.resolve(&mut req, SocketEvent::Opened);
+        let mut writer = Some(writer);
+        let close_reason: String = loop {
+            tokio::select! {
+                biased;
+                maybe_out = outbound_rx.recv() => match (maybe_out, writer.as_mut()) {
+                    (Some(text), Some(writer)) => {
+                        // An answer to a secret request carries the value: never traced.
+                        if let Some(filter) = trace.as_deref()
+                            && text.contains(filter) && !text.contains("\"secrets.answerRequest\"") {
+                                tracing::info!(frame = %text.chars().take(300).collect::<String>(), "rpc >>");
+                            }
+                        if let Err(err) = writer.send(text.as_bytes()).await {
+                            break format!("Send failed: {err}");
+                        }
+                    }
+                    _ => {
+                        if let Some(writer) = writer.take() {
+                            writer.finish().await;
+                        }
+                        break "Closed".into();
+                    }
+                },
+                frame = reader.next() => match frame {
+                    Ok(Some(frame)) => {
+                        // Unpacking megabytes takes milliseconds: not on a thread that serves the app.
+                        let unpacked = if frame.len() < domovoi_rpc::packed::PACK_APART_FROM {
+                            domovoi_rpc::packed::unpack_bytes(frame)
+                        } else {
+                            match tokio::task::spawn_blocking(move || domovoi_rpc::packed::unpack_bytes(frame)).await {
+                                Ok(unpacked) => unpacked,
+                                Err(_) => break "Connection error: a frame could not be read".into(),
+                            }
+                        };
+                        let Ok(text) = unpacked else { break "Connection error: a frame could not be read".into() };
+                        if let Some(filter) = trace.as_deref()
+                            && text.contains(filter) {
+                                tracing::info!(frame = %text.chars().take(600).collect::<String>(), "rpc <<");
+                            }
+                        self.resolve(&mut req, SocketEvent::Message { text });
+                    }
+                    Ok(None) => break "Connection closed".into(),
+                    Err(err) => break format!("Connection error: {err}"),
+                },
+            }
+        };
+        if self.socket_gen.load(Ordering::Acquire) == gen_id {
+            self.resolve(&mut req, SocketEvent::Closed { reason: close_reason });
         }
     }
 

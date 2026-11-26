@@ -194,7 +194,7 @@ pub fn remote_status(state: &AppState, detail: bool) -> RemoteAccessStatus {
 }
 
 pub async fn set_remote(state: &SharedState, enabled: bool, relays: Option<Vec<String>>) -> Result<(), RemoteError> {
-    let result = state.remote.configure(enabled, relays, crate::http::router(state.clone())).await;
+    let result = state.remote.configure(enabled, relays, crate::http::router(state.clone()), crate::http::remote_rpc(state.clone())).await;
     state.pulse.notify_one();
     result
 }

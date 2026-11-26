@@ -161,12 +161,12 @@ impl Remote {
     }
 
     /// Starts serving `router` to iroh peers (restarting if running).
-    pub async fn start(self: &Arc<Self>, router: axum::Router) -> Result<(), RemoteError> {
+    pub async fn start(self: &Arc<Self>, router: axum::Router, rpc: domovoi_remote::RpcHandler) -> Result<(), RemoteError> {
         let _op = self.ops.lock().await;
-        self.start_locked(router).await
+        self.start_locked(router, rpc).await
     }
 
-    async fn start_locked(self: &Arc<Self>, router: axum::Router) -> Result<(), RemoteError> {
+    async fn start_locked(self: &Arc<Self>, router: axum::Router, rpc: domovoi_remote::RpcHandler) -> Result<(), RemoteError> {
         let policy = crate::policy::current();
         if !policy.allows_remote_clients() {
             let refused = policy.refuse_remote_clients(Some("so remote access over iroh does not start".into())).to_string();
@@ -179,11 +179,11 @@ impl Remote {
         self.halt().await;
         self.phase.send_replace(Phase::Starting);
         let lan_only = matches!(network, Network::Direct { .. });
-        let started = match RemoteServer::start(self.key.clone(), network, router.clone()).await {
+        let started = match RemoteServer::start_with_rpc(self.key.clone(), network, router.clone(), Some(rpc.clone())).await {
             Ok(s) => s,
             // The saved LAN port may be taken now: pick a new one.
             Err(_) if lan_only && settings.lan_port.is_some() => {
-                match RemoteServer::start(self.key.clone(), Network::Direct { port: 0 }, router).await {
+                match RemoteServer::start_with_rpc(self.key.clone(), Network::Direct { port: 0 }, router, Some(rpc)).await {
                     Ok(s) => s,
                     Err(e) => return Err(self.failed(e.to_string())),
                 }
@@ -282,7 +282,7 @@ impl Remote {
 
     /// Saves new settings and starts or stops serving to match. A request
     /// that changes nothing leaves a running endpoint (and its peers) alone.
-    pub async fn configure(self: &Arc<Self>, enabled: bool, relays: Option<Vec<String>>, router: axum::Router) -> Result<(), RemoteError> {
+    pub async fn configure(self: &Arc<Self>, enabled: bool, relays: Option<Vec<String>>, router: axum::Router, rpc: domovoi_remote::RpcHandler) -> Result<(), RemoteError> {
         if let Some(relays) = &relays {
             network(relays).map_err(RemoteError::InvalidRelay)?;
         }
@@ -310,7 +310,7 @@ impl Remote {
         if !changed && self.is_running() {
             return Ok(());
         }
-        self.start_locked(router).await
+        self.start_locked(router, rpc).await
     }
 
     /// The best ticket available: the running server's (with its relay and

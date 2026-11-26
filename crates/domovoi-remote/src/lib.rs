@@ -10,6 +10,11 @@
 //! clients (URLSession, an image loader, a webview) then work unchanged
 //! against `http://127.0.0.1:<port>`. The bridge grants nothing by itself;
 //! the server authenticates every request.
+//!
+//! A client that reads its RPC socket in Rust does not take it through
+//! HTTP and the loopback port: it opens a second connection ([`RPC_ALPN`])
+//! whose streams carry the socket's frames as they are ([`frames`],
+//! [`Bridge::rpc`]).
 
 use iroh::endpoint::{Connection, QuicTransportConfig, presets};
 use iroh::{Endpoint, RelayMode};
@@ -24,16 +29,22 @@ pub use iroh_tickets::endpoint::EndpointTicket;
 
 #[cfg(feature = "bridge")]
 mod bridge;
+pub mod frames;
 #[cfg(feature = "server")]
 mod server;
 
 #[cfg(feature = "bridge")]
 pub use bridge::{Bridge, BridgeStatus, ClientEndpoint};
 #[cfg(feature = "server")]
-pub use server::{RemotePeer, RemoteServer, ServerStatus};
+pub use server::{RemotePeer, RemoteServer, RpcHandler, ServerStatus};
 
 /// The protocol: HTTP/1.1, one connection per bi-stream.
 pub const ALPN: &[u8] = b"domovoi/http/1";
+
+/// The RPC socket without HTTP: one socket per bi-stream, as [`frames`].
+/// A server that does not serve it refuses the connection, and the client
+/// takes its socket through HTTP as before.
+pub const RPC_ALPN: &[u8] = b"domovoi/rpc/1";
 
 /// How long a QUIC path may stay silent; keep-alives keep it well under.
 const KEEP_ALIVE: Duration = Duration::from_secs(15);

@@ -77,10 +77,11 @@ live provider filter="":
 
 # Build this checkout's measurements (benches, `perf_*` tests, the server) and keep them
 # under .reference/perf/<label>, so they can be run again after the code has changed
-perf-save label:
-    {{python}} tools/perf.py save {{label}}
+# (`--commit <rev>` builds that commit instead of the checkout as it is)
+perf-save label *args:
+    {{python}} tools/perf.py save {{label}} {{args}}
 
-# Run a kept build's measurements once (`--only bench|store|load|real` runs one group)
+# Run a kept build's measurements once (`--only bench|store|load|remote|real` runs one group)
 perf-run label *args:
     {{python}} tools/perf.py run {{label}} {{args}}
 

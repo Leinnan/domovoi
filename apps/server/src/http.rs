@@ -1129,6 +1129,111 @@ async fn ws(
     })
 }
 
+/// How long a peer that opened an RPC stream has to say who it is.
+const HELLO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// Serves the RPC socket to iroh peers that open it as a stream of frames
+/// (`domovoi_remote::RPC_ALPN`), for [`domovoi_remote::RemoteServer`].
+pub fn remote_rpc(state: SharedState) -> domovoi_remote::RpcHandler {
+    Arc::new(move |peer, reader, writer| Box::pin(rpc_stream(state.clone(), peer, reader, writer)))
+}
+
+/// One RPC socket on an iroh stream: what [`ws`] serves, without HTTP, the
+/// WebSocket and the loopback port in between. The first frame is the
+/// client's [`Hello`](domovoi_rpc::message::Hello) and the answer a
+/// [`Greeting`](domovoi_rpc::message::Greeting); then frames are messages,
+/// as text or packed (`domovoi_rpc::packed::pack_bytes`).
+async fn rpc_stream(state: SharedState, RemotePeer(peer): RemotePeer, mut reader: domovoi_remote::frames::FrameReader, mut writer: domovoi_remote::frames::FrameWriter) {
+    use domovoi_rpc::message::{Greeting, Hello};
+    use futures::{SinkExt, StreamExt};
+    let peer = peer.to_string();
+    async fn greet(writer: &mut domovoi_remote::frames::FrameWriter, greeting: &Greeting) -> bool {
+        writer.send(&serde_json::to_vec(greeting).expect("a greeting is plain data")).await.is_ok()
+    }
+    let refused = |reason: &str| Greeting::Refused { reason: reason.to_owned() };
+    // A device that never paired has no ticket to show: it is not read from.
+    let hello = match state.auth.known_peer(&peer) {
+        Ok(true) => match tokio::time::timeout(HELLO_TIMEOUT, reader.next()).await {
+            Ok(Ok(Some(frame))) => serde_json::from_slice::<Hello>(&frame).ok(),
+            _ => return,
+        },
+        _ => None,
+    };
+    let Some(hello) = hello else {
+        greet(&mut writer, &refused("missing_credential")).await;
+        return writer.finish().await;
+    };
+    let session = match state.auth.redeem_ws_ticket(&hello.ticket, Some(&peer)) {
+        Ok(Some(session)) => session,
+        _ => {
+            greet(&mut writer, &refused("invalid_credential")).await;
+            return writer.finish().await;
+        }
+    };
+    if !greet(&mut writer, &Greeting::Welcome).await {
+        return;
+    }
+    // A client of another protocol version is told which side to update, and
+    // again for whatever it sends, as on a WebSocket ([`tell_to_update`]).
+    if let Some(advice) = update_advice_for(Some(hello.protocol)) {
+        let frame = domovoi_rpc::message::encode_server_message(&domovoi_rpc::message::FromServer::Defect { defect: advice.into() });
+        while writer.send(frame.as_bytes()).await.is_ok() && matches!(reader.next().await, Ok(Some(_))) {}
+        return;
+    }
+    let live = state.connections.open(&session.token_hash);
+    // A revoke between the ticket and `open` found no socket to close.
+    if !matches!(state.auth.session_for_hash(&session.token_hash), Ok(Some(_))) {
+        return;
+    }
+    let ctx = Arc::new(ConnCtx { state, session, connection_id: live.id });
+    // The connection loop reads and writes text; this end of it is bytes.
+    let incoming = futures::stream::unfold(reader, |mut reader| async move {
+        match reader.next().await {
+            Ok(Some(frame)) => Some((String::from_utf8(frame).map_err(|_| "a frame that is not text".to_owned()), reader)),
+            Ok(None) => None,
+            Err(e) => Some((Err(e.to_string()), reader)),
+        }
+    })
+    // An error ends the socket: nothing can be read after it.
+    .scan(false, |ended, frame| {
+        let go_on = !*ended;
+        *ended = frame.is_err();
+        futures::future::ready(go_on.then_some(frame))
+    })
+    .take_until(live.cancel.clone().cancelled_owned());
+    let (frames, mut queued) = futures::channel::mpsc::channel::<String>(64);
+    let pack = hello.pack;
+    let sender = tokio::spawn(async move {
+        while let Some(frame) = queued.next().await {
+            let bytes = match pack {
+                false => frame.into_bytes(),
+                true if frame.len() < domovoi_rpc::packed::PACK_APART_FROM => domovoi_rpc::packed::pack_bytes(frame),
+                true => match tokio::task::spawn_blocking(move || domovoi_rpc::packed::pack_bytes(frame)).await {
+                    Ok(bytes) => bytes,
+                    Err(_) => break,
+                },
+            };
+            if writer.send(&bytes).await.is_err() {
+                return;
+            }
+        }
+        writer.finish().await;
+    });
+    // QUIC keeps the path alive and ends the stream when the peer is gone:
+    // no heartbeat of this socket's own. Packing is done above, as bytes.
+    let options = ConnectionOptions::default();
+    let cancel = live.cancel.clone();
+    tokio::select! {
+        () = domovoi_rpc::serve_connection(rpc_router(), ctx, Box::pin(incoming), frames.sink_map_err(|_| ()), options) => {}
+        () = async move {
+            cancel.cancelled().await;
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        } => {}
+    }
+    drop(live);
+    let _ = sender.await;
+}
+
 /// The socket URL's parameter naming the client's [`PROTOCOL_VERSION`].
 const PROTOCOL_QUERY_PARAM: &str = "protocol";
 
@@ -1138,7 +1243,12 @@ const SERVER_TOO_OLD: &str = "This Domovoi server is older than this app. Update
 /// What to tell a client whose socket URL names another protocol version
 /// than this server's, or none (an app from before the parameter existed).
 fn update_advice(query: &HashMap<String, String>) -> Option<&'static str> {
-    match query.get(PROTOCOL_QUERY_PARAM).and_then(|version| version.parse::<u32>().ok()) {
+    update_advice_for(query.get(PROTOCOL_QUERY_PARAM).and_then(|version| version.parse::<u32>().ok()))
+}
+
+/// What to tell a client of protocol `version` (`None`: it named none).
+fn update_advice_for(version: Option<u32>) -> Option<&'static str> {
+    match version {
         Some(version) if version == PROTOCOL_VERSION => None,
         Some(version) if version > PROTOCOL_VERSION => Some(SERVER_TOO_OLD),
         _ => Some(CLIENT_TOO_OLD),

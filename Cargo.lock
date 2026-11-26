@@ -2271,6 +2271,7 @@ dependencies = [
  "dirs 6.0.0",
  "domovoi-local",
  "domovoi-remote",
+ "domovoi-rpc",
  "domovoi_core",
  "futures",
  "hostname",

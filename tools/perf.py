@@ -2,6 +2,7 @@
 """Measure a build, keep it, and compare it with another.
 
     tools/perf.py save <label>             build the measurements of this checkout and keep them
+    tools/perf.py save <label> --commit X  build those of the commit X (the checkout may have moved on)
     tools/perf.py run <label> [--only G]   run a kept build once and record the numbers
     tools/perf.py pairs <before> <after>   run two kept builds in alternation (default 3 pairs)
     tools/perf.py compare <before> <after> table of medians, spread and change
@@ -24,12 +25,13 @@ Measurements are the divan benches (median per bench), and every line
 `PERF <name> <value> <unit>` the ignored `perf_*` tests print. All of them are
 costs: lower is better.
 
-Groups (`--only`): bench, store, load, real. `real` needs a copy of a real
+Groups (`--only`): bench, store, load, remote, real. `real` needs a copy of a real
 home (`--real-home`, default `.reference/perf-home` when it exists); it is
 copied again before it is opened and never written.
 """
 
 import argparse
+import filecmp
 import json
 import os
 import re
@@ -45,6 +47,8 @@ KEPT = ROOT / ".reference" / "perf"
 REAL_HOME = ROOT / ".reference" / "perf-home"
 # Where `save` builds: a copy of the checkout with its own target folder.
 BUILD = ROOT / ".reference" / "perf-build"
+# Where `save --commit` puts the commit's files before they go to BUILD.
+SOURCE = ROOT / ".reference" / "perf-source"
 
 # (group, name the executable is kept under, cargo arguments that build it,
 # the cargo target it is, arguments it is run with)
@@ -56,9 +60,10 @@ BUILDS = [
     ("bench", "bench-view", ["bench", "--no-run", "-p", "domovoi_core", "--bench", "view"], ("view", "bench"), BENCH_ARGS),
     ("store", "server-unit", ["test", "--release", "--no-run", "-p", "domovoi-server", "--bin", "domovoi-server"], ("domovoi-server", "bin-test"), PERF_TEST_ARGS),
     ("load", "provider-turns", ["test", "--release", "--no-run", "-p", "domovoi-server", "--test", "provider_turns"], ("provider_turns", "test"), PERF_TEST_ARGS),
+    ("remote", "remote-access", ["test", "--release", "--no-run", "-p", "domovoi-server", "--test", "remote_access"], ("remote_access", "test"), PERF_TEST_ARGS),
 ]
 SERVER = "domovoi-server"
-GROUPS = ["bench", "store", "load", "real"]
+GROUPS = ["bench", "store", "load", "remote", "real"]
 # Within `server-unit`: the real-home measurement is its own group.
 REAL_TEST = "perf_real_home"
 
@@ -69,16 +74,32 @@ def sh(args, **kw):
     return subprocess.run(args, cwd=ROOT, text=True, **kw)
 
 
-def sync_build_tree():
-    """Makes BUILD the checkout's own files as they are now, and nothing else
-    beside its target folder."""
-    listed = sh(["git", "ls-files", "-co", "--exclude-standard", "-z"], stdout=subprocess.PIPE).stdout.split("\0")
-    wanted = {name for name in listed if name and (ROOT / name).is_file()}
+def source_tree(commit):
+    """Where the files to build are, and their names: the checkout's own files
+    as they are now, or with `commit` that commit's, taken out of git into
+    SOURCE (the checkout may be several changes further on by then)."""
+    if not commit:
+        listed = sh(["git", "ls-files", "-co", "--exclude-standard", "-z"], stdout=subprocess.PIPE).stdout.split("\0")
+        return ROOT, {name for name in listed if name and (ROOT / name).is_file()}
+    shutil.rmtree(SOURCE, ignore_errors=True)
+    SOURCE.mkdir(parents=True)
+    archive = subprocess.Popen(["git", "archive", "--format=tar", commit], cwd=ROOT, stdout=subprocess.PIPE)
+    unpacked = subprocess.run(["tar", "-x", "-C", str(SOURCE)], stdin=archive.stdout)
+    if archive.wait() != 0 or unpacked.returncode != 0:
+        sys.exit(f"perf: could not take {commit} out of git")
+    names = {str(path.relative_to(SOURCE)) for path in SOURCE.rglob("*") if path.is_file()}
+    return SOURCE, names
+
+
+def sync_build_tree(root, wanted):
+    """Makes BUILD the files `wanted` of `root`, and nothing else beside its
+    target folder. A file that is already the same there is left as it is,
+    with its time, so that cargo builds again only what changed."""
     copied = 0
     for name in sorted(wanted):
-        source, target = ROOT / name, BUILD / name
+        source, target = root / name, BUILD / name
         before, now = (target.stat() if target.exists() else None), source.stat()
-        if before and before.st_size == now.st_size and int(before.st_mtime) == int(now.st_mtime):
+        if before and before.st_size == now.st_size and (int(before.st_mtime) == int(now.st_mtime) or filecmp.cmp(source, target, shallow=False)):
             continue
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, target)
@@ -121,16 +142,16 @@ def cargo_executables(args):
     return found
 
 
-def count_lines(pattern, paths, extensions):
-    """Lines matching `pattern` in the checkout's own files under `paths`."""
-    files = sh(["git", "ls-files", "-co", "--exclude-standard", "--", *paths], stdout=subprocess.PIPE).stdout.splitlines()
+def count_lines(root, names, pattern, paths, extensions):
+    """Lines matching `pattern` in the files `names` of `root` under `paths`."""
+    files = sorted(name for name in names if any(name == path or name.startswith(path + "/") for path in paths))
     matcher = re.compile(pattern) if pattern else None
     lines = hits = with_hit = 0
     for name in files:
         if not name.endswith(extensions):
             continue
         try:
-            text = (ROOT / name).read_text(errors="replace")
+            text = (root / name).read_text(errors="replace")
         except OSError:
             continue
         lines += text.count("\n")
@@ -141,12 +162,12 @@ def count_lines(pattern, paths, extensions):
     return lines, hits, with_hit
 
 
-def static_measures():
-    """What is read off the checkout, not timed."""
+def static_measures(root, names):
+    """What is read off the source, not timed."""
     source = (".rs",)
-    rust_lines, _, _ = count_lines(None, ["apps", "crates"], source)
-    _, _, value_files = count_lines(r"expect\(clippy::disallowed_types", ["apps", "crates"], source)
-    _, t3_lines, _ = count_lines(r"(?i)t3 ?code|\bt3\b", ["apps", "crates", "conformance", "docs", "README.md", "justfile", ".github"], (".rs", ".swift", ".kt", ".md", ".ts", ".yml", ".toml", "justfile", ".py"))
+    rust_lines, _, _ = count_lines(root, names, None, ["apps", "crates"], source)
+    _, _, value_files = count_lines(root, names, r"expect\(clippy::disallowed_types", ["apps", "crates"], source)
+    _, t3_lines, _ = count_lines(root, names, r"(?i)t3 ?code|\bt3\b", ["apps", "crates", "conformance", "docs", "README.md", "justfile", ".github"], (".rs", ".swift", ".kt", ".md", ".ts", ".yml", ".toml", "justfile", ".py"))
     return {
         "code.rust_lines": (float(rust_lines), "count"),
         "code.files_opting_out_of_value_ban": (float(value_files), "count"),
@@ -154,15 +175,16 @@ def static_measures():
     }
 
 
-def save(label):
+def save(label, of=None):
     kept = KEPT / label
     if kept.exists():
         sys.exit(f"perf: {kept} exists; choose another label or remove it")
-    sync_build_tree()
+    root, names = source_tree(of)
+    sync_build_tree(root, names)
     # Read now: the checkout may be edited while the builds run.
-    static = static_measures()
-    commit = sh(["git", "rev-parse", "--short", "HEAD"], stdout=subprocess.PIPE).stdout.strip()
-    dirty = bool(sh(["git", "status", "--porcelain"], stdout=subprocess.PIPE).stdout.strip())
+    static = static_measures(root, names)
+    commit = sh(["git", "rev-parse", "--short", of or "HEAD"], stdout=subprocess.PIPE).stdout.strip()
+    dirty = not of and bool(sh(["git", "status", "--porcelain"], stdout=subprocess.PIPE).stdout.strip())
     (kept / "bin").mkdir(parents=True)
     (kept / "runs").mkdir()
     for _, name, args, target, _ in BUILDS:
@@ -249,6 +271,9 @@ def run(label, only=None, real_home=None):
         if name == "server-unit":
             # The real home is its own step below.
             run_args += ["--skip", REAL_TEST]
+        if not (kept / "bin" / name).exists():
+            # A build kept before this measurement existed.
+            continue
         print(f"perf: {label}: {name}", flush=True)
         done = subprocess.run([str(kept / "bin" / name), *run_args], cwd=kept, env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         (kept / "runs" / f"last-{name}.log").write_text(done.stdout)
@@ -369,7 +394,9 @@ def compare(before_runs, after_runs, before_name, after_name, match=None, change
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
-    sub.add_parser("save").add_argument("label")
+    p = sub.add_parser("save")
+    p.add_argument("label")
+    p.add_argument("--commit", help="build this commit, not the checkout as it is")
     p = sub.add_parser("run")
     p.add_argument("label")
     p.add_argument("--only", action="append", choices=GROUPS)
@@ -389,7 +416,7 @@ def main():
     args = parser.parse_args()
 
     if args.command == "save":
-        save(args.label)
+        save(args.label, args.commit)
     elif args.command == "run":
         sys.exit(0 if run(args.label, args.only, args.real_home) else 1)
     elif args.command == "pairs":

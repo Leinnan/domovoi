@@ -44,6 +44,7 @@ the spread reads as "same". Every measure is a cost: lower is better.
 | `turn.reply_20k.*` | A 20,000-character reply streamed through `Turn` over ten seconds: bytes sent to one subscriber, events, what the reply leaves in the database | `perf_tests.rs` |
 | `load.<clients>.*` | The scripted provider streams 20,000 characters while 1, 10 and 50 clients watch: server CPU, live event latency, lag snapshots, the server's peak memory | `apps/server/tests/provider_turns.rs` |
 | `connect.*`, `call.*` | A signed-in device opening its socket, getting the shell and a thread snapshot; one small call there and back | `provider_turns.rs` |
+| `remote.*` | The socket of a server reached over iroh (both ends on this machine), as a WebSocket through the tunnel's loopback port and as an iroh stream: opening it, one small call there and back, the bytes a packed kilobyte of JSON takes | `apps/server/tests/remote_access.rs` |
 | `real.*` | On a copy of a real home (`.reference/perf-home`, copied again before it is opened): opening the database, the shell snapshot, the largest thread's snapshot, reading every thread. No server is started on it: one would run the home's scheduled tasks | `perf_tests.rs` (`DOMOVOI_PERF_HOME`) |
 | `size.*`, `code.*` | The server binary's size; lines of Rust; files opting out of the JSON-value ban; lines mentioning t3code | read off the checkout at `save` |
 

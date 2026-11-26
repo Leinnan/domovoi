@@ -1,6 +1,10 @@
 //! Serving an axum router to iroh peers.
 
-use crate::{ALPN, EndpointTicket, Error, Network, SecretKey, bind, home_relay, loopback_ticket};
+use crate::frames::{FrameReader, FrameWriter};
+use crate::{ALPN, EndpointTicket, Error, Network, RPC_ALPN, SecretKey, bind, home_relay, loopback_ticket};
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
 use hyper_util::rt::TokioIo;
 use hyper_util::service::TowerToHyperService;
 use iroh::endpoint::Connection;
@@ -34,15 +38,27 @@ pub struct RemoteServer {
     task: std::sync::Mutex<Option<JoinHandle<()>>>,
 }
 
+/// Serves one RPC socket of a peer ([`RPC_ALPN`]): its frames in, its frames
+/// out, until either side ends. It authenticates the peer itself, from what
+/// the first frame says.
+pub type RpcHandler = Arc<dyn Fn(RemotePeer, FrameReader, FrameWriter) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
+
 /// A peer that opens a stream and sends no request is dropped after this.
 const HEADER_READ_TIMEOUT: Duration = Duration::from_secs(20);
 
 impl RemoteServer {
     /// Starts accepting iroh connections and serving `router` on each stream.
     pub async fn start(secret: SecretKey, network: Network, router: axum::Router) -> Result<Self, Error> {
-        let endpoint = bind(secret, &network, vec![ALPN.to_vec()]).await?;
+        Self::start_with_rpc(secret, network, router, None).await
+    }
+
+    /// As [`RemoteServer::start`], also serving RPC sockets ([`RPC_ALPN`])
+    /// with `rpc`.
+    pub async fn start_with_rpc(secret: SecretKey, network: Network, router: axum::Router, rpc: Option<RpcHandler>) -> Result<Self, Error> {
+        let alpns = [Some(ALPN), rpc.as_ref().map(|_| RPC_ALPN)].into_iter().flatten().map(<[u8]>::to_vec).collect();
+        let endpoint = bind(secret, &network, alpns).await?;
         let cancel = CancellationToken::new();
-        let task = tokio::spawn(accept_loop(endpoint.clone(), router, cancel.clone()));
+        let task = tokio::spawn(accept_loop(endpoint.clone(), router, rpc, cancel.clone()));
         Ok(Self { id: endpoint.id(), endpoint: std::sync::Mutex::new(Some(endpoint)), cancel, task: std::sync::Mutex::new(Some(task)) })
     }
 
@@ -108,7 +124,7 @@ impl RemoteServer {
     }
 }
 
-async fn accept_loop(endpoint: Endpoint, router: axum::Router, cancel: CancellationToken) {
+async fn accept_loop(endpoint: Endpoint, router: axum::Router, rpc: Option<RpcHandler>, cancel: CancellationToken) {
     loop {
         let incoming = tokio::select! {
             () = cancel.cancelled() => return,
@@ -118,6 +134,7 @@ async fn accept_loop(endpoint: Endpoint, router: axum::Router, cancel: Cancellat
             },
         };
         let router = router.clone();
+        let rpc = rpc.clone();
         let cancel = cancel.clone();
         tokio::spawn(async move {
             let conn = match incoming.await {
@@ -127,13 +144,17 @@ async fn accept_loop(endpoint: Endpoint, router: axum::Router, cancel: Cancellat
                     return;
                 }
             };
-            if conn.alpn() != ALPN {
-                conn.close(0u32.into(), b"unsupported protocol");
-                return;
-            }
+            let serving: Pin<Box<dyn Future<Output = ()> + Send>> = match (conn.alpn(), rpc) {
+                (alpn, _) if alpn == ALPN => Box::pin(serve_connection(conn.clone(), router)),
+                (alpn, Some(rpc)) if alpn == RPC_ALPN => Box::pin(serve_rpc(conn.clone(), rpc)),
+                _ => {
+                    conn.close(0u32.into(), b"unsupported protocol");
+                    return;
+                }
+            };
             tokio::select! {
                 () = cancel.cancelled() => conn.close(0u32.into(), b"server stopping"),
-                () = serve_connection(conn.clone(), router) => {}
+                () = serving => {}
             }
         });
     }
@@ -162,4 +183,15 @@ async fn serve_connection(conn: Connection, router: axum::Router) {
         });
     }
     tracing::info!(peer = %peer.fmt_short(), "iroh: peer disconnected");
+}
+
+/// Serves every bi-stream the peer opens as one RPC socket.
+async fn serve_rpc(conn: Connection, rpc: RpcHandler) {
+    let peer = conn.remote_id();
+    tracing::info!(peer = %peer.fmt_short(), "iroh: peer connected for RPC");
+    while let Ok((send, recv)) = conn.accept_bi().await {
+        let (reader, writer) = crate::frames::halves(&conn, send, recv);
+        tokio::spawn(rpc(RemotePeer(peer), reader, writer));
+    }
+    tracing::info!(peer = %peer.fmt_short(), "iroh: peer disconnected from RPC");
 }

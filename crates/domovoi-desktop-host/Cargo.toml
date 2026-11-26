@@ -8,6 +8,8 @@ license.workspace = true
 [dependencies]
 domovoi_core = { path = "../../apps/domovoi-core" }
 domovoi-remote = { path = "../domovoi-remote", default-features = false, features = ["bridge"] }
+# The hello of an RPC socket opened as an iroh stream, and its packed frames.
+domovoi-rpc = { path = "../domovoi-rpc", default-features = false }
 domovoi-local = { path = "../domovoi-local" }
 crux_core = "=0.20.0"
 crux_http = "=0.20.0"

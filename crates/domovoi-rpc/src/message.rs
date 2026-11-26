@@ -87,6 +87,30 @@ pub enum FromServer {
     Pong,
 }
 
+/// What a client says first on a socket that is not a WebSocket (an iroh
+/// stream): on a WebSocket the same is in the URL it was opened with.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Hello {
+    /// The client's protocol version.
+    pub protocol: u32,
+    /// A one-time ticket for the session, minted over authenticated HTTP.
+    pub ticket: String,
+    /// Send large frames packed ([`crate::packed::pack_bytes`]).
+    #[serde(default)]
+    pub pack: bool,
+}
+
+/// The server's answer to a [`Hello`], before any other message.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "_tag")]
+pub enum Greeting {
+    /// The socket is open: messages follow as on any other.
+    Welcome,
+    /// It is not, and the stream ends. `reason` is a code such as
+    /// `invalid_credential`.
+    Refused { reason: String },
+}
+
 /// The messages of one frame from a client.
 pub fn decode_client_frame(frame: &str) -> Result<Vec<FromClient>, serde_json::Error> {
     if frame.trim_start().starts_with('[') {

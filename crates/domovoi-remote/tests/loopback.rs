@@ -238,3 +238,53 @@ async fn falls_back_to_the_relay() {
     bridge.stop().await;
     server.shutdown().await;
 }
+
+/// An RPC socket goes over a connection of its own: frames as they are, of
+/// any size, in both directions, and the stream's end is read as its end.
+#[tokio::test]
+async fn rpc_frames_cross_without_http() {
+    let echo: domovoi_remote::RpcHandler = std::sync::Arc::new(|RemotePeer(peer), mut reader, mut writer| {
+        Box::pin(async move {
+            writer.send(peer.to_string().as_bytes()).await.unwrap();
+            while let Ok(Some(frame)) = reader.next().await {
+                writer.send(&frame).await.unwrap();
+            }
+            writer.finish().await;
+        })
+    });
+    let server = RemoteServer::start_with_rpc(SecretKey::generate(), Network::Direct { port: 0 }, router(), Some(echo)).await.unwrap();
+    let key = SecretKey::generate();
+    let me = key.public().to_string();
+    let bridge = Bridge::start(key, Network::Direct { port: 0 }, server.loopback_ticket(), 0).await.unwrap();
+
+    // The server sees a stream once something is sent on it.
+    let (mut reader, mut writer) = bridge.rpc().await.unwrap();
+    writer.send(b"hello").await.unwrap();
+    assert_eq!(reader.next().await.unwrap().as_deref(), Some(me.as_bytes()), "the handler is told which device it serves");
+    assert_eq!(reader.next().await.unwrap().as_deref(), Some(&b"hello"[..]));
+    writer.send(b"").await.unwrap();
+    assert_eq!(reader.next().await.unwrap().as_deref(), Some(&b""[..]), "an empty frame is a frame");
+    let large: Vec<u8> = (0..3_000_000u32).map(|i| (i % 251) as u8).collect();
+    writer.send(&large).await.unwrap();
+    assert_eq!(reader.next().await.unwrap(), Some(large));
+    // HTTP still crosses the bridge beside it.
+    assert_eq!(get_body(bridge.port(), "/peer").await, me);
+    writer.finish().await;
+    assert_eq!(reader.next().await.unwrap(), None, "the handler ended its half after ours");
+
+    bridge.stop().await;
+    server.shutdown().await;
+}
+
+/// A server that does not serve RPC this way refuses the connection: the
+/// client learns it at once and takes its socket through HTTP.
+#[tokio::test]
+async fn a_server_without_rpc_streams_refuses_them() {
+    let server = RemoteServer::start(SecretKey::generate(), Network::Direct { port: 0 }, router()).await.unwrap();
+    let bridge = Bridge::start(SecretKey::generate(), Network::Direct { port: 0 }, server.loopback_ticket(), 0).await.unwrap();
+    let refused = tokio::time::timeout(Duration::from_secs(10), bridge.rpc()).await.expect("refused without waiting out the dial");
+    assert!(refused.is_err());
+    assert!(!get_body(bridge.port(), "/peer").await.is_empty(), "HTTP is served as before");
+    bridge.stop().await;
+    server.shutdown().await;
+}

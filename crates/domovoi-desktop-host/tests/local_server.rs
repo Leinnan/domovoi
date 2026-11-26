@@ -1,6 +1,8 @@
 //! The host beside a real server on this machine: a fresh client finds the
 //! server's descriptor, signs in by writing a request file, and connects with
-//! no pairing code; signed out by the server, it signs itself in again.
+//! no pairing code; signed out by the server, it signs itself in again. And
+//! the host against a server it reaches over iroh: its RPC socket is an iroh
+//! stream, not a WebSocket through the tunnel's loopback port.
 //!
 //! Needs a built server, named by `DOMOVOI_SERVER_BIN` (this crate does not
 //! build one):
@@ -123,6 +125,47 @@ async fn a_fresh_client_beside_a_server_connects_with_no_code_and_signs_itself_i
     assert_ne!(first, second, "a new sign-in");
     assert!(!view.connection.needs_pairing);
     assert_eq!(store.load("environments").as_deref(), Some(saved.as_str()), "the same saved server");
+
+    host.shutdown();
+}
+
+/// A server reached over iroh: the app pairs through the tunnel's loopback
+/// port (HTTP), and its RPC socket goes onto an iroh stream of its own.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs a built server: DOMOVOI_SERVER_BIN"]
+async fn the_socket_of_a_server_reached_over_iroh_is_an_iroh_stream() {
+    let bin = std::fs::canonicalize(PathBuf::from(std::env::var_os("DOMOVOI_SERVER_BIN").expect("DOMOVOI_SERVER_BIN names the server"))).expect("the server binary");
+    let home = std::env::temp_dir().join(format!("domovoi-host-remote-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&home);
+    let port = std::net::TcpListener::bind("127.0.0.1:0").expect("a free port").local_addr().expect("its address").port();
+    // Remote access on, reachable by its addresses only (no relay, no lookup).
+    let child = Server::command(&bin, &home, port).args(["--no-startup-code", "--remote", "--relay", "disabled"]).stdout(Stdio::null()).stderr(Stdio::null()).spawn().expect("the server starts");
+    let server = Server { child, bin, home, port };
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while !server.descriptor().exists() {
+        assert!(Instant::now() < deadline, "the server wrote no descriptor");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let pairing = Server::command(&server.bin, &server.home, server.port).args(["pair", "--remote"]).output().expect("pair runs");
+    let printed = String::from_utf8_lossy(&pairing.stdout).into_owned();
+    let link = printed.split_whitespace().find(|word| word.starts_with("domovoi://connect?")).unwrap_or_else(|| panic!("no pairing link in: {printed}")).to_owned();
+
+    let store = Arc::new(SecureStore::in_memory());
+    let (host, mut events) = domovoi_desktop_host::start(Arc::clone(&store), HostConfig::for_tests(Identity::ICED));
+    let mut view = ViewModel::default();
+    host.send(Event::Launch { surface: "desktop".into(), device_label: "Host Test".into(), device_os: "macOS".into() });
+    host.send(Event::ConnectRemote { link });
+    until(&mut events, &mut view, "the connection over iroh", |view| view.connection.state == "connected" && !view.connection.environment_label.is_empty()).await;
+
+    // The server lists the app as connected, and served its socket as a stream.
+    let devices = server.remote(&["devices"]);
+    let line = devices.lines().find(|line| line.contains("Host Test")).unwrap_or_else(|| panic!("listed: {devices}"));
+    assert!(line.contains("connected") || line.contains("online"), "{line}");
+    let logs: String = std::fs::read_dir(server.home.join("userdata").join("logs"))
+        .expect("the server's logs")
+        .filter_map(|entry| std::fs::read_to_string(entry.ok()?.path()).ok())
+        .collect();
+    assert!(logs.contains("peer connected for RPC"), "the socket did not go onto an iroh stream:\n{}", logs.lines().filter(|line| line.contains("iroh")).collect::<Vec<_>>().join("\n"));
 
     host.shutdown();
 }

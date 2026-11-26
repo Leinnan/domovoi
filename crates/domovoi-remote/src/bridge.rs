@@ -1,6 +1,7 @@
 //! The client side: loopback TCP connections piped into iroh bi-streams.
 
-use crate::{ALPN, EndpointTicket, Error, Network, PathKind, SecretKey, bind, current_path};
+use crate::frames::{FrameReader, FrameWriter};
+use crate::{ALPN, EndpointTicket, Error, Network, PathKind, RPC_ALPN, SecretKey, bind, current_path};
 use iroh::endpoint::Connection;
 use iroh::{Endpoint, EndpointAddr};
 use serde::Serialize;
@@ -55,6 +56,8 @@ struct Shared {
     endpoint: Endpoint,
     remote: EndpointAddr,
     conn: Mutex<Option<Connection>>,
+    /// The connection RPC sockets are streams of ([`RPC_ALPN`]), once one was asked for.
+    rpc_conn: Mutex<Option<Connection>>,
     /// Serializes dials so concurrent TCP accepts share one connection.
     dialing: tokio::sync::Mutex<()>,
     error: Mutex<Option<String>>,
@@ -83,6 +86,7 @@ impl Bridge {
             endpoint,
             remote: ticket.endpoint_addr().clone(),
             conn: Mutex::new(None),
+            rpc_conn: Mutex::new(None),
             dialing: tokio::sync::Mutex::new(()),
             error: Mutex::new(None),
             backoff: Mutex::new(None),
@@ -118,6 +122,28 @@ impl Bridge {
     /// suspended); otherwise a no-op.
     pub async fn ensure_connected(&self) -> Result<(), Error> {
         self.shared.connection(true).await.map(drop)
+    }
+
+    /// An RPC socket to the server: a stream on a connection of its own
+    /// kind ([`RPC_ALPN`]), with no HTTP and no loopback port in between.
+    /// The connection is made by the first socket and kept for the next
+    /// ones. Fails when the server does not serve RPC this way (an older
+    /// one); the socket is then opened through the loopback port as before.
+    pub async fn rpc(&self) -> Result<(FrameReader, FrameWriter), Error> {
+        let kept = lock(&self.shared.rpc_conn).clone().filter(|conn| conn.close_reason().is_none());
+        if let Some(conn) = kept
+            && let Ok((send, recv)) = conn.open_bi().await
+        {
+            return Ok(crate::frames::halves(&conn, send, recv));
+        }
+        let conn = match tokio::time::timeout(CONNECT_TIMEOUT, self.shared.endpoint.connect(self.shared.remote.clone(), RPC_ALPN)).await {
+            Ok(Ok(conn)) => conn,
+            Ok(Err(e)) => return Err(Error::msg("connecting to the server for RPC", e)),
+            Err(_) => return Err(Error::msg("connecting to the server for RPC", "timed out")),
+        };
+        let (send, recv) = conn.open_bi().await.map_err(|e| Error::msg("opening the RPC stream", e))?;
+        *lock(&self.shared.rpc_conn) = Some(conn.clone());
+        Ok(crate::frames::halves(&conn, send, recv))
     }
 
     /// Tells iroh the network changed (Wi-Fi to cellular), so it re-probes
