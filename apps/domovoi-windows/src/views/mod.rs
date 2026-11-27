@@ -2,6 +2,7 @@
 
 pub mod composer;
 pub mod items;
+pub mod issues;
 pub mod link_dialog;
 pub mod markdown;
 pub mod new_thread;

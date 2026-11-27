@@ -195,6 +195,7 @@ fn header(core: &CoreLink, connection: &ConnectionView, grouping: &str, face: (M
             MenuItem::item("go:files", "Go to File…  (Ctrl+P)"),
             MenuItem::item("go:content", "Search in Project…  (Ctrl+Shift+F)"),
             MenuItem::separator("separator-2"),
+            MenuItem::item("route:issues", "Issues"),
             MenuItem::item("route:pull-requests", "Pull Requests"),
             MenuItem::item("route:usage", "Usage"),
         ],
@@ -508,6 +509,9 @@ fn thread_row(row: &ThreadRowView, icons: Option<Icons<'_>>, rows: Rows<'_>) -> 
     let mut pills: Vec<View> = Vec::new();
     if row.plan_ready {
         pills.push(pill("Plan", Some(palette::project_rgb("violet", rows.dark)), rows.dark).into());
+    }
+    if let Some(issue) = &row.issue_badge {
+        pills.push(pill(issue, None, rows.dark).into());
     }
     if !row.pull_request.is_empty() {
         let colour = match row.pull_request_state.as_str() {

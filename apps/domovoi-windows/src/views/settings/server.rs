@@ -104,7 +104,46 @@ pub fn projects(core: &CoreLink, shown: &Shown<'_>, hooks: &Hooks<'_>) -> Vec<Vi
             StackPanel::new().orientation(Orientation::Vertical).spacing(6.0).children(vec![header, index_bar]).into()
         })
         .collect();
-    if rows.is_empty() { vec![empty("No projects yet. Add one from the new-thread page.")] } else { vec![card(rows)] }
+    let mut out = Vec::new();
+    if let Some(linear) = &shown.settings.linear_settings {
+        use std::{cell::RefCell, rc::Rc};
+        let token = Rc::new(RefCell::new(String::new()));
+        let input = token.clone();
+        let connect = core.clone();
+        let mut section = vec![
+            heading("Linear issue tracker"),
+            windows_reactor::PasswordBox::new().automation_name("Linear personal API key").placeholder_text("Personal API key")
+                .on_password_changed(move |value: Rc<str>| *input.borrow_mut() = value.to_string()).into(),
+            Button::new().content(TextBlock::new().text(if linear.linear_connected { "Replace API key" } else { "Connect Linear" }))
+                .on_click(move || {
+                    let value = std::mem::take(&mut *token.borrow_mut());
+                    if !value.trim().is_empty() { connect.send(Event::ConnectIssueTracker { token: Some(value) }); }
+                }).into(),
+        ];
+        if let Some(account) = &linear.linear_account { section.push(caption(&format!("Connected as {account}")).into()); }
+        if let Some(notice) = &linear.linear_notice { section.push(caption(notice).into()); }
+        if linear.linear_connected {
+            section.push(tell(core, "Disconnect Linear", Event::ConnectIssueTracker { token: None }).into());
+        }
+        if !linear.linear_teams.is_empty() {
+            let labels: Vec<_> = std::iter::once("No Linear team".into()).chain(linear.linear_teams.iter().map(|team| team.linear_team_name.clone())).collect();
+            for project in shown.settings.projects.iter().filter(|p| !p.is_scratch) {
+                let scopes: Vec<_> = std::iter::once(None).chain(linear.linear_teams.iter().map(|team| Some(team.linear_team_key.clone()))).collect();
+                let selected = scopes.iter().position(|scope| scope == &project.linear_scope);
+                let (link, project_id) = (core.clone(), project.id.clone());
+                section.push(caption(&project.title).into());
+                section.push(windows_reactor::ComboBox::new().automation_name(format!("Linear team for {}", project.title))
+                    .items_source(labels.clone()).selected_index(selected).on_selection_changed(move |index: Option<usize>| {
+                        if let Some(scope) = index.filter(|index| Some(*index) != selected).and_then(|index| scopes.get(index)) {
+                            link.send(Event::BindProjectIssueTracker { project_id: project_id.clone(), scope: scope.clone() });
+                        }
+                    }).into());
+            }
+        }
+        out.push(card(section));
+    }
+    out.push(if rows.is_empty() { empty("No projects yet. Add one from the new-thread page.") } else { card(rows) });
+    out
 }
 
 /// The link's QR code as an SVG: dark squares on white, with the quiet edge readers need.

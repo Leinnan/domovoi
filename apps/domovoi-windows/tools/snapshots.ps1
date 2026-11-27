@@ -126,6 +126,10 @@ try {
     }
     Invoke-Named 'Close the panel'
 
+    Invoke-Named "More"
+    Invoke-Named "Issues" $automation::RootElement
+    Save-Screen "04-issues"
+
     Invoke-Named 'Settings'
     foreach ($section in 'General', 'Appearance', 'Servers', 'Companion', 'Projects', 'Providers', 'Scheduled Tasks', 'Keybindings', 'Access & Remote', 'Archived', 'Maintenance') {
         Select-Named $section

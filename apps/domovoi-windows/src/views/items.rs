@@ -282,6 +282,9 @@ fn row(core: &CoreLink, item: &ItemView, draw: &Draw<'_>) -> View {
     match item.kind.as_str() {
         "user" => {
             let mut lines: Vec<View> = Vec::new();
+            if let Some(issue) = &item.issue_card {
+                lines.push(act("\u{E71B}", &issue.issue_label, draw, Act::Open(issue.issue_url.clone())));
+            }
             if !item.text.is_empty() {
                 lines.push(text(&item.text, size).into());
             }

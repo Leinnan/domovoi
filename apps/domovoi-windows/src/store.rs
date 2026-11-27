@@ -11,7 +11,7 @@ use std::rc::Rc;
 
 use domovoi_core::delta::{ThreadChange, ThreadPatch, ViewDelta};
 use domovoi_core::view::{
-    AgentSessionsView, ComposerView, ConnectionView, DiagramView, FolderBrowserView, ItemView, PaletteView, PanelView, PullRequestsView, SettingsView, SidebarView,
+    AgentSessionsView, ComposerView, ConnectionView, DiagramView, FolderBrowserView, IssuesView, ItemView, PaletteView, PanelView, PullRequestsView, SettingsView, SidebarView,
     ThreadPageView, ToastView, UsageView,
 };
 
@@ -36,6 +36,7 @@ pub struct Store {
     /// The command palette, while it is open.
     pub palette: Option<Rc<PaletteView>>,
     /// The pages beside the threads: the projects' pull requests, and what the agents used.
+    pub issues: Rc<IssuesView>,
     pub pull_requests: Rc<PullRequestsView>,
     pub usage: Rc<UsageView>,
 }
@@ -128,6 +129,7 @@ impl Store {
         if let Some(change) = delta.palette {
             self.palette = change.palette.map(Rc::new);
         }
+        if let Some(issues) = delta.issues { self.issues = Rc::new(issues); }
         if let Some(requests) = delta.pull_requests {
             self.pull_requests = Rc::new(requests);
         }

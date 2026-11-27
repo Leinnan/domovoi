@@ -292,19 +292,23 @@ fn workspace(core: &CoreLink, composer: &ComposerView) -> View {
     const LOCAL: &str = "Local folder";
     const WORKTREE: &str = "New worktree";
     let worktree = composer.workspace_mode == "worktree";
+    let workspace_required = composer.workspace_required;
     let modes = {
         let core = core.clone();
-        SelectorBar::new().items(vec![SelectorBarItem::new().text(LOCAL).is_selected(!worktree).into(), SelectorBarItem::new().text(WORKTREE).is_selected(worktree).into()]).on_selected_text_changed(
+        SelectorBar::new().items(vec![SelectorBarItem::new().text(LOCAL).is_selected(!worktree && !workspace_required).into(), SelectorBarItem::new().text(WORKTREE).is_selected(worktree).into()]).on_selected_text_changed(
             move |text: Option<Rc<str>>| {
                 // Only a change the user made: showing the mode selects it too.
                 let picked = text.as_deref() == Some(WORKTREE);
-                if text.is_some() && picked != worktree {
+                if text.is_some() && (workspace_required || picked != worktree) {
                     core.send(Event::SetWorkspaceMode { mode: if picked { "worktree" } else { "local" }.into() });
                 }
             },
         )
     };
     let mut lines: Vec<View> = vec![TextBlock::new().text("Workspace").font_weight(FontWeight::SEMI_BOLD).into(), modes.into()];
+    if let Some(chip) = super::issues::issue_chip(core, composer) {
+        lines.push(chip);
+    }
     if worktree && !composer.branches.is_empty() {
         let chosen = composer.base_branch.as_ref().and_then(|base| composer.branches.iter().position(|b| b == base));
         let (core, branches) = (core.clone(), composer.branches.clone());

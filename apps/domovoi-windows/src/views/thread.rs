@@ -95,6 +95,9 @@ pub fn thread(core: &CoreLink, thread: &Thread, sidebar: &SidebarView, icons: Ic
             tell(core, "Open", Event::SelectThread { thread_id: child.thread_id.clone() }).into(),
         ]));
     }
+    if let Some(status) = super::issues::thread_status(core, page, draw) {
+        top.push(status);
+    }
     if !page.links.is_empty() {
         let chips = page.links.iter().map(|link| {
             let (on_act, url) = (draw.on_act.clone(), link.url.clone());

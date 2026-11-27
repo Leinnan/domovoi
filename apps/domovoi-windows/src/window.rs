@@ -1422,9 +1422,10 @@ impl Component for MainWindow {
             ),
             (Some(core), None) => {
                 // The pages beside the threads take the thread's place, and need no composer or panel.
-                let beside_threads = matches!(&*self.store.route, "pull-requests" | "usage");
+                let beside_threads = matches!(&*self.store.route, "issues" | "pull-requests" | "usage");
                 let draw = transcript::Draw { size: f64::from(self.prefs.text_size), dark: self.dark, media: &self.media, diagrams: &self.store.diagrams, state: &self.transcript, on_act: &on_act };
                 let main = match &self.store.thread {
+                    _ if &*self.store.route == "issues" => crate::views::issues::page(core, &self.store.issues, &self.store.sidebar, &context.callback(Message::OpenUrl)),
                     _ if &*self.store.route == "pull-requests" => pull_requests::page(core, &self.store.pull_requests, &self.pulls, &draw, &context.callback(Message::Pulls)),
                     _ if &*self.store.route == "usage" => usage::page(core, &self.store.usage, self.dark, &context.callback(Message::OpenUrl)),
                     Some(open) => thread::thread(
@@ -1558,6 +1559,9 @@ impl Component for MainWindow {
             None => windows_reactor::ContentDialog::new().is_open(false),
         };
         let mut layers: Vec<View> = vec![title_bar.into(), Border::new().grid_row(1).on_preview_key_down(self.on_keys.clone()).content(body).into()];
+        if let (Some(core), Some(sheet)) = (&self.core, self.store.thread.as_ref().and_then(|thread| thread.page.pull_request_sheet.as_ref())) {
+            layers.push(crate::views::issues::review_sheet(core, sheet, &context.callback(Message::OpenUrl)));
+        }
         if let Some((pictures, at)) = &self.transcript.viewer {
             layers.push(self.viewer(pictures, *at, &on_act));
         }
