@@ -97,6 +97,11 @@ pub fn thread_view<'a>(app: &'a App, thread: &'a ThreadPageView) -> Element<'a, 
         );
     }
 
+    if thread.can_create_pull_request || thread.pull_request_status.is_some() {
+        has_banners = true;
+        banners = banners.push(super::issues::status(thread));
+    }
+
     if !thread.links.is_empty() {
         has_banners = true;
         banners = banners.push(row(thread.links.iter().map(work_link_chip)).spacing(XS).wrap());
@@ -467,6 +472,9 @@ fn item_view<'a>(app: &'a App, item: &'a ItemView) -> Element<'a, Message> {
     match item.kind.as_str() {
         "user" => {
             let mut bubble_col = Column::new().spacing(S);
+            if let Some(issue) = &item.issue_card {
+                bubble_col = bubble_col.push(w::small_button(&issue.issue_label, w::secondary_style, Some(Message::OpenUrl(issue.issue_url.clone()))));
+            }
             if !item.text.is_empty() {
                 bubble_col = bubble_col.push(text(&item.text).size(body_size));
             }
@@ -1104,11 +1112,12 @@ pub fn new_thread_view(app: &App) -> Element<'_, Message> {
     }
 
     // Workspace mode: local vs worktree
+    center_col = center_col.push(super::issues::chip(app));
     let is_worktree = comp.workspace_mode == "worktree";
     let ws_picker = w::segmented(
-        &[(false, Some(Icon::Folder), "Local folder"), (true, Some(Icon::GitBranch), "New worktree")],
-        is_worktree,
-        |wt| core(Event::SetWorkspaceMode { mode: if wt { "worktree" } else { "local" }.into() }),
+        &[("local", Some(Icon::Folder), "Local folder"), ("worktree", Some(Icon::GitBranch), "New worktree")],
+        comp.workspace_mode.as_str(),
+        |mode| core(Event::SetWorkspaceMode { mode: mode.into() }),
     );
     let mut ws_row = row![ws_picker].spacing(S).align_y(Alignment::Center);
     if is_worktree && !comp.branches.is_empty() {
@@ -1121,6 +1130,9 @@ pub fn new_thread_view(app: &App) -> Element<'_, Message> {
                     .on_press(core(Event::SetBaseBranch { branch: br.clone() })),
             );
         }
+    }
+    if comp.workspace_required {
+        center_col = center_col.push(w::muted("Choose a workspace to start this issue.", TEXT_SMALL));
     }
     center_col = center_col.push(ws_row);
 

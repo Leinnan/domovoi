@@ -11,6 +11,7 @@ mod palette;
 pub mod panel;
 pub mod provider_editor;
 pub mod scheduled_editor;
+mod issues;
 mod pull_requests;
 mod settings;
 mod sidebar;
@@ -45,6 +46,10 @@ pub fn view(app: &App) -> Element<'_, Message> {
         layers.push(render_overlay(app, ov));
     }
 
+    if let Some(sheet) = app.vm.thread.as_ref().and_then(|thread| thread.pull_request_sheet.as_ref()) {
+        layers.push(issues::sheet(app, sheet));
+    }
+
     // Over overlays, so what the image viewer did ("Image copied") shows.
     if let Some(toast) = &app.vm.toast {
         layers.push(w::toast(
@@ -69,7 +74,7 @@ pub fn view(app: &App) -> Element<'_, Message> {
 }
 
 fn workspace(app: &App) -> Element<'_, Message> {
-    let shows_panel = !matches!(app.vm.route.as_str(), "pull-requests" | "usage");
+    let shows_panel = !matches!(app.vm.route.as_str(), "pull-requests" | "issues" | "usage");
     let panel_open = app.vm.panel.open && shows_panel;
 
     let mut split = row![];
@@ -84,6 +89,7 @@ fn workspace(app: &App) -> Element<'_, Message> {
             Some(t) => thread::thread_view(app, t),
             None => thread::new_thread_view(app),
         },
+        "issues" => issues::view(app),
         "pull-requests" => pull_requests::view(app),
         "usage" => usage::view(app),
         _ => thread::new_thread_view(app),
@@ -129,6 +135,7 @@ fn top_bar(app: &App, shows_panel: bool) -> Element<'_, Message> {
     .on_press(Message::Overlay(Some(Overlay::ServerMenu)));
 
     let route_key: &str = match app.vm.route.as_str() {
+        "issues" => "issues",
         "pull-requests" => "pull-requests",
         "usage" => "usage",
         _ => "thread",
@@ -137,11 +144,13 @@ fn top_bar(app: &App, shows_panel: bool) -> Element<'_, Message> {
     let route_tabs = w::segmented(
         &[
             ("thread", Some(Icon::MessageSquare), "Threads"),
+            ("issues", None, "Issues"),
             ("pull-requests", Some(Icon::GitPullRequest), "Pull Requests"),
             ("usage", Some(Icon::BarChart2), "Usage"),
         ],
         route_key,
         |r| match r {
+            "issues" => core(Event::ShowRoute { route: "issues".into() }),
             "pull-requests" => core(Event::ShowRoute { route: "pull-requests".into() }),
             "usage" => core(Event::ShowRoute { route: "usage".into() }),
             _ => core(Event::NewThread { project_id: None }),

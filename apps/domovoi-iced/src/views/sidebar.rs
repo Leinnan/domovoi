@@ -597,6 +597,9 @@ fn thread_row<'a>(app: &'a App, t: &'a ThreadRowView, show_project: bool) -> Ele
         };
         sub_line = sub_line.push(w::with_tooltip(icon_capsule(ic, t.pull_request.clone(), tone), &tip));
     }
+    if let Some(issue) = &t.issue_badge {
+        sub_line = sub_line.push(w::badge_capsule(issue, None));
+    }
     if t.relation == "fork" {
         sub_line = sub_line.push(w::with_tooltip(w::themed_icon(Icon::GitBranch, ICON_XS, |c| c.muted), "Forked from another thread"));
     }

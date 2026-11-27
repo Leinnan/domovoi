@@ -250,6 +250,7 @@ impl TerminalSplitGrid {
 pub struct App {
     pub host: Option<HostHandle>,
     pub vm: ViewModel,
+    pub pr_body: iced::widget::text_editor::Content,
     pub images: HashMap<String, image::Handle>,
     /// Image URLs whose fetch failed: shown with Retry, not asked for again by themselves.
     pub failed_images: HashSet<String>,
@@ -337,6 +338,7 @@ pub struct App {
 pub enum Message {
     Host(HostMsg),
     Core(Box<Event>),
+    EditPullRequestBody(iced::widget::text_editor::Action),
     // System & window
     SystemTheme(iced::theme::Mode),
     Tick,
@@ -471,6 +473,7 @@ pub enum Message {
     SelectSettingsServer(String),
     ConfigureServer(String),
     ProviderRedirectChanged { instance_id: String, url: String },
+    ConnectLinear,
     SettingTextChanged { key: String, value: String },
     CompanionLookChanged { env_id: String, look: CompanionLook },
     PokeCompanion,
@@ -505,6 +508,7 @@ impl App {
         let app = Self {
             host: None,
             vm: ViewModel::default(),
+            pr_body: iced::widget::text_editor::Content::new(),
             images: HashMap::new(),
             failed_images: HashSet::new(),
             requested_thumbnails: HashSet::new(),
@@ -658,6 +662,13 @@ impl App {
             Message::Host(host_msg) => return self.handle_host(host_msg),
             Message::Core(ev) => {
                 self.send_core(*ev);
+            }
+            Message::EditPullRequestBody(action) => {
+                let edit = action.is_edit();
+                self.pr_body.perform(action);
+                if edit {
+                    self.send_core(Event::SetPullRequestSheetField { field: "body".into(), value: self.pr_body.text() });
+                }
             }
             Message::SystemTheme(mode) => {
                 self.system_dark = mode != iced::theme::Mode::Light;
@@ -1215,6 +1226,11 @@ impl App {
             Message::ProviderRedirectChanged { instance_id, url } => {
                 self.provider_redirect_inputs.insert(instance_id, url);
             }
+            Message::ConnectLinear => {
+                if let Some(token) = self.setting_text_drafts.remove("linear-api-key") {
+                    self.send_core(Event::ConnectIssueTracker { token: Some(token) });
+                }
+            }
             Message::SettingTextChanged { key, value } => {
                 self.setting_text_drafts.insert(key, value);
             }
@@ -1440,7 +1456,16 @@ impl App {
             HostMsg::Delta(delta) => {
                 let prev_state = self.vm.connection.state.clone();
                 let prev_env = self.vm.connection.active_environment_id.clone();
+                let old_body = self.vm.thread.as_ref().and_then(|t| t.pull_request_sheet.as_ref()).map(|s| s.pr_sheet_body.clone());
                 delta.apply(&mut self.vm);
+                let body = self.vm.thread.as_ref().and_then(|t| t.pull_request_sheet.as_ref()).map(|s| &s.pr_sheet_body);
+                if old_body.as_ref() != body {
+                    let body = body.map_or("", String::as_str);
+                    let held = self.pr_body.text();
+                    if held != body && held.strip_suffix('\n') != Some(body) {
+                        self.pr_body = iced::widget::text_editor::Content::with_text(body);
+                    }
+                }
                 if let Some(split) = &self.vm.panel.terminal.split {
                     if self.terminal_grid.stacked != split.stacked {
                         self.terminal_grid = TerminalSplitGrid::new(split.stacked);

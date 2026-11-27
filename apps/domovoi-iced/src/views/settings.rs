@@ -1029,6 +1029,38 @@ fn archived_tab(app: &App) -> Element<'_, Message> {
 fn projects_tab(app: &App) -> Element<'_, Message> {
     let files = &app.vm.settings.project_icon_files;
     let mut col = Column::new().spacing(S).push(w::heading("Projects"));
+    if let Some(linear) = &app.vm.settings.linear_settings {
+        let token = app.setting_text_drafts.get("linear-api-key").map_or("", String::as_str);
+        let mut section = column![
+            w::heading("Linear issue tracker"),
+            w::input("Personal API key", token).secure(true)
+                .on_input(|value| Message::SettingTextChanged { key: "linear-api-key".into(), value }),
+            w::small_button(if linear.linear_connected { "Replace API key" } else { "Connect Linear" },
+                w::primary_style, (!token.trim().is_empty()).then_some(Message::ConnectLinear)),
+        ].spacing(S);
+        if let Some(account) = &linear.linear_account { section = section.push(w::muted(format!("Connected as {account}"), TEXT_SMALL)); }
+        if let Some(notice) = &linear.linear_notice { section = section.push(w::muted(notice, TEXT_SMALL)); }
+        if linear.linear_connected {
+            section = section.push(w::small_button("Disconnect Linear", w::secondary_style, Some(core(Event::ConnectIssueTracker { token: None }))));
+        }
+        if !linear.linear_teams.is_empty() {
+            let options: Vec<String> = std::iter::once("No Linear team".into())
+                .chain(linear.linear_teams.iter().map(|team| format!("{} ({})", team.linear_team_name, team.linear_team_key))).collect();
+            for project in app.vm.settings.projects.iter().filter(|project| !project.is_scratch) {
+                let selected = project.linear_scope.as_ref().and_then(|scope| linear.linear_teams.iter().position(|team| &team.linear_team_key == scope)).map_or(0, |i| i + 1);
+                let values = options.clone();
+                section = section.push(row![
+                    w::muted(&project.title, TEXT_SMALL),
+                    iced::widget::pick_list(options.clone(), Some(options[selected].clone()), move |choice| {
+                        let scope = values.iter().position(|value| value == &choice)
+                            .and_then(|i| i.checked_sub(1)).map(|i| linear.linear_teams[i].linear_team_key.clone());
+                        core(Event::BindProjectIssueTracker { project_id: project.id.clone(), scope })
+                    })
+                ].spacing(S));
+            }
+        }
+        col = col.push(section);
+    }
     for p in &app.vm.settings.projects {
         let picking = files.project_id == p.id;
         let mut title = row![text(&p.title).size(TEXT_UI).font(fonts::SEMIBOLD)].spacing(XS).align_y(Alignment::Center);
