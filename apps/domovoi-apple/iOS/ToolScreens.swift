@@ -364,7 +364,7 @@ struct GitScreen: View {
                             Button("Commit & Push…") { confirming = "commit_push" }
                                 .disabled(git.busy || !hasMessage)
                             if git.pullRequest == nil {
-                                Button("Commit, Push & Open PR…") { confirming = "commit_push_pr" }
+                                Button("Commit, Push & Open PR…") { core.update(.gitAction(action: "commit_push_pr", message: message)) }
                                     .disabled(git.busy || !hasMessage)
                             }
                         }
@@ -383,7 +383,7 @@ struct GitScreen: View {
                         Button("Pull") { core.update(.gitPull) }
                             .disabled(git.busy || !git.hasUpstream || git.behind == 0)
                         if git.pullRequest == nil {
-                            Button("Create Pull Request…") { confirming = "create_pr" }
+                            Button("Create Pull Request…") { core.update(.preparePullRequest) }
                                 .disabled(git.busy || git.branch == nil)
                         }
                     }
@@ -407,6 +407,7 @@ struct GitScreen: View {
                 ContentUnavailableView("Not a Git Repository", systemImage: "arrow.triangle.branch", description: Text("This folder isn't tracked by git."))
             }
         }
+        .background { ThreadPullRequestControls(core: core, showStatus: false) }
         .navigationTitle("Git")
         .navigationBarTitleDisplayMode(.inline)
         .confirmationDialog(
@@ -419,7 +420,6 @@ struct GitScreen: View {
         } message: { action in
             switch action {
             case "push": Text("Pushes \(git.hasUpstream ? "^[\(Int(git.ahead)) commit](inflect: true)" : "the branch") to the remote.")
-            case "create_pr": Text("Pushes \(git.branch ?? "the branch") if needed and opens a pull request for it on GitHub.")
             default: Text("Commits ^[\(git.changedFiles.count) changed file](inflect: true) and pushes to the remote.")
             }
         }
@@ -461,16 +461,13 @@ struct GitScreen: View {
     private var confirmTitle: String {
         switch confirming {
         case "push": "Push \(git.branch ?? "the branch")?"
-        case "create_pr": "Open a pull request for \(git.branch ?? "the branch")?"
         default: "Commit and push to \(git.branch ?? "the branch")?"
         }
     }
 
     private func confirmButton(_ action: String) -> String {
         switch action {
-        case "commit_push_pr": "Commit, Push & Open PR"
         case "push": git.hasUpstream ? "Push" : "Publish"
-        case "create_pr": "Create Pull Request"
         default: "Commit & Push"
         }
     }

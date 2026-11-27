@@ -144,6 +144,7 @@ struct ThreadScreen: View {
                 }
                 // One per thread (as on the Mac): another thread starts at its
                 // own end (or where it was read), not with this one's scroll state.
+                ThreadPullRequestControls(core: core)
                 WorkLinksStrip(links: thread.links)
                 Transcript(core: core, thread: thread, artifactJump: artifactJump)
                     .id(thread.id)
@@ -315,6 +316,7 @@ struct NewThreadScreen: View {
             GlassGroup(spacing: Space.s) {
                 FlowChips {
                     projectMenu
+                    IssueComposerControls(core: core)
                     if composer.prWorktree.isEmpty {
                         workspaceMenu
                         if composer.workspaceMode == "worktree", !composer.branches.isEmpty { branchMenu }
@@ -377,11 +379,12 @@ struct NewThreadScreen: View {
                 get: { composer.workspaceMode },
                 set: { core.update(.setWorkspaceMode(mode: $0)) }
             )) {
+                if composer.workspaceRequired { Text("Choose workspace").tag("").disabled(true) }
                 Label("Current checkout", systemImage: "folder").tag("local")
                 Label("New worktree", systemImage: "arrow.triangle.branch").tag("worktree")
             }
         } label: {
-            chipLabel(composer.workspaceMode == "worktree" ? "New worktree" : "Current checkout", composer.workspaceMode == "worktree" ? "arrow.triangle.branch" : "laptopcomputer")
+            chipLabel(composer.workspaceRequired ? "Choose workspace" : composer.workspaceMode == "worktree" ? "New worktree" : "Current checkout", composer.workspaceMode == "worktree" ? "arrow.triangle.branch" : "laptopcomputer")
         }
         .accessibilityLabel("Workspace")
     }

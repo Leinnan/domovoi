@@ -549,6 +549,7 @@ struct ServerMenu: View {
                     }
                 }
             }
+            Button { open(.issues) } label: { Label("Issues", systemImage: "number") }
             Button { open(.pullRequests) } label: { Label("Pull Requests", systemImage: "arrow.triangle.pull") }
             Button { open(.usage) } label: { Label("Usage", systemImage: "chart.bar") }
             Button { open(.settings) } label: { Label("Settings", systemImage: "gearshape") }

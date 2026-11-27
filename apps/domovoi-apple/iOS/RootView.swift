@@ -9,6 +9,7 @@ enum Screen: Hashable {
     case terminal
     case files
     case git
+    case issues
     case pullRequests
     case usage
     case settings
@@ -133,6 +134,9 @@ struct MainStack: View {
         }
         // The open thread was archived or deleted (the core went to a new
         // thread): on iPad the detail column must not wait on it forever.
+        .onChange(of: core.view.composer.issueHandoff) { _, _ in
+            if core.view.route == "new-thread" { path = [.newThread] }
+        }
         .onChange(of: core.view.route) { _, route in
             // Only when the top screen is a thread the core no longer has open:
             // a New Thread asked for from inside a thread pushes its own screen.
@@ -265,6 +269,7 @@ struct MainStack: View {
         case .terminal: TerminalScreenIOS(core: core)
         case .files: FilesScreen(core: core)
         case .git: GitScreen(core: core)
+        case .issues: IssueBrowser(core: core)
         case .pullRequests: PullRequestsScreen(core: core)
         case .usage: UsageScreen(core: core)
         case .settings: SettingsScreen(core: core)

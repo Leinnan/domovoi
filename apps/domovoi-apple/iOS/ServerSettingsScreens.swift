@@ -253,6 +253,7 @@ struct ServerProjectsScreen: View {
 
     var body: some View {
         Form {
+            LinearProjectSettings(core: core)
             ServerContextSection(core: core)
             Section {
                 if core.view.settings.projects.isEmpty {
