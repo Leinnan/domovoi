@@ -138,7 +138,7 @@ async fn git(cwd: &str, args: &[&str]) -> GitOut {
 fn command_error(operation: &str, cwd: &str, args: &[&str], detail: impl Into<String>, code: Option<i32>) -> GitCommandError {
     GitCommandError {
         operation: operation.to_owned(),
-        command: format!("git {}", args.first().unwrap_or(&"")),
+        command: format!("git {}", args.iter().copied().find(|arg| *arg != "--literal-pathspecs").unwrap_or("")),
         cwd: cwd.to_owned(),
         detail: detail.into(),
         argument_count: Some(args.len()),
@@ -532,8 +532,8 @@ fn writing_instructions(settings: &ServerSettings) -> Option<String> {
 
 /// A commit message for what is staged: `(subject, body, branch fragment)`.
 async fn generate_commit_message(cwd: &str, branch: Option<&str>, paths: Option<&[String]>, with_branch: bool) -> Result<(String, String, Option<String>), TextGenerationError> {
-    let mut stat = vec!["diff", "--cached", "--stat", "--"];
-    let mut patch = vec!["diff", "--cached", "--no-color", "--"];
+    let mut stat = vec!["--literal-pathspecs", "diff", "--cached", "--stat", "--"];
+    let mut patch = vec!["--literal-pathspecs", "diff", "--cached", "--no-color", "--"];
     if let Some(p) = paths {
         stat.extend(p.iter().map(String::as_str));
         patch.extend(p.iter().map(String::as_str));
@@ -600,8 +600,8 @@ async fn generate_pr_content(cwd: &str, source: PrSource<'_>) -> Result<(String,
 
 /// Stages the commit's paths; false when there is nothing to commit.
 async fn stage(cwd: &str, file_paths: Option<&[String]>) -> Result<bool, GitCommandError> {
-    let mut add = vec!["add", "-A", "--"];
-    let mut check = vec!["diff", "--cached", "--quiet", "--"];
+    let mut add = vec!["--literal-pathspecs", "add", "-A", "--"];
+    let mut check = vec!["--literal-pathspecs", "diff", "--cached", "--quiet", "--"];
     if let Some(paths) = file_paths {
         add.extend(paths.iter().map(String::as_str));
         check.extend(paths.iter().map(String::as_str));
@@ -1197,7 +1197,7 @@ fn run_stacked_action(orchestrator: Option<Arc<Orchestrator>>, input: StackedInp
                         }
                     };
                     yield Ok(phase_started(GitActionProgressPhase::Commit, "Committing...".into()));
-                    let mut args: Vec<&str> = vec!["commit", "-m", &subject];
+                    let mut args: Vec<&str> = vec!["--literal-pathspecs", "commit", "-m", &subject];
                     if !body.is_empty() { args.extend(["-m", &body]); }
                     if let Some(p) = paths { args.push("--"); args.extend(p.iter().map(String::as_str)); }
                     if let Err(e) = git_ok("GitVcsDriver.commit", &cwd, &args).await { failure = e.into(); break 'run; }
@@ -1458,6 +1458,25 @@ mod tests {
         assert_eq!(err["detail"], "Cannot push because no git remote is configured for this repository.");
         let log = std::process::Command::new("git").args(["log", "--format=%s%n%b", "-1"]).current_dir(&dir).output().unwrap();
         assert_eq!(String::from_utf8_lossy(&log.stdout).trim(), "Add a\nBody");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn a_reviewed_file_name_is_literal_when_staged_and_committed() {
+        let dir = temp_repo("literal");
+        let cwd = dir.to_string_lossy();
+        let (_, initial_failure) = collect(stacked(&dir, "commit", Some("Initial"))).await;
+        assert!(initial_failure.is_none());
+
+        std::fs::write(dir.join("notes[1].txt"), "selected\n").unwrap();
+        std::fs::write(dir.join("notes1.txt"), "unselected\n").unwrap();
+        let (_, failure) = collect(StackedInput {
+            file_paths: Some(vec!["notes[1].txt".into()]),
+            ..stacked(&dir, "commit", Some("Add notes"))
+        }).await;
+        assert!(failure.is_none(), "{failure:?}");
+        assert_eq!(git(&cwd, &["show", "--format=", "--name-only", "HEAD"]).await.stdout.trim(), "notes[1].txt");
+        assert_eq!(git(&cwd, &["status", "--porcelain"]).await.stdout.trim(), "?? notes1.txt");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
