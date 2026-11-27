@@ -75,6 +75,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.TopAppBar
@@ -302,6 +303,7 @@ fun ThreadScreen(core: Core, threadId: String, nav: Navigator, snackbars: Snackb
         Column(Modifier.fillMaxSize().padding(top = padding.calculateTopPadding())) {
             ConnectionBanner(core)
             thread?.find?.let { FindBar(it, core::update) }
+            thread?.let { ThreadPullRequestControls(core, it) }
             thread?.links?.let { WorkLinksStrip(it) }
             when {
                 thread != null -> Transcript(
@@ -659,10 +661,11 @@ fun NewThreadScreen(core: Core, nav: Navigator, snackbars: SnackbarHostState, sh
             Text(project?.let { "What should we do in ${it.title}?" } ?: "Pick a project to start", style = MaterialTheme.typography.titleLarge, textAlign = TextAlign.Center)
             FlowRow(horizontalArrangement = Arrangement.spacedBy(Space.s, Alignment.CenterHorizontally), verticalArrangement = Arrangement.spacedBy(Space.s)) {
                 ChoiceChip(project?.title ?: "Project", Icons.Outlined.Folder, sidebar.projects.map { it.id to it.title }) { core.update(Event.NewThread(it)) }
+                IssueComposerControls(core, composer)
                 if (composer.prWorktree.isEmpty()) {
                     val worktree = composer.workspaceMode == "worktree"
                     ChoiceChip(
-                        if (worktree) "New worktree" else "Current checkout",
+                        if (composer.workspaceRequired) "Choose workspace" else if (worktree) "New worktree" else "Current checkout",
                         if (worktree) Icons.AutoMirrored.Outlined.CallSplit else Icons.Outlined.Laptop,
                         listOf("local" to "Current checkout", "worktree" to "New worktree"),
                     ) { core.update(Event.SetWorkspaceMode(it)) }
@@ -736,4 +739,85 @@ private fun WorkProgressSheet(
             }
         }
     }
+}
+
+@Composable
+private fun IssueComposerControls(core: Core, composer: com.crayen.domovoi.app.ComposerView) {
+    val issue = composer.issueChip
+    val query = composer.issuePicker
+    if (issue != null) {
+        Text(issue, style = MaterialTheme.typography.labelMedium)
+        TextButton(onClick = { core.update(Event.DetachIssue) }) { Text("Remove issue") }
+        TextButton(onClick = { core.update(Event.SetAssignIssueToMe(!composer.issueAssignToMe)) }) {
+            Text(if (composer.issueAssignToMe) "✓ Assign to me" else "Assign to me")
+        }
+    } else if (query != null) {
+        AlertDialog(
+            onDismissRequest = { core.update(Event.DetachIssue) },
+            title = { Text("Attach issue") },
+            text = { OutlinedTextField(query, { core.update(Event.SetIssuePickerQuery(it)) }, label = { Text("Issue URL or #123") }, singleLine = true) },
+            confirmButton = { TextButton(onClick = { core.update(Event.AttachIssue) }) { Text("Attach") } },
+            dismissButton = { TextButton(onClick = { core.update(Event.DetachIssue) }) { Text("Cancel") } },
+        )
+    } else if (composer.issueAvailable) {
+        TextButton(onClick = { core.update(Event.OpenIssuePicker) }) { Text("Attach issue") }
+    }
+}
+
+@Composable
+fun ThreadPullRequestControls(core: Core, thread: com.crayen.domovoi.app.ThreadPageView, showStatus: Boolean = true) {
+    val uri = androidx.compose.ui.platform.LocalUriHandler.current
+    val pr = thread.pullRequestStatus
+    if (showStatus) Column(Modifier.padding(horizontal = Space.s)) {
+        if (pr != null) {
+            TextButton(onClick = { uri.openUri(pr.prStatusUrl) }) { Text(pr.prStatusLabel) }
+            val state = listOfNotNull(pr.prStatusChecks, pr.prStatusReview).joinToString(" · ")
+            if (state.isNotEmpty()) Text(state, style = MaterialTheme.typography.labelSmall)
+            if (pr.prStatusHasComments) {
+                TextButton(onClick = { core.update(Event.HandReviewCommentsToAgent) }) { Text("Send review to agent") }
+            }
+            if (pr.prStatusFollowing) {
+                TextButton(onClick = { core.update(Event.StopFollowingPullRequest) }) { Text("Stop following") }
+            }
+        }
+        if (thread.canCreatePullRequest && pr == null) {
+            TextButton(onClick = { core.update(Event.PreparePullRequest) }) { Text("Create pull request") }
+        }
+    }
+    val sheet = thread.pullRequestSheet ?: return
+    fun field(field: String, value: String) = core.update(Event.SetPullRequestSheetField(field, value))
+    AlertDialog(
+        onDismissRequest = { core.update(Event.ClosePullRequestSheet) },
+        title = { Text("Create pull request") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(Space.s)) {
+                sheet.prSheetBranch?.let { Text("$it → ${sheet.prSheetBase}") }
+                sheet.prSheetNotice?.let { Text(it) }
+                val existing = sheet.prSheetExistingUrl
+                if (existing != null) {
+                    TextButton(onClick = { uri.openUri(existing) }) { Text("Open existing pull request") }
+                } else {
+                    OutlinedTextField(sheet.prSheetTitle, { field("title", it) }, label = { Text("Title") }, singleLine = true)
+                    OutlinedTextField(sheet.prSheetBody, { field("body", it) }, label = { Text("Description") }, minLines = 3)
+                    if (sheet.prSheetBases.isNotEmpty()) {
+                        ChoiceChip("Base: ${sheet.prSheetBase}", Icons.AutoMirrored.Outlined.CallSplit, sheet.prSheetBases.map { it to it }) { field("base", it) }
+                    }
+                    if (sheet.prSheetSupportsDraft) {
+                        TextButton(onClick = { field("draft", (!sheet.prSheetDraft).toString()) }) { Text(if (sheet.prSheetDraft) "✓ Draft" else "Draft") }
+                    }
+                    sheet.prSheetFiles.forEach { file ->
+                        TextButton(onClick = { core.update(Event.TogglePullRequestFile(file.prFilePath)) }) {
+                            Text(if (file.prFileSelected) "✓ ${file.prFilePath}" else file.prFilePath)
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { core.update(Event.CreatePullRequest) }, enabled = sheet.prSheetCanCreate) {
+                Text(if (sheet.prSheetLoading) "Working…" else "Create")
+            }
+        },
+        dismissButton = { TextButton(onClick = { core.update(Event.ClosePullRequestSheet) }) { Text("Close") } },
+    )
 }

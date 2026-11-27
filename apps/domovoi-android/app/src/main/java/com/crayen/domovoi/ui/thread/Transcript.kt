@@ -427,6 +427,10 @@ private fun ItemContent(item: ItemView, retryBlocked: Boolean, actions: Transcri
             Spacer(Modifier.width(48.dp))
             Surface(color = MaterialTheme.colorScheme.primaryContainer, shape = RoundedCornerShape(20.dp, 20.dp, 6.dp, 20.dp)) {
                 Column(Modifier.padding(horizontal = Space.l, vertical = Space.m), horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(Space.s)) {
+                    item.issueCard?.let { issue ->
+                        val uri = androidx.compose.ui.platform.LocalUriHandler.current
+                        androidx.compose.material3.TextButton(onClick = { uri.openUri(issue.issueUrl) }) { Text(issue.issueLabel) }
+                    }
                     if (item.images.isNotEmpty()) MessageImages(item.images)
                     if (item.text.isNotEmpty()) Text(item.text, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onPrimaryContainer)
                     item.attachments.filter { name -> item.images.none { it.name == name } }.forEach { name ->

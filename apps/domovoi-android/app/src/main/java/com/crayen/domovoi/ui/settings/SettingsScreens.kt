@@ -571,6 +571,46 @@ fun ServerProjectsScreen(core: Core, nav: Navigator, onBack: () -> Unit) {
     ToolScaffold("Projects", onBack, subtitle = connection.environmentLabel) { padding ->
         LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = Space.xxl)) {
             item("ctx") { ServerContextBanner(connection) }
+            settings.linearSettings?.let { linear ->
+                item("linear") {
+                    var token by remember(connection.activeEnvironmentId) { mutableStateOf("") }
+                    Column(Modifier.padding(Space.l), verticalArrangement = Arrangement.spacedBy(Space.s)) {
+                        Text("Linear issue tracker", style = MaterialTheme.typography.titleSmall)
+                        linear.linearAccount?.let { Text("Connected as $it") }
+                        linear.linearNotice?.let { Text(it) }
+                        androidx.compose.material3.OutlinedTextField(token, { token = it }, label = { Text("Personal API key") },
+                            visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(), singleLine = true)
+                        TextButton(onClick = { core.update(Event.ConnectIssueTracker(token)); token = "" }, enabled = token.isNotBlank()) {
+                            Text(if (linear.linearConnected) "Replace API key" else "Connect Linear")
+                        }
+                        if (linear.linearConnected) {
+                            TextButton(onClick = { core.update(Event.ConnectIssueTracker(null)) }) { Text("Disconnect Linear") }
+                        }
+                        if (linear.linearTeams.isNotEmpty()) {
+                            settings.projects.filter { !it.isScratch }.forEach { project ->
+                                var expanded by remember(project.id) { mutableStateOf(false) }
+                                val selected = linear.linearTeams.firstOrNull { it.linearTeamKey == project.linearScope }?.linearTeamName
+                                Box {
+                                    TextButton(onClick = { expanded = true }) { Text("${project.title} · ${selected ?: "No Linear team"}") }
+                                    DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                                        DropdownMenuItem(text = { Text("No Linear team") }, onClick = {
+                                            expanded = false
+                                            core.update(Event.BindProjectIssueTracker(project.id, null))
+                                        })
+                                        linear.linearTeams.forEach { team ->
+                                            DropdownMenuItem(text = { Text(team.linearTeamName) }, onClick = {
+                                                expanded = false
+                                                core.update(Event.BindProjectIssueTracker(project.id, team.linearTeamKey))
+                                            })
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             if (settings.projects.isEmpty()) {
                 item("empty") { EmptyState(Icons.Outlined.Folder, "No projects yet", "Add a folder or import existing sessions on this server.") }
             }

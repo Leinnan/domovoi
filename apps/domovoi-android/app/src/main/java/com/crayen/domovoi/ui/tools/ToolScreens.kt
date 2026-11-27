@@ -387,6 +387,8 @@ fun GitScreen(core: Core, onBack: (() -> Unit)?, openTerminal: () -> Unit = {}) 
         if (action.startsWith("commit")) message = ""
     }
     LaunchedEffect(Unit) { core.update(Event.ShowPanel("git")); core.update(Event.RefreshGit) }
+    val thread by core.view.thread.watch()
+    thread?.let { com.crayen.domovoi.ui.thread.ThreadPullRequestControls(core, it, showStatus = false) }
     ToolScaffold("Git", onBack) { padding ->
         PullToRefreshBox(isRefreshing = false, onRefresh = { core.update(Event.RefreshGit) }, modifier = Modifier.padding(top = padding.calculateTopPadding())) {
             Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = Space.xxl)) {
@@ -442,7 +444,7 @@ fun GitScreen(core: Core, onBack: (() -> Unit)?, openTerminal: () -> Unit = {}) 
                                     Button(onClick = { run("commit") }, enabled = !git.busy && hasMessage) { Text("Commit") }
                                     if (git.hasRemote) FilledTonalButton(onClick = { confirming = "commit_push" }, enabled = !git.busy && hasMessage) { Text("Commit & push") }
                                 }
-                                if (git.hasRemote && git.pullRequest == null) OutlinedButton(onClick = { confirming = "commit_push_pr" }, enabled = !git.busy && hasMessage) { Text("Commit, push & open PR") }
+                                if (git.hasRemote && git.pullRequest == null) OutlinedButton(onClick = { core.update(Event.GitAction("commit_push_pr", message)) }, enabled = !git.busy && hasMessage) { Text("Commit, push & open PR") }
                             }
                         }
                         if (git.hasRemote) {
@@ -452,7 +454,7 @@ fun GitScreen(core: Core, onBack: (() -> Unit)?, openTerminal: () -> Unit = {}) 
                                     Text(if (git.hasUpstream) "Push ${git.ahead} commit${if (git.ahead == 1u) "" else "s"}" else "Publish branch")
                                 }
                                 OutlinedButton(onClick = { core.update(Event.GitPull) }, enabled = !git.busy && git.hasUpstream && git.behind > 0u) { Text("Pull") }
-                                if (git.pullRequest == null) OutlinedButton(onClick = { run("create_pr") }, enabled = !git.busy && git.branch != null) { Text("Create PR") }
+                                if (git.pullRequest == null) OutlinedButton(onClick = { core.update(Event.PreparePullRequest) }, enabled = !git.busy && git.branch != null) { Text("Create PR") }
                             }
                         }
                         if (git.scripts.isNotEmpty()) {
@@ -500,7 +502,7 @@ fun GitScreen(core: Core, onBack: (() -> Unit)?, openTerminal: () -> Unit = {}) 
             },
             confirmButton = {
                 TextButton(onClick = { confirming = null; run(action) }) {
-                    Text(when (action) { "commit_push_pr" -> "Commit, push & open PR"; "push" -> if (git.hasUpstream) "Push" else "Publish"; else -> "Commit & push" })
+                    Text(when (action) { "push" -> if (git.hasUpstream) "Push" else "Publish"; else -> "Commit & push" })
                 }
             },
             dismissButton = { TextButton(onClick = { confirming = null }) { Text("Cancel") } },
@@ -853,6 +855,66 @@ private fun AiCodeReviewSection(core: Core, pr: com.crayen.domovoi.app.PullReque
                             onClick = { core.update(Event.PublishPrReview(pr.key, rev.runId)) },
                             enabled = rev.canPublish && !rev.busy,
                         ) { Text("Publish Selected") }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun IssuesScreen(core: Core, nav: Navigator) {
+    val page by core.view.issues.watch()
+    val sidebar by core.view.sidebar.watch()
+    val uri = androidx.compose.ui.platform.LocalUriHandler.current
+    ToolScaffold("Issues", onBack = nav::back) { padding ->
+        LazyColumn(Modifier.fillMaxSize().padding(padding)) {
+            item("projects") {
+                Column(Modifier.padding(Space.l)) {
+                    Text("Project", style = MaterialTheme.typography.titleSmall)
+                    sidebar.projects.forEach { project ->
+                        TextButton(onClick = { core.update(Event.LoadIssues(project.id)) }) {
+                            Text(if (project.id == page.issueProject) "✓ ${project.title}" else project.title)
+                        }
+                    }
+                    if (page.issueProject != null) {
+                        Row {
+                            listOf("open", "closed", "all").forEach { state ->
+                                TextButton(onClick = { core.update(Event.SetIssueFilter(state)) }, enabled = state != page.issueFilter) {
+                                    Text(state.replaceFirstChar(Char::uppercase))
+                                }
+                            }
+                        }
+                    }
+                    page.issuesNotice?.let { Text(it) }
+                    if (page.issuesLoading) CircularProgressIndicator()
+                    if (page.issueProject != null && !page.issuesLoading && page.issueRows.isEmpty()) Text("No issues found.")
+                }
+            }
+            items(page.issueRows, key = { it.issueIndex }) { issue ->
+                Column(Modifier.padding(horizontal = Space.l)) {
+                    TextButton(onClick = { core.update(Event.SelectIssue(issue.issueIndex)) }) { Text(issue.issueLabel) }
+                    Row {
+                        TextButton(onClick = {
+                            val id = issue.linkedThreadId
+                            if (id == null) core.update(Event.StartIssueThread(issue.issueIndex))
+                            else { core.update(Event.SelectThread(id)); nav.show(Screen.Thread(id)) }
+                        }) { Text(issue.linkedThreadTitle ?: "Start thread") }
+                        TextButton(onClick = { uri.openUri(issue.issueUrl) }) { Text("Open issue") }
+                    }
+                }
+            }
+            if (page.moreIssues) {
+                item("more") { TextButton(onClick = { core.update(Event.LoadMoreIssues) }, enabled = !page.issuesLoading) { Text("Load more") } }
+            }
+            page.issueDetail?.let { detail ->
+                item("details") {
+                    Column(Modifier.padding(Space.l), verticalArrangement = Arrangement.spacedBy(Space.s)) {
+                        Text(detail.issueBody)
+                        detail.closingPullRequestUrl?.let { url ->
+                            TextButton(onClick = { uri.openUri(url) }) { Text("Open closing pull request") }
+                        }
+                        detail.issueComments.forEach { Text(it) }
                     }
                 }
             }

@@ -7,6 +7,7 @@ import com.crayen.domovoi.app.DiagramView
 import com.crayen.domovoi.app.FolderBrowserView
 import com.crayen.domovoi.app.PaletteView
 import com.crayen.domovoi.app.PanelView
+import com.crayen.domovoi.app.IssuesView
 import com.crayen.domovoi.app.PullRequestsView
 import com.crayen.domovoi.app.SettingsView
 import com.crayen.domovoi.app.SidebarView
@@ -40,6 +41,7 @@ class LiveView(first: ViewDelta) {
     private val _retryBlocked = MutableStateFlow(_composer.value.blockedReason.isNotEmpty())
     private val _panel = MutableStateFlow(requireNotNull(first.panel) { FIRST })
     private val _settings = MutableStateFlow(requireNotNull(first.settings) { FIRST })
+    private val _issues = MutableStateFlow(requireNotNull(first.issues) { FIRST })
     private val _pullRequests = MutableStateFlow(requireNotNull(first.pullRequests) { FIRST })
     private val _usage = MutableStateFlow(requireNotNull(first.usage) { FIRST })
     private val _agentSessions = MutableStateFlow(requireNotNull(first.agentSessions) { FIRST })
@@ -63,6 +65,7 @@ class LiveView(first: ViewDelta) {
     val retryBlocked: StateFlow<Boolean> = _retryBlocked.asStateFlow()
     val panel: StateFlow<PanelView> = _panel.asStateFlow()
     val settings: StateFlow<SettingsView> = _settings.asStateFlow()
+    val issues: StateFlow<IssuesView> = _issues.asStateFlow()
     val pullRequests: StateFlow<PullRequestsView> = _pullRequests.asStateFlow()
     val usage: StateFlow<UsageView> = _usage.asStateFlow()
     val agentSessions: StateFlow<AgentSessionsView> = _agentSessions.asStateFlow()
@@ -91,6 +94,7 @@ class LiveView(first: ViewDelta) {
         }
         delta.panel?.let { _panel.value = it }
         delta.settings?.let { _settings.value = it }
+        delta.issues?.let { _issues.value = it }
         delta.pullRequests?.let { _pullRequests.value = it }
         delta.usage?.let { _usage.value = it }
         delta.agentSessions?.let { _agentSessions.value = it }

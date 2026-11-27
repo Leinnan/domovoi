@@ -162,6 +162,7 @@ fun ThreadListPane(core: Core, nav: Navigator, snackbars: SnackbarHostState, sel
                 title = { ServerMenu(core, nav) },
                 actions = {
                     IconButton(onClick = { core.update(Event.OpenPalette) }) { Icon(Icons.Outlined.Search, "Command palette") }
+                    TextButton(onClick = { nav.open(Screen.Issues) }) { Text("Issues") }
                     AddProjectMenu(addActions)
                 },
                 scrollBehavior = scroll,
@@ -535,6 +536,7 @@ private fun ThreadRow(
                         if (thread.inWorktree) Icon(Icons.Outlined.Layers, "In its own worktree", modifier = Modifier.size(12.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
                         SourceBadge(thread.source)
                         if (thread.pinned) Icon(Icons.Filled.PushPin, "Pinned", modifier = Modifier.size(12.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        thread.issueBadge?.let { Text(it, style = MaterialTheme.typography.labelSmall) }
                         if (thread.pullRequest.isNotEmpty()) PullRequestBadge(thread.pullRequest, thread.pullRequestState)
                     }
                 }

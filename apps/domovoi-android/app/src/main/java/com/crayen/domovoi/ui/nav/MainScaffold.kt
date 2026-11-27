@@ -78,6 +78,7 @@ import com.crayen.domovoi.ui.threads.ThreadListPane
 import com.crayen.domovoi.ui.tools.DiffScreen
 import com.crayen.domovoi.ui.tools.FilesScreen
 import com.crayen.domovoi.ui.tools.GitScreen
+import com.crayen.domovoi.ui.tools.IssuesScreen
 import com.crayen.domovoi.ui.tools.PullRequestsScreen
 import com.crayen.domovoi.ui.tools.UsageScreen
 
@@ -180,6 +181,14 @@ fun MainScaffold(core: Core) {
             }
         }
     }
+    val composer by core.view.composer.watch()
+    var seenIssueHandoff by remember { mutableStateOf(composer.issueHandoff) }
+    LaunchedEffect(composer.issueHandoff) {
+        val changed = composer.issueHandoff != seenIssueHandoff
+        seenIssueHandoff = composer.issueHandoff
+        if (changed && composer.issueHandoff != 0u && core.view.route.value == "new-thread") threadsNav.show(Screen.NewThread)
+    }
+
     // The core picked a thread elsewhere (a fork, a PR thread).
     LaunchedEffect(sidebar.selectedThreadId) {
         val id = sidebar.selectedThreadId ?: return@LaunchedEffect
@@ -305,6 +314,7 @@ private fun Content(core: Core, tab: Tab, stack: SnapshotStateList<Screen>, nav:
             entry<Screen.Terminal>(metadata = tool) { TerminalScreen(core, onBack = threadsNav::back) }
             entry<Screen.ImportSessions> { ImportSessionsScreen(core, onBack = nav::back) }
             entry<Screen.BrowseFolders> { FolderBrowserScreen(core, threadsNav, onBack = nav::back) }
+            entry<Screen.Issues> { IssuesScreen(core, threadsNav) }
             entry<Screen.PullRequests> { PullRequestsScreen(core, threadsNav) }
             entry<Screen.Usage> { UsageScreen(core) }
             entry<Screen.Settings> { SettingsScreen(core, nav) }

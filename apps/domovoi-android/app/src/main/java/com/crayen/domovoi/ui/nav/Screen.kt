@@ -13,6 +13,7 @@ sealed interface Screen {
     data object ImportSessions : Screen
     data object BrowseFolders : Screen
     data object AddServer : Screen
+    data object Issues : Screen
     data object PullRequests : Screen
     data object Usage : Screen
     data object Settings : Screen
