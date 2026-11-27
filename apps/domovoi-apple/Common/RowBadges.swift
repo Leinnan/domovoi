@@ -16,6 +16,9 @@ struct ThreadRowBadges: View {
                 .foregroundStyle(Tint.plan)
                 .help("Plan ready")
         }
+        if let issue = thread.issueBadge {
+            Text(issue).badgeCapsule(tint: .secondary)
+        }
         if !thread.pullRequest.isEmpty {
             HStack(spacing: Space.xxs) {
                 Image(systemName: PullRequestState.icon(thread.pullRequestState))

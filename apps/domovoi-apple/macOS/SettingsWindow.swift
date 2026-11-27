@@ -909,6 +909,7 @@ struct ProjectsSettings: View {
 
     var body: some View {
         Form {
+            LinearProjectSettings(core: core)
             ForEach(core.view.settings.projects, id: \.id) { p in
                 VStack(alignment: .leading, spacing: Space.xs) {
                     HStack(spacing: Space.s) {

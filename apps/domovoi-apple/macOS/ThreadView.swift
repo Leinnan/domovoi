@@ -160,6 +160,7 @@ private struct ThreadContent: View {
             }
             // One per thread: another thread starts at its own end (or where
             // it was read), not with this one's scroll state.
+            ThreadPullRequestControls(core: core)
             WorkLinksStrip(links: thread.links)
             Transcript(core: core, thread: thread, artifactJump: artifactJump)
                 .id(thread.id)

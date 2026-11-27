@@ -323,6 +323,7 @@ struct ComposerPane: View {
                     .accessibilityValue(composer.limitsChip)
                 }
 
+                if composer.isNewThread { IssueComposerControls(core: core) }
                 if composer.isNewThread, !composer.prWorktree.isEmpty {
                     // Checked out from a pull request: the thread works there.
                     HStack(spacing: Space.tight) {
@@ -341,7 +342,7 @@ struct ComposerPane: View {
                             Text("Worktree · \(composer.baseBranch ?? "HEAD")").lineLimit(1).fixedSize()
                         } else {
                             Image(systemName: "folder")
-                            Text("Current checkout").lineLimit(1).fixedSize()
+                            Text(composer.workspaceRequired ? "Choose workspace" : "Current checkout").lineLimit(1).fixedSize()
                         }
                     }
                     .popover(isPresented: shown(.workspace), arrowEdge: .top) { OptionPopover(core: core, option: .workspace) }
@@ -890,7 +891,7 @@ private struct OptionPopover: View {
     private var workspace: some View {
         VStack(alignment: .leading, spacing: Space.s) {
             OptionHeader("Workspace", "folder")
-            row("Current checkout", detail: "Works in the project's folder as it is.", icon: "folder", chosen: composer.workspaceMode != "worktree") {
+            row("Current checkout", detail: "Works in the project's folder as it is.", icon: "folder", chosen: composer.workspaceMode == "local") {
                 core.update(.setWorkspaceMode(mode: "local"))
             }
             row("New worktree", detail: "A separate checkout on its own branch, so this one stays untouched.", icon: "arrow.triangle.branch", chosen: composer.workspaceMode == "worktree") {

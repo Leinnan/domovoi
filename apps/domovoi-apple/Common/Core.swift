@@ -946,6 +946,7 @@ final class LiveView {
     private(set) var panel: PanelView
     private(set) var palette: PaletteView?
     private(set) var settings: SettingsView
+    private(set) var issues: IssuesView
     private(set) var pullRequests: PullRequestsView
     private(set) var usage: UsageView
     private(set) var agentSessions: AgentSessionsView
@@ -972,7 +973,7 @@ final class LiveView {
         guard let connection = first.connection, let toast = first.toast, let sidebar = first.sidebar,
               let route = first.route, let thread = first.thread, let composer = first.composer,
               let panel = first.panel, let palette = first.palette, let settings = first.settings,
-              let pullRequests = first.pullRequests, let usage = first.usage,
+              let issues = first.issues, let pullRequests = first.pullRequests, let usage = first.usage,
               let agentSessions = first.agentSessions, let folderBrowser = first.folderBrowser
         else { preconditionFailure("the core's first view must carry every part") }
         self.connection = connection
@@ -987,6 +988,7 @@ final class LiveView {
         self.panel = panel
         self.palette = palette
         self.settings = settings
+        self.issues = issues
         self.pullRequests = pullRequests
         self.usage = usage
         self.agentSessions = agentSessions
@@ -1047,6 +1049,7 @@ final class LiveView {
         }
         if let v = update.palette { palette = v }
         if let v = update.settings { settings = v }
+        if let v = update.issues { issues = v }
         if let v = update.pullRequests { pullRequests = v }
         if let v = update.usage { usage = v }
         if let v = update.agentSessions { agentSessions = v }
@@ -1157,6 +1160,7 @@ struct ViewUpdate {
     var panel: PanelView?
     var palette: PaletteView??
     var settings: SettingsView?
+    var issues: IssuesView?
     var pullRequests: PullRequestsView?
     var usage: UsageView?
     var agentSessions: AgentSessionsView?
@@ -1181,6 +1185,7 @@ struct ViewUpdate {
         if let v = later.panel { out.panel = v }
         if let v = later.palette { out.palette = v }
         if let v = later.settings { out.settings = v }
+        if let v = later.issues { out.issues = v }
         if let v = later.pullRequests { out.pullRequests = v }
         if let v = later.usage { out.usage = v }
         if let v = later.agentSessions { out.agentSessions = v }
@@ -1209,6 +1214,7 @@ struct ViewUpdate {
         panel = delta.panel
         palette = delta.palette.map(\.palette)
         settings = delta.settings
+        issues = delta.issues
         pullRequests = delta.pullRequests
         usage = delta.usage
         agentSessions = delta.agentSessions

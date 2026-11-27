@@ -79,7 +79,7 @@ struct MainView: View {
     /// much room. A sidebar the user hid stays hidden.
     @State private var sidebarHiddenNeeding: CGFloat?
 
-    private var showsPanel: Bool { !["pull-requests", "usage"].contains(core.view.route) }
+    private var showsPanel: Bool { !["issues", "pull-requests", "usage"].contains(core.view.route) }
     private var panelShown: Bool { core.view.panelOpen && showsPanel }
 
     var body: some View {
@@ -213,6 +213,8 @@ struct DetailView: View {
             switch core.view.route {
             case "thread":
                 ThreadView(core: core)
+            case "issues":
+                IssueBrowser(core: core)
             case "pull-requests":
                 PullRequestsPage(core: core)
             case "usage":

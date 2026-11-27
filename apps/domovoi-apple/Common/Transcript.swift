@@ -1144,6 +1144,9 @@ struct ItemRow: View, @MainActor Equatable {
                 hoverActions.opacity(hovering ? 1 : 0).allowsHitTesting(hovering)
                 #endif
                 VStack(alignment: .trailing, spacing: Space.s) {
+                    if let issue = item.issueCard, let url = URL(string: issue.issueUrl) {
+                        Link(issue.issueLabel, destination: url).font(TypeRole.meta)
+                    }
                     if !item.images.isEmpty { MessageImages(images: item.images) }
                     if !item.text.isEmpty { Text(item.text).selectableText() }
                     ForEach(item.attachments.filter { name in !item.images.contains { $0.name == name } }, id: \.self) { name in

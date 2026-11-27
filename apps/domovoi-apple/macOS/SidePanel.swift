@@ -447,7 +447,7 @@ struct GitPane: View {
                     // narrow panel where three in a row were cut short.
                     Menu("Commit") {
                         Button("Commit & Push…") { confirming = "commit_push" }.disabled(!git.hasRemote)
-                        Button("Commit, Push & Open PR…") { confirming = "commit_push_pr" }.disabled(!git.hasRemote)
+                        Button("Commit, Push & Open PR…") { core.update(.gitAction(action: "commit_push_pr", message: message)) }.disabled(!git.hasRemote)
                     } primaryAction: {
                         run("commit")
                     }
@@ -481,7 +481,7 @@ struct GitPane: View {
                 titleVisibility: .visible,
                 presenting: confirming
             ) { action in
-                Button(action == "commit_push_pr" ? "Commit, Push & Open PR" : "Commit & Push") { run(action) }
+                Button("Commit & Push") { run(action) }
             } message: { _ in
                 Text("Commits ^[\(git.changedFiles.count) changed file](inflect: true) and pushes to the remote.")
             }

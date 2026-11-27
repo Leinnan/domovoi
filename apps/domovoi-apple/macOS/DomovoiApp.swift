@@ -99,6 +99,7 @@ struct DomovoiApp: App {
                 Button("Search in Project…") { openPalette("content") }
                     .keyboardShortcut("f", modifiers: [.command, .shift])
                 Divider()
+                Button("Issues") { core.update(.showRoute(route: "issues")) }
                 Button("Pull Requests") { core.update(.showRoute(route: "pull-requests")) }
                 Button("Usage") { core.update(.showRoute(route: "usage")) }
                 Divider()
@@ -141,7 +142,7 @@ struct ComposerCommandItems: View {
     /// The composer is on screen (a thread or a new thread).
     private var available: Bool {
         let c = core.view.connection.state
-        return (c == "connected" || c == "reconnecting") && !["pull-requests", "usage"].contains(core.view.route)
+        return (c == "connected" || c == "reconnecting") && !["issues", "pull-requests", "usage"].contains(core.view.route)
     }
 
     var body: some View {
