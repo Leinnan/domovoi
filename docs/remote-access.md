@@ -193,7 +193,7 @@ not private (`private`).
 ## The status bar icon
 
 ```sh
-domovoi-server --tray       # or `just tray`
+domovoi-server --tray
 ```
 
 The icon shows a prompt (`>_`): faded when remote access is off, solid when it
@@ -208,19 +208,10 @@ when remote access failed to start. The menu:
 - **Advanced** ▸ version, endpoint id, logs and data folders
 - **Quit Domovoi Server**
 
-It is built with the `tray` Cargo feature (on by default). On Linux that needs
-GTK 3, `libxdo` and an appindicator library to build (`libgtk-3-dev
-libxdo-dev libayatana-appindicator3-dev` on Debian); without a desktop session
-the server runs without an icon. `cargo build --no-default-features` leaves it
-out.
-
-On macOS, `just tray-app` builds `dist/Domovoi Server.app` (no Dock icon) to move to
-/Applications. Building the Mac app builds it too: `just mac-build` puts a debug
-copy beside `Domovoi.app` in `apps/domovoi-apple/build/Build/Products/Debug`, and `just
-mac-package` ships an Apple silicon one in `dist/` (its own .zip, and in the .dmg
-next to `Domovoi.app`). Its executable is `domovoi-server` itself, which starts with
-the icon and without a pairing code when it is an app's executable. A launcher
-script that `exec`s the server would not do: macOS 26 then hides the icon.
+On macOS, launch **Domovoi Server.app** (no Dock icon) from `/Applications` to
+start the server with its status bar icon. On Linux, without a desktop session
+the server runs without an icon. For building the tray app or headless binaries
+from source, see [development.md](development.md).
 
 ## Managing a running server from a terminal
 
@@ -260,8 +251,8 @@ is rewritten at start.
 macOS does not let programs started by launchd read `~/Documents`,
 `~/Desktop`, `~/Downloads` or iCloud Drive without asking, and nobody is there
 to answer. So for a bare binary `autostart on` refuses an executable or home
-directory in those folders: use the app from `just tray-app`, or copy the
-binary to `~/.local/bin`.
+directory in those folders: use **Domovoi Server.app**, or copy the binary to
+`~/.local/bin`.
 
 ## Logs and shutdown
 
@@ -352,20 +343,6 @@ Point the proxy's `https://hooks.example.com/api/hooks/` at
 `http://127.0.0.1:13780/api/hooks/`. Each task's URL carries its own token;
 add a signature secret in the task for senders that sign their requests.
 
-## The iPhone app on a device
-
-The Xcode project is generated (`just mac-generate`) and signs the iPhone app
-with automatic signing for the team in the justfile (`DEVELOPMENT_TEAM=<team>`
-picks another one; the bundle id is then `com.crayen.domovoi` on that team):
-
-- `just ios-device` builds a debug app for a physical iPhone.
-- `just ios-device-run <device>` also installs and launches it
-  (`xcrun devicectl list devices` names the phone).
-- `just ios-archive` makes a release archive in `dist/`.
-- `just ios-open` opens the project in Xcode.
-
-The app needs iOS 26 and runs on iPhone and iPad.
-
 ## A Linux server
 
 On a Linux machine nobody signs in to, the server runs headless as a systemd
@@ -387,26 +364,5 @@ lingering on (`--linger`, or `loginctl enable-linger`) it starts at boot,
 otherwise when you sign in. The server keeps listening on 127.0.0.1 only:
 phones reach it over iroh.
 
-From the Mac, against `DOMOVOI_LINUX_HOST` (an ssh destination; the justfile
-names a default):
-
-```sh
-just linux-deploy        # cross-build, copy to ~/.local/bin, service install, wait until it is up
-just linux-pair          # a pairing link and QR code, drawn in this terminal (valid 10 minutes)
-just linux remote status # any subcommand: remote devices, service status, stop…
-just linux-logs          # journalctl --user -u domovoi-server -f
-```
-
-`just server-package-linux` makes a tarball in `dist/` instead. The Linux build
-from the Mac (`tools/cross/linux.sh`) uses zig as the C toolchain
-(`cargo install cargo-zigbuild`, `rustup target add x86_64-unknown-linux-gnu`),
-needs glibc 2.34 or newer on the machine, and leaves out the status bar icon
-(`--no-default-features`), so it needs no GTK.
-
-## Building for other systems
-
-- `just check-windows` cross-builds the server for Windows with zig
-  (`cargo install cargo-zigbuild`, `rustup target add x86_64-pc-windows-gnu`).
-- `tools/cross/linux.sh` cross-builds the headless server for Linux with zig
-  (see "A Linux server").
-- `just check-linux` builds and tests the server crates in Docker.
+For cross-building the headless Linux binary or deploying over SSH with `just`,
+see [development.md](development.md).
