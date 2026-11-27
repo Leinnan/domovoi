@@ -1066,8 +1066,7 @@ What the live runs found:
 ## Issue threads
 
 A thread started to work on an issue, from picking the issue to its pull
-request merging. What is here is built stage by stage; a stage that is not
-listed is not done.
+request merging.
 
 - Launch (`ThreadLaunchInput.issue`, `rpc/shell.rs` `launch_thread_for_client`,
   `rpc/issues/snapshot.rs`): the server reads the issue before any worktree is
@@ -1197,6 +1196,20 @@ listed is not done.
   (`a_pull_request_notifies_of_what_happened_to_it_once`) and
   `mcp::pull_requests`
   (`open_review_conversations_reach_the_agent_as_untrusted_data`).
+
+- Clients: the project Issues page, new-thread issue picker, issue card and
+  thread badge are wired in Iced, macOS, iOS, Android and Windows. A focused
+  issue requires the user to choose a workspace. The PR sheet reviews the
+  title, description, base, draft state and exact files to commit, with files
+  initially unchecked in a shared checkout. The thread shows the linked
+  PR's status and offers to hand review comments to the agent or stop
+  following. Project Settings connects Linear and binds a project to a team.
+- Client verification: replay tests cover the workspace requirement, a
+  refused launch retaining its issue, and reviewed PR creation preserving
+  the user's edits and selecting only the specified files. Compile checks
+  passed on Iced, macOS, the iOS simulator and Android. Windows passed a
+  GNU-target cross-check with Zig. The native Windows smoke test and a live
+  hosted-repository issue-to-merge run remain pending.
 
 ## Managed policy
 
