@@ -62,7 +62,6 @@ pub mod permission {
 
 /// The features the server implements that no app screen uses yet.
 pub mod kept {
-    pub const ISSUE_THREADS: &str = "a thread started on an issue, and the pull request made from it (the screens follow the server)";
     pub const ISSUES: &str = "issues from GitHub, GitLab and Linear (the agent tools read them through the same service)";
     pub const PULL_REQUEST_PAGE: &str = "the rest of a pull request's page: detail, review threads, labels, reviewers, stacks, review guides";
     pub const REPOSITORIES: &str = "repositories: sign-in to a host, lookup, clone and publish";
@@ -109,22 +108,22 @@ methods! {
     "domovoi.terminals.subscribe" => Stream, TERMINAL_READ, Client;
     "filesystem.browse" => Unary, FILESYSTEM_READ, Client;
     "filesystem.getMetadata" => Unary, FILESYSTEM_READ, Kept(kept::FILES);
-    "git.preparePullRequest" => Unary, ORCHESTRATION_OPERATE, Kept(kept::ISSUE_THREADS);
+    "git.preparePullRequest" => Unary, ORCHESTRATION_OPERATE, Client;
     "git.preparePullRequestThread" => Unary, SOURCE_CONTROL_WRITE, Client;
     "git.resolvePullRequest" => Unary, ORCHESTRATION_READ, Kept(kept::VERSION_CONTROL);
     "git.runStackedAction" => Stream, SOURCE_CONTROL_WRITE, Client;
-    "issueTrackers.bindProject" => Unary, SETTINGS_WRITE, Kept(kept::ISSUES);
-    "issueTrackers.connect" => Unary, SETTINGS_WRITE, Kept(kept::ISSUES);
-    "issueTrackers.list" => Unary, ORCHESTRATION_READ, Kept(kept::ISSUES);
+    "issueTrackers.bindProject" => Unary, SETTINGS_WRITE, Client;
+    "issueTrackers.connect" => Unary, SETTINGS_WRITE, Client;
+    "issueTrackers.list" => Unary, ORCHESTRATION_READ, Client;
     "issues.candidates" => Unary, ORCHESTRATION_READ, Kept(kept::ISSUES);
     "issues.comment" => Unary, SOURCE_CONTROL_WRITE, Kept(kept::ISSUES);
     "issues.comments" => Unary, ORCHESTRATION_READ, Kept(kept::ISSUES);
     "issues.create" => Unary, SOURCE_CONTROL_WRITE, Kept(kept::ISSUES);
-    "issues.detail" => Unary, ORCHESTRATION_READ, Kept(kept::ISSUES);
+    "issues.detail" => Unary, ORCHESTRATION_READ, Client;
     "issues.linkedThreads" => Unary, ORCHESTRATION_READ, Kept(kept::ISSUES);
-    "issues.list" => Unary, ORCHESTRATION_READ, Kept(kept::ISSUES);
+    "issues.list" => Unary, ORCHESTRATION_READ, Client;
     "issues.react" => Unary, SOURCE_CONTROL_WRITE, Kept(kept::ISSUES);
-    "issues.resolve" => Unary, ORCHESTRATION_READ, Kept(kept::ISSUES);
+    "issues.resolve" => Unary, ORCHESTRATION_READ, Client;
     "issues.setState" => Unary, SOURCE_CONTROL_WRITE, Kept(kept::ISSUES);
     "issues.templates" => Unary, ORCHESTRATION_READ, Kept(kept::ISSUES);
     "issues.update" => Unary, SOURCE_CONTROL_WRITE, Kept(kept::ISSUES);

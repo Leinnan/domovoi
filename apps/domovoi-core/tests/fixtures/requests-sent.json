@@ -90,6 +90,15 @@
     ]
   },
   {
+    "step": "orchestration.subscribeShell sent",
+    "sent": [
+      {
+        "payload": {},
+        "rpc": "issueTrackers.list"
+      }
+    ]
+  },
+  {
     "step": "open a thread",
     "sent": [
       {
@@ -2888,6 +2897,109 @@
       {
         "payload": {},
         "rpc": "subscribeTerminalMetadata"
+      }
+    ]
+  },
+  {
+    "step": "the project's issues",
+    "sent": [
+      {
+        "payload": {
+          "cursors": null,
+          "limit": 40,
+          "projectId": "p1",
+          "state": "open"
+        },
+        "rpc": "issues.list"
+      }
+    ]
+  },
+  {
+    "step": "read an issue",
+    "sent": [
+      {
+        "payload": {
+          "host": "github.com",
+          "key": "12",
+          "projectId": "p1",
+          "scope": "owner/repo",
+          "tracker": "github"
+        },
+        "rpc": "issues.detail"
+      }
+    ]
+  },
+  {
+    "step": "the issue composer",
+    "sent": [
+      {
+        "rpc": "Interrupt"
+      },
+      {
+        "rpc": "Interrupt"
+      }
+    ]
+  },
+  {
+    "step": "launch on the issue",
+    "sent": [
+      {
+        "payload": {
+          "commandId": "made-87",
+          "creationSource": "web",
+          "generateTitle": true,
+          "initialMessage": {
+            "attachments": [],
+            "messageId": "made-88",
+            "text": ""
+          },
+          "interactionMode": "plan",
+          "issue": {
+            "assignToMe": false,
+            "issue": {
+              "host": "github.com",
+              "key": "12",
+              "projectId": "p1",
+              "scope": "owner/repo",
+              "tracker": "github"
+            }
+          },
+          "modelSelection": {
+            "instanceId": "codex",
+            "model": "gpt-6"
+          },
+          "projectId": "p1",
+          "runtimeMode": "full-access",
+          "threadId": "made-89",
+          "title": "New thread",
+          "workspaceStrategy": {
+            "baseRef": "main",
+            "type": "worktree"
+          }
+        },
+        "rpc": "orchestration.launchThread"
+      }
+    ]
+  },
+  {
+    "step": "orchestration.launchThread answered",
+    "sent": [
+      {
+        "payload": {
+          "commandId": "made-90",
+          "opened": true,
+          "threadId": "made-89",
+          "type": "thread.visit",
+          "visitedAt": "2026-11-18T11:06:40.000Z"
+        },
+        "rpc": "orchestration.dispatchCommand"
+      },
+      {
+        "payload": {
+          "requestCompletionMarker": true,
+          "threadId": "made-89"
+        },
+        "rpc": "orchestration.subscribeThread"
       }
     ]
   },

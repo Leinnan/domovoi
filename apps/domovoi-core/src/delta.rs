@@ -11,7 +11,7 @@
 //! after the core starts carries every section.
 
 use crate::view::{
-    AgentSessionsView, ComposerView, ConnectionView, DiagramView, FolderBrowserView, ItemView, PaletteView, PanelView, PullRequestsView,
+    AgentSessionsView, ComposerView, ConnectionView, DiagramView, FolderBrowserView, IssuesView, ItemView, PaletteView, PanelView, PullRequestsView,
     SettingsView, SidebarView, ThreadPageView, ToastView, UsageView, ViewModel,
 };
 use crate::{Effect, Event, Model, DomovoiApp};
@@ -34,6 +34,7 @@ pub struct ViewDelta {
     pub palette: Option<PaletteChange>,
     pub settings: Option<SettingsView>,
     pub pull_requests: Option<PullRequestsView>,
+    pub issues: Option<IssuesView>,
     pub usage: Option<UsageView>,
     pub agent_sessions: Option<AgentSessionsView>,
     pub folder_browser: Option<FolderBrowserView>,
@@ -90,6 +91,7 @@ impl ViewDelta {
             palette: changed(old.map(|v| &v.palette), &new.palette).map(|palette| PaletteChange { palette }),
             settings: changed(old.map(|v| &v.settings), &new.settings),
             pull_requests: changed(old.map(|v| &v.pull_requests), &new.pull_requests),
+            issues: changed(old.map(|v| &v.issues), &new.issues),
             usage: changed(old.map(|v| &v.usage), &new.usage),
             agent_sessions: changed(old.map(|v| &v.agent_sessions), &new.agent_sessions),
             folder_browser: changed(old.map(|v| &v.folder_browser), &new.folder_browser),
@@ -102,7 +104,7 @@ impl ViewDelta {
         macro_rules! set {
             ($($field:ident),*) => { $( if let Some(v) = self.$field { view.$field = v; } )* };
         }
-        set!(connection, sidebar, route, composer, panel, settings, pull_requests, usage, agent_sessions, folder_browser, diagrams);
+        set!(connection, sidebar, route, composer, panel, settings, pull_requests, issues, usage, agent_sessions, folder_browser, diagrams);
         if let Some(c) = self.toast {
             view.toast = c.toast;
         }
@@ -199,7 +201,8 @@ macro_rules! page_header {
             id, title, project_id, project_title, branch, worktree_path, cwd, model_label, provider_instance_id, model_instance_id, model,
             runtime_mode, interaction_mode, status, working, loading, has_earlier, loading_earlier, pinned, settled, archived, pending_requests,
             pending_sends, working_since_ms, working_activity, checkpoints, find, parent, can_merge_back, can_fork, context, usage, queued,
-            queue_held, background, background_tasks, limit_resets, limit_plan, plan, tasks, waiting_children, artifact_count, secret_requests, links
+            queue_held, background, background_tasks, limit_resets, limit_plan, plan, tasks, waiting_children, artifact_count, secret_requests, links,
+            can_create_pull_request, pull_request_sheet, pull_request_status
         )
     };
 }

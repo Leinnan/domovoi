@@ -298,6 +298,10 @@ fn item_view(item: &TurnItem, message: Option<&ConversationMessage>, checkpoint:
     match item {
         TurnItem::UserMessage(i) => {
             v.kind = "user".into();
+            v.issue_card = i.issue.as_ref().map(|card| IssueCardView {
+                issue_label: format!("{} {}", card.display_key, card.title),
+                issue_url: card.url.clone(),
+            });
             // The message holds the text; the item's own copy stands in for a message not held.
             let (text, attachments) = message.map_or((&i.text, &i.attachments), |m| (&m.text, &m.attachments));
             v.text = text.clone();
@@ -802,6 +806,10 @@ fn working_activity<'a>(
 
 fn thread_page(model: &Model) -> Option<(ThreadPageView, Vec<crate::artifacts::CollectedArtifact>)> {
     let (mut page, collected) = thread_page_body(model)?;
+    let shell = model.thread_shell(&page.id);
+    page.can_create_pull_request = crate::pull_request_sheet::available(model);
+    page.pull_request_sheet = crate::pull_request_sheet::view(model, &page.id);
+    page.pull_request_status = shell.and_then(crate::pull_request_sheet::status);
     page.usage = session_usage(model, &page);
     Some((page, collected))
 }
@@ -1981,7 +1989,9 @@ pub(crate) fn composer(model: &Model) -> ComposerView {
     let draft = model.draft();
     let is_new = model.selected_thread.is_none();
     let working = model.selected_thread.as_deref().and_then(|t| model.thread_shell(t)).is_some_and(|t| matches!(shell_status(t), ShellStatus::Working | ShellStatus::Approval));
-    let has_content = !draft.trim().is_empty() || !model.composer.attachments.is_empty();
+    let issue = crate::issues::draft(model);
+    let workspace_required = issue.is_some_and(|draft| draft.workspace.is_none());
+    let has_content = !draft.trim().is_empty() || !model.composer.attachments.is_empty() || issue.is_some();
     let slash = selected.as_ref().map(|m| slash_commands(model, &m.instance_id, &draft)).unwrap_or_default();
     let limits = selected
         .as_ref()
@@ -2066,7 +2076,13 @@ pub(crate) fn composer(model: &Model) -> ComposerView {
         runtime_modes: runtime_modes(),
         runtime_mode: composer_runtime_mode(model),
         interaction_mode: composer_interaction_mode(model),
-        workspace_mode: if model.composer.workspace_mode.is_empty() { "local".into() } else { model.composer.workspace_mode.clone() },
+        issue_chip: issue.map(|draft| draft.label.clone()),
+        issue_available: is_new && crate::issues::available(model),
+        issue_picker: if is_new { model.composer.issue_picker.clone() } else { None },
+        issue_assign_to_me: issue.is_some_and(|draft| draft.assign),
+        workspace_required,
+        issue_handoff: model.composer.issue_handoff,
+        workspace_mode: if let Some(issue) = issue { issue.workspace.clone().unwrap_or_default() } else if model.composer.workspace_mode.is_empty() { "local".into() } else { model.composer.workspace_mode.clone() },
         base_branch: model.composer.base_branch.clone().or_else(|| model.panel.git.local.as_ref().and_then(|local| local.ref_name.clone())),
         branches: model.composer.branches.clone(),
         is_new_thread: is_new,
@@ -2079,6 +2095,7 @@ pub(crate) fn composer(model: &Model) -> ComposerView {
         }),
         // Not connected but on the way back: what's sent waits in the outbox.
         can_send: can_queue(model)
+            && !workspace_required
             && has_content
             && !model.composer.sending
             && (!is_new || model.selected_project.is_some())
@@ -2602,6 +2619,7 @@ fn settings(model: &Model) -> SettingsView {
         push_configured: remote.is_some_and(|remote| remote.push.configured),
     };
     SettingsView {
+        linear_settings: crate::issues::linear_settings(model),
         groups: setting_groups(model),
         providers: model
             .providers
@@ -2753,6 +2771,7 @@ fn settings(model: &Model) -> SettingsView {
             .map(|p| {
                 let idx = pages.project_indexes.get(p.id.as_str());
                 ProjectSettingsView {
+                linear_scope: model.pages.issue_trackers.bindings.get(p.id.as_str()).filter(|binding| binding.tracker == "linear").map(|binding| binding.scope.clone()),
                     id: p.id.as_str().to_owned(),
                     title: p.title.clone(),
                     workspace_root: p.workspace_root.clone(),
@@ -3525,6 +3544,7 @@ pub fn view(model: &Model) -> ViewModel {
         }),
         settings: settings(model),
         pull_requests: pull_requests(model),
+        issues: crate::issues::view(model),
         usage: usage(model),
         agent_sessions: agent_sessions(model),
         folder_browser: folder_browser(model),

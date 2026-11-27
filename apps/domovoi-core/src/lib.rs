@@ -21,6 +21,8 @@ pub mod local;
 pub mod markdown;
 pub mod diagrams;
 mod artifacts;
+mod issues;
+mod pull_request_sheet;
 pub mod model;
 pub mod notify;
 pub mod offline;

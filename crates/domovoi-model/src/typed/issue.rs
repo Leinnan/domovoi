@@ -261,7 +261,7 @@ pub struct IssueReaction {
 
 /// Addresses one issue (`IssueRef`). `host` is absent for the kind's public
 /// host; `projectId` names the project whose credentials serve the read.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IssueRef {
     pub project_id: ProjectId,

@@ -298,6 +298,7 @@ pub struct Model {
 /// A thread sent to be started, before the server has it (`Model::starting_thread`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Launching {
+    pub issue: Option<crate::issues::IssueDraft>,
     pub id: String,
     pub project_id: String,
     pub title: String,
@@ -511,6 +512,9 @@ pub struct Attachment {
 
 #[derive(Default)]
 pub struct Composer {
+    pub issue_drafts: HashMap<String, crate::issues::IssueDraft>,
+    pub issue_handoff: u32,
+    pub issue_picker: Option<String>,
     /// Drafts per thread id, or `new:<project id>` for a new thread.
     pub drafts: HashMap<String, String>,
     pub draft_revision: u32,
@@ -761,6 +765,9 @@ pub struct ScheduledRun {
 
 #[derive(Default)]
 pub struct Pages {
+    pub pull_request_sheet: Option<crate::pull_request_sheet::Sheet>,
+    pub issues: crate::issues::Issues,
+    pub issue_trackers: domovoi_model::typed::IssueTrackerConnectionList,
     /// Each provider instance's sign-in and managed install, as last reported.
     pub provider_auth: std::collections::BTreeMap<String, domovoi_model::typed::ProviderAuthState>,
     pub provider_install: std::collections::BTreeMap<String, domovoi_model::typed::ProviderInstallState>,
@@ -1014,6 +1021,8 @@ impl Model {
             self.browser.loading = false;
             self.browser.error = Some("The connection dropped. Pull to try again.".into());
         }
+        crate::issues::disconnected(self);
+        crate::pull_request_sheet::disconnected(self);
         self.pages.prs_loading = false;
         if self.pages.usage_loading {
             self.pages.usage_loading = false;

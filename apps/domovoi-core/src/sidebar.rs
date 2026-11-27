@@ -263,6 +263,7 @@ fn row(model: &Model, labels: &Labels, t: &ThreadShell) -> ThreadRowView {
     ThreadRowView {
         plan_ready: t.has_actionable_proposed_plan && !matches!(shell_status(t), ShellStatus::Working | ShellStatus::Approval),
         plan_mode: is_planning(t),
+        issue_badge: pull_request.is_empty().then(|| t.issues.iter().flatten().find(|link| link.is_focus()).map(|link| link.display_key.clone())).flatten(),
         pull_request,
         pull_request_state,
         id: t.id.as_str().to_owned(),

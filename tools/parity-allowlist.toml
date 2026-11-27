@@ -99,3 +99,7 @@ reason = "Clients show `label` and `percent`, which the core derives from it."
 [fields."SecretRequestView.delivery"]
 missing = ["*"]
 reason = "The core words what delivery means into SecretRequestView.hint, which every client shows; the raw value is for tests and future clients."
+
+[fields."ComposerView.issue_handoff"]
+missing = ["macos", "desktop", "windows"]
+reason = "Phones navigate to a separate new-thread screen on issue handoff. Desktop shells already render the core route."

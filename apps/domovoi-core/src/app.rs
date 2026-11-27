@@ -428,6 +428,25 @@ pub enum Event {
     RevokeClient { session_id: String },
 
     // Pull requests and usage
+    ConnectIssueTracker { token: Option<String> },
+    BindProjectIssueTracker { project_id: String, scope: Option<String> },
+    LoadIssues { project_id: String },
+    SetIssueFilter { filter: String },
+    LoadMoreIssues,
+    SelectIssue { index: u32 },
+    StartIssueThread { index: u32 },
+    OpenIssuePicker,
+    SetIssuePickerQuery { query: String },
+    AttachIssue,
+    DetachIssue,
+    SetAssignIssueToMe { assign: bool },
+    PreparePullRequest,
+    SetPullRequestSheetField { field: String, value: String },
+    TogglePullRequestFile { path: String },
+    CreatePullRequest,
+    ClosePullRequestSheet,
+    HandReviewCommentsToAgent,
+    StopFollowingPullRequest,
     LoadPullRequests,
     /// `merge` (with `merge_method` `merge` | `squash` | `rebase`) | `close` |
     /// `reopen` | `ready` | `draft`.

@@ -33,7 +33,7 @@ impl std::fmt::Debug for Request {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut out = f.debug_struct("Request");
         out.field("method", &self.method);
-        if self.method == SECRETS_ANSWER_REQUEST {
+        if matches!(self.method, SECRETS_ANSWER_REQUEST | "issueTrackers.connect") {
             out.field("payload", &"(left out)");
         } else {
             out.field("payload", &self.payload);
@@ -585,6 +585,18 @@ pub fn git_prepare_pull_request_thread(cwd: &str, reference: &str) -> Request {
 }
 
 /// The open pull requests of the server's projects.
+pub fn git_prepare_pull_request(input: &domovoi_model::typed::PullRequestPrepareInput) -> Request {
+    built("git.preparePullRequest", json!(input))
+}
+
+pub fn git_create_reviewed_pull_request(payload: Value) -> Request {
+    built("git.runStackedAction", payload)
+}
+
+pub fn issue_request(method: &'static str, payload: serde_json::Value) -> Request {
+    built(method, payload)
+}
+
 pub fn pull_requests_list() -> Request {
     built("pullRequests.list", json!({ "state": "open", "limit": 50 }))
 }

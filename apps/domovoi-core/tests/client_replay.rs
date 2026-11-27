@@ -818,6 +818,100 @@ fn composing_and_launching_a_thread() {
     assert!(!page.loading && page.pending_sends.len() == 1, "its message stays shown until the thread's own copy comes");
 }
 
+fn issue_summary() -> Value {
+    json!({
+        "tracker": "github", "host": "github.com", "scope": "owner/repo", "key": "12", "displayKey": "#12",
+        "title": "Fix the parser", "url": "https://github.com/owner/repo/issues/12",
+        "author": null, "state": {"category": "open", "name": "Open"}, "createdAt": "1", "updatedAt": "2",
+        "closedAt": null, "assignees": [], "labels": [], "commentCount": 0,
+    })
+}
+
+fn issue_list() -> Value {
+    let mut summary = issue_summary();
+    summary["projectId"] = json!("p1");
+    summary["projectTitle"] = json!("Project");
+    json!({ "viewers": {}, "trackers": [], "errors": [], "entries": [summary], "nextCursors": {} })
+}
+
+#[test]
+fn an_issue_thread_requires_a_workspace_and_keeps_the_issue_if_launch_fails() {
+    let (mut model, sent) = connected();
+    providers_snapshot(&mut model, &sent);
+    model.projects.push(records::project(json!({ "id": "p1" })));
+
+    let _ = run(&mut model, Event::SetWorkspaceMode { mode: "worktree".into() });
+    let sent = sent_requests(&run(&mut model, Event::LoadIssues { project_id: "p1".into() }));
+    let list = sent.iter().find(|r| r["tag"] == "issues.list").unwrap();
+    let _ = sock(&mut model, exit_ok(list["id"].as_str().unwrap(), issue_list()));
+    assert_eq!(DomovoiApp.view(&model).issues.issue_rows[0].issue_label, "#12 Fix the parser");
+
+    let _ = run(&mut model, Event::StartIssueThread { index: 0 });
+    let composer = DomovoiApp.view(&model).composer;
+    assert!(composer.workspace_required && !composer.can_send && composer.workspace_mode.is_empty());
+    assert_eq!(composer.issue_chip.as_deref(), Some("#12 Fix the parser"));
+    assert!(sent_requests(&run(&mut model, Event::Send)).is_empty());
+
+    let _ = run(&mut model, Event::SetWorkspaceMode { mode: "local".into() });
+    let _ = run(&mut model, Event::SetAssignIssueToMe { assign: true });
+    assert!(DomovoiApp.view(&model).composer.can_send);
+    let sent = sent_requests(&run(&mut model, Event::Send));
+    let launch = sent.iter().find(|r| r["tag"] == "orchestration.launchThread").unwrap();
+    assert_eq!(launch["payload"]["initialMessage"]["text"], "");
+    assert_eq!(launch["payload"]["workspaceStrategy"]["type"], "root");
+    assert_eq!(launch["payload"]["issue"]["issue"]["key"], "12");
+    assert_eq!(launch["payload"]["issue"]["assignToMe"], true);
+
+    let _ = sock(&mut model, exit_fail(launch["id"].as_str().unwrap(), json!({"message": "Tracker unavailable"})));
+    let composer = DomovoiApp.view(&model).composer;
+    assert_eq!(composer.issue_chip.as_deref(), Some("#12 Fix the parser"));
+    assert!(composer.issue_assign_to_me && composer.can_send);
+}
+
+#[test]
+fn a_pull_request_only_commits_the_reviewed_files_and_keeps_edits_during_generation() {
+    let (mut model, _) = connected();
+    model.projects.push(records::project(json!({ "id": "p1" })));
+    model.threads.push(records::shell(json!({ "id": "t1", "projectId": "p1", "title": "Fix the parser" })));
+    model.selected_thread = Some("t1".into());
+    model.route = "thread".into();
+
+    let sent = sent_requests(&run(&mut model, Event::PreparePullRequest));
+    let request = sent.iter().find(|r| r["tag"] == "git.preparePullRequest").unwrap();
+    assert_eq!(request["payload"]["generate"], false);
+    let pr = domovoi_model::typed::PullRequestPrepareResult {
+        branch: Some("parser".into()), commits_ahead_of_base: 1, base_branch: "main".into(),
+        base_branches: vec!["main".into()], supports_draft: true,
+        dirty_files: vec![
+            domovoi_model::typed::PullRequestDirtyFile { path: "parser.rs".into(), insertions: 1, deletions: 0 },
+            domovoi_model::typed::PullRequestDirtyFile { path: "personal.txt".into(), insertions: 2, deletions: 0 },
+        ],
+        closing: vec![domovoi_model::typed::PullRequestClosingRef {
+            display_key: "#12".into(), reference: "Closes #12".into(), url: "https://github.com/owner/repo/issues/12".into(),
+        }],
+        ..Default::default()
+    };
+    let sent = sent_requests(&sock(&mut model, exit_ok(request["id"].as_str().unwrap(), json!(pr))));
+    let request = sent.iter().find(|r| r["tag"] == "git.preparePullRequest").unwrap();
+    assert_eq!(request["payload"]["generate"], true);
+    let sheet = DomovoiApp.view(&model).thread.unwrap().pull_request_sheet.unwrap();
+    assert!(sheet.pr_sheet_files.iter().all(|file| !file.pr_file_selected));
+    assert_eq!(sheet.pr_sheet_body, "Closes #12");
+
+    let _ = run(&mut model, Event::SetPullRequestSheetField { field: "title".into(), value: "Parser fixes".into() });
+    let _ = run(&mut model, Event::SetPullRequestSheetField { field: "draft".into(), value: "true".into() });
+    let _ = run(&mut model, Event::TogglePullRequestFile { path: "parser.rs".into() });
+    let _ = sock(&mut model, exit_ok(request["id"].as_str().unwrap(), json!(domovoi_model::typed::PullRequestPrepareResult {
+        title: Some("Generated title".into()), ..pr
+    })));
+
+    let sent = sent_requests(&run(&mut model, Event::CreatePullRequest));
+    let action = sent.iter().find(|r| r["tag"] == "git.runStackedAction").unwrap();
+    assert_eq!(action["payload"]["threadId"], "t1");
+    assert_eq!(action["payload"]["filePaths"], json!(["parser.rs"]));
+    assert_eq!(action["payload"]["pullRequest"], json!({ "title": "Parser fixes", "body": "Closes #12", "draft": true, "baseBranch": "main" }));
+}
+
 /// Two providers whose models offer different efforts.
 fn two_effort_providers(model: &mut Model, sent: &[Value]) {
     let config_id = sent.iter().find(|r| r["tag"] == "subscribeServerConfig").unwrap()["id"].as_str().unwrap().to_owned();
@@ -4959,6 +5053,15 @@ fn every_request_the_core_sends_is_as_recorded() {
     s.set(Event::SettleThread { thread_id: "t1".into(), settled: true });
     s.go("reconnect", Event::Reconnect);
     s.socket("the socket opens again: what waited is sent", SocketEvent::Opened);
+    // ---- issues ----
+    s.go("the project's issues", Event::LoadIssues { project_id: "p1".into() });
+    s.answer("issues.list", issue_list());
+    s.go("read an issue", Event::SelectIssue { index: 0 });
+    s.go("the issue composer", Event::StartIssueThread { index: 0 });
+    s.set(Event::SetWorkspaceMode { mode: "worktree".into() });
+    s.go("launch on the issue", Event::Send);
+    s.answer("orchestration.launchThread", json!({ "threadId": "t-issue" }));
+
     let environment = s.model.active_env.clone().expect("a server is active");
     s.go("forget the server", Event::ForgetEnvironment { id: environment });
 

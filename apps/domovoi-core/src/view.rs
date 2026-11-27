@@ -19,6 +19,7 @@ pub struct ViewModel {
     pub palette: Option<PaletteView>,
     pub settings: SettingsView,
     pub pull_requests: PullRequestsView,
+    pub issues: IssuesView,
     pub usage: UsageView,
     /// The import picker (after `ScanAgentSessions`).
     pub agent_sessions: AgentSessionsView,
@@ -318,6 +319,7 @@ pub struct SidebarProjectView {
 
 #[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
 pub struct ThreadRowView {
+    pub issue_badge: Option<String>,
     pub project_icon: ProjectIconView,
     pub id: String,
     pub project_id: String,
@@ -372,6 +374,9 @@ pub struct SearchHitView {
 
 #[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
 pub struct ThreadPageView {
+    pub can_create_pull_request: bool,
+    pub pull_request_sheet: Option<PullRequestSheetView>,
+    pub pull_request_status: Option<PullRequestStatusView>,
     pub id: String,
     pub title: String,
     pub project_id: String,
@@ -652,6 +657,7 @@ pub struct PendingSendView {
 // serializes as what it holds, so shells see the same types and bytes.
 #[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
 pub struct ItemView {
+    pub issue_card: Option<IssueCardView>,
     pub id: String,
     /// `user` | `assistant` | `reasoning` | `command` | `file_change` | `tool` |
     /// `approval` | `question` | `plan` | `checkpoint` | `error` | `notice`
@@ -886,6 +892,12 @@ pub struct FindView {
 
 #[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
 pub struct ComposerView {
+    pub issue_chip: Option<String>,
+    pub issue_available: bool,
+    pub issue_picker: Option<String>,
+    pub issue_assign_to_me: bool,
+    pub workspace_required: bool,
+    pub issue_handoff: u32,
     pub draft: String,
     /// Bumped whenever the core replaces the draft (the shell then reloads it).
     pub draft_revision: u32,
@@ -1375,6 +1387,7 @@ pub struct PaletteItemView {
 
 #[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
 pub struct SettingsView {
+    pub linear_settings: Option<LinearSettingsView>,
     pub groups: Vec<SettingGroupView>,
     pub providers: Vec<ProviderView>,
     /// Another Antigravity instance can be added (with an API key or Vertex).
@@ -1645,6 +1658,7 @@ pub struct AccessEntryView {
 
 #[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
 pub struct ProjectSettingsView {
+    pub linear_scope: Option<String>,
     pub id: String,
     pub title: String,
     pub workspace_root: String,
@@ -1905,4 +1919,83 @@ pub struct UsageRowView {
     pub sessions: u64,
     /// `$0.42`; empty when the server has no prices.
     pub cost: String,
+}
+
+#[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct IssuesView {
+    pub issue_project: Option<String>,
+    pub issue_filter: String,
+    pub issue_rows: Vec<IssueRowView>,
+    pub issue_detail: Option<IssueDetailView>,
+    pub issues_loading: bool,
+    pub issues_notice: Option<String>,
+    pub more_issues: bool,
+}
+
+#[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct IssueRowView {
+    pub issue_index: u32,
+    pub issue_label: String,
+    pub issue_url: String,
+    pub linked_thread_id: Option<String>,
+    pub linked_thread_title: Option<String>,
+}
+
+#[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct IssueDetailView {
+    pub issue_body: String,
+    pub issue_comments: Vec<String>,
+    pub closing_pull_request_url: Option<String>,
+}
+
+#[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct IssueCardView {
+    pub issue_label: String,
+    pub issue_url: String,
+}
+
+#[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct PullRequestSheetView {
+    pub pr_sheet_title: String,
+    pub pr_sheet_body: String,
+    pub pr_sheet_draft: bool,
+    pub pr_sheet_supports_draft: bool,
+    pub pr_sheet_base: String,
+    pub pr_sheet_bases: Vec<String>,
+    pub pr_sheet_files: Vec<PullRequestFileView>,
+    pub pr_sheet_branch: Option<String>,
+    pub pr_sheet_existing_url: Option<String>,
+    pub pr_sheet_notice: Option<String>,
+    pub pr_sheet_loading: bool,
+    pub pr_sheet_can_create: bool,
+}
+
+#[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct PullRequestFileView {
+    pub pr_file_path: String,
+    pub pr_file_selected: bool,
+}
+
+#[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct PullRequestStatusView {
+    pub pr_status_label: String,
+    pub pr_status_url: String,
+    pub pr_status_checks: Option<String>,
+    pub pr_status_review: Option<String>,
+    pub pr_status_following: bool,
+    pub pr_status_has_comments: bool,
+}
+
+#[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct LinearSettingsView {
+    pub linear_account: Option<String>,
+    pub linear_notice: Option<String>,
+    pub linear_connected: bool,
+    pub linear_teams: Vec<LinearTeamView>,
+}
+
+#[derive(Facet, Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
+pub struct LinearTeamView {
+    pub linear_team_key: String,
+    pub linear_team_name: String,
 }

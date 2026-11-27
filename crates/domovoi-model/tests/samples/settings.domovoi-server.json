@@ -140,5 +140,7 @@
  "secretProviders": {},
  "usageHistoryRetentionDays": 92,
  "usagePriceOverrides": {},
- "usageModelAliases": {}
+ "usageModelAliases": {},
+ "prWatchWakeOnFailedChecks": true,
+ "prWatchMaxFixAttempts": 3
 }

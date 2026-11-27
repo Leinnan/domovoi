@@ -138,7 +138,7 @@ fn now(model: &Model) -> Timestamp {
 /// An orchestration command. It waits in the outbox until the server
 /// answers, and goes again after a dropped connection (the server answers a
 /// repeated command id from its receipt, so nothing happens twice).
-fn dispatch(model: &mut Model, command: impl Into<typed::Command>, label: &str) -> Cmd {
+pub(crate) fn dispatch(model: &mut Model, command: impl Into<typed::Command>, label: &str) -> Cmd {
     let command = command.into();
     // Marking a thread visited isn't worth queueing.
     if label == "Open thread" {
@@ -1082,7 +1082,21 @@ fn send_message(model: &mut Model) -> Cmd {
         let (name, arg) = (name.to_owned(), arg.to_owned());
         return run_builtin(model, &name, &arg);
     }
-    if (text.is_empty() && model.composer.attachments.is_empty()) || model.composer.sending {
+    let issue = crate::issues::draft(model);
+    if let Some(id) = issue.and_then(|draft| crate::issues::linked_thread(model, &draft.issue)).map(|thread| thread.id.as_str().to_owned()) {
+        return select_thread(model, id);
+    }
+    if issue.is_none() && !model.composer.sending && model.route == "new-thread"
+        && model.composer.attachments.is_empty() && crate::issues::available(model)
+        && model.connection == Connection::Connected && let Some(reference) = crate::issues::issue_reference(&text)
+    {
+        model.composer.issue_picker = Some(reference.to_owned());
+        return crate::issues::update(model, Event::AttachIssue).and(render());
+    }
+    if issue.is_some_and(|draft| draft.workspace.is_none())
+        || (text.is_empty() && model.composer.attachments.is_empty() && issue.is_none())
+        || model.composer.sending
+    {
         return Command::done();
     }
     let thread_id = model.selected_thread.clone().unwrap_or_else(uuid);
@@ -1183,9 +1197,11 @@ pub fn finish_send(model: &mut Model, thread_id: &str, message_id: &str, new_thr
         return render();
     };
     let title: String = text.lines().next().unwrap_or("New thread").chars().take(60).collect();
+    let issue = model.composer.issue_drafts.remove(&key);
+    let workspace_mode = issue.as_ref().and_then(|draft| draft.workspace.as_deref()).unwrap_or(&model.composer.workspace_mode);
     let workspace_strategy = if let Some((worktree_path, branch, _)) = model.composer.existing_worktree.take() {
         WorkspaceStrategy::ExistingWorktree { worktree_path, branch: Some(branch) }
-    } else if model.composer.workspace_mode == "worktree" {
+    } else if workspace_mode == "worktree" {
         WorkspaceStrategy::Worktree { base_ref: model.composer.base_branch.clone().unwrap_or_else(|| "HEAD".into()), branch: None, start_from_origin: None }
     } else {
         WorkspaceStrategy::Root { branch: None }
@@ -1203,17 +1219,20 @@ pub fn finish_send(model: &mut Model, thread_id: &str, message_id: &str, new_thr
         interaction_mode: composer_interaction_mode(model).as_str().into(),
         workspace_strategy,
         initial_message: Some(InitialMessage { message_id: Some(message_id.into()), text: text.clone(), context: None, attachments }),
-        issue: None,
+        issue: issue.as_ref().map(|draft| domovoi_model::typed::ThreadLaunchIssue {
+            issue: draft.issue.clone(),
+            assign_to_me: Some(draft.assign),
+        }),
         created_by: None,
         delegated_from: None,
     };
     let request = requests::orchestration_launch_thread(launch);
-    let shown_title = launch_title(&text);
+    let shown_title = issue.as_ref().map_or_else(|| launch_title(&text), |draft| draft.label.clone());
     let out = Outgoing { request, message_id: None, route: Route::Launch(thread_id.to_owned()), label: "Start thread".into(), draft_key: key, text: text.clone(), sent_ms: model.now_ms };
     let sent = send_outgoing(model, out);
     // Shown at once, as the server will have it: the thread open, listed,
     // with its first message on its way.
-    model.starting_thread = Some(Launching { id: thread_id.to_owned(), project_id: project.clone(), title: shown_title, message_id: message_id.to_owned(), text });
+    model.starting_thread = Some(Launching { issue, id: thread_id.to_owned(), project_id: project.clone(), title: shown_title, message_id: message_id.to_owned(), text });
     open_launching(model, thread_id);
     sent.and(render())
 }
@@ -1254,7 +1273,12 @@ pub fn opened_launched(model: &mut Model, thread_id: &str) -> Cmd {
 pub fn launch_failed(model: &mut Model, thread_id: &str) -> Cmd {
     let Some(launching) = model.starting_thread.take_if(|l| l.id == thread_id) else { return Command::done() };
     if model.selected_thread.as_deref() == Some(thread_id) {
-        return start_new_thread(model, Some(launching.project_id));
+        let cmd = start_new_thread(model, Some(launching.project_id));
+        if let Some(issue) = launching.issue {
+            model.composer.issue_drafts.insert(model.draft_key(), issue);
+            model.composer.issue_handoff = model.composer.issue_handoff.wrapping_add(1);
+        }
+        return cmd;
     }
     Command::done()
 }
@@ -1416,6 +1440,7 @@ fn pr_call(model: &mut Model, key: &str, request: impl FnOnce(&PullRequestListEn
 
 pub fn start_new_thread(model: &mut Model, project_id: Option<String>) -> Cmd {
     model.composer.existing_worktree = None;
+    model.composer.issue_picker = None;
     let mut cmds = vec![unsubscribe_threads(model, None), detach_terminals(model)];
     if let Some(p) = project_id {
         model.selected_project = Some(p);
@@ -1896,6 +1921,10 @@ pub fn update(event: Event, model: &mut Model) -> Cmd {
         Event::ShowRoute { route } => {
             model.route = route.clone();
             match route.as_str() {
+                "issues" => match model.selected_project.clone() {
+                    Some(project_id) => update(Event::LoadIssues { project_id }, model),
+                    None => render(),
+                },
                 "pull-requests" => update(Event::LoadPullRequests, model),
                 "usage" => update(Event::LoadUsage { days: if model.pages.usage_days == 0 { 7 } else { model.pages.usage_days } }, model),
                 _ => render(),
@@ -2467,6 +2496,13 @@ pub fn update(event: Event, model: &mut Model) -> Cmd {
             }
         }
         Event::SetWorkspaceMode { mode } => {
+            if model.composer.sending || !matches!(mode.as_str(), "local" | "worktree") {
+                return Command::done();
+            }
+            let key = model.draft_key();
+            if let Some(draft) = model.composer.issue_drafts.get_mut(&key) {
+                draft.workspace = Some(mode.clone());
+            }
             model.composer.workspace_mode = mode;
             if model.composer.base_branch.is_none() {
                 model.composer.base_branch = model.panel.git.local.as_ref().and_then(|local| local.ref_name.clone());
@@ -2967,6 +3003,9 @@ pub fn update(event: Event, model: &mut Model) -> Cmd {
             a.and(b)
         }
         Event::GitAction { action, message } => {
+            if matches!(action.as_str(), "create_pr" | "commit_push_pr") && model.selected_thread.is_some() {
+                return crate::pull_request_sheet::open_from_git(model, &message);
+            }
             let cwd = model.panel.git.cwd.clone();
             if cwd.is_empty() || model.panel.git.busy {
                 return Command::done();
@@ -3050,7 +3089,7 @@ pub fn update(event: Event, model: &mut Model) -> Cmd {
             }
             "projects" => {
                 let ids: Vec<String> = model.projects.iter().filter(|p| !p.workspace_root.ends_with("/scratch")).map(|p| p.id.as_str().to_owned()).collect();
-                let mut cmd = Command::done();
+                let mut cmd = crate::issues::load_trackers(model);
                 for pid in ids {
                     cmd = cmd.and(call(model, requests::projects_index_status(&pid), Route::ProjectIndex(pid)));
                 }
@@ -3206,6 +3245,13 @@ pub fn update(event: Event, model: &mut Model) -> Cmd {
         }
 
         // ---- pull requests / usage ----
+        event @ (Event::ConnectIssueTracker { .. } | Event::BindProjectIssueTracker { .. } | Event::LoadIssues { .. } | Event::SetIssueFilter { .. } | Event::LoadMoreIssues
+            | Event::SelectIssue { .. } | Event::StartIssueThread { .. } | Event::OpenIssuePicker
+            | Event::SetIssuePickerQuery { .. } | Event::AttachIssue | Event::DetachIssue
+            | Event::SetAssignIssueToMe { .. }) => crate::issues::update(model, event),
+        event @ (Event::PreparePullRequest | Event::SetPullRequestSheetField { .. }
+            | Event::TogglePullRequestFile { .. } | Event::CreatePullRequest | Event::ClosePullRequestSheet
+            | Event::HandReviewCommentsToAgent | Event::StopFollowingPullRequest) => crate::pull_request_sheet::update(model, event),
         Event::LoadPullRequests => {
             model.pages.prs_loading = true;
             model.pages.prs_error = None;

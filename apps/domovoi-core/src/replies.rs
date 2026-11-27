@@ -88,6 +88,22 @@ fn notify_transition(model: &mut Model, shell: &ThreadShell) -> Option<Cmd> {
     Some(Command::request_from_shell(NotifyOperation { title, body: body.into(), thread_id: id, environment_id, request_id }).then_send(|_| crate::Event::Notified))
 }
 
+fn notify_pull_request(model: &Model, next: &ThreadShell) -> Vec<Cmd> {
+    use domovoi_model::typed::{pull_request_notices, pull_requests_seen};
+    let id = next.id.as_str();
+    if model.focused && model.selected_thread.as_deref() == Some(id) {
+        return vec![];
+    }
+    let Some(previous) = model.thread_shell(id) else { return vec![] };
+    let environment_id = model.environment.as_ref().map(|environment| environment.environment_id.as_str().to_owned())
+        .or_else(|| model.active_environment().map(|environment| environment.server_id.clone()))
+        .unwrap_or_default();
+    pull_request_notices(&pull_requests_seen(previous), &pull_requests_seen(next)).into_iter()
+        .map(|body| Command::request_from_shell(NotifyOperation {
+            title: next.title.clone(), body, thread_id: id.to_owned(), environment_id: environment_id.clone(), request_id: None,
+        }).then_send(|_| crate::Event::Notified)).collect()
+}
+
 fn upsert_project(list: &mut Vec<ProjectShell>, project: ProjectShell) {
     match list.iter_mut().find(|held| held.id == project.id) {
         Some(held) => *held = project,
@@ -132,6 +148,7 @@ fn shell_chunk(model: &mut Model, item: Value) -> Vec<Cmd> {
             }
             crate::project_icons::prune(model);
             model.threads = snapshot.threads;
+            cmds.push(crate::issues::load_trackers(model));
             // Where each thread stands now, so only a change from here notifies.
             model.notified.clear();
             for thread in &model.threads {
@@ -161,6 +178,7 @@ fn shell_chunk(model: &mut Model, item: Value) -> Vec<Cmd> {
                 upsert_thread(&mut model.archived, *thread);
             } else {
                 model.archived.retain(|held| held.id != thread.id);
+                cmds.extend(notify_pull_request(model, &thread));
                 if let Some(c) = notify_transition(model, &thread) {
                     cmds.push(c);
                 }
@@ -594,10 +612,12 @@ fn chunk(model: &mut Model, route: &Route, v: Value) -> Vec<Cmd> {
             match event {
                 GitActionProgressEvent::ActionFinished(finished) => {
                     model.panel.git.busy = false;
+                    crate::pull_request_sheet::finish(model, &finished.action_id, None);
                     model.toast("success", finished.result.toast.title);
                 }
                 GitActionProgressEvent::ActionFailed(failed) => {
                     model.panel.git.busy = false;
+                    crate::pull_request_sheet::finish(model, &failed.action_id, Some(failed.message.clone()));
                     model.panel.git.error = Some(failed.message);
                 }
                 _ => {}
@@ -1013,6 +1033,15 @@ fn exit_ok(model: &mut Model, route: Route, value: Value) -> Vec<Cmd> {
             model.pages.host = read::<HostResourcesSnapshot>(model, "the server's resources", value);
             vec![]
         }
+        Route::IssueTrackers => {
+            if let Some(trackers) = read(model, "issue tracker connections", value) {
+                model.pages.issue_trackers = trackers;
+            }
+            vec![]
+        }
+        Route::IssueTrackerMutation => vec![crate::issues::load_trackers(model)],
+        Route::PreparePullRequest(id, generate) => crate::pull_request_sheet::reply(model, &id, generate, Ok(value)),
+        Route::Issues(..) | Route::IssueDetail(_) | Route::IssueResolve(..) => crate::issues::reply(model, route, Ok(value)),
         Route::PullRequests => {
             model.pages.prs_loading = false;
             let list = read::<PullRequestListResult>(model, "the pull requests", value);
@@ -1334,6 +1363,12 @@ fn exit_failed(model: &mut Model, route: Route, cause: &Value) -> Vec<Cmd> {
         Route::ListEntries(dir) => {
             model.panel.files.loading.remove(dir);
         }
+        Route::PreparePullRequest(id, generate) => {
+            return crate::pull_request_sheet::reply(model, id, *generate, Err(message));
+        }
+        Route::Issues(..) | Route::IssueDetail(_) | Route::IssueResolve(..) => {
+            return crate::issues::reply(model, route, Err(message));
+        }
         Route::PullRequests => {
             model.pages.prs_loading = false;
             model.pages.prs_error = Some(message);
@@ -1365,7 +1400,10 @@ fn exit_failed(model: &mut Model, route: Route, cause: &Value) -> Vec<Cmd> {
             }
         }
         Route::Command(l) if l == "Storage cleanup" || l == "Reclaim space" => model.pages.storage_busy = false,
-        Route::GitAction(_) => model.panel.git.busy = false,
+        Route::GitAction(id) => {
+            model.panel.git.busy = false;
+            crate::pull_request_sheet::finish(model, id, Some(message.clone()));
+        }
         Route::PullRequestAction { .. } | Route::PullRequestThread(_) => model.pages.pr_busy = None,
         Route::PrReviewAction { .. } => model.pages.pr_review_busy = false,
         Route::PrReview(_) | Route::PrReviewStream(_) | Route::FailoverStatus | Route::ProjectIndex(_) => return vec![],
