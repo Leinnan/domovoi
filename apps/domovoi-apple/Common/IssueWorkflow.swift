@@ -99,11 +99,14 @@ struct IssueComposerControls: View {
 struct ThreadPullRequestControls: View {
     @ObservedObject var core: Core
     var showStatus = true
+    var showSheet = true
 
     var body: some View {
         let thread = core.view.thread
         Group {
-            if showStatus, let pr = thread?.pullRequestStatus {
+            if !showStatus {
+                Color.clear.frame(width: 0, height: 0)
+            } else if let pr = thread?.pullRequestStatus {
                 HStack {
                     if let url = URL(string: pr.prStatusUrl) { Link(pr.prStatusLabel, destination: url).lineLimit(1) }
                     if let checks = pr.prStatusChecks { Text(checks) }
@@ -114,12 +117,12 @@ struct ThreadPullRequestControls: View {
                         if thread?.canCreatePullRequest == true { Button("Create pull request") { core.update(.preparePullRequest) } }
                     }
                 }
-            } else if showStatus, thread?.canCreatePullRequest == true {
+            } else if thread?.canCreatePullRequest == true {
                 Button("Create pull request") { core.update(.preparePullRequest) }
             }
         }
         .sheet(isPresented: Binding(
-            get: { core.view.thread?.pullRequestSheet != nil },
+            get: { showSheet && core.view.thread?.pullRequestSheet != nil },
             set: { if !$0 { core.update(.closePullRequestSheet) } }
         )) {
             if let sheet = core.view.thread?.pullRequestSheet {

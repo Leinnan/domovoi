@@ -107,6 +107,7 @@ struct MainStack: View {
                 }
             }
         }
+        .background { ThreadPullRequestControls(core: core, showStatus: false) }
         .onReceive(IOSSnapshots.navigate) { screens in path = screens }
         .sheet(isPresented: Binding(
             get: { core.view.palette != nil },

@@ -765,10 +765,10 @@ private fun IssueComposerControls(core: Core, composer: com.crayen.domovoi.app.C
 }
 
 @Composable
-fun ThreadPullRequestControls(core: Core, thread: com.crayen.domovoi.app.ThreadPageView, showStatus: Boolean = true) {
+private fun ThreadPullRequestControls(core: Core, thread: com.crayen.domovoi.app.ThreadPageView) {
     val uri = androidx.compose.ui.platform.LocalUriHandler.current
     val pr = thread.pullRequestStatus
-    if (showStatus) Column(Modifier.padding(horizontal = Space.s)) {
+    Column(Modifier.padding(horizontal = Space.s)) {
         if (pr != null) {
             TextButton(onClick = { uri.openUri(pr.prStatusUrl) }) { Text(pr.prStatusLabel) }
             val state = listOfNotNull(pr.prStatusChecks, pr.prStatusReview).joinToString(" · ")
@@ -784,7 +784,13 @@ fun ThreadPullRequestControls(core: Core, thread: com.crayen.domovoi.app.ThreadP
             TextButton(onClick = { core.update(Event.PreparePullRequest) }) { Text("Create pull request") }
         }
     }
-    val sheet = thread.pullRequestSheet ?: return
+}
+
+@Composable
+fun PullRequestReviewDialog(core: Core) {
+    val thread by core.view.thread.watch()
+    val sheet = thread?.pullRequestSheet ?: return
+    val uri = androidx.compose.ui.platform.LocalUriHandler.current
     fun field(field: String, value: String) = core.update(Event.SetPullRequestSheetField(field, value))
     AlertDialog(
         onDismissRequest = { core.update(Event.ClosePullRequestSheet) },

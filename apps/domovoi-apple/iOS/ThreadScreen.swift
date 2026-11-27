@@ -144,7 +144,7 @@ struct ThreadScreen: View {
                 }
                 // One per thread (as on the Mac): another thread starts at its
                 // own end (or where it was read), not with this one's scroll state.
-                ThreadPullRequestControls(core: core)
+                ThreadPullRequestControls(core: core, showSheet: false)
                 WorkLinksStrip(links: thread.links)
                 Transcript(core: core, thread: thread, artifactJump: artifactJump)
                     .id(thread.id)

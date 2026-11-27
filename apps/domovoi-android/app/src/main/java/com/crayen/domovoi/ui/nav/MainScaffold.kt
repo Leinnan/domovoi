@@ -112,6 +112,7 @@ fun MainScaffold(core: Core) {
     val expanded = windowInfo.windowSizeClass.isWidthAtLeastBreakpoint(WindowSizeClass.WIDTH_DP_MEDIUM_LOWER_BOUND)
 
     ToastEffect(core, snackbars)
+    com.crayen.domovoi.ui.thread.PullRequestReviewDialog(core)
 
     val nav = remember(stack) {
         object : Navigator {

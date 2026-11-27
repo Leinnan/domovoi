@@ -407,7 +407,6 @@ struct GitScreen: View {
                 ContentUnavailableView("Not a Git Repository", systemImage: "arrow.triangle.branch", description: Text("This folder isn't tracked by git."))
             }
         }
-        .background { ThreadPullRequestControls(core: core, showStatus: false) }
         .navigationTitle("Git")
         .navigationBarTitleDisplayMode(.inline)
         .confirmationDialog(

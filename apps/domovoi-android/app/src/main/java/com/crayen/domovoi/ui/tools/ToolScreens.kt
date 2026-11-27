@@ -387,8 +387,6 @@ fun GitScreen(core: Core, onBack: (() -> Unit)?, openTerminal: () -> Unit = {}) 
         if (action.startsWith("commit")) message = ""
     }
     LaunchedEffect(Unit) { core.update(Event.ShowPanel("git")); core.update(Event.RefreshGit) }
-    val thread by core.view.thread.watch()
-    thread?.let { com.crayen.domovoi.ui.thread.ThreadPullRequestControls(core, it, showStatus = false) }
     ToolScaffold("Git", onBack) { padding ->
         PullToRefreshBox(isRefreshing = false, onRefresh = { core.update(Event.RefreshGit) }, modifier = Modifier.padding(top = padding.calculateTopPadding())) {
             Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = Space.xxl)) {
